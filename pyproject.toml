@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "quantabench"
+dynamic = ["version"]
+description = "An open, GPU-aware molecular modeling workbench: build geometries, search conformers, optimize with ML potentials and xTB, and visualize the results."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Brandon T. McReynolds" }]
+keywords = [
+    "computational-chemistry", "molecular-modeling", "conformer-search", "geometry-optimization",
+    "machine-learning-potentials", "xtb", "rdkit", "ase", "pyside6", "pfas",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "rdkit>=2024.3",
+    "ase>=3.23",
+    "psutil>=5.9",
+    "platformdirs>=4.2",
+    "PySide6-Essentials>=6.8",
+    "pyvista>=0.44",
+    "pyvistaqt>=0.11",
+]
+
+[project.optional-dependencies]
+# PyTorch is NOT listed here on purpose: install the build that matches your GPU first
+# (AMD ROCm on Windows/Linux, NVIDIA CUDA, or CPU). See docs/INSTALL.md.
+ml = ["aimnet>=0.2"]                       # AIMNet2 neutral + charged organics (needs torch)
+xtb = ["dxtb>=0.4"]                        # GFN1-xTB in PyTorch (GFN2 also needs tad-libcint, Linux)
+protonate = ["dimorphite-dl>=2.0"]         # pH-dependent protonation states
+ovito = ["ovito>=3.12"]                    # embedded OVITO viewport for big systems / trajectories
+all = ["quantabench[ml,xtb,protonate]"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/brandonbtm29/QuantaBench"
+Issues = "https://github.com/brandonbtm29/QuantaBench/issues"
+Changelog = "https://github.com/brandonbtm29/QuantaBench/blob/main/CHANGELOG.md"
+
+[project.scripts]
+quantabench-cli = "quantabench.cli:main"
+
+[project.gui-scripts]
+quantabench = "quantabench.gui.app:main"
+
+[tool.hatch.version]
+path = "src/quantabench/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/quantabench"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["scratch"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = [
+    "E501",  # long lines: wrap them when touching that code
+    "S310",  # urllib on fixed https URLs (PubChem lookup)
+    "B905",  # zip() without strict=: lengths are checked where it matters
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S603", "S607"]

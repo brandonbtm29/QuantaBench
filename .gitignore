@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.venv-*/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Per-machine settings pointer (points at ~/SyncThing/QuantaBench/Settings on Brandon's machines)
+settings_location.json
+settings.json
+
+# Results and data never go in this public repo: they live in the output folder (SyncThing)
+runs/
+Runs/
+*.lammpstrj
+*.spartan
+*.pt
+
+# Scratch work and Claude Code personal files
+scratch/
+CLAUDE.local.md
+.claude/settings.local.json

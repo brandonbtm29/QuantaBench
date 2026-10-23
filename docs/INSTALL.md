@@ -1,0 +1,123 @@
+# Installing QuantaBench
+
+QuantaBench needs Python 3.11 or newer. **Use Python 3.12** if you want AMD GPU support on Windows,
+because AMD's Windows PyTorch wheels are built for 3.12 only.
+
+The order matters: **install the PyTorch build that matches your GPU first**, then QuantaBench.
+Otherwise pip may pull a generic PyTorch that cannot see your card.
+
+## Windows 11, AMD Radeon (native, recommended for RX 7000/9000)
+
+Native Windows is the fastest and most reliable route for Radeon cards. Earlier testing on this project
+found WSL2 GPU pass-through fragile on consumer Radeons.
+
+1. Install AMD Software: Adrenalin Edition 26.2.2 or newer, and Python 3.12 from python.org.
+2. Create an environment:
+
+   ```powershell
+   cd "$HOME\GitHub Projects\QuantaBench"
+   py -3.12 -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   python -m pip install --upgrade pip
+   ```
+
+3. Install AMD's ROCm SDK and PyTorch wheels (ROCm 7.2.1; check
+   [AMD's page](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/windows/install-pytorch.html)
+   for newer releases):
+
+   ```powershell
+   pip install --no-cache-dir `
+     https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl `
+     https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl `
+     https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl `
+     https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz
+   pip install --no-cache-dir `
+     https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl
+   python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+   ```
+
+   On ROCm, PyTorch still calls the GPU `cuda`. `True` plus your Radeon's name means it works.
+
+4. Install QuantaBench with the optional engines:
+
+   ```powershell
+   pip install -e ".[all,dev]"
+   quantabench-cli doctor --bench
+   quantabench
+   ```
+
+   If `doctor` reports a PyTorch version ending in `+cpu` (for example `2.14.1+cpu`), pip pulled the
+   generic CPU build from PyPI because step 3 was skipped or ran afterwards. Rerun step 3 with
+   `--force-reinstall --no-deps` on the torch wheel. The ML packages accept torch 2.9.
+
+### Smart App Control
+
+Windows 11's Smart App Control blocks unsigned DLLs that Microsoft's cloud has not seen before.
+Brand-new releases of scientific wheels (RDKit, VTK, PyTorch extensions) often fall into that group.
+The symptom is:
+
+```
+ImportError: DLL load failed while importing rdForceField: An Application Control policy has blocked this file.
+```
+
+There are two ways around it:
+
+- **Turn Smart App Control off.** Windows Security > App & browser control > Smart App Control
+  settings > Off. Since the April 2026 Windows update it can be turned back on later without
+  reinstalling Windows. This is the practical choice for a development machine that runs many
+  pip-installed native libraries.
+- **Keep it on and use older releases** that Microsoft already recognizes, for example
+  `pip install "rdkit==2026.3.6"`. This is not guaranteed, and other packages may be blocked next.
+
+Organization-managed PCs (WDAC/App Control for Business) show the same message. There, ask IT to
+allow the Python environment, or use WSL2/Linux.
+
+## Windows + WSL2 (Ubuntu 22.04 / 24.04)
+
+AMD lists the RX 9060 XT as supported on WSL2 with ROCm 7.2.1 and the *Adrenalin 26.1.1 for WSL2*
+driver. Follow AMD's "Radeon on WSL" guide, then install the Linux ROCm PyTorch wheels inside WSL as
+in the Linux section. If `torch.cuda.is_available()` is `False` or WSL logs `Ioctl failed: -22`, use
+native Windows for GPU work. WSL2 is still useful on the CPU, for example to run GFN2-xTB, whose
+libcint backend has no Windows build yet:
+
+```bash
+pip install "tad-libcint<0.4"   # enables gfn2-xtb in dxtb on Linux/WSL
+```
+
+## Linux (native)
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+# Install PyTorch first, using the command from https://pytorch.org/get-started/locally/
+# for your GPU (ROCm for AMD, CUDA for NVIDIA, or CPU). For example, CPU only:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -e ".[all,dev]" "tad-libcint<0.4"
+quantabench-cli doctor --bench
+```
+
+The GUI needs `libxcb-cursor0` on Debian/Ubuntu (`sudo apt install libxcb-cursor0`).
+
+## macOS (planned)
+
+The device layer already recognizes Apple's `mps` backend, and the GUI stack (PySide6, PyVista) runs
+on macOS. Engine testing and packaging are scheduled for 0.5.
+
+## Optional extras
+
+| Extra | Installs | Enables |
+|---|---|---|
+| `ml` | `aimnet` | AIMNet2 ML potential (downloads model weights on first use) |
+| `xtb` | `dxtb` | GFN1-xTB (and GFN2 with `tad-libcint` on Linux) |
+| `protonate` | `dimorphite-dl` | Alternative pH protonation |
+| `ovito` | `ovito` | Embedded OVITO viewport |
+| `all` | ml, xtb, protonate | |
+
+## Settings in a synced folder
+
+```powershell
+quantabench-cli settings --set-dir "~/SyncThing/QuantaBench/Settings"
+```
+
+This writes a git-ignored `settings_location.json` pointer in the repo, so every computer that clones
+the repo and has the SyncThing folder shares the same settings. The GUI offers the same choice under
+Settings > Folders.
