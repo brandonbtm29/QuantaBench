@@ -23,6 +23,7 @@ FORMATS = {
     "pdb": "Best conformer, PDB",
     "mol": "Best conformer, MDL Molfile",
     "lammps": "Best conformer, LAMMPS data file (atom_style charge, real units, padded box)",
+    "spectrum": "IR spectrum and normal-mode table, CSV (when frequencies were computed)",
 }
 DEFAULT_FORMATS = ("xyz", "sdf", "extxyz")
 
@@ -92,6 +93,11 @@ def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMAT
         elif fmt == "lammps":
             p = out_dir / f"{stem}.lammps.data"
             write_lammps_data(best_atoms, p, best.charges)
+        elif fmt == "spectrum":
+            if not result.vibrations:
+                continue
+            written += write_vibrations(result.vibrations, out_dir, stem)
+            continue
         else:
             raise ValueError(f"Unknown export format {fmt!r} (known: {', '.join(FORMATS)})")
         written.append(p)
@@ -99,6 +105,31 @@ def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMAT
     summary.write_text(json.dumps(result.to_dict(), indent=2, default=str) + "\n", encoding="utf-8")
     written.append(summary)
     return written
+
+
+def write_vibrations(vib: dict, out_dir: Path, stem: str, fwhm: float = 20.0) -> list[Path]:
+    """``<stem>_ir.csv`` (Lorentzian-broadened spectrum, unscaled frequencies) and ``<stem>_modes.csv``
+    from a ``VibrationalResult.to_dict()``."""
+    from types import SimpleNamespace
+
+    from . import vibrations
+
+    spec = vibrations.ir_spectrum(vib["frequencies_cm1"], vib.get("ir_intensities_km_mol"), fwhm=fwhm)
+    paths = [vibrations.write_spectrum_csv(out_dir / f"{stem}_ir.csv", spec)]
+    fields = ("method", "frequencies_cm1", "ir_intensities_km_mol", "reduced_masses_amu", "force_constants_mdyn_A")
+    paths.append(vibrations.write_modes_csv(out_dir / f"{stem}_modes.csv",
+                                            SimpleNamespace(**{k: vib.get(k) for k in fields}),
+                                            scale=vib.get("scale_factor", 1.0)))
+    if vib.get("positions_A") and vib.get("symbols"):
+        # the tightly re-optimized geometry the frequencies belong to (the other files hold the ranked one)
+        e = (vib.get("thermo") or {}).get("potential_energy_ev")
+        lines = [str(len(vib["symbols"])),
+                 f"{stem}: frequency geometry ({vib.get('method', '')})" + (f" E = {e:.6f} eV" if e is not None else "")]
+        lines += [f"{s} {x:.6f} {y:.6f} {z:.6f}" for s, (x, y, z) in zip(vib["symbols"], vib["positions_A"])]
+        p = out_dir / f"{stem}_freq.xyz"
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        paths.append(p)
+    return paths
 
 
 def write_batch_tables(results: list[MoleculeResult], run_dir: Path) -> list[Path]:

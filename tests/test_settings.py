@@ -40,3 +40,16 @@ def test_pointer_file(tmp_path, monkeypatch):
 def test_portable_home():
     p = Path.home() / "SyncThing" / "QuantaBench"
     assert sm.portable(p) == "~/SyncThing/QuantaBench"
+
+
+def test_old_settings_get_new_build_defaults(isolated_settings):
+    folder = isolated_settings / "settings"
+    folder.mkdir(parents=True)
+    (folder / sm.SETTINGS_FILE).write_text(json.dumps({"build": {"ph": 6.0, "refine_method": "gfn1-xtb"}}))
+    s = sm.load()
+    assert s.build.ph == 6.0 and s.build.batched == "auto" and s.build.frequencies is False
+    from quantabench.chem.pipeline import BuildConfig
+
+    s.build.frequencies, s.build.batched = True, "on"
+    cfg = BuildConfig.from_settings(s)
+    assert cfg.frequencies and cfg.batched == "on" and cfg.method == "gfn1-xtb"

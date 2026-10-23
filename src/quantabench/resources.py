@@ -62,7 +62,8 @@ class HardwareReport:
                 f"{self.ram_gb:.0f} GB RAM | GPU: {gpu}")
 
 
-OPTIONAL_PACKAGES = ("torch", "aimnet", "dxtb", "tad_libcint", "dimorphite_dl", "ovito", "openmm", "torch_sim")
+OPTIONAL_PACKAGES = ("torch", "aimnet", "dxtb", "tad_libcint", "dimorphite_dl", "ovito", "openmm", "torch_sim",
+                     "lammps", "openpyxl")
 
 
 def has_package(name: str) -> bool:

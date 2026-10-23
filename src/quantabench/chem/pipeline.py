@@ -5,8 +5,10 @@
       -> protonation state at pH
       -> 3D embedding, conformer search (ETKDGv3) + MMFF94s pre-optimization
       -> energy-window + RMSD pruning
-      -> refinement of the lowest conformers with the chosen engine (AIMNet2 / xTB / MMFF), GPU when possible
+      -> refinement of the lowest conformers with the chosen engine (AIMNet2 / xTB / MMFF), GPU when possible;
+         all conformers in one torch batch on a GPU (``chem.batch_opt``), one at a time with ASE otherwise
       -> re-pruning, Boltzmann weights, descriptors
+      -> optional: frequencies, IR and RRHO/qRRHO thermochemistry of the best conformer
       -> export (XYZ, SDF ensemble, extXYZ with charges, PDB, MOL, LAMMPS data) + batch tables
 
 The pipeline is UI-agnostic: the CLI and the GUI both call ``run`` with a progress callback and a
@@ -26,9 +28,9 @@ from rdkit import Chem
 
 from .. import resources
 from ..settings import Settings
+from . import batch_opt, engines, export, properties
 from . import conformers as confs
 from . import descriptors as desc
-from . import engines, export, properties
 from .inputs import MoleculeInput
 from .optimize import Cancelled, optimize
 from .standardize import formal_charge, prepare
@@ -52,6 +54,11 @@ class BuildConfig:
     optimizer: str = "lbfgs"
     temperature_k: float = 298.15
     xtb_properties: bool = True           # GFN1-xTB charges, dipole, polarizability of the best conformer
+    batched: str = "auto"                 # "auto" (batched on a GPU) | "on" | "off": see use_batched()
+    frequencies: bool = False             # Hessian, IR and thermochemistry of the best conformer
+    freq_hessian: str = "auto"            # "auto" | "analytic" | "finite" (vibrations.analyze)
+    symmetry_number: int = 0              # rotational symmetry number σ for the entropy; 0 = detect per molecule
+    freq_qrrho: bool = True               # Grimme's quasi-RRHO entropy for low-frequency modes
     seed: int = 42
     threads: int = 0
     gpu: str = "auto"
@@ -67,7 +74,7 @@ class BuildConfig:
         cfg = cls(method=b.refine_method, ph=b.ph, protonate=b.protonate, keep_largest_fragment=b.keep_largest_fragment,
                   max_conformers=b.max_conformers, energy_window_kcal=b.energy_window_kcal,
                   rmsd_threshold=b.rmsd_threshold, fmax=b.fmax, max_steps=b.max_steps, temperature_k=b.temperature_k,
-                  seed=b.random_seed, threads=r.threads, gpu=r.gpu, gpu_index=r.gpu_index,
+                  seed=b.random_seed, batched=b.batched, frequencies=b.frequencies, threads=r.threads, gpu=r.gpu, gpu_index=r.gpu_index,
                   gpu_memory_fraction=r.gpu_memory_fraction, output_dir=str(s.output_path()))
         return replace(cfg, **overrides)
 
@@ -104,6 +111,7 @@ class MoleculeResult:
     descriptors: dict = field(default_factory=dict)
     timings: dict = field(default_factory=dict)
     files: list[str] = field(default_factory=list)
+    vibrations: dict | None = None     # VibrationalResult.to_dict() when cfg.frequencies
 
     def to_dict(self) -> dict:
         d = {k: v for k, v in asdict(self).items() if k not in ("mol", "input")}
@@ -123,6 +131,22 @@ class MoleculeResult:
 
 
 ProgressFn = Callable[[int, int, str, str], None]   # (molecule index, total, stage, message)
+BATCHED_MODES = ("auto", "on", "off")
+
+
+def use_batched(cfg: BuildConfig, method: str, device: str) -> bool:
+    """Whether ``method`` on ``device`` refines all conformers in one batch (``batch_opt.refine_batched``).
+
+    'auto' batches only on a GPU, where one call for B conformers costs about as much as one call for
+    one; on a CPU the sequential ASE path stays the default (batched L-BFGS gives identical results and
+    was 2.4x faster on 2 CPUs for PFOA x 8, but it holds all conformers in memory at once). 'on' batches
+    on any device, 'off' never. Methods without a batched adapter (MMFF) always run sequentially.
+    """
+    if cfg.batched not in BATCHED_MODES:
+        raise ValueError(f"batched must be one of {BATCHED_MODES}, not {cfg.batched!r}")
+    if cfg.batched == "off" or not batch_opt.supports_batched(method):
+        return False
+    return cfg.batched == "on" or device != "cpu"
 
 
 def _noop(*_args) -> None:
@@ -178,6 +202,43 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
     return out
 
 
+def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: ConformerResult, cfg: BuildConfig,
+                 should_stop: Callable[[], bool], log: Callable[[str], None]) -> None:
+    """Vibrational analysis of the best conformer; a failure becomes a note, not a failed molecule."""
+    from . import vibrations
+
+    atoms = export.mol_to_atoms(conf_set.mol, best.conf_id)
+    fmax = min(cfg.fmax, 0.01)    # frequencies need a tighter minimum than the conformer ranking
+    try:
+        vr = vibrations.analyze(atoms, result.method, result.charge, result.multiplicity, device=result.device,
+                                temperature=cfg.temperature_k, symmetry_number=cfg.symmetry_number,
+                                hessian=cfg.freq_hessian, mol=conf_set.mol, qrrho=cfg.freq_qrrho,
+                                preoptimize_fmax=fmax, should_stop=should_stop, log=log)
+    except Cancelled:
+        raise
+    except Exception as exc:
+        result.notes.append(f"frequencies skipped ({type(exc).__name__}: {exc})")
+        log(f"  {result.notes[-1]}")
+        return
+    # The tight re-optimization moves the atoms (up to a few tenths of an Å on flat perfluoroalkyl torsions).
+    # The stored conformer is left alone, so its ranking energy, charges, dipole and 3D descriptors still
+    # belong to its exported geometry; the frequency geometry is kept separately (``positions_A``, written
+    # as <id>_freq.xyz by the spectrum export) together with its own energy (thermo.potential_energy_ev).
+    result.vibrations = vr.to_dict()
+    result.descriptors.update({f"vib_{k}": v for k, v in vr.descriptors().items()})
+    if vr.positions is not None:
+        pos = np.asarray(vr.positions, float)
+        result.vibrations["symbols"] = atoms.get_chemical_symbols()
+        result.vibrations["positions_A"] = np.round(pos, 6).tolist()
+        shift = float(np.sqrt(((pos - atoms.get_positions()) ** 2).sum(1)).max()) if len(pos) else 0.0
+        result.vibrations["geometry_max_shift_A"] = shift
+        result.descriptors["vib_geometry_max_shift_A"] = shift
+    result.notes += [f"frequencies: {w}" for w in vr.warnings]
+    t = vr.thermo
+    log(f"  frequencies ({vr.hessian_method} Hessian): {vr.n_modes} modes, {vr.n_imaginary} imaginary"
+        + (f", ZPE {t.zpe_kcal:.2f} kcal/mol, S {t.entropy_cal_molK:.2f} cal/(mol K)" if t else ""))
+
+
 def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", threads: int = 1,
                  should_stop: Callable[[], bool] = lambda: False,
                  log: Callable[[str], None] = _noop, stage: Callable[[str], None] = _noop) -> MoleculeResult:
@@ -231,8 +292,12 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         for n_try, candidate in enumerate(candidates):
             result.method = candidate
             result.device = device if engines.ENGINES[candidate].gpu_capable else "cpu"
+            refine = batch_opt.refine_batched if use_batched(cfg, candidate, result.device) else _refine
+            if refine is not _refine:
+                log(f"  batched refinement of {min(len(cs.conf_ids), max(1, cfg.refine_top))} conformers "
+                    f"on {result.device}")
             try:
-                refined = _refine(result, cs, cfg, result.device, should_stop, log)
+                refined = refine(result, cs, cfg, result.device, should_stop, log)
                 break
             except Cancelled:
                 raise
@@ -291,6 +356,11 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             except Exception as exc:
                 result.notes.append(f"xTB properties skipped ({type(exc).__name__}: {exc})")
         result.timings["descriptors"] = time.perf_counter() - t
+        if cfg.frequencies:
+            stage("frequencies")
+            t = time.perf_counter()
+            _frequencies(result, cs, kept[0], cfg, should_stop, log)
+            result.timings["frequencies"] = time.perf_counter() - t
         result.status = "ok"
         log(f"  done: {len(kept)} conformer(s), best E = {e0:.5f} eV")
     except Cancelled:

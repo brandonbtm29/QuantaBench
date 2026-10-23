@@ -49,6 +49,8 @@ class BuildDefaults:
     max_steps: int = 500
     temperature_k: float = 298.15
     random_seed: int = 42
+    batched: str = "auto"             # batched conformer refinement: "auto" (GPU only) | "on" | "off"
+    frequencies: bool = False         # frequencies + thermochemistry of the best conformer
 
 
 @dataclass

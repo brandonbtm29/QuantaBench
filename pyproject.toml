@@ -44,8 +44,11 @@ ml = ["aimnet>=0.2"]                       # AIMNet2 neutral + charged organics 
 xtb = ["dxtb>=0.4"]                        # GFN1-xTB in PyTorch (GFN2 also needs tad-libcint, Linux)
 protonate = ["dimorphite-dl>=2.0"]         # pH-dependent protonation states
 ovito = ["ovito>=3.12"]                    # embedded OVITO viewport for big systems / trajectories
-all = ["quantabench[ml,xtb,protonate]"]
-dev = ["pytest>=8", "ruff>=0.6"]
+md = ["lammps>=2023.8"]                    # LAMMPS Python module (CPU + OpenMP) for `md smd --run` and checks
+excel = ["openpyxl>=3.1"]                  # .xlsx/.xlsm input (CompTox dashboard exports)
+# lammps ships wheels for Windows (win_amd64), Linux and macOS; openpyxl is pure Python
+all = ["quantabench[ml,xtb,protonate,md,excel]"]
+dev = ["pytest>=8", "pytest-timeout>=2.3", "ruff>=0.6"]
 
 [project.urls]
 Homepage = "https://github.com/brandonbtm29/QuantaBench"

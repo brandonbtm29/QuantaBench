@@ -26,12 +26,15 @@ class SiteRule:
 # Ordered roughly from strongest acid to weakest base. Values are typical literature pKa's;
 # they only need to be on the right side of the working pH.
 RULES: tuple[SiteRule, ...] = (
+    # The Uncharger turns halide anions into HX; these put them back (HCl -7, HBr -9, HI -10, HF 3.2)
+    SiteRule("hydrohalic acid", "[Cl,Br,I;H1;D0;+0:1]", -7.0, "acid"),
+    SiteRule("hydrofluoric acid", "[F;H1;D0;+0:1]", 3.2, "acid"),
     SiteRule("sulfate monoester", "[OX2H1:1][SX4](=O)(=O)[OX2]", -2.0, "acid"),
     SiteRule("sulfonic acid", "[OX2H1:1][SX4](=O)(=O)[#6]", -1.5, "acid"),
     SiteRule("phosphate/phosphonate (1st OH)", "[OX2H1:1][PX4](=O)", 1.8, "acid"),
     SiteRule("carboxylic acid", "[OX2H1:1][CX3](=O)", 4.0, "acid"),
     SiteRule("perfluoroalkyl sulfonamide N-H", "[NX3;H2,H1;!$(N[#6]=O):1][SX4](=O)(=O)C(F)(F)", 6.5, "acid"),
-    SiteRule("aliphatic amine", "[NX3;H2,H1,H0;+0;!$(N[a]);!$(N[#6,#16,#15]=[O,S,N]);!$(N[SX4]);!$(N-[#6](F));!$(N#*);!$(N=*):1]",
+    SiteRule("aliphatic amine", "[NX3;H3,H2,H1,H0;+0;!$(N[a]);!$(N[#6,#16,#15]=[O,S,N]);!$(N[SX4]);!$(N-[#6](F));!$(N#*);!$(N=*):1]",
              10.0, "base"),
     SiteRule("amidine/guanidine", "[NX3;H2,H1;+0:1][CX3]=[NX2]", 12.0, "base"),
 )

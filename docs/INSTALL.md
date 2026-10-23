@@ -110,7 +110,19 @@ on macOS. Engine testing and packaging are scheduled for 0.5.
 | `xtb` | `dxtb` | GFN1-xTB (and GFN2 with `tad-libcint` on Linux) |
 | `protonate` | `dimorphite-dl` | Alternative pH protonation |
 | `ovito` | `ovito` | Embedded OVITO viewport |
-| `all` | ml, xtb, protonate | |
+| `md` | `lammps` | LAMMPS Python module: `md smd --run` and quick checks of SMD setups |
+| `excel` | `openpyxl` | `.xlsx`/`.xlsm` input (CompTox dashboard exports) |
+| `all` | ml, xtb, protonate, md, excel | |
+
+Notes on the new extras:
+
+- **`md`.** PyPI has `lammps` wheels for Windows (win_amd64), Linux and macOS. The wheel is a CPU
+  build with OpenMP (the Linux wheel tested here has no GPU package). For production pulls, and for
+  the GPU package (OpenCL on Radeon), use the LAMMPS Windows installer's `lmp.exe`; every SMD folder's
+  `README.txt` lists the exact commands, e.g. `lmp.exe -sf gpu -pk gpu 1 neigh no -in in.smd`.
+  QuantaBench only writes the input files and parses the outputs, so the extra is optional.
+- **`excel`.** openpyxl is pure Python. Legacy `.xls` files additionally need `xlrd`; otherwise save
+  them as `.xlsx` or `.csv`.
 
 ## Settings in a synced folder
 

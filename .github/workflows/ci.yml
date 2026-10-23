@@ -13,6 +13,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.12"]
     runs-on: ${{ matrix.os }}
+    # A modal dialog or a hung render would otherwise hold the runner for the 6 h default
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,6 +23,15 @@ jobs:
       - name: Qt runtime libraries (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxcb-cursor0 libegl1 libgl1 xvfb
+      - name: OpenGL for Qt and VTK (Windows)
+        # GitHub's Windows runners have no GPU and only GDI's OpenGL 1.1; VTK 9 needs 3.2+. This installs
+        # Mesa's llvmpipe opengl32.dll system-wide (not the off-screen-only build: the viewer embeds an
+        # on-screen QtInteractor) and leaves PYVISTA_OFF_SCREEN unset for the same reason.
+        if: runner.os == 'Windows'
+        uses: pyvista/setup-headless-display-action@v4
+        with:
+          pyvista: false
+          install-mesa3d-offscreen: false
       - name: Install (core, CPU only; GPU engines are optional extras)
         run: |
           python -m pip install --upgrade pip
@@ -29,7 +40,7 @@ jobs:
         run: ruff check .
       - name: Test (Linux, virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a pytest -q
+        run: xvfb-run -a pytest -q --timeout=300
       - name: Test (Windows)
         if: runner.os == 'Windows'
-        run: pytest -q
+        run: pytest -q --timeout=300

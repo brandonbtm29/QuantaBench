@@ -1,16 +1,22 @@
 """Main window.
 
-Layout borrows from OVITO: the 3D viewport is the center of attention, the "pipeline" on the right
+Layout borrows from OVITO: the structure views are the center of attention, the "pipeline" on the right
 lists the processing stages (select one to edit its parameters, see its status for the selected
 molecule), the molecule list sits on the left, and conformers + log share the bottom panel.
+
+The center is a splitter with a 2D depiction (RDKit, left, narrower) and the 3D viewer (PyVista).
+Both views hold the same :class:`~quantabench.gui.selection.SelectionModel`, so an atom picked in
+either one is highlighted in both, and the measurement for the last 2-4 picked atoms is shown in the
+status bar.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -19,6 +25,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -30,7 +37,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
+    QSplitter,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -48,8 +57,16 @@ from ..chem import engines, export
 from ..chem import inputs as inputs_mod
 from ..chem.pipeline import BuildConfig, MoleculeResult
 from . import workers
+from .selection import SelectionModel
 from .settings_dialog import METHODS, SettingsDialog, method_label
-from .viewer import STYLES, MoleculeViewer
+from .viewer2d import MoleculeViewer2D
+from .viewer3d import COLOR_MODES, LABEL_MODES, STYLES, MoleculeViewer3D
+
+MODE_ACTIONS = (("rotate", "Rotate", "Ctrl+1", "Drag rotates the view (click selects, Ctrl+click adds)"),
+                ("select", "Select", "Ctrl+2", "Drag draws a selection box"),
+                ("move", "Move", "Ctrl+3", "Drag on a molecule rotates it rigidly, Shift+drag slides it "
+                                           "(press on a selected atom to move only the selection)"))
+BATCHED_CHOICES = (("auto", "Auto (batched on a GPU)"), ("on", "Always batched"), ("off", "One at a time (ASE)"))
 
 STAGES = [
     ("input", "Input", "Structure source"),
@@ -59,6 +76,17 @@ STAGES = [
     ("properties", "Properties", "Boltzmann weights, descriptors, xTB charges/dipole/polarizability"),
     ("export", "Export", "Files written for every molecule"),
 ]
+
+
+def _window_settings() -> QSettings:
+    """Window geometry and dock layout (the registry on Windows). ``QUANTABENCH_WINDOW_STATE`` points it at
+    an INI file instead, so the tests never overwrite the user's own layout."""
+    ini = os.environ.get("QUANTABENCH_WINDOW_STATE")
+    if ini:
+        return QSettings(ini, QSettings.Format.IniFormat)
+    return QSettings("QuantaBench", "QuantaBench")
+
+
 STATUS_ICON = {"ok": "✔", "failed": "✖", "cancelled": "○", "pending": "…", "running": "▶"}
 
 
@@ -73,11 +101,26 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.last_run_dir: Path | None = None
         self._closing = False
+        self._quit_pending = False         # close() asked while workers run: closes when they finish
+        self.closed = False
         self.setWindowTitle(f"QuantaBench {__version__}")
         self.resize(1500, 920)
 
-        self.viewer = MoleculeViewer(self)
-        self.setCentralWidget(self.viewer)
+        self.surface_dialog = None
+        self._shown_key = None            # (molecule id, built result or None) in the views; see _views_key
+        self._surface_preview = False     # the 3D view shows the Surface Builder's system, not the molecule
+        self.selection = SelectionModel(self)
+        self.viewer = MoleculeViewer3D(self, selection=self.selection)
+        self.viewer2d = MoleculeViewer2D(self, selection=self.selection)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setObjectName("views")
+        self.splitter.addWidget(self.viewer2d)
+        self.splitter.addWidget(self.viewer)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 2)
+        self.splitter.setSizes([380, 620])
+        self.splitter.setCollapsible(1, False)
+        self.setCentralWidget(self.splitter)
         self._build_molecule_dock()
         self._build_pipeline_dock()
         self._build_bottom_dock()
@@ -135,13 +178,19 @@ class MainWindow(QMainWindow):
             self.stage_tree.addTopLevelItem(it)
             self.stage_items[key] = it
         self.stage_tree.setMaximumHeight(170)
+        self.stage_tree.setMinimumHeight(150)
         lay.addWidget(self.stage_tree)
         self.stage_stack = QStackedWidget()
         self.stage_pages = {}
         for key, _label, tip in STAGES:
             page = self._stage_page(key, tip)
             self.stage_pages[key] = self.stage_stack.addWidget(page)
-        lay.addWidget(self.stage_stack, 1)
+        scroll = QScrollArea()             # the Properties page can list dozens of descriptors
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(self.stage_stack)
+        lay.addWidget(scroll, 1)
         self.stage_tree.currentItemChanged.connect(self._on_stage_selected)
         self.stage_tree.setCurrentItem(self.stage_items["refine"])
         run_row = QHBoxLayout()
@@ -177,8 +226,16 @@ class MainWindow(QMainWindow):
             self.csv_smiles_col.setPlaceholderText("auto (SMILES, QSAR_READY_SMILES, ...)")
             self.csv_id_col = QLineEdit()
             self.csv_id_col.setPlaceholderText("auto (DTXSID, ID, Name, ...)")
-            form.addRow("CSV SMILES column", self.csv_smiles_col)
-            form.addRow("CSV ID column", self.csv_id_col)
+            self.csv_sheet = QLineEdit()
+            self.csv_sheet.setPlaceholderText("first sheet (name or 0-based index)")
+            self.smiles_pref = QComboBox()
+            for key, label in (("smiles", "SMILES, then QSAR-ready, then MS-ready"), ("qsar", "QSAR-ready first"),
+                               ("ms", "MS-ready first")):
+                self.smiles_pref.addItem(label, key)
+            form.addRow("Table SMILES column", self.csv_smiles_col)
+            form.addRow("Table ID column", self.csv_id_col)
+            form.addRow("Excel sheet", self.csv_sheet)
+            form.addRow("SMILES preference", self.smiles_pref)
         elif key == "prepare":
             self.w_desalt = QCheckBox("Keep largest fragment (strip counter-ions)")
             self.w_protonate = QCheckBox("Assign protonation state")
@@ -225,6 +282,11 @@ class MainWindow(QMainWindow):
             self.w_steps.setRange(10, 10000)
             self.w_optimizer = QComboBox()
             self.w_optimizer.addItems(["lbfgs", "fire"])
+            self.w_batched = QComboBox()
+            for key, label in BATCHED_CHOICES:
+                self.w_batched.addItem(label, key)
+            self.w_batched.setToolTip("Refine all conformers of a molecule in one torch batch (xTB, AIMNet2). "
+                                      "Same results as one at a time; much faster on a GPU.")
             self.engine_info = QLabel()
             self.engine_info.setWordWrap(True)
             self.w_method.currentIndexChanged.connect(self._update_engine_info)
@@ -233,15 +295,28 @@ class MainWindow(QMainWindow):
             form.addRow("Force convergence", self.w_fmax)
             form.addRow("Max steps", self.w_steps)
             form.addRow("Optimizer", self.w_optimizer)
+            form.addRow("Conformer batching", self.w_batched)
             form.addRow(self.engine_info)
         elif key == "properties":
             self.w_xtbprops = QCheckBox("GFN1-xTB charges, dipole, polarizability (best conformer)")
             self.w_xtbprops.setEnabled(resources.has_package("dxtb"))
+            self.w_freq = QCheckBox("Frequencies + thermochemistry (best conformer)")
+            self.w_freq.setToolTip("Hessian, normal modes, IR intensities, ZPE/H/S/G (ideal gas, qRRHO). "
+                                   "Adds the IR spectrum to the exported files. Minutes per molecule on a CPU.")
+            self.w_symmetry = QSpinBox()
+            self.w_symmetry.setRange(0, 24)
+            self.w_symmetry.setSpecialValueText("Auto (per molecule)")
+            self.w_symmetry.setValue(0)
+            self.w_symmetry.setToolTip("Rotational symmetry number σ. Auto detects it from each molecule's point group "
+                                       "(1 for most PFAS, 2 for water, 12 for methane); a fixed value applies to "
+                                       "every molecule in the run")
             self.w_temp = QDoubleSpinBox()
             self.w_temp.setRange(1, 2000)
             self.w_temp.setSuffix(" K")
             form.addRow(self.w_xtbprops)
-            form.addRow("Boltzmann temperature", self.w_temp)
+            form.addRow(self.w_freq)
+            form.addRow("Symmetry number", self.w_symmetry)
+            form.addRow("Temperature", self.w_temp)
             self.props_view = QLabel()
             self.props_view.setWordWrap(True)
             self.props_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -298,7 +373,9 @@ class MainWindow(QMainWindow):
 
         self.a_open = act("Open...", self.open_files, "Ctrl+O", "Open SDF, MOL, XYZ, PDB, SMI or CSV files")
         self.a_run = act("Run", lambda: self.run_build(False), "F5", "Build every molecule in the list")
-        self.a_cancel = act("Cancel", self.cancel_build, "Esc")
+        # Not Esc: the views use Esc to clear the selection, and a window-wide Esc would cancel the batch
+        self.a_cancel = act("Cancel", self.cancel_build, "Shift+Esc", "Stop the build after the current step "
+                            "(Shift+Esc)")
         self.a_cancel.setEnabled(False)
         self.a_export = act("Export...", self.export_selected, "Ctrl+E", "Save the selected molecule")
         self.a_surface = act("Surface builder...", self.open_surface_builder, None,
@@ -306,18 +383,52 @@ class MainWindow(QMainWindow):
         self.a_settings = act("Settings...", self.open_settings, "Ctrl+,")
         for a in (self.a_open, self.a_run, self.a_cancel, self.a_export, self.a_surface, self.a_settings):
             tb.addAction(a)
-        tb.addSeparator()
+        vt = QToolBar("View")
+        vt.setObjectName("view_toolbar")
+        self.addToolBar(vt)
+        self.view_toolbar = vt
+        self.mode_group = QActionGroup(self)
+        self.mode_group.setExclusive(True)
+        self.mode_actions = {}
+        for key, text, shortcut, tip in MODE_ACTIONS:
+            a = act(text, lambda _checked=False, k=key: self.set_view_mode(k), shortcut, f"{tip} ({shortcut})")
+            a.setCheckable(True)
+            self.mode_group.addAction(a)
+            self.mode_actions[key] = a
+            vt.addAction(a)
+        self.mode_actions["rotate"].setChecked(True)
+        vt.addSeparator()
         self.style_box = QComboBox()
         self.style_box.addItems(STYLES)
         self.style_box.currentTextChanged.connect(self.viewer.set_style)
-        tb.addWidget(QLabel(" Style "))
-        tb.addWidget(self.style_box)
+        vt.addWidget(QLabel(" Style "))
+        vt.addWidget(self.style_box)
+        self.label_box = QComboBox()
+        for m in LABEL_MODES:
+            self.label_box.addItem(m.replace("+", " + ").capitalize(), m)
+        self.label_box.setToolTip("Atom labels in both views (indices are 0-based, like ASE and RDKit)")
+        self.label_box.currentIndexChanged.connect(self._on_label_mode)
+        vt.addWidget(QLabel(" Labels "))
+        vt.addWidget(self.label_box)
+        self.color_box = QComboBox()
+        for m in COLOR_MODES:
+            self.color_box.addItem(m.capitalize(), m)
+        self.color_box.setToolTip("Element (Jmol), Charge (red = negative, blue = positive), "
+                                  "Tag (surface gray, adsorbate orange)")
+        self.color_box.currentIndexChanged.connect(lambda _i: self.viewer.set_color_mode(self.color_box.currentData()))
+        vt.addWidget(QLabel(" Color "))
+        vt.addWidget(self.color_box)
         self.h_box = QCheckBox("Hydrogens")
         self.h_box.setChecked(True)
+        self.h_box.setToolTip("Hydrogens in the 3D view (the 2D view: View > Hydrogens in 2D)")
         self.h_box.toggled.connect(self.viewer.set_show_hydrogens)
-        tb.addWidget(self.h_box)
-        tb.addAction(act("Reset view", self.viewer.reset_camera, "R"))
-        tb.addAction(act("Screenshot...", self.save_screenshot))
+        vt.addWidget(self.h_box)
+        self.a_show2d = act("Show 2D", self._set_2d_visible, "Ctrl+D", "Show the 2D structure next to the 3D view")
+        self.a_show2d.setCheckable(True)
+        self.a_show2d.setChecked(True)
+        vt.addAction(self.a_show2d)
+        vt.addAction(act("Reset view", self.reset_views, "R", "Default orientation, fit both views"))
+        vt.addAction(act("Screenshot...", self.save_screenshot))
 
         m = self.menuBar()
         f = m.addMenu("&File")
@@ -331,6 +442,14 @@ class MainWindow(QMainWindow):
             b.addAction(a)
         b.addAction(self.a_surface)
         v = m.addMenu("&View")
+        v.addAction(self.a_show2d)
+        self.a_h2d = act("Hydrogens in 2D", lambda on: self.viewer2d.set_show_hydrogens(on))
+        self.a_h2d.setCheckable(True)
+        v.addAction(self.a_h2d)
+        mm = v.addMenu("Mouse mode")
+        for a in self.mode_actions.values():
+            mm.addAction(a)
+        v.addSeparator()
         for d in (self.mol_dock, self.pipeline_dock, self.bottom_dock):
             v.addAction(d.toggleViewAction())
         self.a_ovito = act("Open in OVITO viewport", self.open_in_ovito)
@@ -348,6 +467,12 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(260)
         self.progress.setVisible(False)
+        self.measure_label = QLabel("")
+        self.measure_label.setToolTip("Click 2 atoms for a distance, 3 for an angle, 4 for a dihedral "
+                                      "(Ctrl+click adds atoms)")
+        self.measure_label.setStyleSheet("font-weight: bold; padding: 0 8px;")
+        self.statusBar().addPermanentWidget(self.measure_label)
+        self.viewer.measurementChanged.connect(self._on_measurement)
         self.hw_label = QLabel("Detecting hardware...")
         self.statusBar().addPermanentWidget(self.hw_label)
         self.statusBar().addPermanentWidget(self.progress)
@@ -367,6 +492,9 @@ class MainWindow(QMainWindow):
         self.w_steps.setValue(b.max_steps)
         self.w_temp.setValue(b.temperature_k)
         self.w_xtbprops.setChecked(resources.has_package("dxtb"))
+        self.w_freq.setChecked(b.frequencies)
+        keys = [k for k, _ in BATCHED_CHOICES]
+        self.w_batched.setCurrentIndex(keys.index(b.batched) if b.batched in keys else 0)
         for fmt, cb in self.w_formats.items():
             cb.setChecked(fmt in export.DEFAULT_FORMATS)
         self.out_label.setText(f"Output folder: {self.s.output_path()}")
@@ -385,14 +513,18 @@ class MainWindow(QMainWindow):
         b.fmax = self.w_fmax.value()
         b.max_steps = self.w_steps.value()
         b.temperature_k = self.w_temp.value()
+        b.frequencies = self.w_freq.isChecked()
+        b.batched = self.w_batched.currentData()
 
     def current_config(self) -> BuildConfig:
         self._store_stage_values()
         formats = tuple(f for f, cb in self.w_formats.items() if cb.isChecked()) or export.DEFAULT_FORMATS
+        if self.w_freq.isChecked() and "spectrum" not in formats:
+            formats = (*formats, "spectrum")
         return BuildConfig.from_settings(
             self.s, refine_top=self.w_refine_top.value(), optimizer=self.w_optimizer.currentText(),
             protonation_method=self.w_prot_method.currentData(), xtb_properties=self.w_xtbprops.isChecked(),
-            formats=formats)
+            symmetry_number=self.w_symmetry.value(), formats=formats)
 
     def _update_engine_info(self) -> None:
         key = self.w_method.currentData()
@@ -412,8 +544,7 @@ class MainWindow(QMainWindow):
             return
         w = workers.FunctionWorker(resources.detect)
         w.done.connect(self._on_hardware)
-        w.failed.connect(lambda msg: self.hw_label.setText(f"Hardware detection failed: {msg}"))
-        workers.start(w, self)
+        workers.start(w, self, on_failed=lambda msg: self.hw_label.setText(f"Hardware detection failed: {msg}"))
 
     def _on_hardware(self, rep) -> None:
         self.report = rep
@@ -488,21 +619,42 @@ class MainWindow(QMainWindow):
             self.statusBar().clearMessage()
             QMessageBox.warning(self, "Add molecule", msg)
 
-        w.done.connect(done)
-        w.failed.connect(failed)
-        workers.start(w, self)
+        workers.start(w, self, on_done=done, on_failed=failed)   # relayed: the callbacks touch widgets
 
-    def open_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "Open structures", "", "Structures (*.sdf *.mol *.xyz *.pdb *.smi "
-                                                "*.smiles *.csv *.txt);;All files (*)")
-        for p in paths:
-            try:
-                items = inputs_mod.read_file(p, self.csv_smiles_col.text().strip() or None,
-                                             self.csv_id_col.text().strip() or None)
-            except Exception as exc:
-                QMessageBox.warning(self, "Open", f"{Path(p).name}: {exc}")
-                continue
+    def open_files(self, paths: list[str] | None = None) -> None:
+        if not paths:
+            patterns = " ".join(f"*{ext}" for ext in sorted(inputs_mod.FILE_TYPES))
+            paths, _ = QFileDialog.getOpenFileNames(self, "Open structures", "",
+                                                    f"Structures and tables ({patterns});;All files (*)")
+        if not paths:
+            return
+        sheet = self.csv_sheet.text().strip() or None
+        if sheet is not None and sheet.isdigit():
+            sheet = int(sheet)
+        opts = dict(smiles_col=self.csv_smiles_col.text().strip() or None, id_col=self.csv_id_col.text().strip() or None,
+                    sheet=sheet, smiles_preference=self.smiles_pref.currentData())
+
+        def read_all():  # off the GUI thread: a CompTox table can have thousands of rows to parse
+            out, messages, errors = [], [], []
+            for p in paths:
+                try:
+                    out += inputs_mod.read_file(p, log=messages.append, **opts)
+                except Exception as exc:
+                    errors.append(f"{Path(p).name}: {exc}")
+            return out, messages, errors
+
+        def done(result):
+            items, messages, errors = result
+            self.statusBar().clearMessage()
+            for m in messages:
+                self.log(m)
             self.add_inputs(items)
+            if errors:
+                QMessageBox.warning(self, "Open", "\n".join(errors))
+
+        self.statusBar().showMessage(f"Reading {len(paths)} file(s)...")
+        w = workers.FunctionWorker(read_all)
+        workers.start(w, self, on_done=done, on_failed=lambda msg: QMessageBox.warning(self, "Open", msg))
 
     def remove_selected(self) -> None:
         rows = sorted({i.row() for i in self.mol_list.selectedIndexes()}, reverse=True)
@@ -522,6 +674,8 @@ class MainWindow(QMainWindow):
         self.mol_list.clear()
         self.conf_table.setRowCount(0)
         self.viewer.clear()
+        self.viewer2d.clear()
+        self._shown_key = None
 
     def selected_input(self) -> inputs_mod.MoleculeInput | None:
         row = self.mol_list.currentRow()
@@ -535,12 +689,32 @@ class MainWindow(QMainWindow):
         self.input_detail.setText(f"<b>{inp.id}</b> {inp.name}<br>SMILES: {inp.smiles}<br>Source: {inp.source}")
         self._update_stage_status(res)
         self._fill_conformers(res)
-        if res and res.status == "ok":
-            self.viewer.show_rdkit(res.mol, res.conformers[0].conf_id)
+        built = res is not None and res.status == "ok"
+        if built:
             self._show_info(res)
         else:
-            self._preview_input(inp)
             self.mol_info.setText(res.error if res and res.error else "Not built yet. Press Run.")
+            self.props_view.setText("")
+        if self._surface_preview:
+            return                       # the open Surface Builder owns the 3D view until it is closed
+        key = (inp.id, res if built else None)
+        if self._shown_key is None or self._shown_key[0] != key[0] or self._shown_key[1] is not key[1]:
+            # Indices belong to the previous structure. The input preview (AddHs of the raw input) and the
+            # built molecule (standardized, protonated) number their atoms differently, so a swap from
+            # preview to built, or to a rebuilt result, clears the selection too.
+            self.selection.clear()
+            self._shown_key = key
+        if built:
+            self._show_conformer(res, 0, reset_camera=True)
+        else:
+            self._preview_input(inp)
+
+    def _show_conformer(self, res: MoleculeResult, row: int, reset_camera: bool) -> None:
+        """Show conformer ``row`` of a built molecule in both views, with its charges when it has them."""
+        c = res.conformers[row]
+        self.viewer.show_rdkit(res.mol, c.conf_id, reset_camera=reset_camera, charges=c.charges)
+        self.viewer2d.show_rdkit(res.mol, c.conf_id, reset_camera=reset_camera)
+        self._apply_2d_options(c.charges)
 
     def _preview_input(self, inp) -> None:
         """Quick single-conformer preview so the user sees something right away."""
@@ -555,6 +729,8 @@ class MainWindow(QMainWindow):
                     return
                 AllChem.MMFFOptimizeMolecule(mol)
             self.viewer.show_rdkit(mol, -1)
+            self.viewer2d.show_rdkit(mol, -1)
+            self._apply_2d_options(None)
         except Exception as exc:
             self.log(f"preview failed for {inp.id}: {exc}")
 
@@ -568,10 +744,27 @@ class MainWindow(QMainWindow):
                                  ("xtb_polarizability_iso_A3", "Polarizability (xTB)", "Å³")):
             if key in d:
                 bits.append(f"{label}: {d[key]:.2f} {unit}")
+        vib = res.vibrations
+        thermo = (vib or {}).get("thermo")
+        if thermo:
+            bits.append(f"ZPE {thermo['zpe_kcal']:.2f} kcal/mol, S {thermo['entropy_cal_molK']:.1f} cal/(mol·K), "
+                        f"G − E {thermo['g_corr_kcal']:.2f} kcal/mol at {thermo['temperature_k']:.0f} K"
+                        + (f"; <b>{vib['n_imaginary']} imaginary</b>" if vib["n_imaginary"] else ""))
         bits += [f"<i>{n}</i>" for n in res.notes]
         self.mol_info.setText("<br>".join(bits))
-        self.props_view.setText("<br>".join(f"{k}: {v:.4g}" if isinstance(v, float) else f"{k}: {v}"
-                                            for k, v in d.items()))
+        lines = []
+        if thermo:
+            lines += [f"<b>Thermochemistry</b> ({vib['method']}, {vib['hessian_method']} Hessian, "
+                      f"{thermo['temperature_k']:.2f} K, {'qRRHO' if thermo['qrrho'] else 'RRHO'})",
+                      f"ZPE: {thermo['zpe_kcal']:.3f} kcal/mol",
+                      f"H: {thermo['enthalpy_kcal']:.3f} kcal/mol (H − E {thermo['h_corr_kcal']:.3f})",
+                      f"S: {thermo['entropy_cal_molK']:.3f} cal/(mol·K)",
+                      f"G: {thermo['gibbs_kcal']:.3f} kcal/mol (G − E {thermo['g_corr_kcal']:.3f})",
+                      f"{vib['n_modes']} modes, {vib['n_imaginary']} imaginary, lowest "
+                      f"{vib['lowest_freq_cm1']:.1f} cm⁻¹", ""]
+        lines += [f"{k}: {v:.4g}" if isinstance(v, float) else f"{k}: {v}" for k, v in d.items()
+                  if not k.startswith("vib_")]
+        self.props_view.setText("<br>".join(lines))
 
     def _update_stage_status(self, res: MoleculeResult | None) -> None:
         for key, it in self.stage_items.items():
@@ -606,8 +799,8 @@ class MainWindow(QMainWindow):
     def _on_conformer_selected(self, row, _col, _prow, _pcol) -> None:
         inp = self.selected_input()
         res = self.results.get(inp.id) if inp else None
-        if res and 0 <= row < len(res.conformers):
-            self.viewer.show_rdkit(res.mol, res.conformers[row].conf_id, reset_camera=False)
+        if res and 0 <= row < len(res.conformers) and not self._surface_preview:
+            self._show_conformer(res, row, reset_camera=False)
 
     def _on_stage_selected(self, cur, _prev) -> None:
         if cur is not None:
@@ -642,10 +835,17 @@ class MainWindow(QMainWindow):
         self.bottom_tabs.setCurrentWidget(self.log_view)
         workers.start(self.worker, self)
 
-    def cancel_build(self) -> None:
-        if self.worker is not None:
-            self.worker.cancel()
-            self.log("Cancelling after the current step...")
+    def cancel_build(self, _checked=False, confirm: bool = True) -> None:
+        if self.worker is None:
+            return
+        remaining = len(self.running)
+        if confirm and remaining > 1 and QMessageBox.question(
+                self, "Cancel build", f"Stop the build? {remaining} molecule(s) have not finished.\n"
+                "Finished molecules are kept; a batch can be resumed with "
+                "quantabench-cli build --resume.") != QMessageBox.StandardButton.Yes:
+            return
+        self.worker.cancel()
+        self.log("Cancelling after the current step...")
 
     def _set_running(self, on: bool) -> None:
         self.progress.setVisible(on)
@@ -678,6 +878,8 @@ class MainWindow(QMainWindow):
         self._set_running(False)
         self.last_run_dir = run_dir
         ok = sum(r.status == "ok" for r in results)
+        if self._quit_pending:
+            return                       # closing: keep "Closing after the current step..." on screen
         self.statusBar().showMessage(f"Done: {ok}/{len(results)} built" + (f", saved to {run_dir}" if run_dir else ""),
                                      15000)
         if run_dir:
@@ -689,7 +891,8 @@ class MainWindow(QMainWindow):
         self.running.clear()
         self._set_running(False)
         self.log(msg)
-        QMessageBox.critical(self, "Build failed", msg.splitlines()[0])
+        if not self._quit_pending:
+            QMessageBox.critical(self, "Build failed", msg.splitlines()[0])
 
     # ================================================================== export & tools
     def export_selected(self) -> None:
@@ -711,8 +914,13 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def save_screenshot(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save screenshot", "quantabench.png", "PNG (*.png)")
-        if path:
+        path, _ = QFileDialog.getSaveFileName(self, "Save screenshot", "quantabench.png",
+                                              "3D view, PNG (*.png);;2D structure, SVG (*.svg);;2D structure, PNG (*.2d.png)")
+        if not path:
+            return
+        if path.endswith(".svg") or path.endswith(".2d.png"):
+            self.viewer2d.export(path, background="white" if path.endswith(".png") else None)
+        else:
             self.viewer.screenshot(path)
 
     def _selected_atoms(self):
@@ -727,11 +935,91 @@ class MainWindow(QMainWindow):
         return atoms, res.input.id, res
 
     def open_surface_builder(self) -> None:
+        """Modeless, so the 3D view stays usable: Move mode grabs the adsorbate, and every finished drag
+        updates the dialog's system (Save and the LAMMPS export write the moved coordinates)."""
         from .surface_dialog import SurfaceDialog
 
+        if self.surface_dialog is not None:
+            self.surface_dialog.raise_()
+            self.surface_dialog.activateWindow()
+            return
         atoms, name, _ = self._selected_atoms()
-        dlg = SurfaceDialog(atoms, name, preview_cb=lambda system: self.viewer.show_atoms(system), parent=self)
-        dlg.exec()
+        dlg = SurfaceDialog(atoms, name, preview_cb=self._preview_surface, parent=self,
+                            gpu=self.s.resources.gpu != "off")
+        dlg.setModal(False)
+        dlg.moveModeRequested.connect(lambda on: self.set_view_mode("move" if on else "rotate"))
+        self.viewer.coordinatesChanged.connect(dlg.set_positions)
+        dlg.finished.connect(self._surface_dialog_closed)
+        self.surface_dialog = dlg
+        dlg.show()
+
+    def _preview_surface(self, system, reset_camera: bool = True) -> None:
+        self.selection.clear()           # molecule indices mean other atoms in the slab system
+        self._shown_key = None
+        self._surface_preview = True
+        self.viewer2d.clear()            # the 2D depiction is for molecules, not slabs: hide it meanwhile
+        self.viewer2d.setVisible(False)
+        self.viewer.show_atoms(system, reset_camera=reset_camera)
+        if self.color_box.currentData() == "element" and reset_camera:
+            self.color_box.setCurrentIndex(COLOR_MODES.index("tag"))
+
+    def _surface_dialog_closed(self, _result=0) -> None:
+        dlg, self.surface_dialog = self.surface_dialog, None
+        if dlg is not None:
+            try:
+                self.viewer.coordinatesChanged.disconnect(dlg.set_positions)
+            except (RuntimeError, TypeError):
+                pass
+            dlg.deleteLater()
+        self._surface_preview = False
+        self.set_view_mode("rotate")
+        self.viewer2d.setVisible(self.a_show2d.isChecked())
+        if self.color_box.currentData() == "tag":
+            self.color_box.setCurrentIndex(COLOR_MODES.index("element"))
+        row = self.mol_list.currentRow()
+        if 0 <= row < len(self.inputs):
+            self._shown_key = None
+            self._on_molecule_selected(row)
+
+    # ================================================================== views
+    def set_view_mode(self, mode: str) -> None:
+        """'rotate' | 'select' | 'move' for the 3D view (the toolbar group and the surface dialog follow)."""
+        self.viewer.set_mode(mode)
+        self.mode_actions[mode].setChecked(True)
+        if self.surface_dialog is not None:
+            self.surface_dialog.set_move_checked(mode == "move")
+        hint = {"rotate": "", "select": "Select mode: drag a box to select atoms",
+                "move": "Move mode: drag on a molecule rotates it, Shift+drag slides it"}[mode]
+        if hint:
+            self.statusBar().showMessage(hint, 8000)
+
+    def _on_label_mode(self, _index=0) -> None:
+        self.viewer.set_label_mode(self.label_box.currentData())
+        inp = self.selected_input()
+        res = self.results.get(inp.id) if inp else None
+        row = max(0, self.conf_table.currentRow())
+        charges = res.conformers[row].charges if res and res.status == "ok" and row < len(res.conformers) else None
+        self._apply_2d_options(charges)
+
+    def _apply_2d_options(self, charges) -> None:
+        mode = self.label_box.currentData()
+        try:
+            self.viewer2d.set_options(atom_indices=mode in ("index", "element+index"),
+                                      charges=charges if mode == "charge" else None)
+        except ValueError as exc:   # charges for another atom count
+            self.log(f"2D labels: {exc}")
+
+    def _on_measurement(self, text: str) -> None:
+        self.measure_label.setText(text)
+
+    def _set_2d_visible(self, on: bool) -> None:
+        self.viewer2d.setVisible(bool(on))
+        if self.a_show2d.isChecked() != bool(on):
+            self.a_show2d.setChecked(bool(on))
+
+    def reset_views(self) -> None:
+        self.viewer.reset_camera()
+        self.viewer2d.fit()
 
     def open_in_ovito(self) -> None:
         atoms, name, _ = self._selected_atoms()
@@ -772,37 +1060,76 @@ class MainWindow(QMainWindow):
 
     # ================================================================== window state
     def _restore_window(self) -> None:
-        qs = QSettings("QuantaBench", "QuantaBench")
+        qs = _window_settings()
         geo, state = qs.value("geometry"), qs.value("state")
+        self.resizeDocks([self.bottom_dock], [190], Qt.Orientation.Vertical)
+        self.resizeDocks([self.mol_dock, self.pipeline_dock], [270, 440], Qt.Orientation.Horizontal)
         if geo is not None:
             self.restoreGeometry(geo)
         if state is not None:
             self.restoreState(state)
+        split = qs.value("splitter")
+        if split is not None:
+            self.splitter.restoreState(split)
+        show2d = qs.value("show2d")
+        if show2d is not None:
+            self._set_2d_visible(str(show2d).lower() in ("true", "1"))
+
+    def _busy_threads(self) -> list:
+        """Worker threads that are still running (build, PubChem lookups, file reads, LAMMPS export)."""
+        out = []
+        for worker in list(self.__dict__.get("_live_workers", ())):
+            thread = getattr(worker, "_thread", None)
+            try:
+                if thread is not None and thread.isRunning():
+                    out.append(thread)
+            except RuntimeError:          # already deleted by deleteLater
+                pass
+        return out
+
+    def _close_when_idle(self) -> None:
+        if self.worker is None and not self._busy_threads():
+            self._quit_timer.stop()
+            self.close()
 
     def closeEvent(self, event) -> None:
-        if self.worker is not None:
+        """Never blocks: with work still running, cancel it, say so, and close again once every worker thread
+        has stopped. (Waiting here froze the UI, and a QThread destroyed while running aborts the process,
+        which could leave jobs.sqlite mid-write.) Cancellation takes effect at the pipeline's next checkpoint."""
+        if self.worker is not None and not self._quit_pending:
             if QMessageBox.question(self, "Quit", "A build is running. Cancel it and quit?") != \
                     QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
             self.worker.cancel()
-            thread = getattr(self.worker, "_thread", None)
-            if thread is not None:
-                thread.wait(15000)
+        if self.worker is not None or self._busy_threads():
+            self._quit_pending = True
+            self._closing = True
+            self.statusBar().showMessage("Closing after the current step...")
+            self.centralWidget().setEnabled(False)
+            for d in (self.mol_dock, self.pipeline_dock):
+                d.setEnabled(False)
+            if not hasattr(self, "_quit_timer"):
+                self._quit_timer = QTimer(self)
+                self._quit_timer.setInterval(200)
+                self._quit_timer.timeout.connect(self._close_when_idle)
+            self._quit_timer.start()
+            event.ignore()
+            return
         self._closing = True
-        qs = QSettings("QuantaBench", "QuantaBench")
+        qs = _window_settings()
         qs.setValue("geometry", self.saveGeometry())
         qs.setValue("state", self.saveState())
+        qs.setValue("splitter", self.splitter.saveState())
+        qs.setValue("show2d", self.a_show2d.isChecked())
         try:
             self._store_stage_values()
             settings_mod.save(self.s)
         except OSError:
             pass
-        for worker in list(self.__dict__.get("_live_workers", ())):
-            thread = getattr(worker, "_thread", None)
-            if thread is not None and thread.isRunning():
-                thread.quit()
-                thread.wait(15000)
+        if self.surface_dialog is not None:
+            self.surface_dialog.close()
         self.viewer.close_viewer()
+        self.viewer2d.close_viewer()
+        self.closed = True
         super().closeEvent(event)
-
