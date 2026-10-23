@@ -4,7 +4,7 @@ Public repo `brandonbtm29/QuantaBench`: an open, GPU-aware molecular modeling wo
 (PySide6 GUI + CLI) that turns SMILES/names/lists into conformer ensembles refined with ML
 potentials or xTB, with descriptors and exports for QSAR and LAMMPS.
 
-Start with `docs/VISION.md` (why), `docs/ARCHITECTURE.md` (how), and `docs/ROADMAP.md` (what's next).
+Start with `docs/VISION.md` (why), `docs/ARCHITECTURE.md` (how), `docs/ROADMAP.md` and `docs/UI_PLAN.md` (what's next). Scheduled agent runs follow `docs/dev/RUNBOOK.md` and take work from `docs/dev/BACKLOG.md`.
 
 ## Layout rule (same as Brandon's other repos)
 - **Code** lives here: `GitHub Projects/QuantaBench` (Windows `C:\Users\Brand\GitHub Projects\QuantaBench`).
