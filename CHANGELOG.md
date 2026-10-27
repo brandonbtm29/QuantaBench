@@ -7,6 +7,9 @@
 - xTB polarizability and IR intensities degrade with a note when dxtb's libcint backend is missing
   (native Windows), instead of failing; GFN1 Hessians no longer request dipole integrals.
 - Dark-mode 2D viewer test no longer assumes a light desktop.
+- LAMMPS SMD: charged single atoms (counter-ions) use Joung-Cheatham ion LJ parameters (`Na_ion`, ...)
+  and stay on `nve/limit` in every stage. With UFF's neutral-atom LJ, Na+ collapsed onto a carboxylate
+  oxygen in vacuum and the run blew up ("Out of range atoms") for 3 of 6 seeds on Windows.
 
 Viewer:
 

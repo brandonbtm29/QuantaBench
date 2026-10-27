@@ -19,6 +19,9 @@ UFF provides for the whole periodic table.
   σ = 3.40 Å with a shallower ε/k_B = 28.0 K = 0.0556 kcal/mol; select it with
   ``graphite="steele"``. The choice shifts adsorption energies by roughly the ratio
   sqrt(0.086/0.0556) ≈ 1.24 for the carbon-adsorbate term, so report which one you used.
+* **Monatomic ions: Joung-Cheatham** (TIP3P set, see ``ION_LJ``) for single-atom adsorbates that
+  carry a charge (counter-ions, type label ``"Na_ion"`` etc.); UFF's neutral-atom terms let ions
+  collapse onto charged head groups.
 * **Mixing: geometric** for both ε and σ (``pair_modify mix geometric``), which is UFF's own
   combination rule. Note that AMBER itself uses Lorentz-Berthelot (arithmetic σ); with
   σ_graphite = 3.40 Å and UFF σ between 2.6 and 4.0 Å the two rules differ by < 1.5 % in σ_ij.
@@ -65,6 +68,23 @@ UFF_LJ: dict[str, tuple[float, float]] = {
     "I": (4.500, 0.339),
 }
 
+# Monatomic ions (counter-ions): Joung and Cheatham, J. Phys. Chem. B 2008, 112, 9020 (TIP3P set,
+# Table 5): element -> (R_min/2 in Å, ε in kcal/mol). UFF's LJ terms are fitted to *neutral* atoms, so
+# their repulsion is far too soft to keep a bare ion off a charged head group in vacuum: Na+ collapses
+# onto a carboxylate oxygen, the contact gets stiff, and the run blows up ("Out of range atoms").
+ION_LJ: dict[str, tuple[float, float]] = {
+    "Li": (1.025, 0.0279896),
+    "Na": (1.369, 0.0874393),
+    "K": (1.705, 0.1936829),
+    "Rb": (1.813, 0.3278219),
+    "Cs": (1.976, 0.4065394),
+    "F": (2.303, 0.0033640),
+    "Cl": (2.513, 0.0355910),
+    "Br": (2.608, 0.0586554),
+    "I": (2.860, 0.0536816),
+}
+ION_CITATION = "Joung and Cheatham, J. Phys. Chem. B 2008, 112, 9020 (TIP3P ion set)"
+
 # Graphite / graphene carbon presets: name -> (epsilon kcal/mol, sigma Å, citation)
 GRAPHITE_LJ: dict[str, tuple[float, float, str]] = {
     "amber": (0.0860, 3.400, "Cornell et al., J. Am. Chem. Soc. 1995, 117, 5179 (AMBER parm94 CA)"),
@@ -98,6 +118,14 @@ def uff_lj(element: str) -> LJ:
     return LJ(epsilon=d, sigma=x / TWO_POW_SIXTH, source=UFF_CITATION)
 
 
+def ion_lj(element: str) -> LJ | None:
+    """Joung-Cheatham parameters for a monatomic ion, or None if not tabulated (falls back to UFF)."""
+    if element not in ION_LJ:
+        return None
+    rmin_half, eps = ION_LJ[element]
+    return LJ(epsilon=eps, sigma=2.0 * rmin_half / TWO_POW_SIXTH, source=ION_CITATION)
+
+
 def graphite_lj(preset: str = DEFAULT_GRAPHITE) -> LJ:
     try:
         eps, sig, cite = GRAPHITE_LJ[preset]
@@ -127,6 +155,8 @@ def resolve_type_params(type_labels: Mapping[str, str], surface_labels: set[str]
             out[label] = LJ(float(eps), float(sig), "user override")
         elif label in surface_labels and element == "C":
             out[label] = graphite_lj(graphite)
+        elif label.endswith("_ion") and ion_lj(element) is not None:
+            out[label] = ion_lj(element)
         else:
             out[label] = uff_lj(element)
     return out

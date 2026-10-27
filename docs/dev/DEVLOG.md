@@ -27,4 +27,6 @@ Newest entries at the bottom. One entry per working session or nightly run.
   - dxtb dipole integrals need libcint, which has no compatible Windows build → polarizability and IR
     intensities now degrade gracefully (GFN1 frequencies/thermo still work); new backlog item WIN-1.
   - A dark-mode test assumed a light desktop → fixed.
+  - LAMMPS counter-ion test lost atoms on Windows (3/6 seeds; Linux 0/12): Na+ collapsed onto the
+    carboxylate with UFF LJ → Joung-Cheatham ion parameters + nve/limit for ions.
 - Smart App Control no longer blocks RDKit. ROCm PyTorch still to install (HW-1).

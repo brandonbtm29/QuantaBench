@@ -191,6 +191,28 @@ def test_counter_ion_becomes_point_particle(tfa, tmp_path):
     assert log.ok and not log.lost_atoms and len(log.blocks) == 3
 
 
+def test_counter_ion_uses_ion_parameters_and_stays_stable(tfa, tmp_path):
+    """Na+ next to a carboxylate in vacuum: with UFF's neutral-atom LJ the ion collapsed onto oxygen
+    and the run blew up on Windows for some seeds. Ion LJ + nve/limit must survive every seed."""
+    assert P.ion_lj("Na").sigma == pytest.approx(2.439, abs=1e-3)
+    slab = surfaces.graphite_slab(6, 4, layers=2, vacuum=20)
+    system = surfaces.place_on_surface(slab, tfa, height=3.5)
+    system += Atoms("Na", positions=[[2.0, 2.0, slab.positions[:, 2].max() + 3.0]], charges=[1.0], tags=[2])
+    base = qlmp.write_smd_setup(system, tmp_path / "base", **SHORT, config=SHORT_CFG)
+    assert "Na_ion" in base.data.read_text() and "nve/limit 0.1" in base.input.read_text()
+    pytest.importorskip("lammps")
+    import re
+    import shutil
+
+    for seed in (1001, 1004, 1005, 4928459):      # seeds that failed on Windows with UFF Na
+        d = tmp_path / f"s{seed}"
+        shutil.copytree(base.out_dir, d)
+        inp = d / "in.smd"
+        inp.write_text(re.sub(r"(variable seed\s+index\s+)\d+", rf"\g<1>{seed}", inp.read_text()))
+        log = qlog.parse_log(qlmp.run_lammps(d))
+        assert log.ok and not log.lost_atoms, f"seed {seed}"
+
+
 def test_molecule_across_periodic_boundary_stays_whole(tfa, tmp_path):
     slab = surfaces.graphite_slab(6, 4, layers=2, vacuum=20)
     system = surfaces.place_on_surface(slab, tfa, height=3.5, xy=(0.2, 0.2))   # straddles x = 0 and y = 0

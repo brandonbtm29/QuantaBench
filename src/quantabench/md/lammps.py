@@ -20,7 +20,7 @@ atoms" from overlaps, missing ``extra/special/per/atom`` for bonded topologies).
    from the neighbor list (``neigh_modify exclude molecule/intra``): they could not move a rigid body
    anyway. What is lost: conformational relaxation on the surface (e.g. a PFAS tail flattening or
    a head group rotating independently). Single-atom adsorbates (counter-ions) are integrated as
-   ordinary point particles.
+   point particles (``nve/limit`` + Langevin) with Joung-Cheatham ion LJ parameters.
 2. **Frozen surface.** The slab atoms belong to no integrator and start with zero velocity, so they
    never move; surface-surface pairs are excluded. This is the standard rigid-surface approximation
    for adsorption on graphite (stiff lattice, ~0.1 Å thermal motion) and it removes the need for a
@@ -309,12 +309,13 @@ def write_smd_setup(system_atoms: Atoms, out_dir: str | Path, temperature: float
             labels.append(lab)
     for mol in molecules:
         for k in mol:
-            lab = symbols[k]
+            # charged single atoms (counter-ions) get their own type with ion LJ parameters
+            lab = f"{symbols[k]}_ion" if len(mol) == 1 and abs(q[k]) >= 0.5 else symbols[k]
             label_of_atom[k] = lab
             if lab not in labels:
                 labels.append(lab)
     type_id = {lab: i + 1 for i, lab in enumerate(labels)}
-    element_of = {lab: lab.removesuffix("_surf") for lab in labels}
+    element_of = {lab: lab.removesuffix("_surf").removesuffix("_ion") for lab in labels}
     surface_labels = {lab for lab in labels if lab.endswith("_surf")}
     lj = P.resolve_type_params(element_of, surface_labels, cfg.graphite, params)
 
@@ -468,7 +469,9 @@ def _input_script(c: dict) -> str:
             add(f"fix             rbody rigidmols rigid/small molecule langevin ${{T}} ${{T}} {damp:g} "
                 f"$(v_seed+{seed_offset})")
         if c["ion_ids"]:
-            add("fix             ionint ions " + ("nve/limit 0.05" if limit else "nve"))
+            # nve/limit in every stage: at 300 K an ion moves ~0.005 Å/fs, so the cap only bites if a
+            # close contact goes wrong, and then it stops the run from blowing up
+            add("fix             ionint ions nve/limit " + ("0.05" if limit else "0.1"))
             add(f"fix             ionlgv ions langevin ${{T}} ${{T}} {damp:g} $(v_seed+{seed_offset + 100})")
 
     def unfix_integrators() -> None:
