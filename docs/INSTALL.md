@@ -83,6 +83,10 @@ allow the Python environment, or use WSL2/Linux.
   `QOpenGLWidget` that crashes in `initializeGL` with the AMD driver on Windows (verified on an
   RX 9060 XT, driver 26.10.1). 0.12 works. If you upgraded it by hand: `pip install "pyvistaqt==0.12.0"`.
 
+- **LAMMPS with counter-ions is intermittently unstable with the Windows wheel.** Identical SMD inputs
+  with a free Na⁺ fail ~5-10% of runs ("Out of range atoms"); Linux/WSL runs are deterministic. Adsorbate
+  runs without counter-ions are fine. Tracked as MD-1 in `docs/dev/BACKLOG.md`.
+
 ## Windows + WSL2 (Ubuntu 22.04 / 24.04)
 
 AMD lists the RX 9060 XT as supported on WSL2 with ROCm 7.2.1 and the *Adrenalin 26.1.1 for WSL2*

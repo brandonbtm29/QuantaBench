@@ -95,6 +95,18 @@ Depends on: none (research only; can run any night).
   a charge-response/finite-field fallback. Acceptance: GFN2 and IR intensities on Windows, or a
   documented decision why not.
 
+## MD-1: Counter-ions in vacuum SMD (Windows LAMMPS non-determinism + ion-pair heating) · ready
+- On BTM NOVA, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a
+  TFA⁻ + Na⁺ on graphite setup with "Out of range atoms - cannot compute PPPM" (also with
+  `OMP_NUM_THREADS=1`: 1/20); Linux is deterministic and passes 12/12 seeds. Reproducer:
+  `scratch/ionrepro.py` (in git history of docs/dev; regenerate from tests/test_lammps.py setup).
+- Physics side: a free Na⁺ falls onto the carboxylate in vacuum and releases tens of kcal/mol; even with
+  Joung-Cheatham ion LJ and 20 fs ion friction the adsorbate runs at 1000+ K in short protocols.
+  Options: start the counter-ion pre-paired at the head group, longer soft start, freeze spectator ions,
+  or recommend no counter-ion (PPPM neutralizing background) for adsorption SMD in vacuum.
+- Acceptance: a documented protocol that keeps T within ±20% of target after the soft start, and a
+  minimal upstream LAMMPS issue (or a confirmed local cause) for the Windows failures.
+
 ## Needs Brandon (hardware / Windows / decisions)
 
 - **HW-1 · needs-Brandon:** ROCm PyTorch on BTM NOVA; `quantabench-cli doctor --bench` output.
