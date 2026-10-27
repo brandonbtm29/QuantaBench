@@ -88,6 +88,11 @@ class SMDConfig:
     soft_steps: int = 2000
     soft_timestep: float = 0.5
     soft_damp: float = 10.0               # Langevin damping time of the rigid bodies (fs)
+    # Free counter-ions: strong Langevin friction in every stage. In vacuum an ion falls onto the
+    # oppositely charged head group and releases tens of kcal/mol; the weak rigid-body thermostats
+    # cannot remove that, the contact pair rings at thousands of K, and the run eventually fails.
+    # Ions are not pulled, so their friction does not enter the SMD work.
+    ion_damp: float = 20.0
     viscous_gamma: float = 0.0            # optional extra fix viscous (kcal/mol/Å per Å/fs); 0 = off
     # stage 2: NVT equilibration
     equil_steps: int = 50_000             # 50 ps
@@ -472,7 +477,8 @@ def _input_script(c: dict) -> str:
             # nve/limit in every stage: at 300 K an ion moves ~0.005 Å/fs, so the cap only bites if a
             # close contact goes wrong, and then it stops the run from blowing up
             add("fix             ionint ions nve/limit " + ("0.05" if limit else "0.1"))
-            add(f"fix             ionlgv ions langevin ${{T}} ${{T}} {damp:g} $(v_seed+{seed_offset + 100})")
+            add(f"fix             ionlgv ions langevin ${{T}} ${{T}} {min(damp, cfg.ion_damp):g} "
+                f"$(v_seed+{seed_offset + 100})")
 
     def unfix_integrators() -> None:
         if c["rigid_ids"]:
