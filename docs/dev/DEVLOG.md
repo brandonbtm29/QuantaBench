@@ -17,3 +17,14 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - Not verified: anything on a GPU, Windows, or with real AIMNet2 weights (see ROADMAP 0.2 "Still open").
 - Planning: `docs/UI_PLAN.md` (task-oriented workspaces, job model) and `docs/dev/BACKLOG.md`.
 - Next: UI-1 app shell.
+
+## 2026-10-27: first native Windows run on BTM NOVA
+- Pushed 0.2.0.dev0 to GitHub from BTM NOVA (fast-forward from a git bundle; the cloud session has no
+  push access to the repo yet).
+- Native Windows test run (Python 3.12.10, CPU PyTorch 2.14.1, Radeon RX 9060 XT OpenGL 4.6):
+  - pyvistaqt 0.13 crashed (access violation in `initializeGL`) on the first 3D viewer → pinned
+    `pyvistaqt<0.13`; with 0.12 all 31 GUI/3D tests pass.
+  - dxtb dipole integrals need libcint, which has no compatible Windows build → polarizability and IR
+    intensities now degrade gracefully (GFN1 frequencies/thermo still work); new backlog item WIN-1.
+  - A dark-mode test assumed a light desktop → fixed.
+- Smart App Control no longer blocks RDKit. ROCm PyTorch still to install (HW-1).

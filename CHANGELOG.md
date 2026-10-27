@@ -2,6 +2,12 @@
 
 ## 0.2.0 (unreleased)
 
+### Fixed on native Windows (2026-10-27)
+- Pin `pyvistaqt<0.13`: its new framebuffer OpenGL widget crashes on AMD/Windows; 0.12 works.
+- xTB polarizability and IR intensities degrade with a note when dxtb's libcint backend is missing
+  (native Windows), instead of failing; GFN1 Hessians no longer request dipole integrals.
+- Dark-mode 2D viewer test no longer assumes a light desktop.
+
 Viewer:
 
 - 2D structure view (RDKit SVG depiction) next to the 3D view, both sharing one atom selection: pick

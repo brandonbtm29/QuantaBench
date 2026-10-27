@@ -268,6 +268,11 @@ def test_selection_drives_highlights(app, pfoa_anion):
 def test_options_charges_and_dark_palette(viewer, app):
     from PySide6.QtGui import QColor, QPalette
 
+    light_pal = QPalette()  # explicit light baseline: the desktop may already be in dark mode (Windows)
+    light_pal.setColor(QPalette.ColorRole.Window, QColor("#f4f5f7"))
+    light_pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+    viewer.setPalette(light_pal)
+    app.processEvents()
     mol = built(FTCA_62)
     viewer.show_rdkit(mol)
     with pytest.raises(ValueError):

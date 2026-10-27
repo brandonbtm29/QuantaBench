@@ -72,6 +72,17 @@ There are two ways around it:
 Organization-managed PCs (WDAC/App Control for Business) show the same message. There, ask IT to
 allow the Python environment, or use WSL2/Linux.
 
+### What native Windows can't do yet
+
+- **GFN2-xTB, xTB polarizability and xTB IR intensities** need dxtb's `libcint` integral backend.
+  The only `tad-libcint` release with a Windows wheel (0.4) is incompatible with dxtb 0.4. On Windows,
+  GFN1-xTB optimizations, frequencies, thermochemistry, Mulliken charges and charge-based dipoles all
+  work; polarizability and IR intensities are skipped with a note. Use WSL2/Linux for those until
+  dxtb catches up.
+- **pyvistaqt is pinned below 0.13.** 0.13 replaced the native-window VTK widget with a framebuffer
+  `QOpenGLWidget` that crashes in `initializeGL` with the AMD driver on Windows (verified on an
+  RX 9060 XT, driver 26.10.1). 0.12 works. If you upgraded it by hand: `pip install "pyvistaqt==0.12.0"`.
+
 ## Windows + WSL2 (Ubuntu 22.04 / 24.04)
 
 AMD lists the RX 9060 XT as supported on WSL2 with ROCm 7.2.1 and the *Adrenalin 26.1.1 for WSL2*

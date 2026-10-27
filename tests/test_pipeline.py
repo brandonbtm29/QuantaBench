@@ -169,7 +169,11 @@ def test_gfn1_xtb_real(tmp_path):
     r = pipeline.run_molecule(from_smiles("OC(=O)C(F)(F)F", id="TFA"),
                               cfg(tmp_path, method="gfn1-xtb", xtb_properties=True), device="cpu", threads=1)
     assert r.status == "ok", r.error
-    assert r.descriptors["xtb_polarizability_iso_A3"] > 1
+    if engines.has_libcint():
+        assert r.descriptors["xtb_polarizability_iso_A3"] > 1
+    else:  # native Windows: no dipole integrals, polarizability skipped with a note
+        assert "xtb_polarizability_iso_A3" not in r.descriptors
+        assert any("polarizability skipped" in n for n in r.notes)
     assert abs(sum(r.conformers[0].charges) + 1) < 1e-6
 
 

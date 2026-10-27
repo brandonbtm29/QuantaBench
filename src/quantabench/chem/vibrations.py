@@ -341,7 +341,15 @@ def finite_difference_hessian(atoms: Atoms, step: float = 0.01, dipole: bool = T
     return hess, dmu
 
 
-def _dxtb_setup(numbers, positions, method: str, device: str):
+def _has_libcint() -> bool:
+    from .engines import has_libcint
+
+    return has_libcint()
+
+
+def _dxtb_setup(numbers, positions, method: str, device: str, field: bool = False):
+    """dxtb calculator in float64. ``field=True`` adds a zero ElectricField interaction (needed for
+    dipole derivatives); that requires dipole integrals from the libcint backend."""
     import dxtb
     import torch
     from dxtb.components.field import new_efield
@@ -352,11 +360,14 @@ def _dxtb_setup(numbers, positions, method: str, device: str):
     dtype = torch.float64
     par = dxtb.GFN2_XTB if method == "gfn2-xtb" else dxtb.GFN1_XTB
     opts = {"verbosity": 0}
-    if method == "gfn2-xtb":
+    if field or method == "gfn2-xtb":
         opts["int_driver"] = "libcint"
-    field = torch.zeros(3, device=dev, dtype=dtype, requires_grad=True)
     z = torch.as_tensor(np.asarray(numbers), device=dev)
-    calc = dxtb.Calculator(z, par, interaction=new_efield(field), opts=opts, device=dev, dtype=dtype)
+    interaction = None
+    if field:
+        efield = torch.zeros(3, device=dev, dtype=dtype, requires_grad=True)
+        interaction = new_efield(efield)
+    calc = dxtb.Calculator(z, par, interaction=interaction, opts=opts, device=dev, dtype=dtype)
 
     def pos_tensor():
         return torch.tensor(np.asarray(positions) / BOHR_ANG, device=dev, dtype=dtype, requires_grad=True)
@@ -412,8 +423,9 @@ def available_memory_gb(device: str = "cpu") -> float:
 
 def dxtb_dipole_derivatives(numbers, positions, method: str = "gfn1-xtb", charge: int = 0,
                             multiplicity: int = 1, device: str = "cpu") -> np.ndarray:
-    """Analytic dipole derivative dμ/dR, shape (3, 3N), in e (= e·Bohr/Bohr = e·Å/Å)."""
-    calc, pos_tensor = _dxtb_setup(numbers, positions, method, device)
+    """Analytic dipole derivative dμ/dR, shape (3, 3N), in e (= e·Bohr/Bohr = e·Å/Å).
+    Needs the libcint backend (dipole integrals)."""
+    calc, pos_tensor = _dxtb_setup(numbers, positions, method, device, field=True)
     kwargs = {"chrg": charge}
     if multiplicity > 1:
         kwargs["spin"] = multiplicity - 1
@@ -909,7 +921,10 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
     h = symmetrize(h)
     timings["hessian"] = time.perf_counter() - t
 
-    if ir and use_dxtb:
+    if ir and use_dxtb and not _has_libcint():
+        warnings.append("IR intensities skipped: dxtb dipole derivatives need the libcint backend "
+                        "(tad-libcint<0.4, Linux/WSL only for now). Frequencies and thermochemistry are unaffected.")
+    elif ir and use_dxtb:
         t = time.perf_counter()
         try:
             dmu = dxtb_dipole_derivatives(work.numbers, work.positions, method, charge, multiplicity, device)

@@ -51,9 +51,12 @@ def test_water_gfn1_modes_and_ir(water_gfn1):
     assert 1400 < bend < 1800
     assert 3200 < sym < 4000 and 3200 < asym < 4000
     ints = r.ir_intensities_km_mol
-    assert ints is not None and "analytic" in r.ir_source
-    assert all(i > 0 for i in ints)
-    assert ints[2] > ints[1]                  # asymmetric stretch stronger than symmetric
+    if not engines.has_libcint():  # native Windows: frequencies only, IR skipped with a warning
+        assert ints is None and any("IR intensities skipped" in w for w in r.warnings)
+    else:
+        assert ints is not None and "analytic" in r.ir_source
+        assert all(i > 0 for i in ints)
+        assert ints[2] > ints[1]              # asymmetric stretch stronger than symmetric
     # reduced masses: bend and stretches of water are ~1.0-1.1 amu
     assert all(0.9 < m < 1.2 for m in r.reduced_masses_amu)
 
@@ -90,8 +93,9 @@ def test_co2_is_linear():
     f = r.frequencies_cm1
     assert f[0] == pytest.approx(f[1], abs=1.0)         # degenerate bend
     ints = r.ir_intensities_km_mol
-    assert ints[2] < 1e-3                              # symmetric stretch is IR-inactive
-    assert ints[3] > ints[0] > 1.0                     # asymmetric stretch is the strongest band
+    if engines.has_libcint():
+        assert ints[2] < 1e-3                          # symmetric stretch is IR-inactive
+        assert ints[3] > ints[0] > 1.0                 # asymmetric stretch is the strongest band
     assert r.thermo.geometry == "linear"
 
 

@@ -1,6 +1,10 @@
 """Electronic properties from GFN1-xTB (dxtb) at a fixed geometry: atomic charges, dipole moment
 and static polarizability.
 
+Charges and the charge-based dipole need only dxtb's default PyTorch integrals. The polarizability
+needs an electric-field interaction, i.e. dipole integrals from the libcint backend; without it
+(native Windows today) the polarizability is skipped with a note.
+
 These are the Spartan-style inputs to the "quantum parachor" idea (polarizability, dipole, volume).
 GFN1-xTB uses a minimal basis, so absolute polarizabilities are low (roughly half of DFT values);
 use them for trends and as ML features, or recalibrate against a DFT subset.
@@ -12,7 +16,7 @@ import numpy as np
 
 from ..resources import has_package
 from .descriptors import dipole_debye
-from .engines import BOHR_ANG
+from .engines import BOHR_ANG, has_libcint
 
 AU_POLARIZABILITY_A3 = 0.1481847
 
@@ -43,7 +47,10 @@ def xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity
         "xtb_charges": [float(x) for x in q],
         "xtb_dipole_debye": dipole_debye(np.asarray(positions_ang), q, np.asarray(masses)),
     }
-    if polarizability:
+    if polarizability and not has_libcint():
+        out["_notes"] = ["xTB polarizability skipped: needs dxtb's libcint backend (tad-libcint<0.4, "
+                         "Linux/WSL only for now)"]
+    elif polarizability:
         field = torch.zeros(3, device=dev, dtype=dtype, requires_grad=True)
         fcalc = dxtb.Calculator(z, dxtb.GFN1_XTB, interaction=new_efield(field), opts=opts, device=dev, dtype=dtype)
         alpha = fcalc.get_polarizability(pos, **kwargs).detach().cpu().double().numpy() * AU_POLARIZABILITY_A3

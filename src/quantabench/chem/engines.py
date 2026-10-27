@@ -50,6 +50,27 @@ ENGINES: dict[str, EngineInfo] = {
 }
 
 
+_LIBCINT_OK: bool | None = None
+
+
+def has_libcint() -> bool:
+    """True when dxtb's libcint integral backend is importable *and* compatible.
+
+    It provides the multipole integrals needed for GFN2-xTB and for any dxtb electric-field quantity
+    (dipole moment, polarizability, IR intensities). There is no compatible Windows build yet:
+    tad-libcint 0.4 (the only release with a Windows wheel) needs a newer tad-mctc than dxtb 0.4 pins.
+    """
+    global _LIBCINT_OK
+    if _LIBCINT_OK is None:
+        try:
+            import tad_libcint  # noqa: F401
+
+            _LIBCINT_OK = True
+        except Exception:
+            _LIBCINT_OK = False
+    return _LIBCINT_OK
+
+
 def available(key: str) -> tuple[bool, str]:
     if key == "mmff":
         return True, ""
@@ -58,7 +79,7 @@ def available(key: str) -> tuple[bool, str]:
     if key in ("gfn1-xtb", "gfn2-xtb"):
         if not has_package("dxtb"):
             return False, "install with: pip install dxtb"
-        if key == "gfn2-xtb" and not has_package("tad_libcint"):
+        if key == "gfn2-xtb" and not has_libcint():
             return False, "GFN2 needs tad-libcint, currently Linux/WSL only (pip install 'tad-libcint<0.4')"
         return True, ""
     if key == "aimnet2":

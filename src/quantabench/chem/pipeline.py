@@ -346,6 +346,9 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                         raise
                     props = properties.xtb_properties(*args, device="cpu")
                 charges = props.pop("xtb_charges")
+                for note in props.pop("_notes", []):
+                    result.notes.append(note)
+                    log(f"  {note}")
                 result.descriptors.update(props)
                 if best.charges is None:
                     best.charges, best.dipole_debye = charges, props["xtb_dipole_debye"]

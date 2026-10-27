@@ -88,12 +88,21 @@ Depends on: none (research only; can run any night).
 
 ---
 
+## WIN-1: xTB dipole integrals on native Windows · ready
+- Native Windows has no compatible dxtb `libcint` backend (tad-libcint 0.4 needs tad-mctc ≥ 0.11, dxtb 0.4
+  pins 0.7), so GFN2-xTB, xTB polarizability and xTB IR intensities are unavailable there (they degrade
+  with a note). Investigate: a newer dxtb release, building tad-libcint 0.3 for Windows (CI wheel), or
+  a charge-response/finite-field fallback. Acceptance: GFN2 and IR intensities on Windows, or a
+  documented decision why not.
+
 ## Needs Brandon (hardware / Windows / decisions)
 
 - **HW-1 · needs-Brandon:** ROCm PyTorch on BTM NOVA; `quantabench-cli doctor --bench` output.
 - **HW-2 · needs-Brandon:** dxtb and AIMNet2 on the RX 9060 XT (single + batched); AIMNet2 weights
   download; compare energies CPU vs GPU.
-- **HW-3 · needs-Brandon:** GUI on Windows 11 (HiDPI picking, frame rate on a 20k-atom slab, dark mode).
+- **HW-3 · needs-Brandon:** GUI on Windows 11. Done 2026-10-27: the full suite including all GUI tests
+  passes natively on BTM NOVA (Radeon RX 9060 XT, OpenGL 4.6) with pyvistaqt 0.12; pyvistaqt 0.13
+  crashed (now pinned `<0.13`). Still to check by hand: HiDPI picking feel, 20k-atom slab frame rate.
 - **HW-4 · needs-Brandon:** LAMMPS `in.smd` with the GPU (OpenCL) build on Windows.
 - **DEC-1 · needs-Brandon:** approve `docs/SIMULATE_DESIGN.md` (after RES-1).
 - **VAL-1 · needs-Brandon:** Spartan Essential 76 PFAS comparison needs his Spartan exports (SDF/CSV of
