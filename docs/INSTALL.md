@@ -72,6 +72,14 @@ There are two ways around it:
 Organization-managed PCs (WDAC/App Control for Business) show the same message. There, ask IT to
 allow the Python environment, or use WSL2/Linux.
 
+### What the AMD GPU can do today (Windows, ROCm 7.2.1)
+
+PyTorch sees the card, but no QuantaBench engine uses it yet: AMD's Windows PyTorch lacks GPU linear
+algebra (MAGMA), which dxtb needs, and AIMNet2's dispersion runs through NVIDIA-only Warp kernels
+(backlog GPU-1/GPU-2). AMD's wheel also has a much slower CPU math library than PyPI's CPU build. Until
+that changes, keep the CPU build in `.venv` for everyday work and install ROCm into a second
+environment (`py -3.12 -m venv .venv-rocm`) for GPU experiments.
+
 ### What native Windows can't do yet
 
 - **GFN2-xTB, xTB polarizability and xTB IR intensities** need dxtb's `libcint` integral backend.

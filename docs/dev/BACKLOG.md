@@ -107,9 +107,32 @@ Depends on: none (research only; can run any night).
 - Acceptance: a documented protocol that keeps T within ±20% of target after the soft start, and a
   minimal upstream LAMMPS issue (or a confirmed local cause) for the Windows failures.
 
+## GPU-1: AIMNet2 on AMD GPUs (replace NVIDIA Warp D3) · ready
+- `aimnet` 0.2 computes DFT-D3 (and neighbor lists) through `nvalchemi-toolkit-ops` / NVIDIA Warp, which
+  rejects ROCm devices ("Invalid device identifier: cuda:0" on BTM NOVA). The NN itself is plain PyTorch.
+- Load the model with dispersion disabled (`needs_dispersion=False`) and add D3(BJ) for ωB97M from
+  `tad-dftd3` (pure PyTorch, already installed with dxtb) with AIMNet2's D3 parameters; keep the dense
+  neighbor path (< `nb_threshold` atoms). Verify on CPU against the stock calculator to ~1e-5 eV and
+  forces, then on GPU (needs-Brandon to run). Acceptance: AIMNet2 single + batched on a ROCm device.
+
+## GPU-2: dxtb on AMD GPUs · ready
+- AMD's Windows ROCm PyTorch has no MAGMA/hipSOLVER linear algebra on the GPU
+  (`torch.linalg.cholesky` / `eigh` raise). Options: route dxtb's small dense linear algebra to the CPU
+  inside an otherwise-GPU calculation (tensors are ~100x100 for PFAS-size molecules), or document
+  WSL2/Linux ROCm wheels (which include MAGMA). Measure whether GPU dxtb beats CPU at all for these sizes;
+  batched conformers are where it should.
+
+## PERF-1: Separate CPU and GPU environments on Windows · ready
+- Until GPU-1/GPU-2 land, the PyPI CPU torch (fast MKL/OpenBLAS kernels) is the better default on Windows.
+  Document a two-venv setup (`.venv` CPU, `.venv-rocm` GPU) in INSTALL.md and make `doctor --bench`
+  report CPU GFLOP/s with a warning when it is far below expectations. Also find why `doctor --bench`
+  ran > 50 min under the ROCm build (likely BLAS thread oversubscription: 23 OpenMP threads × OpenBLAS).
+
 ## Needs Brandon (hardware / Windows / decisions)
 
-- **HW-1 · needs-Brandon:** ROCm PyTorch on BTM NOVA; `quantabench-cli doctor --bench` output.
+- **HW-1 · done 2026-10-28:** ROCm 7.2.1 PyTorch 2.9.1 on BTM NOVA sees the RX 9060 XT (matmul
+  6.1 TFLOP/s fp32). But: no QuantaBench engine runs on it yet (see GPU-1, GPU-2), and AMD's Windows
+  wheel ships a slow CPU BLAS (52 vs 881 GFLOP/s for PyPI's CPU torch), so CPU work got ~17x slower.
 - **HW-2 · needs-Brandon:** dxtb and AIMNet2 on the RX 9060 XT (single + batched); AIMNet2 weights
   download; compare energies CPU vs GPU.
 - **HW-3 · needs-Brandon:** GUI on Windows 11. Done 2026-10-27: the full suite including all GUI tests

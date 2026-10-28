@@ -33,3 +33,12 @@ Newest entries at the bottom. One entry per working session or nightly run.
     1/20 with OMP_NUM_THREADS=1); those two tests are xfail on Windows. Backlog MD-1.
   - Full suite natively on Windows: 177 passed.
 - Smart App Control no longer blocks RDKit. ROCm PyTorch still to install (HW-1).
+
+## 2026-10-28: ROCm PyTorch on BTM NOVA
+- Installed AMD's ROCm 7.2.1 SDK + PyTorch 2.9.1 (Windows): `torch.cuda.is_available()` True, RX 9060 XT,
+  6.1 TFLOP/s fp32 matmul. The ROCm SDK calls `offload-arch.exe` with an unquoted path, which the space in
+  "GitHub Projects" splits (harmless warning so far).
+- Engines on the GPU: GFN1-xTB fails (no MAGMA: `torch.linalg.cholesky` on GPU), AIMNet2 fails (NVIDIA Warp
+  D3 rejects the ROCm device). CPU: GFN1 0.30 s and AIMNet2 0.28 s per energy+forces for the PFOA anion.
+- AMD's wheel has a slow CPU BLAS (52 GFLOP/s vs 881 with PyPI's CPU torch); `doctor --bench` ran > 50 min.
+- New backlog items GPU-1 (AIMNet2 D3 via tad-dftd3), GPU-2 (dxtb linear algebra), PERF-1 (two venvs).
