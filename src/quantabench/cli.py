@@ -351,6 +351,43 @@ def _freq_as_is(args) -> int:
     return status
 
 
+def _import(args) -> int:
+    """Read other programs' output files with cclib: summary, then the usual exports per file."""
+    from .chem import export, io_cclib
+    from .chem.pipeline import new_run_dir
+
+    ok, why = io_cclib.available()
+    if not ok:
+        print(f"cclib is not installed ({why}); pip install quantabench[interop]", file=sys.stderr)
+        return 2
+    out = Path(args.out).expanduser() if args.out else new_run_dir(settings_mod.load().output_path(), "import")
+    formats = tuple(args.formats) if args.formats else (*export.DEFAULT_FORMATS, "spectrum")
+    results, status = [], 0
+    for f in args.files:
+        try:
+            calc = io_cclib.read_output(f)
+            res = io_cclib.to_result(calc, f)
+        except Exception as exc:
+            print(f"{Path(f).name}: FAILED {exc}", file=sys.stderr)
+            status = 1
+            continue
+        print("\n".join(calc.summary()))
+        if res.vibrations:
+            _print_vibrations(res.input.id, res.vibrations)
+        ids = {r.input.id for r in results}
+        base, n = res.input.id, 2
+        while res.input.id in ids:             # two files with the same name from different folders
+            res.input.id = f"{base}_{n}"
+            n += 1
+        files = export.write_molecule(res, out, formats)
+        res.files = [str(p) for p in files]
+        results.append(res)
+        print(f"  wrote {len(files)} files to {out} ({', '.join(p.name for p in files)})\n")
+    if len(results) > 1:
+        export.write_batch_tables(results, out)
+    return status
+
+
 def _slab(args) -> int:
     from ase.io import write
 
@@ -591,6 +628,16 @@ def build_parser() -> argparse.ArgumentParser:
     fq.add_argument("--multiplicity", type=int, default=1, help="with --as-is: spin multiplicity")
     fq.add_argument("-v", "--verbose", action="store_true")
     fq.set_defaults(func=_freq)
+
+    im = sub.add_parser("import", help="read Gaussian/ORCA/Psi4/xtb/MOPAC/... output files (cclib) and export them",
+                        description="Parses each output file with cclib (last geometry, energies, charges, "
+                                    "frequencies, IR intensities, normal modes), prints a summary and writes "
+                                    "the usual files (XYZ, SDF, extXYZ, IR spectrum and mode table) per file.")
+    im.add_argument("files", nargs="+", metavar="FILE", help="program output files")
+    im.add_argument("--out", help="output folder (default: a new run folder in the settings' output folder)")
+    im.add_argument("--formats", nargs="+", choices=export_formats(),
+                    help="export formats (default: xyz sdf extxyz spectrum)")
+    im.set_defaults(func=_import)
 
     s = sub.add_parser("slab", help="graphite slab, optionally with a molecule placed above it")
     s.add_argument("--nx", type=int, default=16), s.add_argument("--ny", type=int, default=9)
