@@ -1,0 +1,378 @@
+ *******************************************************************************
+ **                                                                           **
+ **                              MOPAC v23.2.5                                **
+ **                                                                           **
+ *******************************************************************************
+ ** MOPAC's Digital Object Identifier: https://doi.org/10.5281/zenodo.6511958 **
+ **                                                                           **
+ ** Please cite the open-source release paper for use of this MOPAC version:  **
+ ** J. E. Moussa and J. J. P. Stewart (2026)                                  **
+ ** MOPAC: An open-source semiempirical molecular orbital program             **
+ ** J. Open Source Softw., 11(119), 8025, https://doi.org/10.21105/joss.08025 **
+ *******************************************************************************
+
+                              PM7 CALCULATION RESULTS
+
+ *******************************************************************************
+ *  CALCULATION DONE: (MAX THREADS = 1)              Sun Nov  1 19:39:45 2026  *
+ *  PM7        - The PM7 Hamiltonian to be used
+ *  PRECISE    - TIGHTER CRITERIA TO BE USED
+ *  T=         - A TIME OF 172800.0 SECONDS REQUESTED
+ *  DUMP=N     - RESTART FILE WRITTEN EVERY 7200.0 SECONDS REQUESTED
+ *******************************************************************************
+PM7 PRECISE
+ water: PM7 optimization, then frequencies (QuantaBench cclib test fixture)
+
+   ATOM   CHEMICAL          X               Y               Z
+  NUMBER   SYMBOL      (ANGSTROMS)     (ANGSTROMS)     (ANGSTROMS)
+
+     1       O          0.00000000  *   0.00000000  *   0.11730000  *
+     2       H          0.00000000  *   0.75720000  *  -0.46920000  *
+     3       H          0.00000000  *  -0.75720000  *  -0.46920000  *
+
+
+
+          CARTESIAN COORDINATES 
+
+    NO.       ATOM           X           Y           Z
+
+     1         O          0.0000      0.0000      0.1173
+     2         H          0.0000      0.7572     -0.4692
+     3         H          0.0000     -0.7572     -0.4692
+
+ General Reference for PM7:
+ "Optimization of Parameters for Semiempirical Methods VI: More Modifications to the 
+ NDDO Approximations and Re-optimization of Parameters", J. J. P. Stewart, J. Mol. Mod., 1:32, 19 (2013)
+ https://link.springer.com/article/10.1007/s00894-012-1667-x
+
+           Empirical Formula: H2 O  =     3 atoms
+
+
+
+      MOLECULAR POINT GROUP   :   C2v 
+
+
+      RHF CALCULATION, NO. OF DOUBLY OCCUPIED LEVELS = 4
+
+
+          Geometry optimization using EF
+
+          DIAGONAL MATRIX USED AS START HESSIAN
+
+ CYCLE:     1 TIME:   0.000 TIME LEFT:  2.00D  GRAD.:     3.173 HEAT: -57.79008
+ CYCLE:     2 TIME:   0.000 TIME LEFT:  2.00D  GRAD.:     1.971 HEAT: -57.79679
+ CYCLE:     3 TIME:   0.000 TIME LEFT:  2.00D  GRAD.:     0.196 HEAT: -57.79982
+ CYCLE:     4 TIME:   0.000 TIME LEFT:  2.00D  GRAD.:     0.010 HEAT: -57.79986
+
+     GRADIENT =  0.01032 IS LESS THAN CUTOFF =  0.05000
+
+
+
+ -------------------------------------------------------------------------------
+ PM7 PRECISE
+ water: PM7 optimization, then frequencies (QuantaBench cclib test fixture)
+
+
+
+     GEOMETRY OPTIMISED USING EIGENVECTOR FOLLOWING (EF).     
+     SCF FIELD WAS ACHIEVED                                   
+
+
+                              PM7 CALCULATION
+                                                       MOPAC v23.2.5 Linux
+                                                       Sun Nov  1 19:39:45 2026
+
+
+
+
+          FINAL HEAT OF FORMATION =        -57.79986 KCAL/MOL =    -241.83461 KJ/MOL
+
+
+          COSMO AREA              =         42.43 SQUARE ANGSTROMS
+          COSMO VOLUME            =         25.18 CUBIC ANGSTROMS
+
+          GRADIENT NORM           =          0.01032          =       0.00596 PER ATOM
+          IONIZATION POTENTIAL    =         12.115384 EV
+          HOMO LUMO ENERGIES (EV) =        -12.115  4.049
+          NO. OF FILLED LEVELS    =          4
+          MOLECULAR WEIGHT        =         18.0152         POINT GROUP:  C2v 
+
+          MOLECULAR DIMENSIONS (Angstroms)
+
+            Atom       Atom       Distance
+            H     3    H     2     1.51964
+            O     1    H     2     0.57906
+            H     2    O     1     0.00000
+
+
+          SCF CALCULATIONS        =          6
+
+          WALL-CLOCK TIME         =      0.031 SECONDS
+          COMPUTATION TIME        =      0.021 SECONDS
+
+
+
+
+   ATOM   CHEMICAL          X               Y               Z
+  NUMBER   SYMBOL      (ANGSTROMS)     (ANGSTROMS)     (ANGSTROMS)
+
+     1       O          0.00000000  *  -0.00000000  *   0.11481286  *
+     2       H          0.00000000  *   0.75982001  *  -0.46424535  *
+     3       H         -0.00000000  *  -0.75982001  *  -0.46424535  *
+
+                             CARTESIAN COORDINATES
+
+   1    O        0.000000000    -0.000000000     0.114812864
+   2    H        0.000000000     0.759820007    -0.464245354
+   3    H       -0.000000000    -0.759820007    -0.464245354
+
+
+           Empirical Formula: H2 O  =     3 atoms
+
+
+
+      MOLECULAR POINT GROUP   :   C2v 
+
+
+                  EIGENVALUES  
+ -29.61475 -17.83918 -14.21608 -12.11538   4.04863   6.35071
+
+
+              NET ATOMIC CHARGES AND DIPOLE CONTRIBUTIONS
+
+  ATOM NO.   TYPE          CHARGE      No. of ELECS.   s-Pop       p-Pop       
+    1          O          -0.649366        6.6494     1.81331     4.83606
+    2          H           0.324683        0.6753     0.67532
+    3          H           0.324683        0.6753     0.67532
+ DIPOLE           X         Y         Z       TOTAL
+ POINT-CHG.    -0.000     0.000    -1.806     1.806
+ HYBRID        -0.000    -0.000    -0.323     0.323
+ SUM           -0.000     0.000    -2.129     2.129
+
+
+          ATOMIC ORBITAL ELECTRON POPULATIONS
+
+     Atom    s        px        py        pz   
+    1  O   1.81331   2.00000   1.35059   1.48547
+    2  H   0.67532
+    3  H   0.67532
+ *******************************************************************************
+ **                                                                           **
+ **                              MOPAC v23.2.5                                **
+ **                                                                           **
+ *******************************************************************************
+ ** MOPAC's Digital Object Identifier: https://doi.org/10.5281/zenodo.6511958 **
+ **                                                                           **
+ ** Please cite the open-source release paper for use of this MOPAC version:  **
+ ** J. E. Moussa and J. J. P. Stewart (2026)                                  **
+ ** MOPAC: An open-source semiempirical molecular orbital program             **
+ ** J. Open Source Softw., 11(119), 8025, https://doi.org/10.21105/joss.08025 **
+ *******************************************************************************
+
+                              PM7 CALCULATION RESULTS
+
+ *******************************************************************************
+ *  CALCULATION DONE: (MAX THREADS = 1)              Sun Nov  1 19:39:45 2026  *
+ *  PM7        - The PM7 Hamiltonian to be used
+ *  OLDGEO     - PREVIOUS GEOMETRY TO BE USED
+ *  PRECISE    - TIGHTER CRITERIA TO BE USED
+ *  FORCE      - FORCE CALCULATION SPECIFIED
+ *  T=         - A TIME OF 172800.0 SECONDS REQUESTED
+ *  DUMP=N     - RESTART FILE WRITTEN EVERY 7200.0 SECONDS REQUESTED
+ *******************************************************************************
+PM7 FORCE PRECISE OLDGEO
+ water: PM7 frequencies at the optimized geometry
+
+   ATOM   CHEMICAL          X               Y               Z
+  NUMBER   SYMBOL      (ANGSTROMS)     (ANGSTROMS)     (ANGSTROMS)
+
+     1       O          0.00000000  *  -0.00000000  *   0.11481286  *
+     2       H          0.00000000  *   0.75982001  *  -0.46424535  *
+     3       H         -0.00000000  *  -0.75982001  *  -0.46424535  *
+
+
+
+          CARTESIAN COORDINATES 
+
+    NO.       ATOM           X           Y           Z
+
+     1         O          0.0000     -0.0000      0.1148
+     2         H          0.0000      0.7598     -0.4642
+     3         H         -0.0000     -0.7598     -0.4642
+
+ General Reference for PM7:
+ "Optimization of Parameters for Semiempirical Methods VI: More Modifications to the 
+ NDDO Approximations and Re-optimization of Parameters", J. J. P. Stewart, J. Mol. Mod., 1:32, 19 (2013)
+ https://link.springer.com/article/10.1007/s00894-012-1667-x
+
+           Empirical Formula: H2 O  =     3 atoms
+
+
+
+      MOLECULAR POINT GROUP   :   C2v 
+
+
+      RHF CALCULATION, NO. OF DOUBLY OCCUPIED LEVELS = 4
+
+
+
+          HEAT OF FORMATION =     -57.799860 KCALS/MOLE
+
+
+          CARTESIAN COORDINATE DERIVATIVES
+
+   NUMBER  ATOM         X            Y            Z
+
+     1       O     -0.006547    -0.008591     0.000000
+     2       H      0.004245     0.003555     0.000000
+     3       H      0.002301     0.005036     0.000000
+
+
+
+          GRADIENT NORM =   0.01334
+
+          MOLECULAR WEIGHT =   18.02
+
+
+
+          ROTATIONAL CONSTANTS IN CM(-1)
+
+          A =   28.08277295   B =   14.48530371   C =    9.55616338
+
+
+
+           PRINCIPAL MOMENTS OF INERTIA IN UNITS OF 10**(-40)*GRAM-CM**2
+
+          A =        0.9968   B =        1.9325   C =        2.9293
+
+
+          ORIENTATION OF MOLECULE IN FORCE CALCULATION
+
+    NO.       ATOM         X         Y         Z
+
+     1          O      -0.0393   -0.0515    0.0000
+     2          H       0.9160   -0.0515    0.0000
+     3          H      -0.2926    0.8696   -0.0000
+
+
+    FIRST DERIVATIVES WILL BE USED IN THE CALCULATION OF SECOND DERIVATIVES
+
+          ESTIMATED TIME TO COMPLETE CALCULATION =        0.28 SECONDS
+
+    FOR POINT-GROUP C2v  THERE ARE   4 UNIQUE SYMMETRY FUNCTIONS.
+
+ STEP:   1 TIME =     0.00 SECS, INTEGRAL =      0.00 TIME LEFT: 172800.00
+ STEP:   2 TIME =     0.00 SECS, INTEGRAL =      0.00 TIME LEFT: 172800.00
+ STEP:   3 TIME =     0.01 SECS, INTEGRAL =      0.01 TIME LEFT: 172799.99
+ STEP:   4 TIME =     0.00 SECS, INTEGRAL =      0.01 TIME LEFT: 172799.99
+ STEP:   5 TIME =     0.00 SECS, INTEGRAL =      0.01 TIME LEFT: 172799.99
+ STEP:   6 TIME =     0.01 SECS, INTEGRAL =      0.02 TIME LEFT: 172799.98
+ STEP:   7                       INTEGRAL =      0.02 TIME LEFT: 172799.98
+ STEP:   8                       INTEGRAL =      0.02 TIME LEFT: 172799.98
+ STEP:   9                       INTEGRAL =      0.02 TIME LEFT: 172799.98
+
+(To convert to Hartree/Bohr^2, multiply by (10^(-21) x N x a0^2)/(4.184 x 627.51) =  0.0642)
+
+
+           FORCE MATRIX IN MILLIDYNES/ANGSTROM
+
+
+                  O  1       H  2       H  3
+ ------------------------------------------
+     O    1   6.430049
+     H    2   4.079021   4.528339
+     H    3   4.077289   0.851484   4.528339
+
+
+          HEAT OF FORMATION =     -57.799860 KCALS/MOLE
+
+          ZERO POINT ENERGY      10.093 KCAL/MOL
+
+
+           NORMAL COORDINATE ANALYSIS (Total motion = 1 Angstrom)
+
+
+   Root No.       1         2         3
+
+                 1 A1      1 B2      2 A1  
+
+                1394.4    2809.6    2856.4
+  
+           1   -0.0320   -0.0379   -0.0157
+           2   -0.0420    0.0289   -0.0206
+           3    0.0000   -0.0000    0.0000
+           4    0.0791    0.4761    0.4758
+           5    0.4669    0.0000   -0.1039
+           6   -0.0000   -0.0000    0.0000
+           7    0.4292    0.1263   -0.2264
+           8    0.2001   -0.4591    0.4312
+           9   -0.0000    0.0000   -0.0000
+
+
+           MASS-WEIGHTED COORDINATE ANALYSIS (NORMAL COORDINATES)
+
+
+   Root No.       1         2         3
+
+                 1 A1      1 B2      2 A1  
+
+                1394.4    2809.6    2856.4
+  
+           1   -0.1817   -0.2161   -0.0899
+           2   -0.2385    0.1647   -0.1179
+           3    0.0000   -0.0000    0.0000
+           4    0.1127    0.6805    0.6832
+           5    0.6651    0.0000   -0.1492
+           6   -0.0000   -0.0000    0.0000
+           7    0.6114    0.1805   -0.3251
+           8    0.2851   -0.6561    0.6191
+           9   -0.0000    0.0000   -0.0000
+
+
+          DESCRIPTION OF VIBRATIONS
+
+
+ VIBRATION          1    1A1         ATOM PAIR     ENERGY CONTRIBUTION    RADIAL
+ FREQUENCY          1394.41         O 1 -- H 3         +50.0% ( 56.8%)      9.6%
+ TRANSITION DIPOLE   0.5291         O 1 -- H 2         +50.0% ( 56.8%)      9.6%
+ TRAVEL (Ang.)       0.2974
+ REDUCED MASS        0.5467
+ EFFECTIVE MASS      1.6957
+ FORCE CONSTANT      0.6263
+
+ VIBRATION          2    1B2         ATOM PAIR     ENERGY CONTRIBUTION    RADIAL
+ FREQUENCY          2809.63         O 1 -- H 2         +50.0% ( 71.6%)     96.7%
+ TRANSITION DIPOLE   1.2615         O 1 -- H 3         +50.0% ( 71.6%)     96.7%
+ TRAVEL (Ang.)       0.2149
+ REDUCED MASS        0.5195
+ EFFECTIVE MASS      1.5011
+ FORCE CONSTANT      2.4161
+
+ VIBRATION          3    2A1         ATOM PAIR     ENERGY CONTRIBUTION    RADIAL
+ FREQUENCY          2856.36         O 1 -- H 3         +50.0% ( 68.6%)     99.8%
+ TRANSITION DIPOLE   0.3924         O 1 -- H 2         +50.0% ( 68.6%)     99.8%
+ TRAVEL (Ang.)       0.2195
+ REDUCED MASS        0.4898
+ EFFECTIVE MASS      1.1488
+ FORCE CONSTANT      2.3543
+
+           FORCE CONSTANT IN CARTESIAN COORDINATES (Millidynes/A)
+
+    ATOM   CHEMICAL       X               Y               Z
+   NUMBER   SYMBOL  FORCE CONSTANT  FORCE CONSTANT  FORCE CONSTANT
+
+      1       O        4.703684        4.131635       -0.001568
+      2       H        4.446728        0.618050       -0.000734
+      3       H        1.096086        3.968692       -0.000734
+
+ **********************
+ *                    *
+ * JOB ENDED NORMALLY *
+ *                    *
+ **********************
+
+
+
+ TOTAL JOB TIME:             0.09 SECONDS
+
+ == MOPAC DONE ==
