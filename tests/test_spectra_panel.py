@@ -288,7 +288,9 @@ def _check_two_traces(app, w, res, tmp_path):
     panel.select_set(0)
     assert panel.scale.value() == pytest.approx(computed.vib["scale_factor"])
     out = panel.export_csv(tmp_path / "both.csv")
-    assert out.read_text().splitlines()[0] == "wavenumber_cm-1,intensity_km_mol,qm_intensity_km_mol"
+    # without IR intensities (native Windows: no dxtb libcint) every mode has the same weight: normalized
+    unit = "km_mol" if res.vibrations.get("ir_intensities_km_mol") else "normalized"
+    assert out.read_text().splitlines()[0] == f"wavenumber_cm-1,intensity_{unit},qm_intensity_{unit}"
     if w.viewer.plotter is not None:
         shown = w.viewer.atoms.positions.copy()
         assert panel.play()                              # first frame: sin(0) = 0 -> the frequency geometry

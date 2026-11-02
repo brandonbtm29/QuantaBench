@@ -53,6 +53,7 @@ def _fake_program(folder: Path, name: str, body: str) -> Path:
 FAKE_XTB = r'''
 import json, os, sys, time
 from pathlib import Path
+sys.stdout.reconfigure(encoding="utf-8")   # the real xtb writes UTF-8 ("Mol. α(0)"); Windows' default is cp1252
 BOHR = 0.529177210903
 args = sys.argv[1:]
 if "--version" in args:
