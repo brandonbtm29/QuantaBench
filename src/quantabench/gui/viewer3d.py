@@ -274,6 +274,9 @@ class MoleculeViewer3D(QWidget):
 
     measurementChanged = Signal(str)      # "distance: 1.234 Å", "angle: ...", "" when none
     coordinatesChanged = Signal(object)   # np.ndarray (N, 3), full new positions after a move
+    #: The scene was rebuilt (new structure, style, colors, hydrogens) or cleared. Actors added by others
+    #: (e.g. the Surfaces panel's "qb_surface") are kept; listeners check whether they still fit ``atoms``.
+    sceneRebuilt = Signal()
 
     def __init__(self, parent=None, selection: SelectionModel | None = None):
         super().__init__(parent)
@@ -387,6 +390,7 @@ class MoleculeViewer3D(QWidget):
         self._remove_scene()
         self.selection.clear()
         self._render()
+        self.sceneRebuilt.emit()
 
     def reset_camera(self) -> None:
         """Default (isometric) orientation, zoomed to fit, rotating about the center of the structure."""
@@ -823,6 +827,7 @@ class MoleculeViewer3D(QWidget):
         self._remove_scene()
         if self._atoms is None:
             self._render()
+            self.sceneRebuilt.emit()
             return
         import pyvista as pv
         import vtk
@@ -889,6 +894,7 @@ class MoleculeViewer3D(QWidget):
             self._reset_view()
         self.plotter.renderer.ResetCameraClippingRange()
         self._render()
+        self.sceneRebuilt.emit()
 
     def _glyph_actor(self, pd, source_port, scale_array: str, material: dict, orient: str | None = None):
         import vtk
