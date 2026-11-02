@@ -28,3 +28,5 @@ CLAUDE.local.md
 
 # Psi4 writes timer.dat into the working directory
 timer.dat
+# PID file the WSL wrapper writes into job folders (chem/external.py)
+.qb_pid

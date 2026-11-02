@@ -101,6 +101,7 @@ def test_settings_engines_tab_round_trip_and_detection(tmp_path, monkeypatch):
     # "Detect now" checks typed paths without touching the cache or the environment
     monkeypatch.setattr(external, "find_program", lambda name, **k: None)
     monkeypatch.setattr(external, "find_python_with", lambda *a, **k: None)
+    monkeypatch.setattr(external, "_probe_version", lambda *a, **k: "")   # never start a real WSL from a test
     env_before = dict(os.environ)
     d._detect_programs()
     assert _wait(app, lambda: "Searching" not in d.program_report.toPlainText())

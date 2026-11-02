@@ -151,8 +151,10 @@ def conda_env_prefixes() -> list[Path]:
 def _probe_version(info: ProgramInfo, spec: ProgramSpec, timeout: float = 15.0) -> str:
     if not spec.version_args:
         return ""
+    # no wrapper here: the WSL one writes .qb_pid into the working directory, and a probe has no job folder
+    cmd = ["wsl.exe", "-e", info.path[len(WSL_PREFIX):]] if info.via_wsl else [info.path]
     try:
-        cp = subprocess.run([*info.command(), *spec.version_args], capture_output=True, text=True,
+        cp = subprocess.run([*cmd, *spec.version_args], capture_output=True, text=True, cwd=tempfile.gettempdir(),
                             timeout=timeout, stdin=subprocess.DEVNULL, errors="replace",
                             creationflags=_NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
