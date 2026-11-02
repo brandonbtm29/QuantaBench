@@ -6,6 +6,7 @@ def isolated_settings(tmp_path, monkeypatch):
     """Never touch the real settings folder (or the GUI's saved window layout) from tests."""
     monkeypatch.setenv("QUANTABENCH_SETTINGS_DIR", str(tmp_path / "settings"))
     monkeypatch.setenv("QUANTABENCH_WINDOW_STATE", str(tmp_path / "window_state.ini"))
+    monkeypatch.setenv("QUANTABENCH_CACHE_DIR", str(tmp_path / "cache"))      # program version cache
     yield tmp_path
 
 

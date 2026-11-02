@@ -209,8 +209,21 @@ def _keep_dir(stem: str) -> Path:
     """A scratch folder that outlives the job folder, for the files ``export.write_qm`` copies later."""
     from . import external
 
-    safe = re.sub(r"[^\w.-]+", "_", stem)[:40] or "mol"
+    safe = external.ascii_name(stem, 40)      # ASCII only: Psi4 on Windows opens files through ANSI paths
     return Path(tempfile.mkdtemp(prefix=f"qm_{safe}_", dir=external.scratch_root()))
+
+
+def _keep_file(src: Path, dst: Path, warnings: list[str]) -> str | None:
+    """Move a result file out of the job folder; copy if moving fails; a warning (not a lost QM result)
+    if neither works (a Windows sharing violation, a full disk)."""
+    try:
+        return str(shutil.move(str(src), dst))
+    except OSError:
+        try:
+            return str(shutil.copy2(src, dst))
+        except OSError as exc:
+            warnings.append(f"could not keep {src.name} ({exc})")
+            return None
 
 
 def _write_xyz(path: Path, symbols, frames: list[tuple[str, list]]) -> Path:
@@ -378,14 +391,24 @@ def run_stage(result, cs, cfg, *, threads: int = 1, should_stop: Callable[[], bo
     with external.work_dir(f"psi4_{result.input.id}") as wd:
         out = run_driver(task, wd, python, threads=task["threads"], timeout=timeout, should_stop=should_stop, log=log)
         warnings += out.get("warnings", [])
-        keep = _keep_dir(result.input.id)
         files: dict[str, str] = {}
-        if (wd / PSI4_OUTPUT).is_file():
-            files["log"] = str(shutil.move(str(wd / PSI4_OUTPUT), keep / "psi4.out"))
-        cubes = out.get("cubes") or {}
-        for label in ("density", "esp"):
-            if cubes.get(label) and (wd / cubes[label]).is_file():
-                files[label] = str(shutil.move(str(wd / cubes[label]), keep / f"{label}.cube"))
+        try:
+            keep = _keep_dir(result.input.id)
+        except OSError as exc:
+            keep = None
+            warnings.append(f"could not keep the QM files ({exc})")
+        if keep is not None:
+            kept = []
+            if (wd / PSI4_OUTPUT).is_file():
+                kept.append(("log", wd / PSI4_OUTPUT, keep / "psi4.out"))
+            cubes = out.get("cubes") or {}
+            for label in ("density", "esp"):
+                if cubes.get(label) and (wd / cubes[label]).is_file():
+                    kept.append((label, wd / cubes[label], keep / f"{label}.cube"))
+            for label, src, dst in kept:
+                path = _keep_file(src, dst, warnings)
+                if path is not None:
+                    files[label] = path
 
     # conformers: energies (eV), relative energies, optimized geometries
     e_ref = out.get("energy_hartree")
@@ -454,7 +477,7 @@ def run_stage(result, cs, cfg, *, threads: int = 1, should_stop: Callable[[], bo
         from . import surfaces
 
         try:
-            qm["surface"] = dict(surfaces.surface_descriptors(files["density"], files["esp"]))
+            qm["surface"] = dict(surfaces.surface_descriptors(files["density"], files["esp"]), iso_au=0.002)
         except NotImplementedError:
             warnings.append("surface descriptors are not available yet (chem.surfaces is not implemented); "
                             "the density and ESP cubes are kept")

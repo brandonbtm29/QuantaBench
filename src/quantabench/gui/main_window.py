@@ -1222,7 +1222,9 @@ class MainWindow(QMainWindow):
         before = settings_mod.settings_dir()
         self._store_stage_values()
         dlg = SettingsDialog(self.s, self.report, self)
-        if not dlg.exec():
+        accepted = dlg.exec()
+        dlg.deleteLater()
+        if not accepted:
             return
         s = dlg.result_settings()
         if settings_mod.settings_dir() != before:

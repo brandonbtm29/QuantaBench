@@ -50,7 +50,8 @@ hexane, diethyl ether, ethyl acetate). Engines without a solvent model run in th
   `envs/tools-windows.yml`, or the zip from https://github.com/grimme-lab/xtb/releases; point
   Settings > Engines > xtb at `bin\xtb.exe` if it is not on PATH. xtb ≥ 6.5 is required; 6.7.1 is
   tested. 6.4.x is rejected.
-- **Optimizer.** `--optimizer native` uses xtb's own optimizer, 4-10x faster than ASE stepping xtb. The
+- **Optimizer.** `--optimizer native` uses xtb's own optimizer, 4-10x faster than ASE stepping xtb (one
+  extra single point at the end, because `xtbout.json` after `--opt` holds the start geometry's dipole). The
   level is the loosest xtb level whose threshold guarantees the requested fmax (0.03 eV/Å -> `vtight`).
 - **Properties.** `gfn2_dipole_debye`, `gfn2_gap_ev`, `gfn2_d4_polarizability_A3` (the D4 dispersion
   model's molecular α(0), a good static-polarizability estimate: water 1.41 vs 1.45 Å³ experiment),
@@ -93,13 +94,16 @@ hexane, diethyl ether, ethyl acetate). Engines without a solvent model run in th
 - **Install.** `conda install -c conda-forge mopac` (Windows: `Library\bin\mopac.exe`) or the
   installer from https://openmopac.net. MOPAC ≥ 22 (open source, no license key); 23.2.5 tested.
 - **Energy is the heat of formation in eV**, because MOPAC's gradients are those of ΔHf. Compare
-  energies only within one method.
+  energies only within one method. ΔHf already includes ZPE and 298 K thermal terms, so after frequencies
+  use the corrections (`vib_zpe_kcal`, `vib_h_corr_kcal`, `vib_g_corr_kcal`), not the absolute H and G.
 - `--optimizer native` (MOPAC's own optimizer) is 3-15x faster than ASE stepping MOPAC.
 - **Properties.** `pm7_heat_of_formation_kcal`, dipole, HOMO/LUMO/gap, ionization energy,
   `pm7_polarizability_iso_A3` (POLAR, closed shell; water 1.26, methanol 2.99 Å³) and, with COSMO,
   `pm7_cosmo_area_A2` and `pm7_cosmo_volume_A3`.
-- MOPAC exits with code 0 on errors; QuantaBench reads its error messages instead. COSMO energies have
-  small steps as surface segments switch; gradients are smooth, so optimizations are fine.
+- MOPAC exits with code 0 on errors; QuantaBench reads its error messages instead.
+- **COSMO is not smooth:** energies and gradients jump as surface segments switch. Optimizations in COSMO
+  can stop short of fmax, and COSMO frequencies are approximate (CF3COO⁻ in water: a −28 cm⁻¹ spurious
+  mode). Run MOPAC frequencies in the gas phase.
 
 ## Psi4 (QM stage)
 
@@ -128,6 +132,8 @@ quantabench-cli build "OC(=O)C(F)(F)C(F)(F)C(F)(F)F PFBA" --method xtb-gfn2 --so
 - **Timings, 2 CPU threads, ωB97X-D/def2-SVP.** Water 1 s. PFBA anion in PCM water: SCF 31 s,
   properties 21 s, cubes 23 s, finite-field polarizability 142 s (PCM forces finite fields).
 - **Pitfalls.**
+  - PCM solvents: PCMSolver has no DMF, n-hexane, diethyl ether, octanol or ethyl acetate; those QM stages
+    run in the gas phase with a note.
   - libint 2.13 makes Psi4 1.9.1 segfault: pin `libint=2.9`.
   - pint ≥ 0.25 breaks qcelemental 0.30, so every optimization fails: pin `pint<0.25`. The driver
     patches this for its own process and warns.
@@ -143,6 +149,10 @@ mapped on it, and the Murray-Politzer GIPF statistics: V_min, V_max, means, σ²
 Without QM cubes, the panel draws a vdW or solvent-accessible surface colored by the point-charge ESP
 of the current conformer's charges. Colors follow Spartan and GaussView (red = negative). Water at
 ωB97X-D/def2-SVP: 20.5 Å³ and 36.8 Å² at 0.002 au.
+
+The descriptors use the 0.002 au surface (Spartan's), recorded as `qm_surf_iso_au`. Published
+Murray-Politzer GIPF values are on 0.001 au, where the ESP is softer (water HF/6-31G*: σ²tot 345 vs 478
+(kcal/mol)² at 0.002 au), so compare with the literature only at the same isovalue.
 
 ![ESP on the 0.002 au density surface of trifluoroacetic acid](img/esp_surface.png)
 

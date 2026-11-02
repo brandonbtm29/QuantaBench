@@ -181,11 +181,11 @@ def test_available_missing_old_and_new(tmp_path, monkeypatch):
     exe = _fake_program(tmp_path / "old", "xtb", FAKE_XTB)
     monkeypatch.setenv("QUANTABENCH_XTB", str(exe))
     monkeypatch.setenv("FAKE_XTB_VERSION", "6.4.1")
-    external.clear_cache()
+    external.find_program("xtb", refresh=True)   # same file, new version: bypass the on-disk version cache
     ok, why = eng_xtb.available()
     assert not ok and "6.4.1" in why and ">= 6.5" in why and "6.7.1 recommended" in why
     monkeypatch.setenv("FAKE_XTB_VERSION", "6.7.1")
-    external.clear_cache()
+    external.find_program("xtb", refresh=True)
     assert eng_xtb.available() == (True, "")
     assert engines.available("xtb-gfn2") == (True, "")
 
@@ -204,8 +204,8 @@ def test_opt_level_guarantees_fmax():
 def test_command_lines_are_relative_and_complete():
     wsl = external.ProgramInfo("xtb", "wsl:xtb", "settings", "6.7.1")
     cmd = eng_xtb.command("xtb-gfn2", charge=-1, multiplicity=2, solvent="dichloromethane", program=wsl)
-    assert cmd == ["wsl.exe", "-e", "xtb", "calc.xyz", "--gfn", "2", "--grad", "--chrg", "-1", "--uhf", "1",
-                   "--alpb", "ch2cl2", "--json"]
+    assert cmd == ["wsl.exe", "-e", "sh", "-c", external.WSL_WRAPPER, "xtb", "calc.xyz", "--gfn", "2", "--grad",
+                   "--chrg", "-1", "--uhf", "1", "--alpb", "ch2cl2", "--json"]
     native = external.ProgramInfo("xtb", "/opt/xtb/bin/xtb", "PATH", "6.7.1")
     cmd = eng_xtb.command("gfnff", solvent="water", model="gbsa", opt_level_name="vtight", cycles=50,
                           accuracy=0.1, program=native)
@@ -418,8 +418,9 @@ def test_native_optimize_uses_calculator_folder_and_sets_results(fake_xtb):
     a.calc = calc
     native = engines.native_optimizer("xtb-gfn2")
     res = native(a, 0.03, 77, lambda: False, None, charge=0, multiplicity=1, solvent="", threads=1)
-    argv = fake_xtb()[-1]["argv"]
+    argv = [c["argv"] for c in fake_xtb() if "--opt" in c["argv"]][-1]
     assert argv[argv.index("--opt") + 1] == "vtight" and argv[argv.index("--cycles") + 1] == "77"
+    assert "--opt" not in fake_xtb()[-1]["argv"]       # then one single point at the optimized geometry
     assert np.allclose(a.positions, 0.99 * start, atol=1e-10)
     e_eh, g = _expected(a.positions)
     assert res.energy_ev == pytest.approx(e_eh * HARTREE_EV, abs=1e-8) and res.steps == 4
@@ -550,21 +551,22 @@ def test_real_native_optimize_methanol():
 
 
 @pytest.mark.external
-def test_real_native_optimize_anion_dipole_matches_a_fresh_single_point():
-    """xtb reports an ion's dipole about its own origin; after --opt that frame can differ from xtbopt.xyz."""
+@pytest.mark.parametrize("smiles,charge", [("OC(=O)C(F)(F)F", 0), ("[O-]C(=O)C(F)(F)F", -1)])
+def test_real_native_optimize_dipole_matches_a_fresh_single_point(smiles, charge):
+    """After --opt, xtbout.json holds the start geometry's dipole: the calculator must not publish it."""
     _real_xtb()
     from rdkit import Chem
     from rdkit.Chem import AllChem
 
-    m = Chem.AddHs(Chem.MolFromSmiles("[O-]C(=O)C(F)(F)F"))
+    m = Chem.AddHs(Chem.MolFromSmiles(smiles))
     AllChem.EmbedMolecule(m, randomSeed=7)
     a = Atoms([x.GetAtomicNum() for x in m.GetAtoms()], positions=m.GetConformer().GetPositions() + 4.0)
-    a.calc = eng_xtb.XtbCalculator(a.numbers, "xtb-gfn2", charge=-1, threads=1)
-    eng_xtb.native_optimize(a, 0.03, 200, None, None, method="xtb-gfn2", charge=-1, threads=1)
+    a.calc = eng_xtb.XtbCalculator(a.numbers, "xtb-gfn2", charge=charge, threads=1)
+    eng_xtb.native_optimize(a, 0.03, 200, None, None, method="xtb-gfn2", charge=charge, threads=1)
     mu_opt = np.asarray(a.calc.results["dipole"])
     b = a.copy()
-    b.calc = eng_xtb.XtbCalculator(b.numbers, "xtb-gfn2", charge=-1, threads=1)
+    b.calc = eng_xtb.XtbCalculator(b.numbers, "xtb-gfn2", charge=charge, threads=1)
     b.get_potential_energy()
-    assert np.linalg.norm(mu_opt) == pytest.approx(np.linalg.norm(b.calc.results["dipole"]), rel=1e-3)
+    assert mu_opt == pytest.approx(np.asarray(b.calc.results["dipole"]), abs=2e-3)
     a.calc.close()
     b.calc.close()

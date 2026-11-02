@@ -73,7 +73,7 @@ def test_wsl_paths_and_command():
     assert external.to_wsl_path(r"C:\Users\Brand\GitHub Projects\x") == "/mnt/c/Users/Brand/GitHub Projects/x"
     assert external.to_wsl_path("/home/u/x") == "/home/u/x"
     info = external.ProgramInfo("crest", "wsl:crest", "settings")
-    assert info.via_wsl and info.command() == ["wsl.exe", "-e", "crest"]
+    assert info.via_wsl and info.command() == ["wsl.exe", "-e", "sh", "-c", external.WSL_WRAPPER, "crest"]
 
 
 def test_find_python_with_current_interpreter():
@@ -260,3 +260,125 @@ def test_qm_stage_failure_is_a_note(monkeypatch):
                       xtb_properties=False)
     res = run_molecule(from_smiles("CCO", id="ethanol"), cfg)
     assert res.status == "ok" and any("QM stage skipped" in n for n in res.notes)
+
+
+# ----------------------------------------------------------------------------- review fixes (2026-11-01)
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell wrapper")
+
+
+@posix_only
+def test_posix_children_get_the_raised_stack_limit(tmp_path):
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+    run = external.run_program(["sh", "-c", "ulimit -s"], tmp_path)
+    want = "unlimited" if hard == resource.RLIM_INFINITY else str(hard // 1024)
+    assert run.text().strip() == want
+
+
+@posix_only
+def test_missing_program_is_reported_not_run(tmp_path):
+    with pytest.raises(external.ExternalProgramError, match="could not start"):
+        external.run_program([str(tmp_path / "no_such_xtb"), "x.xyz"], tmp_path)
+
+
+@posix_only
+def test_keyboard_interrupt_kills_the_child(tmp_path):
+    """The child has its own session, so Ctrl+C never reaches it: run_program must kill it."""
+    import os
+    import signal
+
+    calls = {"n": 0}
+
+    def interrupt():
+        calls["n"] += 1
+        if calls["n"] == 5:
+            raise KeyboardInterrupt
+        return False
+
+    with pytest.raises(KeyboardInterrupt):
+        external.run_program([sys.executable, "-c", "import os, time; open('pid', 'w').write(str(os.getpid())); "
+                              "time.sleep(60)"], tmp_path, should_stop=interrupt, poll_s=0.1)
+    pid = int((tmp_path / "pid").read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    assert signal.SIGTERM  # (silence unused-import linters on some platforms)
+
+
+@posix_only
+def test_wsl_wrapper_records_pid_and_cancel_kills_linux_side(tmp_path, monkeypatch):
+    """A fake wsl.exe (``--cd DIR -e cmd...``) runs the real wrapper script on Linux."""
+    import os
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "wsl.exe"
+    fake.write_text('#!/bin/sh\n[ "$1" = "--cd" ] && { cd "$2"; shift 2; }\n[ "$1" = "-e" ] && shift\nexec "$@"\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    job = tmp_path / "job"
+    info = external.ProgramInfo("crest", "wsl:sleep", "settings")
+    flag = threading.Event()
+    threading.Timer(1.0, flag.set).start()
+    with pytest.raises(Cancelled):
+        external.run_program([*info.command(), "60"], job, should_stop=flag.is_set, poll_s=0.05)
+    pid = int((job / ".qb_pid").read_text())
+    time.sleep(0.2)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_wsl_paths_are_ignored_off_windows(tmp_path, monkeypatch):
+    exe = _fake_program(tmp_path, "crest", 'print("Version 3.0.2, Tue")\n')
+    monkeypatch.setattr(external, "IS_WINDOWS", False)
+    s = settings_mod.Settings()
+    s.engines.paths["crest"] = "wsl:/home/u/envs/bin/crest"     # synced from a Windows machine
+    settings_mod.save(s)
+    monkeypatch.setenv("QUANTABENCH_CREST", str(exe))
+    info = external.find_program("crest", refresh=True)
+    assert info.path == str(exe) and "is for Windows" in info.source
+
+
+def test_missing_configured_path_is_noted(tmp_path, monkeypatch):
+    exe = _fake_program(tmp_path, "xtb", 'print("* xtb version 6.7.1 (x)")\n')
+    s = settings_mod.Settings()
+    s.engines.paths["xtb"] = str(tmp_path / "moved" / "xtb")
+    settings_mod.save(s)
+    monkeypatch.setenv("QUANTABENCH_XTB", str(exe))
+    info = external.find_program("xtb", refresh=True)
+    assert info.path == str(exe) and "not found" in info.source
+
+
+def test_versions_are_cached_on_disk(tmp_path, monkeypatch):
+    exe = _fake_program(tmp_path, "xtb", 'print("* xtb version 6.7.1 (x)")\n')
+    monkeypatch.setenv("QUANTABENCH_XTB", str(exe))
+    assert external.find_program("xtb", refresh=True).version == "6.7.1"
+    external.clear_cache()
+    monkeypatch.setattr(external, "_probe_version", lambda *a, **k: pytest.fail("probed again"))
+    assert external.find_program("xtb").version == "6.7.1"
+
+
+def test_bad_settings_types_do_not_break_discovery(tmp_path, monkeypatch):
+    import json
+
+    d = tmp_path / "settings"
+    d.mkdir(exist_ok=True)
+    (d / "settings.json").write_text(json.dumps({"engines": {"paths": None, "keep_scratch": "yes"}}))
+    s = settings_mod.load()
+    assert s.engines.paths == {} and s.engines.keep_scratch is False
+    monkeypatch.setattr(external, "_search", lambda spec: None)
+    monkeypatch.delenv("QUANTABENCH_CREST", raising=False)
+    assert external.find_program("crest", refresh=True) is None
+
+
+def test_default_timeout_comes_from_settings(tmp_path):
+    s = settings_mod.Settings()
+    s.engines.timeout_s = 0.5
+    settings_mod.save(s)
+    with pytest.raises(external.ExternalProgramError, match="timed out"):
+        external.run_program([sys.executable, "-c", "import time; time.sleep(30)"], tmp_path / "j", poll_s=0.05)
+
+
+def test_ascii_scratch_names():
+    assert external.ascii_name("α-pinene oxide") == "pinene_oxide"
+    assert external.ascii_name("ααα") == "job"

@@ -19,7 +19,8 @@ class Solvent:
     label: str
     epsilon: float         # static dielectric constant at 25 °C
     alpb: str | None       # xtb/tblite ALPB/GBSA keyword (None = not parametrized)
-    pcm: str | None        # PCMSolver name used by Psi4 (None = not in its table)
+    pcm: str | None        # PCMSolver name used by Psi4 (None = not in its table: gas phase + note).
+                           # Checked against PCMSolver 1.2.3: it has no DMF, n-hexane or diethyl ether.
 
 
 SOLVENTS: dict[str, Solvent] = {s.name: s for s in (
@@ -30,14 +31,14 @@ SOLVENTS: dict[str, Solvent] = {s.name: s for s in (
     Solvent("acetonitrile", "Acetonitrile", 35.69, "acetonitrile", "acetonitrile"),
     Solvent("acetone", "Acetone", 20.49, "acetone", "acetone"),
     Solvent("dmso", "DMSO", 46.83, "dmso", "dimethylsulfoxide"),
-    Solvent("dmf", "DMF", 37.22, "dmf", "n,n-dimethylformamide"),
-    Solvent("thf", "THF", 7.43, "thf", "tetrahydrofuran"),
+    Solvent("dmf", "DMF", 37.22, "dmf", None),
+    Solvent("thf", "THF", 7.43, "thf", "THF"),
     Solvent("dichloromethane", "Dichloromethane", 8.93, "ch2cl2", "methylenechloride"),
     Solvent("chloroform", "Chloroform", 4.71, "chcl3", "chloroform"),
     Solvent("toluene", "Toluene", 2.37, "toluene", "toluene"),
     Solvent("benzene", "Benzene", 2.27, "benzene", "benzene"),
-    Solvent("hexane", "n-Hexane", 1.88, "hexane", "n-hexane"),
-    Solvent("diethylether", "Diethyl ether", 4.24, "ether", "diethylether"),
+    Solvent("hexane", "n-Hexane", 1.88, "hexane", None),
+    Solvent("diethylether", "Diethyl ether", 4.24, "ether", None),
     Solvent("ethylacetate", "Ethyl acetate", 5.99, "ethylacetate", None),
 )}
 

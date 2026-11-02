@@ -358,7 +358,12 @@ def read_output(path: str | Path) -> ImportedCalculation:
     version = str(md.get("legacy_package_version") or md.get("package_version") or "")
     head = text[:65536] if text is not None else _head(path)
     method, basis = _method_basis(data, head)
-    coords = np.asarray(data.atomcoords, dtype=float).reshape(-1, len(data.atomnos), 3)
+    coords = np.asarray(data.atomcoords, dtype=float)
+    if coords.size == 0 or len(data.atomnos) == 0:
+        hint = (" xtb single-point and --hess outputs carry no geometry that cclib reads: import the output of "
+                "an --opt or --ohess run, or the .xyz file" if "xtb" in program.lower() else "")
+        raise ValueError(f"{path.name}: {program} output without coordinates that cclib can read.{hint}")
+    coords = coords.reshape(-1, len(data.atomnos), 3)
     calc = ImportedCalculation(path=str(path), program=program, version=version, method=method, basis=basis,
                                numbers=[int(z) for z in data.atomnos], positions_A=coords[-1].copy(),
                                trajectory_A=coords, compat=compat)

@@ -51,6 +51,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("QuantaBench Settings")
         self.setMinimumWidth(560)
         self.setMinimumHeight(640)   # the Engines tab: four paths, the detection report and run options
+        self._closed = False
         self.s = s
         tabs = QTabWidget()
         tabs.addTab(self._resources_tab(report), "Compute")
@@ -235,6 +236,8 @@ class SettingsDialog(QDialog):
             return rows, py, version
 
         def done(result):
+            if self._closed:
+                return                    # the dialog was closed while detection ran: drop the result
             rows, py, version = result
             lines = [f"{n}: " + (f"{i.version or 'version ?'} at {i.path} ({i.source})" if i
                                  else (why or "not found")) for n, i, why in rows]
@@ -242,20 +245,20 @@ class SettingsDialog(QDialog):
                                      (f"{py} cannot import psi4" if py else "not found")))
             self.program_report.setPlainText("\n".join(lines))
 
+        def failed(msg):
+            if not self._closed:
+                self.program_report.setPlainText(msg.splitlines()[0])
+
         self.program_report.setPlainText("Searching...")
         from . import workers
 
-        self._detect_thread = workers.start(workers.FunctionWorker(detect), self, done,
-                                            lambda msg: self.program_report.setPlainText(msg.splitlines()[0]))
+        # The main window owns the thread (it waits for its workers before closing), so closing this dialog
+        # never blocks on a slow probe (a WSL start) and no QThread is destroyed while running.
+        owner = self.parent() if self.parent() is not None else self
+        workers.start(workers.FunctionWorker(detect), owner, done, failed)
 
     def done(self, result: int) -> None:
-        """Wait for a running "Detect now" (it only probes versions) so no QThread outlives the dialog."""
-        thread = getattr(self, "_detect_thread", None)
-        if thread is not None:
-            try:
-                thread.wait(30000)
-            except RuntimeError:          # already deleted by Qt
-                pass
+        self._closed = True
         super().done(result)
 
     def _folders_tab(self) -> QWidget:

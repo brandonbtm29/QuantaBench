@@ -524,14 +524,12 @@ def native_optimize(atoms, fmax: float = 0.03, max_steps: int = 500, should_stop
     atoms.set_positions(pos)
     if calc is not None:
         calc.n_runs += 1
-        if charge:
-            # xtb reports an ion's dipole about its own origin, and after --opt that origin need not be the
-            # frame of xtbopt.xyz (PFBA anion: 8.81 D instead of 7.75 D). One single point at the final
-            # geometry gives consistent charges and a correct dipole about the centre of mass.
-            calc.reset()
-            calc.calculate(atoms)
-        else:
-            calc.store(atoms, res)
+        # After --opt, xtbout.json holds the dipole of the *first* SCF (the start geometry), while the
+        # energy, charges and engrad belong to the final one (CF3COOH: 3.11 D stored vs 3.52 D at the
+        # optimum; for ions the error was larger still). One cheap single point at the final geometry
+        # makes every result, the dipole included, belong to the geometry the atoms now have.
+        calc.reset()
+        calc.calculate(atoms)
     converged = bool(info["opt_converged"]) and fmax_final <= fmax
     if log is not None and info["opt_converged"] and not converged:
         log(f"  xtb --opt {level} converged, but max force {fmax_final:.4f} eV/Å > fmax {fmax}")

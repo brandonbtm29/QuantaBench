@@ -108,6 +108,7 @@ def test_settings_engines_tab_round_trip_and_detection(tmp_path, monkeypatch):
     assert "xtb: not found" in text and "Psi4: not found" in text
     assert "crest: version ?" in text and "wsl:" in text          # a wsl: path is taken as given
     assert dict(os.environ) == env_before
+    assert _wait(app, lambda: not d.__dict__.get("_live_workers"))   # the detection thread has ended
     d.reject()
     d.deleteLater()
     app.processEvents()

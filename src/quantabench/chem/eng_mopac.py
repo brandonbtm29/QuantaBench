@@ -324,7 +324,7 @@ class MopacCalculator(Calculator):
 def _factory(method: str):
     def factory(numbers, charge: int = 0, multiplicity: int = 1, device: str = "cpu", **options) -> MopacCalculator:
         return MopacCalculator(method, charge, multiplicity, solvent=options.get("solvent") or "",
-                               threads=int(options.get("threads") or 1))
+                               threads=int(options.get("threads") or 1), should_stop=options.get("should_stop"))
     factory.__name__ = f"mopac_{method.split('-')[0].lower()}_factory"
     return factory
 
@@ -373,7 +373,7 @@ def _native_optimize(method: str):
 
 def _properties(method: str, prefix: str, label: str):
     def properties(numbers, positions, charge: int = 0, multiplicity: int = 1, *, solvent: str = "",
-                   threads: int = 1, polarizability: bool = True, **options) -> dict:
+                   threads: int = 1, polarizability: bool = True, should_stop=None, **options) -> dict:
         check_electrons(numbers, charge, multiplicity)
         solvent = solvent or ""
         threads = int(threads or 1)
@@ -381,7 +381,7 @@ def _properties(method: str, prefix: str, label: str):
         polar_here = polarizability and multiplicity == 1 and not solvent
         job = run_job(numbers, positions, keywords(method, charge, multiplicity, solvent=solvent, threads=threads,
                                                    task="sp", polar=polar_here),
-                      threads=threads, prefix=f"mopac_{method}_props")
+                      threads=threads, prefix=f"mopac_{method}_props", should_stop=should_stop)
         aux = job.aux
         out: dict = {f"{prefix}_heat_of_formation_kcal": job.heat_of_formation_kcal}
         for key, name in (("DIPOLE:DEBYE", "dipole_debye"), ("IONIZATION_POTENTIAL:EV", "ionization_ev"),
@@ -404,7 +404,7 @@ def _properties(method: str, prefix: str, label: str):
                 alpha = polarizability_from_out(job.out)
             else:     # in a solvent: the polarizability is a gas-phase property (as for tblite)
                 gas = run_job(numbers, positions, keywords(method, charge, 1, threads=threads, task="sp", polar=True),
-                              threads=threads, prefix=f"mopac_{method}_polar")
+                              threads=threads, prefix=f"mopac_{method}_polar", should_stop=should_stop)
                 alpha = polarizability_from_out(gas.out)
                 notes.append(f"{label} polarizability: gas phase (other {prefix} properties: COSMO {solvent})")
             if alpha is not None:

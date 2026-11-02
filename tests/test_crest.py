@@ -205,7 +205,7 @@ def test_wsl_crest_command_and_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(external, "run_program", run)
     cfg = BuildConfig(crest_method="gfn2//gfnff", crest_quick=False, energy_window_kcal=3.0)
     cs = crest.generate(_ethanol(), cfg, threads=4, solvent="water", charge=0)
-    assert seen["cmd"] == ["wsl.exe", "-e", "crest", "input.xyz", "--gfn2//gfnff", "--legacy", "--ewin", "3",
+    assert seen["cmd"] == ["wsl.exe", "-e", "sh", "-c", external.WSL_WRAPPER, "crest", "input.xyz", "--gfn2//gfnff", "--legacy", "--ewin", "3",
                            "--alpb", "water", "--chrg", "0", "--uhf", "0", "-T", "4"]
     assert not any(Path(a).is_absolute() or str(seen["cwd"]) in a for a in seen["cmd"][3:])   # relative names
     env = seen["env"]

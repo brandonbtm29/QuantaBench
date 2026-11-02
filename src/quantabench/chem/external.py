@@ -39,6 +39,13 @@ from .optimize import Cancelled
 
 IS_WINDOWS = sys.platform == "win32"
 WSL_PREFIX = "wsl:"
+#: POSIX children run as ``sh -c STACK_WRAPPER prog args...``: raise the stack limit (ulimit -s; xtb and CREST
+#: overflow the default 8 MB on larger molecules), then exec the program (same PID, same process group).
+#: This replaces a Python ``preexec_fn``, which is unsafe in the forked child of a multi-threaded GUI.
+STACK_WRAPPER = 'ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" 2>/dev/null; exec "$0" "$@"'
+#: The same inside WSL, plus the Linux PID in .qb_pid (taskkill on wsl.exe does not reach the Linux side).
+WSL_WRAPPER = ('ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" 2>/dev/null; echo $$ > .qb_pid; '
+               'exec "$0" "$@"')
 
 
 class ExternalProgramError(RuntimeError):
@@ -79,9 +86,10 @@ class ProgramInfo:
         return self.path.startswith(WSL_PREFIX)
 
     def command(self) -> list[str]:
-        """argv prefix that starts the program."""
+        """argv prefix that starts the program. Through WSL, a small ``sh`` wrapper raises the stack limit
+        (xtb/CREST need it) and records the Linux PID in ``.qb_pid`` so a cancel can kill the Linux side."""
         if self.via_wsl:
-            return ["wsl.exe", "-e", self.path[len(WSL_PREFIX):]]
+            return ["wsl.exe", "-e", "sh", "-c", WSL_WRAPPER, self.path[len(WSL_PREFIX):]]
         return [self.path]
 
 
@@ -97,7 +105,7 @@ def _engine_settings():
 
 
 # ----------------------------------------------------------------------------------- discovery
-_CACHE: dict[str, ProgramInfo | None] = {}
+_CACHE: dict[str, tuple[ProgramInfo | None, str]] = {}   # name -> (info, how far its version was probed)
 
 
 def clear_cache() -> None:
@@ -153,22 +161,37 @@ def _probe_version(info: ProgramInfo, spec: ProgramSpec, timeout: float = 15.0) 
     return m.group(1) if m else ""
 
 
+def _configured_paths() -> dict:
+    paths = getattr(_engine_settings(), "paths", None)
+    return paths if isinstance(paths, dict) else {}
+
+
 def _locate(spec: ProgramSpec) -> tuple[str, str] | None:
-    """(path, source) of the first match, without running anything."""
-    cfg_path = str(getattr(_engine_settings(), "paths", {}).get(spec.name, "") or "").strip()
-    if cfg_path:
-        if cfg_path.startswith(WSL_PREFIX):
-            return cfg_path, "settings"
-        p = Path(os.path.expanduser(cfg_path))
+    """(path, source) of the first match, without running anything. A configured path that does not exist
+    (or a ``wsl:`` path on a machine that is not Windows, e.g. settings synced from Windows to Linux) is
+    skipped, and the search goes on; the source of what is found then says so."""
+    skipped = []
+    for value, source in ((str(_configured_paths().get(spec.name, "") or "").strip(), "settings"),
+                          (os.environ.get(f"QUANTABENCH_{spec.name.upper()}", "").strip(), "environment variable")):
+        if not value:
+            continue
+        note = f" ({'; '.join(skipped)})" if skipped else ""
+        if value.startswith(WSL_PREFIX):
+            if IS_WINDOWS:
+                return value, source + note
+            skipped.append(f"{source}: {value} is for Windows")
+            continue
+        p = Path(os.path.expanduser(value))
         if p.is_file():
-            return str(p), "settings"
-    env_path = os.environ.get(f"QUANTABENCH_{spec.name.upper()}", "").strip()
-    if env_path:
-        if env_path.startswith(WSL_PREFIX):
-            return env_path, "environment variable"
-        p = Path(os.path.expanduser(env_path))
-        if p.is_file():
-            return str(p), "environment variable"
+            return str(p), source + note
+        skipped.append(f"{source}: {value} not found")
+    hit = _search(spec)
+    if hit is not None and skipped:
+        return hit[0], f"{hit[1]} ({'; '.join(skipped)})"
+    return hit
+
+
+def _search(spec: ProgramSpec) -> tuple[str, str] | None:
     names = _exe_names(spec)
     for n in names:
         found = shutil.which(n)
@@ -186,25 +209,73 @@ def _locate(spec: ProgramSpec) -> tuple[str, str] | None:
     return None
 
 
-def find_program(name: str, *, version: bool = True, refresh: bool = False) -> ProgramInfo | None:
+def _version_cache_file() -> Path:
+    """Per-machine cache (not in the synced settings folder); ``QUANTABENCH_CACHE_DIR`` overrides it."""
+    from platformdirs import user_cache_dir
+
+    root = os.environ.get("QUANTABENCH_CACHE_DIR", "").strip() or user_cache_dir("QuantaBench", appauthor=False)
+    return Path(root) / "program_versions.json"
+
+
+def _cached_version(info: ProgramInfo, spec: ProgramSpec, refresh: bool) -> str:
+    """Version of a local program, cached on disk by (path, size, mtime): building the GUI's engine menus
+    then never waits for ``--version`` runs after the first start."""
+    import json
+
+    try:
+        st = Path(info.path).stat()
+        key = f"{info.path}|{st.st_size}|{st.st_mtime_ns}"
+    except OSError:
+        return _probe_version(info, spec)
+    path = _version_cache_file()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    if not refresh and isinstance(data.get(key), str) and data[key]:
+        return data[key]
+    version = _probe_version(info, spec)
+    if version:
+        data = {k: v for k, v in data.items() if not k.startswith(f"{info.path}|")}
+        data[key] = version
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+    return version
+
+
+def find_program(name: str, *, version: bool = True, refresh: bool = False,
+                 probe_wsl: bool = False) -> ProgramInfo | None:
     """Locate an external program. ``None`` if it is not installed anywhere QuantaBench looks.
 
     Order: ``settings.engines.paths[name]`` (may be ``wsl:<command>``), ``QUANTABENCH_<NAME>``,
     PATH, the running Python environment, conda/mamba environments in the usual places.
-    Results are cached per process; ``refresh=True`` looks again (e.g. after the user edits settings).
+    Results are cached per process, and versions on disk by (path, size, mtime); ``refresh=True`` looks
+    and probes again (e.g. after the user edits settings). A ``wsl:`` program's version is only probed
+    with ``probe_wsl=True`` (starting WSL can take seconds; ``doctor`` and Settings > Detect now do it).
     """
     spec = PROGRAMS[name]
     if refresh:
         _CACHE.pop(name, None)
+    want = "wsl" if probe_wsl else ("local" if version else "none")   # how much probing the caller needs
+    rank = {"none": 0, "local": 1, "wsl": 2}
     if name in _CACHE:
-        return _CACHE[name]
+        info, probed = _CACHE[name]
+        if info is None or rank[probed] >= rank[want] or (want == "wsl" and not info.via_wsl and probed == "local"):
+            return info
     hit = _locate(spec)
     info = None
     if hit is not None:
         info = ProgramInfo(name, hit[0], hit[1])
-        if version:
-            info = ProgramInfo(name, hit[0], hit[1], _probe_version(info, spec))
-    _CACHE[name] = info
+        if version and not info.via_wsl:
+            info = ProgramInfo(name, hit[0], hit[1], _cached_version(info, spec, refresh))
+        elif version and probe_wsl:
+            info = ProgramInfo(name, hit[0], hit[1], _probe_version(info, spec, timeout=60.0))
+    _CACHE[name] = (info, want)
     return info
 
 
@@ -336,6 +407,12 @@ def scratch_root() -> Path:
     return p
 
 
+def ascii_name(text: str, limit: int = 60) -> str:
+    """A file-name-safe ASCII version of ``text`` (molecule ids like "α-pinene" -> "pinene"): some programs
+    (Psi4 on Windows) open files through narrow ANSI paths."""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_.-")[:limit] or "job"
+
+
 @contextlib.contextmanager
 def work_dir(prefix: str, keep: bool | None = None) -> Iterator[Path]:
     """A fresh scratch folder for one job. Removed when the block succeeds (unless ``keep`` or
@@ -343,7 +420,7 @@ def work_dir(prefix: str, keep: bool | None = None) -> Iterator[Path]:
     and the exception message gets the folder appended."""
     if keep is None:
         keep = bool(getattr(_engine_settings(), "keep_scratch", False))
-    safe = re.sub(r"[^\w.-]+", "_", prefix)[:60] or "job"
+    safe = ascii_name(prefix)
     d = Path(tempfile.mkdtemp(prefix=f"{safe}_", dir=scratch_root()))
     try:
         yield d
@@ -377,32 +454,42 @@ class ProgramRun:
         return "\n".join(self.text().splitlines()[-n:])
 
 
-def _raise_stack_limit() -> None:  # POSIX child: xtb/CREST want a large main-thread stack (ulimit -s)
-    try:
-        import resource
+def _kill_wsl_side(cwd: Path) -> None:
+    """Kill the Linux process a ``wsl:`` program started (its PID is in ``cwd/.qb_pid``)."""
+    if not (cwd / ".qb_pid").is_file():
+        return
+    script = ('p=$(cat .qb_pid 2>/dev/null); [ -n "$p" ] || exit 0; kill -TERM "$p" 2>/dev/null; '
+              'for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$p" 2>/dev/null || exit 0; sleep 0.5; done; '
+              'kill -KILL "$p" 2>/dev/null; true')
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(["wsl.exe", "--cd", to_wsl_path(cwd.resolve()), "-e", "sh", "-c", script],
+                       capture_output=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
 
-        soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
-        if hard == resource.RLIM_INFINITY or hard > soft:
-            resource.setrlimit(resource.RLIMIT_STACK, (hard, hard))
-    except Exception:
-        pass
 
-
-def _kill_tree(proc: subprocess.Popen) -> None:
+def _kill_tree(proc: subprocess.Popen, cwd: Path | None = None, via_wsl: bool = False) -> None:
+    """Stop ``proc`` and everything it started: the process group on POSIX (SIGTERM, then SIGKILL for
+    whatever is left), ``taskkill /T`` on Windows, and the Linux side of a WSL program."""
+    if via_wsl and cwd is not None:
+        _kill_wsl_side(cwd)
     if proc.poll() is not None:
         return
     try:
         if IS_WINDOWS:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
-                           creationflags=_NO_WINDOW, timeout=20)
+            cp = subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
+                                creationflags=_NO_WINDOW, timeout=20)
+            if cp.returncode != 0 and proc.poll() is None:
+                proc.kill()
         else:
             os.killpg(proc.pid, signal.SIGTERM)
             try:
                 proc.wait(5)
             except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
+                pass
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)   # members that ignored SIGTERM, or a stuck leader
     except (OSError, subprocess.SubprocessError):
-        proc.kill()
+        with contextlib.suppress(OSError):
+            proc.kill()
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(10)
 
@@ -427,10 +514,16 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
         cmd = [cmd[0], "--cd", to_wsl_path(cwd.resolve()), *cmd[1:]]
     if env is None:
         env = program_env(threads, via_wsl=via_wsl)
+    if timeout is None:
+        limit = float(getattr(_engine_settings(), "timeout_s", 0) or 0)
+        timeout = limit if limit > 0 else None
+    shown = cmd
+    if not IS_WINDOWS and not via_wsl:
+        cmd = ["/bin/sh", "-c", STACK_WRAPPER, *cmd]
     log_file = cwd / log_name
     t0 = time.perf_counter()
     if log:
-        log(f"  $ {' '.join(cmd)}")
+        log(f"  $ {' '.join(shown)}")
     with open(log_file, "wb") as out:
         kwargs: dict = {"cwd": str(cwd), "env": env, "stdout": out, "stderr": subprocess.STDOUT,
                         "stdin": subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL}
@@ -438,33 +531,40 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
             kwargs["creationflags"] = _NO_WINDOW
         else:
             kwargs["start_new_session"] = True     # own process group, so cancellation kills children
-            kwargs["preexec_fn"] = _raise_stack_limit
+            if not Path(shown[0]).is_file() and shutil.which(shown[0]) is None:
+                raise ExternalProgramError(f"could not start {shown[0]}: no such program")
         try:
             proc = subprocess.Popen(cmd, **kwargs)
         except OSError as exc:
-            raise ExternalProgramError(f"could not start {cmd[0]}: {exc}") from exc
+            raise ExternalProgramError(f"could not start {shown[0]}: {exc}") from exc
         if stdin_text is not None:
             try:
                 proc.stdin.write(stdin_text.encode())
                 proc.stdin.close()
             except OSError:
                 pass
-        while True:
-            try:
-                proc.wait(poll_s)
-                break
-            except subprocess.TimeoutExpired:
-                pass
-            if should_stop is not None and should_stop():
-                _kill_tree(proc)
-                raise Cancelled()
-            if timeout is not None and time.perf_counter() - t0 > timeout:
-                _kill_tree(proc)
-                run = ProgramRun(-1, time.perf_counter() - t0, log_file)
-                raise ExternalProgramError(f"{Path(cmd[0]).name} timed out after {timeout:.0f} s\n{run.tail()}")
+        try:
+            while True:
+                try:
+                    proc.wait(poll_s)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                if should_stop is not None and should_stop():
+                    raise Cancelled()
+                if timeout is not None and time.perf_counter() - t0 > timeout:
+                    _kill_tree(proc, cwd, via_wsl)
+                    run = ProgramRun(-1, time.perf_counter() - t0, log_file)
+                    raise ExternalProgramError(f"{Path(shown[0]).name} timed out after {timeout:.0f} s\n"
+                                               f"{run.tail()}")
+        except BaseException:
+            # Cancel, Ctrl+C (the child has its own session, so SIGINT never reaches it), or any error in
+            # should_stop/log: never leave the program running.
+            _kill_tree(proc, cwd, via_wsl)
+            raise
     run = ProgramRun(proc.returncode, time.perf_counter() - t0, log_file)
     if check and run.returncode != 0:
-        raise ExternalProgramError(f"{' '.join(cmd[:3])} exited with code {run.returncode}\n{run.tail()}")
+        raise ExternalProgramError(f"{' '.join(shown[:3])} exited with code {run.returncode}\n{run.tail()}")
     return run
 
 
@@ -473,5 +573,5 @@ def report(names: Sequence[str] | None = None) -> list[tuple[str, ProgramInfo | 
     """(name, info or None, install hint) for ``doctor`` and the Settings dialog."""
     out = []
     for name in names or PROGRAMS:
-        out.append((name, find_program(name), PROGRAMS[name].install_hint))
+        out.append((name, find_program(name, probe_wsl=True), PROGRAMS[name].install_hint))
     return out

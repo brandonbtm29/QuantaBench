@@ -217,3 +217,20 @@ def test_table_errors(tmp_path):
         read_spectrum(_write(tmp_path, "blank.csv", "\n\n"))
     with pytest.raises(FileNotFoundError):
         read_spectrum(tmp_path / "missing.csv")
+
+
+def test_dif_abscissas_without_firstx_lastx_deltax(tmp_path):
+    """Line 2 starts with the Y-check value, so its abscissa is that of line 1's last point."""
+    from quantabench.chem import spectra_io
+
+    p = tmp_path / "dif.jdx"
+    p.write_text("##TITLE=t\n##JCAMP-DX=5.01\n##XUNITS=1/CM\n##YUNITS=ABSORBANCE\n##XYDATA=(X++(Y..Y))\n"
+                 "0 10JK\n2 13LMN\n##END=\n")
+    sp = spectra_io.read_spectrum(p)
+    assert list(sp.x) == [0, 1, 2, 3, 4, 5] and list(sp.y) == [10, 11, 13, 16, 20, 25]
+
+
+def test_bare_t_header_is_transmittance():
+    from quantabench.chem import spectra_io
+
+    assert spectra_io._units_from_header(["Wavelength (um)", "T"]) == ("MICROMETERS", "TRANSMITTANCE")

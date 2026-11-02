@@ -112,7 +112,8 @@ def _units_from_header(header: list[str]) -> tuple[str, str]:
     yh = header[1].lower() if len(header) > 1 else ""
     xu = "MICROMETERS" if re.search(r"µm|μm|\bum\b|micro", xh) else "NANOMETERS" if re.search(r"\bnm\b|nano", xh) \
         else "1/CM"
-    yu = "%T" if re.search(r"%\s*t|percent", yh) else "TRANSMITTANCE" if "transm" in yh else \
+    yu = "%T" if re.search(r"%\s*t|percent", yh) else "TRANSMITTANCE" if ("transm" in yh or re.fullmatch(
+        r"\s*t\s*(\(.*\))?\s*", yh)) else \
         "ABSORBANCE" if "absorb" in yh else (header[1] if len(header) > 1 else "")
     return xu, yu
 
@@ -396,7 +397,11 @@ def read_jcamp(path: str | Path) -> Spectrum:
             if delta is None and first is not None and last is not None and npoints and npoints > 1:
                 delta = (last - first) / (npoints - 1)
             if delta is None and len(data) > 1 and data[0].values:
-                delta = (data[1].x - data[0].x) * xfac / len(data[0].values)
+                # line 2's abscissa is that of its first point, or of the Y-check point (= line 1's last
+                # point) when it starts with a DIF check value
+                steps = len(data[0].values) - (1 if data[1].checked else 0)
+                if steps > 0:
+                    delta = (data[1].x - data[0].x) * xfac / steps
             if delta is None:
                 raise ValueError(f"{path.name}: cannot place the abscissas (no FIRSTX/LASTX/DELTAX)")
             # a line that starts with a DIF check value: its abscissa is that of the check point

@@ -85,21 +85,52 @@ class Settings:
     # ---------------------------------------------------------------- io
     @classmethod
     def from_dict(cls, data: dict) -> Settings:
+        """Settings from JSON. Unknown keys are ignored, and a value of the wrong type (a hand-edited or
+        corrupted file: ``"paths": null``) falls back to the default instead of breaking the app."""
         s = cls()
+        if not isinstance(data, dict):
+            return s
         for f in fields(cls):
             if f.name not in data:
                 continue
             value = data[f.name]
             current = getattr(s, f.name)
-            if hasattr(current, "__dataclass_fields__") and isinstance(value, dict):
-                known = {k: v for k, v in value.items() if k in current.__dataclass_fields__}
-                setattr(s, f.name, type(current)(**{**asdict(current), **known}))
+            if hasattr(current, "__dataclass_fields__"):
+                if not isinstance(value, dict):
+                    continue
+                merged = asdict(current)
+                for k, v in value.items():
+                    if k in merged:
+                        ok, v = _coerce(merged[k], v)
+                        if ok:
+                            merged[k] = v
+                setattr(s, f.name, type(current)(**merged))
             else:
-                setattr(s, f.name, value)
+                ok, value = _coerce(current, value)
+                if ok:
+                    setattr(s, f.name, value)
         return s
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _coerce(default, value) -> tuple[bool, object]:
+    """(accepted, value) for a JSON value replacing ``default``: same type, or an int where a float goes."""
+    if isinstance(default, bool):
+        return isinstance(value, bool), value
+    if isinstance(default, float):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return True, float(value)
+        return False, value
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool), value
+    for kind in (str, dict, list):
+        if isinstance(default, kind):
+            if kind is dict and isinstance(value, dict):
+                return True, {str(k): v for k, v in value.items() if isinstance(v, str)}
+            return isinstance(value, kind), value
+    return True, value
 
 
 # -------------------------------------------------------------------- location

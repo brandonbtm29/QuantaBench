@@ -139,7 +139,10 @@ Depends on: none (research only; can run any night).
 ## ENG-2: CREST through WSL · needs-Brandon
 - `wsl:/home/<user>/miniforge3/envs/qb-tools/bin/crest` from the Windows GUI on a PFAS: `--cd` path
   translation, `WSLENV` thread variables, cancellation of the WSL process, and gfn2//gfnff (needs `xtb` on
-  WSL's default PATH). Only covered by mocked tests so far.
+  WSL's default PATH). Only covered by mocked tests so far (a fake `wsl.exe` on Linux runs the real wrapper).
+- The wrapper (`external.WSL_WRAPPER`) raises `ulimit -s` and writes the Linux PID to `.qb_pid`; cancel
+  kills that PID through `wsl.exe` before `taskkill`. Children of CREST's legacy mode (xtb) may survive a
+  cancel: if they do, start the program with `setsid -w` and kill the process group.
 
 ## ENG-3: Engine follow-ups · ready
 - `vibrations.from_hessian(...)`: make the second half of `analyze()` public so `qm.vibrations_from_hessian`
@@ -148,7 +151,20 @@ Depends on: none (research only; can run any night).
 - Surfaces: a color bar in the 3D view; split A₊/A₋ at the V = 0 line instead of per vertex.
 - `doctor`: probe the Psi4 environment for the pint/qcelemental break and missing dftd3/dftd4.
 - tblite on Windows: document or support running QuantaBench inside the conda env that has tblite-python.
-- GBSA as a user choice (factories accept `solvation_model`; BuildConfig always uses ALPB).
+- GBSA as a user choice (factories accept `solvation_model`; BuildConfig always uses ALPB). The xtb program
+  stops with "not parametrized" for GBSA ethanol/octanol/ethyl acetate (GFN1 also DMF, hexane): fall back to
+  ALPB with a note, as tblite does.
+- GIPF statistics at 0.001 au as well (the Murray-Politzer literature convention; `qm_surf_*` is at 0.002 au,
+  Spartan's surface, recorded as `qm_surf_iso_au`). Water HF/6-31G*: σ²tot 478 (0.002) vs 345 (0.001).
+- Psi4 log: write the MBIS free-atom and finite-field SCFs to a second output file, so cclib can re-import
+  `<id>_qm_log.out` (today it stops at the free-atom UKS "Beta Occupied" block).
+- Review 2026-11-01 leftovers (robustness): a Windows Job Object (kill-on-close) so a hard GUI crash cannot
+  orphan xtb/CREST/Psi4; `subprocess.run(timeout=...)` in version probes can still block on Windows if a
+  launcher's child keeps the pipe open (use Popen + kill); the conda scan takes the first env alphabetically,
+  not the newest program version; failed-run scratch folders are kept by design but never pruned; the first
+  GUI start still probes local program versions on the GUI thread (cached on disk afterwards).
+- MOPAC COSMO: energies step as surface segments switch (CF3COO⁻ in water: finite-difference forces off by
+  0.3 eV/Å at h = 1 mÅ); consider running MOPAC frequencies in the gas phase automatically.
 
 ## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · ready (after VAL-1 data)
 - The QM stage reproduces Spartan's level (Spartan used 6-31G*: run `wb97x-d/6-31g*` too). Compare

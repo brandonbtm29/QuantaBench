@@ -611,7 +611,7 @@ def run(t: dict) -> dict:
             if best is None or e < best[0]:
                 best = (e, i, mol, wfn)
             msg = f"E = {e:.8f} Eh" + ("" if conv else " (optimization not converged)")
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:   # PCMSolver calls exit() on an unknown solvent
             rec["error"] = friendly(exc)
             msg = f"failed: {rec['error']}"
         rec["seconds"] = time.perf_counter() - tc
@@ -691,7 +691,7 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         result = run(task)
-    except Exception as exc:  # every failure is reported through result.json
+    except (Exception, SystemExit) as exc:  # every failure is reported through result.json
         msg = str(exc) if isinstance(exc, TaskError) else friendly(exc)
         write_json(result_path, {"ok": False, "error": msg, "traceback": traceback.format_exc()})
         print(f"QuantaBench psi4 driver: {msg}", file=sys.stderr)

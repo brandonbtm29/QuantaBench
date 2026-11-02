@@ -293,6 +293,9 @@ def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: Con
         result.vibrations["geometry_max_shift_A"] = shift
         result.descriptors["vib_geometry_max_shift_A"] = shift
     result.notes += [f"frequencies: {w}" for w in vr.warnings]
+    if engines.all_engines()[result.method].family == "semi-empirical":
+        result.notes.append("frequencies: MOPAC's energy is the heat of formation, which already includes ZPE and "
+                            "298 K thermal terms; use vib_zpe/vib_h_corr/vib_g_corr, not the absolute H and G")
     t = vr.thermo
     log(f"  frequencies ({vr.hessian_method} Hessian): {vr.n_modes} modes, {vr.n_imaginary} imaginary"
         + (f", ZPE {t.zpe_kcal:.2f} kcal/mol, S {t.entropy_cal_molK:.2f} cal/(mol K)" if t else ""))
@@ -336,7 +339,7 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
 
 
 def _engine_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,
-                       log: Callable[[str], None]) -> None:
+                       log: Callable[[str], None], should_stop: Callable[[], bool] = lambda: False) -> None:
     """Properties from the refinement engine itself (e.g. MOPAC heat of formation, xtb GFN2 dipole)."""
     fn = engines.properties_function(result.method)
     if fn is None:
@@ -344,7 +347,7 @@ def _engine_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerRes
     atoms = export.mol_to_atoms(mol, best.conf_id)
     try:
         props = dict(fn(atoms.numbers, atoms.positions, result.charge, result.multiplicity,
-                        **calculator_options(result, cfg)))
+                        should_stop=should_stop, **calculator_options(result, cfg)))
     except Cancelled:
         raise
     except Exception as exc:
@@ -477,9 +480,17 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             if all(d is not None for d in dips):
                 result.descriptors["dipole_debye_boltz"] = float(np.dot(weights, dips))
         result.descriptors["method"] = method
+        if method == "mmff" and result.forcefield.startswith("CREST"):
+            # MMFF refinement keeps CREST's geometries and energies (they are not MMFF energies)
+            result.descriptors["method"] = result.forcefield
+            result.notes.append(f"no refinement: geometries and energies are {result.forcefield}, not MMFF94s")
         if result.solvent:
             result.descriptors["solvent"] = result.solvent
-        _engine_properties(result, cs.mol, kept[0], cfg, log)
+            if engines.ENGINES[method].family == "semi-empirical":
+                result.notes.append("MOPAC COSMO energies are not smooth under small displacements: optimizations "
+                                    "may stop short of fmax and COSMO frequencies are approximate (use the gas "
+                                    "phase for frequencies)")
+        _engine_properties(result, cs.mol, kept[0], cfg, log, should_stop)
         if cfg.xtb_properties and properties.available():
             stage("properties")
             best = kept[0]
