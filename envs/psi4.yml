@@ -1,0 +1,22 @@
+# Psi4 for QuantaBench's QM stage, in its own environment (Linux, WSL2, native Windows).
+#
+#   conda env create -f envs/psi4.yml
+#   quantabench-cli settings ...  or Settings > Engines > Psi4 Python:
+#     Linux/WSL: ~/miniforge3/envs/qb-psi4/bin/python    Windows: %USERPROFILE%\miniforge3\envs\qb-psi4\python.exe
+#
+# Pins (found while testing Psi4 1.9.1, Nov 2026):
+#   libint 2.9   libint 2.13 makes Psi4 1.9.1 segfault on the first SCF
+#   pint < 0.25  pint 0.26 breaks qcelemental 0.30's unit registry, so every optimization fails
+# pcmsolver gives PCM solvation; dftd3-python/dftd4-python enable -d3bj/-d4 functionals (b3lyp-d3bj).
+# macOS arm64: drop pcmsolver and the dftd packages if the solver complains.
+name: qb-psi4
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - psi4=1.9.1
+  - libint=2.9
+  - pint<0.25
+  - pcmsolver
+  - dftd3-python
+  - dftd4-python

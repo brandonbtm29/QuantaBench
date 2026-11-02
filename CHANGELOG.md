@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.0.dev (unreleased)
+
+### External engines, QM stage, surfaces and spectra (2026-11-01)
+- **External-engine layer** (`chem/external.py`): finds xtb, CREST, MOPAC and Psi4 (settings,
+  `QUANTABENCH_<NAME>`, PATH, conda/mamba envs, `wsl:` on Windows), runs them with thread caps,
+  `OMP_STACKSIZE`, scratch folders, log files, timeouts and process-tree cancellation. Settings > Engines
+  tab with "Detect now"; `doctor` lists the programs.
+- **Engine plugins** (`engines.register`): `xtb-gfn2`, `xtb-gfn1`, `gfnff` (xtb program), `tblite-gfn2`,
+  `tblite-gfn1`, `mopac-pm7`, `mopac-pm6`. Each brings its own properties (`gfn2_*`, `tblite_gfn2_*`,
+  `pm7_*` descriptors) and, for xtb and MOPAC, its own optimizer (`--optimizer native`).
+- **Implicit solvent** for every engine that has one (`--solvent`, GUI Refinement > Solvent): ALPB/GBSA,
+  COSMO, PCM; gas phase with a note otherwise.
+- **CREST** conformer search (`--conformers crest`, `--crest-method`, GUI Conformer search page) with
+  RDKit fallback.
+- **QM stage with Psi4** (`--qm wb97x-d/def2-svp`, `--qm-task`, `--qm-top`, `--qm-freq`, `--cubes`; GUI
+  "QM (DFT)" page): energies or optimizations, dipole, charges (Mulliken/Löwdin/MBIS), orbitals,
+  polarizability, PCM, frequencies + IR + thermochemistry, density/ESP cubes; `qm_*` descriptors and
+  `<id>_qm_*` files.
+- **Surfaces**: Gaussian cube reader/writer, 0.002 au density surfaces with ESP and GIPF descriptors
+  (`qm_surf_*`), point-charge ESP fallback, Surfaces panel (red = negative, as in Spartan).
+- **Spectra panel**: IR spectrum with sticks, QM trace, experimental overlay (CSV, JCAMP-DX incl.
+  compressed forms), click a peak to animate its normal mode.
+- **Import** of other programs' outputs through cclib: File > Import calculation output,
+  `quantabench-cli import`.
+- `envs/` conda files for the external programs; `docs/ENGINES.md`.
+- `pyqtgraph` is a core dependency; `tblite` joins the `xtb` extra (not on Windows); new `interop` extra.
+
 ## 0.2.0 (unreleased)
 
 ### Fixed on native Windows (2026-10-27)

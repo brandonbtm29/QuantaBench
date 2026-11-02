@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QTabWidget,
@@ -49,10 +50,12 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("QuantaBench Settings")
         self.setMinimumWidth(560)
+        self.setMinimumHeight(640)   # the Engines tab: four paths, the detection report and run options
         self.s = s
         tabs = QTabWidget()
         tabs.addTab(self._resources_tab(report), "Compute")
         tabs.addTab(self._build_tab(), "Build defaults")
+        tabs.addTab(self._engines_tab(), "Engines")
         tabs.addTab(self._folders_tab(), "Folders")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -142,6 +145,119 @@ class SettingsDialog(QDialog):
         form.addRow("Force convergence", self.fmax)
         return w
 
+    #: (settings key, label, file-dialog title) of the external programs QuantaBench can run
+    PROGRAM_FIELDS = (("xtb", "xtb", "xtb executable"), ("crest", "CREST", "crest executable"),
+                      ("mopac", "MOPAC", "MOPAC executable"), ("psi4_python", "Psi4 Python", "Python with psi4"))
+
+    def _engines_tab(self) -> QWidget:
+        """Paths of external programs (blank = find automatically), scratch folder, OpenMP stack, QM memory."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        e = self.s.engines
+        box = QGroupBox("External programs")
+        outer = QVBoxLayout(box)
+        hint = QLabel("Leave blank to search PATH and the usual conda/mamba environments.<br>"
+                      "On Windows, <code>wsl:/full/path/to/crest</code> runs a Linux build inside WSL.")
+        outer.addWidget(hint)
+        form = QFormLayout()
+        outer.addLayout(form)
+        self.program_paths: dict[str, QLineEdit] = {}
+        for key, label, title in self.PROGRAM_FIELDS:
+            edit = QLineEdit(e.paths.get(key, ""))
+            edit.setPlaceholderText("automatic")
+            browse = QPushButton("...")
+            browse.setFixedWidth(32)
+            browse.clicked.connect(lambda _c=False, ed=edit, t=title: self._browse_program(ed, t))
+            row = QHBoxLayout()
+            row.addWidget(edit, 1)
+            row.addWidget(browse)
+            form.addRow(label, row)
+            self.program_paths[key] = edit
+        self.program_report = QPlainTextEdit()      # a fixed-height box: long paths scroll instead of resizing
+        self.program_report.setReadOnly(True)
+        self.program_report.setFixedHeight(self.fontMetrics().lineSpacing() * 5 + 12)
+        self.program_report.setPlaceholderText("Press Detect now to see which programs QuantaBench finds.")
+        detect = QPushButton("Detect now")
+        detect.clicked.connect(self._detect_programs)
+        outer.addWidget(detect)
+        outer.addWidget(self.program_report)
+        lay.addWidget(box)
+
+        run = QGroupBox("Runs")
+        rf = QFormLayout(run)
+        self.scratch = QLineEdit(e.scratch_dir)
+        self.scratch.setPlaceholderText("system temp folder / QuantaBench")
+        rf.addRow("Scratch folder", self.scratch)
+        self.keep_scratch = QCheckBox("Keep job folders of successful runs (for debugging)")
+        self.keep_scratch.setChecked(e.keep_scratch)
+        rf.addRow(self.keep_scratch)
+        self.stacksize = QLineEdit(e.omp_stacksize)
+        self.stacksize.setToolTip("OMP_STACKSIZE for xtb, CREST, MOPAC and Psi4 (reserves address space per thread)")
+        rf.addRow("OpenMP stack size", self.stacksize)
+        self.qm_memory = QDoubleSpinBox()
+        self.qm_memory.setRange(0.5, 512)
+        self.qm_memory.setSuffix(" GB")
+        self.qm_memory.setValue(e.qm_memory_gb)
+        rf.addRow("Psi4 memory per job", self.qm_memory)
+        self.ext_timeout = QDoubleSpinBox()
+        self.ext_timeout.setRange(0, 7 * 24 * 3600)
+        self.ext_timeout.setDecimals(0)
+        self.ext_timeout.setSuffix(" s")
+        self.ext_timeout.setSpecialValueText("No limit")
+        self.ext_timeout.setValue(e.timeout_s)
+        rf.addRow("Time limit per run", self.ext_timeout)
+        lay.addWidget(run)
+        lay.addStretch(1)
+        return w
+
+    def _browse_program(self, edit: QLineEdit, title: str) -> None:
+        start = edit.text() if edit.text() and not edit.text().startswith("wsl:") else str(Path.home())
+        path, _ = QFileDialog.getOpenFileName(self, title, str(Path(start).expanduser()))
+        if path:
+            edit.setText(settings_mod.portable(path))
+
+    def _detect_programs(self) -> None:
+        """Check the paths typed here (not saved yet), or search automatically for blank ones; off the GUI thread."""
+        from ..chem import external
+
+        typed = {k: ed.text().strip() for k, ed in self.program_paths.items()}
+
+        def detect():
+            rows = []
+            for name in ("xtb", "crest", "mopac"):
+                if typed.get(name):
+                    info = external.inspect_path(name, typed[name])
+                    rows.append((name, info, "typed path does not exist" if info is None else ""))
+                else:
+                    rows.append((name, external.find_program(name, refresh=True), ""))
+            py = typed.get("psi4_python") or external.find_python_with("psi4", "psi4_python") or ""
+            version = external.python_module_version(py, "psi4") if py else None
+            return rows, py, version
+
+        def done(result):
+            rows, py, version = result
+            lines = [f"{n}: " + (f"{i.version or 'version ?'} at {i.path} ({i.source})" if i
+                                 else (why or "not found")) for n, i, why in rows]
+            lines.append("Psi4: " + (f"{version} via {py}" if version else
+                                     (f"{py} cannot import psi4" if py else "not found")))
+            self.program_report.setPlainText("\n".join(lines))
+
+        self.program_report.setPlainText("Searching...")
+        from . import workers
+
+        self._detect_thread = workers.start(workers.FunctionWorker(detect), self, done,
+                                            lambda msg: self.program_report.setPlainText(msg.splitlines()[0]))
+
+    def done(self, result: int) -> None:
+        """Wait for a running "Detect now" (it only probes versions) so no QThread outlives the dialog."""
+        thread = getattr(self, "_detect_thread", None)
+        if thread is not None:
+            try:
+                thread.wait(30000)
+            except RuntimeError:          # already deleted by Qt
+                pass
+        super().done(result)
+
     def _folders_tab(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -223,4 +339,11 @@ class SettingsDialog(QDialog):
         b.rmsd_threshold = self.rmsd.value()
         b.fmax = self.fmax.value()
         s.output_dir = self.output.text().strip()
+        e = s.engines
+        e.paths = {k: ed.text().strip() for k, ed in self.program_paths.items() if ed.text().strip()}
+        e.scratch_dir = self.scratch.text().strip()
+        e.keep_scratch = self.keep_scratch.isChecked()
+        e.omp_stacksize = self.stacksize.text().strip() or "4G"
+        e.qm_memory_gb = self.qm_memory.value()
+        e.timeout_s = self.ext_timeout.value()
         return s

@@ -42,3 +42,19 @@ Newest entries at the bottom. One entry per working session or nightly run.
   D3 rejects the ROCm device). CPU: GFN1 0.30 s and AIMNet2 0.28 s per energy+forces for the PFOA anion.
 - AMD's wheel has a slow CPU BLAS (52 GFLOP/s vs 881 with PyPI's CPU torch); `doctor --bench` ran > 50 min.
 - New backlog items GPU-1 (AIMNet2 D3 via tad-dftd3), GPU-2 (dxtb linear algebra), PERF-1 (two venvs).
+
+## 2026-11-01: original plan's engines (multi-agent build)
+- Compared the first QuantaBench plan (PyQt6, CREST, GFN2/GFN-FF, MOPAC, Psi4 + cubes, PyQtGraph spectra,
+  cclib, one conda env) with the roadmap; built the missing pieces on a new shared contract
+  (`chem/external.py`, engine plugins, `chem/solvents.py`, CREST/QM/panel hooks), then five parallel
+  builders: xtb program + CREST, tblite + MOPAC, Psi4 QM stage, cubes/surfaces/ESP panel, spectra panel +
+  cclib/JCAMP import. 366 tests pass on Linux with the real programs.
+- Environment findings: Psi4 1.9.1 segfaults with libint 2.13 (pin 2.9); pint 0.26 breaks qcelemental
+  0.30 (pin <0.25); conda's xtb 6.7.1 and tblite-python 0.8 cannot share an env (solver drops xtb to
+  6.4.1); tblite's PyPI wheel works; no CREST or xtb 6.7.1 on osx-arm64 conda-forge.
+- Science notes: xtb reports ion dipoles about its own origin (fixed: centre of mass, and a fresh single
+  point after `--opt`); xtb's "Mol. α(0)" is the D4 model value (now `gfn2_d4_polarizability_A3`), not
+  the electronic response that tblite/dxtb/Psi4 give; MOPAC energies are ΔHf.
+- Follow-ups: ENG-1 (Windows), ENG-2 (CREST via WSL), ENG-3 (refactors), VAL-2 (Spartan comparison).
+  Suggested `vibrations.from_hessian(hessian_ev_A2, numbers, positions, energy_ev, *, method, charge,
+  multiplicity, dipole_derivative, ir_source, hessian_method, temperature, ...)` for ENG-3.

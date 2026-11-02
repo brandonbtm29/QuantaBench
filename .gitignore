@@ -25,3 +25,6 @@ Runs/
 scratch/
 CLAUDE.local.md
 .claude/settings.local.json
+
+# Psi4 writes timer.dat into the working directory
+timer.dat

@@ -1,0 +1,15 @@
+# External programs for QuantaBench on Linux and WSL2 (conda-forge): xtb, CREST, MOPAC.
+#
+#   conda env create -f envs/tools.yml        # or: mamba / micromamba
+#
+# QuantaBench itself stays in its own venv (pip, see docs/INSTALL.md). It finds these programs in
+# ~/miniforge3/envs/qb-tools (and the other usual conda/mamba folders) by itself; `quantabench-cli doctor`
+# shows what it found. Do not add tblite-python here: the solver then downgrades xtb to 6.4 (tblite on
+# Linux comes from pip: `pip install tblite` in the QuantaBench venv).
+name: qb-tools
+channels:
+  - conda-forge
+dependencies:
+  - xtb>=6.7.1
+  - crest>=3
+  - mopac>=22

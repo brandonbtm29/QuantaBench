@@ -85,8 +85,10 @@ environment (`py -3.12 -m venv .venv-rocm`) for GPU experiments.
 - **GFN2-xTB, xTB polarizability and xTB IR intensities** need dxtb's `libcint` integral backend.
   The only `tad-libcint` release with a Windows wheel (0.4) is incompatible with dxtb 0.4. On Windows,
   GFN1-xTB optimizations, frequencies, thermochemistry, Mulliken charges and charge-based dipoles all
-  work; polarizability and IR intensities are skipped with a note. Use WSL2/Linux for those until
-  dxtb catches up.
+  work; polarizability and IR intensities are skipped with a note. **GFN2-xTB itself is available on
+  Windows through the xtb program** (`xtb-gfn2`, with ALPB solvation, its own optimizer, dipoles,
+  D4 polarizability and finite-difference IR intensities): install `envs/tools-windows.yml`. Tested on
+  Linux so far; the first Windows run is backlog ENG-1.
 - **pyvistaqt is pinned below 0.13.** 0.13 replaced the native-window VTK widget with a framebuffer
   `QOpenGLWidget` that crashes in `initializeGL` with the AMD driver on Windows (verified on an
   RX 9060 XT, driver 26.10.1). 0.12 works. If you upgraded it by hand: `pip install "pyvistaqt==0.12.0"`.
@@ -125,17 +127,32 @@ The GUI needs `libxcb-cursor0` on Debian/Ubuntu (`sudo apt install libxcb-cursor
 The device layer already recognizes Apple's `mps` backend, and the GUI stack (PySide6, PyVista) runs
 on macOS. Engine testing and packaging are scheduled for 0.5.
 
+## External programs: xtb, CREST, MOPAC, Psi4 (optional)
+
+These are separate programs, not pip packages. Install them with conda (Miniforge) into their own
+environments; QuantaBench finds them there by itself (`quantabench-cli doctor` lists them):
+
+```bash
+conda env create -f envs/tools.yml          # Linux/WSL: xtb, CREST, MOPAC
+conda env create -f envs/tools-windows.yml  # native Windows: xtb, MOPAC (CREST runs through WSL)
+conda env create -f envs/psi4.yml           # Psi4 for the QM (DFT) stage, with the pins it needs
+```
+
+Set paths by hand in Settings > Engines when they live elsewhere. Details, versions and pitfalls per
+program are in [ENGINES.md](ENGINES.md).
+
 ## Optional extras
 
 | Extra | Installs | Enables |
 |---|---|---|
 | `ml` | `aimnet` | AIMNet2 ML potential (downloads model weights on first use) |
-| `xtb` | `dxtb` | GFN1-xTB (and GFN2 with `tad-libcint` on Linux) |
+| `xtb` | `dxtb`, `tblite` (not on Windows) | GFN1-xTB (dxtb), GFN2-xTB in process (tblite; dxtb with `tad-libcint`) |
+| `interop` | `cclib` | Import Gaussian/ORCA/Psi4/xtb/MOPAC output files |
 | `protonate` | `dimorphite-dl` | Alternative pH protonation |
 | `ovito` | `ovito` | Embedded OVITO viewport |
 | `md` | `lammps` | LAMMPS Python module: `md smd --run` and quick checks of SMD setups |
 | `excel` | `openpyxl` | `.xlsx`/`.xlsm` input (CompTox dashboard exports) |
-| `all` | ml, xtb, protonate, md, excel | |
+| `all` | ml, xtb, protonate, md, excel, interop | |
 
 Notes on the new extras:
 

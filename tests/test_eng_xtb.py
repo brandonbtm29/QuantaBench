@@ -458,13 +458,13 @@ def test_properties_gas_reference_and_keys(fake_xtb):
     assert props["gfn2_gsolv_kcal"] == pytest.approx(-0.01 * eng_xtb.KCAL_PER_HARTREE, abs=1e-4)
     assert props["gfn2_gsolv_term_kcal"] == pytest.approx(-0.012 * eng_xtb.KCAL_PER_HARTREE, abs=1e-6)
     assert props["gfn2_gap_ev"] == 10.5
-    assert props["gfn2_polarizability_iso_A3"] == pytest.approx(9.42875 * 0.1481847)
+    assert props["gfn2_d4_polarizability_A3"] == pytest.approx(9.42875 * 0.1481847)
     assert props["gfn2_dipole_debye"] > 0 and props["charges"] == pytest.approx([-0.6, 0.3, 0.3])
     runs = [c["argv"] for c in fake_xtb()]
     assert len(runs) == 2 and "--alpb" in runs[0] and "--alpb" not in runs[1]
     assert "--grad" not in runs[0]
     p1 = engines.properties_function("xtb-gfn1")(WATER.numbers, WATER.positions, 0, 1, threads=1)
-    assert "gfn1_polarizability_iso_A3" not in p1 and "gfn1_gsolv_kcal" not in p1 and p1["_notes"] == []
+    assert "gfn1_d4_polarizability_A3" not in p1 and "gfn1_gsolv_kcal" not in p1 and p1["_notes"] == []
     pff = engines.properties_function("gfnff")(WATER.numbers, WATER.positions, 0, 1, threads=1)
     assert "gfnff_gap_ev" not in pff and pff["gfnff_dipole_debye"] > 0 and pff["_notes"]
 
@@ -530,7 +530,7 @@ def test_real_properties_water_in_water():
     assert p["gfn2_gsolv_kcal"] == pytest.approx(-9.0760, abs=1e-3)
     assert p["gfn2_gsolv_term_kcal"] == pytest.approx(-12.0533, abs=1e-3)
     assert p["gfn2_gap_ev"] == pytest.approx(15.1574, abs=1e-3)
-    assert p["gfn2_polarizability_iso_A3"] == pytest.approx(1.4126, abs=1e-3)
+    assert p["gfn2_d4_polarizability_A3"] == pytest.approx(1.4126, abs=1e-3)
     assert p["gfn2_dipole_debye"] == pytest.approx(2.5456, abs=1e-3)
 
 
@@ -547,3 +547,24 @@ def test_real_native_optimize_methanol():
     assert res.energy_ev < e0 and res.energy_ev / HARTREE_EV == pytest.approx(-8.2261183, abs=2e-6)
     assert np.linalg.norm(a.get_forces(), axis=1).max() == pytest.approx(res.fmax, abs=2e-3)
     a.calc.close()
+
+
+@pytest.mark.external
+def test_real_native_optimize_anion_dipole_matches_a_fresh_single_point():
+    """xtb reports an ion's dipole about its own origin; after --opt that frame can differ from xtbopt.xyz."""
+    _real_xtb()
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    m = Chem.AddHs(Chem.MolFromSmiles("[O-]C(=O)C(F)(F)F"))
+    AllChem.EmbedMolecule(m, randomSeed=7)
+    a = Atoms([x.GetAtomicNum() for x in m.GetAtoms()], positions=m.GetConformer().GetPositions() + 4.0)
+    a.calc = eng_xtb.XtbCalculator(a.numbers, "xtb-gfn2", charge=-1, threads=1)
+    eng_xtb.native_optimize(a, 0.03, 200, None, None, method="xtb-gfn2", charge=-1, threads=1)
+    mu_opt = np.asarray(a.calc.results["dipole"])
+    b = a.copy()
+    b.calc = eng_xtb.XtbCalculator(b.numbers, "xtb-gfn2", charge=-1, threads=1)
+    b.get_potential_energy()
+    assert np.linalg.norm(mu_opt) == pytest.approx(np.linalg.norm(b.calc.results["dipole"]), rel=1e-3)
+    a.calc.close()
+    b.calc.close()

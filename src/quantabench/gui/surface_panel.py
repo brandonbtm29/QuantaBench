@@ -24,7 +24,7 @@ else RDKit Gasteiger charges). Meshes are computed on a worker thread (``gui.wor
 molecule is small enough to take a few tens of milliseconds, and cached per molecule, geometry and settings.
 
 Colormaps follow matplotlib's direction (the first color is the most negative ESP): ``bwr`` paints negative
-regions blue and positive ones red; "Reverse" gives the Spartan/GaussView convention (red = negative) that
+regions blue and positive ones red; "Reverse" (on by default) gives the Spartan/GaussView convention (red = negative) that
 the viewer's charge coloring uses.
 """
 
@@ -257,7 +257,9 @@ class SurfacePanel(QWidget):
         for name in COLORMAPS:
             self.cmap_box.addItem(name, name)
         self.reverse_box = QCheckBox("Reverse")
-        self.reverse_box.setToolTip("Red = negative, blue = positive (Spartan, GaussView and the charge coloring)")
+        self.reverse_box.setToolTip("Checked (default): red = negative, blue = positive, as in Spartan, GaussView "
+                                    "and QuantaBench's charge coloring. Unchecked: matplotlib's direction.")
+        self.reverse_box.setChecked(True)
         row.addWidget(self.cmap_box, 1)
         row.addWidget(self.reverse_box)
         form.addRow("Colormap", row)

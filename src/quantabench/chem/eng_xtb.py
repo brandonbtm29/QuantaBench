@@ -524,7 +524,14 @@ def native_optimize(atoms, fmax: float = 0.03, max_steps: int = 500, should_stop
     atoms.set_positions(pos)
     if calc is not None:
         calc.n_runs += 1
-        calc.store(atoms, res)
+        if charge:
+            # xtb reports an ion's dipole about its own origin, and after --opt that origin need not be the
+            # frame of xtbopt.xyz (PFBA anion: 8.81 D instead of 7.75 D). One single point at the final
+            # geometry gives consistent charges and a correct dipole about the centre of mass.
+            calc.reset()
+            calc.calculate(atoms)
+        else:
+            calc.store(atoms, res)
     converged = bool(info["opt_converged"]) and fmax_final <= fmax
     if log is not None and info["opt_converged"] and not converged:
         log(f"  xtb --opt {level} converged, but max force {fmax_final:.4f} eV/Å > fmax {fmax}")
@@ -545,7 +552,7 @@ def properties(numbers, positions_A, charge: int = 0, multiplicity: int = 1, *, 
     """One xtb single point at this geometry (same level and solvent as the refinement).
 
     ``<prefix>_energy_ev``, ``_dipole_debye`` (about the centre of mass), ``_gap_ev`` (HOMO-LUMO; not
-    for GFN-FF), ``_polarizability_iso_A3`` (GFN2: xtb's "Mol. α(0) /au" x 0.1481847), and with a
+    for GFN-FF), ``_d4_polarizability_A3`` (GFN2: the D4 dispersion model's molecular α(0), xtb's "Mol. α(0) /au" x 0.1481847; a charge-scaled sum of atomic reference polarizabilities, not the GFN2 electronic response), and with a
     solvent ``_gsolv_kcal`` = E(solution) - E(gas) at this geometry (a second, gas-phase single point;
     this includes the cost of polarizing the solute, like CENSO's xtb Gsolv) and ``_gsolv_term_kcal``
     (the "-> Gsolv" term xtb prints, evaluated with the solution-phase density). Plus "charges".
@@ -570,7 +577,7 @@ def properties(numbers, positions_A, charge: int = 0, multiplicity: int = 1, *, 
     if res.gap_ev is not None:
         out[f"{prefix}_gap_ev"] = float(res.gap_ev)
     if method == "xtb-gfn2" and res.alpha_au is not None:
-        out[f"{prefix}_polarizability_iso_A3"] = float(res.alpha_au * AU_POLARIZABILITY_A3)
+        out[f"{prefix}_d4_polarizability_A3"] = float(res.alpha_au * AU_POLARIZABILITY_A3)
     if solvent:
         if gas is not None:
             out[f"{prefix}_gsolv_kcal"] = (res.energy_eh - gas.energy_eh) * KCAL_PER_HARTREE

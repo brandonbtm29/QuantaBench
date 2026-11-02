@@ -792,6 +792,18 @@ class MoleculeViewer3D(QWidget):
             self.plotter.enable_anti_aliasing(want)
             self._aa = want
 
+    def set_interactive(self, on: bool) -> None:
+        """Cheaper anti-aliasing while coordinates animate: FXAA instead of SSAA (which renders the scene
+        several times per frame). False restores the usual choice for the atom count."""
+        if self.plotter is None:
+            return
+        if on and self._aa == "ssaa":
+            self.plotter.disable_anti_aliasing()
+            self.plotter.enable_anti_aliasing("fxaa")
+            self._aa = "fxaa"
+        elif not on:
+            self._set_anti_aliasing(len(self._atoms) if self._atoms is not None else 0)
+
     def _add(self, name: str, actor) -> None:
         self.plotter.add_actor(actor, name=name, reset_camera=False, pickable=False, render=False)
         self._names.add(name)

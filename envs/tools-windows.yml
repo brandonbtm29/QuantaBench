@@ -1,0 +1,14 @@
+# External programs for QuantaBench on native Windows (conda-forge win-64): xtb, MOPAC, tblite.
+#
+#   conda env create -f envs\tools-windows.yml
+#
+# CREST has no Windows build: install envs/tools.yml inside WSL2 and set Settings > Engines > CREST to
+# wsl:/home/<you>/miniforge3/envs/qb-tools/bin/crest (see docs/ENGINES.md).
+# tblite has no Windows wheel on PyPI; the conda build here is for reference (QuantaBench imports tblite
+# in-process, so it must live in the same environment as QuantaBench to be used).
+name: qb-tools
+channels:
+  - conda-forge
+dependencies:
+  - xtb>=6.7.1
+  - mopac>=22

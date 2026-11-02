@@ -56,14 +56,14 @@ class ProgramSpec:
 
 PROGRAMS: dict[str, ProgramSpec] = {
     "xtb": ProgramSpec("xtb", ("xtb",), ("--version",), r"xtb version (\S+)",
-                       "conda install -c conda-forge 'xtb>=6.7.1', or the Windows zip from "
+                       "conda install -c conda-forge \"xtb>=6.7.1\", or the Windows zip from "
                        "https://github.com/grimme-lab/xtb/releases"),
     "crest": ProgramSpec("crest", ("crest",), ("--version",), r"Version (\d[\w.]*)",
                          "Linux/WSL/macOS: conda install -c conda-forge crest (no Windows build: use WSL)"),
     "mopac": ProgramSpec("mopac", ("mopac", "MOPAC2016"), ("--version",), r"MOPAC version (\S+)",
                          "conda install -c conda-forge mopac, or the installer from https://openmopac.net"),
     "psi4": ProgramSpec("psi4", ("psi4",), ("--version",), r"(\d+\.\d+(?:\.\d+)?)",
-                        "conda install -c conda-forge psi4 'libint=2.9' (in its own environment)"),
+                        "conda install -c conda-forge psi4 \"libint=2.9\" \"pint<0.25\" (in its own environment; docs/ENGINES.md)"),
 }
 
 
@@ -206,6 +206,32 @@ def find_program(name: str, *, version: bool = True, refresh: bool = False) -> P
             info = ProgramInfo(name, hit[0], hit[1], _probe_version(info, spec))
     _CACHE[name] = info
     return info
+
+
+def inspect_path(name: str, path: str) -> ProgramInfo | None:
+    """``ProgramInfo`` for an explicit path (or ``wsl:<command>``) the user typed, with its version;
+    ``None`` if the file does not exist. Does not touch the cache."""
+    spec = PROGRAMS[name]
+    path = path.strip()
+    if not path.startswith(WSL_PREFIX):
+        p = Path(os.path.expanduser(path))
+        if not p.is_file():
+            return None
+        path = str(p)
+    info = ProgramInfo(name, path, "typed path")
+    return ProgramInfo(name, path, "typed path", _probe_version(info, spec))
+
+
+def python_module_version(python: str, module: str, timeout: float = 60.0) -> str | None:
+    """``module.__version__`` as seen by interpreter ``python`` (None if it cannot import it)."""
+    try:
+        cp = subprocess.run([python, "-I", "-c", f"import {module}; print({module}.__version__)"],
+                            capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                            errors="replace", creationflags=_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = (cp.stdout or "").strip().splitlines()
+    return out[-1] if cp.returncode == 0 and out else None
 
 
 def require_program(name: str) -> ProgramInfo:

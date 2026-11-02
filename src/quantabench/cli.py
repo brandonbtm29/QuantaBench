@@ -5,7 +5,9 @@
     quantabench-cli build --file cohort.xlsx --smiles-pref qsar --chunk 1/3     # resumable batch run
     quantabench-cli build --resume RUN_DIR [--retry-failed]
     quantabench-cli status RUN_DIR | merge OUT_DIR RUN_DIR...
+    quantabench-cli build "...PFBA" --conformers crest --method xtb-gfn2 --solvent water --qm wb97x-d/def2-svp --cubes
     quantabench-cli freq "OC(=O)C(F)(F)F TFA" --method gfn1-xtb                # frequencies + thermo + IR
+    quantabench-cli import psi4_output.dat ORCA.out [--out DIR]                 # other programs' outputs (cclib)
     quantabench-cli slab --nx 16 --ny 9 --layers 3 --molecule "OC(=O)C(F)(F)..." -o pfoa_on_graphite.data
                          [--lammps-dir DIR]
     quantabench-cli md smd --system pfoa_graphite.extxyz -o DIR [--gpu] [--run]

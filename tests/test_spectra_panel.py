@@ -79,22 +79,6 @@ def _imported():
     return io_cclib.to_result(io_cclib.read_output(PSI4), PSI4)
 
 
-@pytest.fixture
-def engine_labels(monkeypatch):
-    """MainWindow._show_info reads ``engines.ENGINES[res.method].label``, which raises KeyError for an imported
-    result's method ("psi4: wB97X-D/def2-SVP"): a one-line fallback is requested in main_window.py (see the
-    spectra/interop report). Until it lands, unknown methods are labeled with their own name here."""
-    from quantabench.chem import engines
-
-    engines.load_plugins()                      # register plugins into the real dict before swapping it
-
-    class _Labels(dict):
-        def __missing__(self, key):
-            return SimpleNamespace(key=key, label=key)
-
-    monkeypatch.setattr(engines, "ENGINES", _Labels(engines.ENGINES))
-
-
 # ------------------------------------------------------------------------------------- no GUI
 def test_broaden_matches_vibrations_ir_spectrum():
     from quantabench.chem import vibrations
@@ -128,7 +112,7 @@ def test_mode_sets():
 
 # ------------------------------------------------------------------------------------- GUI
 @needs_display
-def test_dock_menus_plot_table_and_overlay(tmp_path, engine_labels, gui):
+def test_dock_menus_plot_table_and_overlay(tmp_path, gui):
     from quantabench.chem import spectra_io
 
     app, w = gui
@@ -205,7 +189,7 @@ def test_dock_menus_plot_table_and_overlay(tmp_path, engine_labels, gui):
 
 
 @needs_display
-def test_mode_animation(engine_labels, gui):
+def test_mode_animation(gui):
     from ase.build import molecule
 
     from quantabench.chem.inputs import from_smiles
@@ -314,7 +298,7 @@ def _check_two_traces(app, w, res, tmp_path):
 
 
 @needs_display
-def test_import_action(tmp_path, engine_labels, monkeypatch, gui):
+def test_import_action(tmp_path, monkeypatch, gui):
     pytest.importorskip("cclib")
     from PySide6.QtWidgets import QMessageBox
 
@@ -338,9 +322,7 @@ def test_import_action(tmp_path, engine_labels, monkeypatch, gui):
 
 
 @needs_display
-@pytest.mark.xfail(raises=KeyError, strict=False,
-                   reason="MainWindow._show_info indexes engines.ENGINES[res.method]; requested fallback in main_window")
-def test_add_imported_result_without_label_fallback(gui):
+def test_add_imported_result_shows_its_method(gui):
     _app_, w = gui
     w.add_result(_imported())
     assert w.spectra_panel.sets

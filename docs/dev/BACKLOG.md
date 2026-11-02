@@ -94,6 +94,8 @@ Depends on: none (research only; can run any night).
   with a note). Investigate: a newer dxtb release, building tad-libcint 0.3 for Windows (CI wheel), or
   a charge-response/finite-field fallback. Acceptance: GFN2 and IR intensities on Windows, or a
   documented decision why not.
+- 2026-11-01: GFN2-xTB is now available on Windows through the xtb program (`xtb-gfn2`, finite-difference
+  IR intensities from its dipoles). What remains is dxtb's GPU/batched GFN2 path; lower priority.
 
 ## MD-1: Counter-ions in vacuum SMD (Windows LAMMPS non-determinism + ion-pair heating) · ready
 - On BTM NOVA, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a
@@ -128,6 +130,32 @@ Depends on: none (research only; can run any night).
   report CPU GFLOP/s with a warning when it is far below expectations. Also find why `doctor --bench`
   ran > 50 min under the ROCm build (likely BLAS thread oversubscription: 23 OpenMP threads × OpenBLAS).
 
+## ENG-1: External engines on native Windows · needs-Brandon
+- Install `envs/tools-windows.yml` and `envs/psi4.yml` on BTM NOVA, run `quantabench-cli doctor`, then
+  `pytest -m external` with `QUANTABENCH_XTB`, `QUANTABENCH_MOPAC`, `QUANTABENCH_PSI4_PYTHON` set (or the
+  paths in Settings > Engines). Check: conda's `Library\bin` discovery, process-tree cancellation
+  (`taskkill /T`), paths with spaces ("GitHub Projects"), Psi4's PCMSolver on win-64, GUI Engines tab.
+
+## ENG-2: CREST through WSL · needs-Brandon
+- `wsl:/home/<user>/miniforge3/envs/qb-tools/bin/crest` from the Windows GUI on a PFAS: `--cd` path
+  translation, `WSLENV` thread variables, cancellation of the WSL process, and gfn2//gfnff (needs `xtb` on
+  WSL's default PATH). Only covered by mocked tests so far.
+
+## ENG-3: Engine follow-ups · ready
+- `vibrations.from_hessian(...)`: make the second half of `analyze()` public so `qm.vibrations_from_hessian`
+  stops duplicating it (see the QM builder's suggested signature in DEVLOG 2026-11-01).
+- QM charges (MBIS/Löwdin) as an option for the exported conformer charges (extxyz, LAMMPS data).
+- Surfaces: a color bar in the 3D view; split A₊/A₋ at the V = 0 line instead of per vertex.
+- `doctor`: probe the Psi4 environment for the pint/qcelemental break and missing dftd3/dftd4.
+- tblite on Windows: document or support running QuantaBench inside the conda env that has tblite-python.
+- GBSA as a user choice (factories accept `solvation_model`; BuildConfig always uses ALPB).
+
+## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · ready (after VAL-1 data)
+- The QM stage reproduces Spartan's level (Spartan used 6-31G*: run `wb97x-d/6-31g*` too). Compare
+  dipoles, polarizabilities, 0.002 au volumes/areas and ESP extrema with Spartan's exports; recommend a
+  default level for the 4,700-PFAS descriptor run with timings (PFBA anion: ~4.5 min on 2 threads with
+  PCM, cubes and finite-field α).
+
 ## Needs Brandon (hardware / Windows / decisions)
 
 - **HW-1 · done 2026-10-28:** ROCm 7.2.1 PyTorch 2.9.1 on BTM NOVA sees the RX 9060 XT (matmul
@@ -144,7 +172,7 @@ Depends on: none (research only; can run any night).
   ωB97X-D geometries and properties) placed somewhere the runs can read.
 
 ## Later (from ROADMAP)
-Surfaces (ESP-colored SAS first), spectra panel with normal-mode animation, properties inspector,
+Orbital isosurfaces, NMR (PySCF), properties inspector,
 align/overlay, constraints/scans/TS, isomer/tautomer enumeration (branched vs linear PFAS),
 substructure search over results, force-field assignment (OpenFF/GAFF2/OPLS), cross-molecule GPU
 batching, process-pool CPU stage.

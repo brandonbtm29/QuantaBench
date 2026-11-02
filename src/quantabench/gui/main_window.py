@@ -53,7 +53,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__, resources
 from .. import settings as settings_mod
-from ..chem import engines, export
+from ..chem import engines, export, solvents
 from ..chem import inputs as inputs_mod
 from ..chem.pipeline import BuildConfig, MoleculeResult
 from . import workers
@@ -71,11 +71,19 @@ BATCHED_CHOICES = (("auto", "Auto (batched on a GPU)"), ("on", "Always batched")
 STAGES = [
     ("input", "Input", "Structure source"),
     ("prepare", "Standardize && protonate", "Largest fragment, neutral parent, charge state at pH"),
-    ("conformers", "Conformer search", "ETKDGv3 embedding, MMFF94s pre-optimization, pruning"),
-    ("refine", "Refinement", "Re-optimize the lowest conformers with an ML potential or xTB"),
-    ("properties", "Properties", "Boltzmann weights, descriptors, xTB charges/dipole/polarizability"),
+    ("conformers", "Conformer search", "ETKDGv3 embedding + MMFF94s, or CREST metadynamics (xtb); pruning"),
+    ("refine", "Refinement", "Re-optimize the lowest conformers with an ML potential, xTB, tblite or MOPAC, "
+                             "optionally in an implicit solvent"),
+    ("properties", "Properties", "Boltzmann weights, descriptors, the engine's charges/dipole/polarizability, "
+                                 "frequencies"),
+    ("qm", "QM (DFT)", "Psi4 single points or optimizations of the lowest conformers: properties, polarizability, "
+                       "density/ESP cubes, frequencies"),
     ("export", "Export", "Files written for every molecule"),
 ]
+QM_FUNCTIONALS = ("wb97x-d", "b3lyp-d3bj", "pbe0-d3bj", "r2scan", "m06-2x", "hf")
+QM_BASES = ("def2-svp", "def2-svpd", "def2-tzvp", "6-31g*", "6-31+g*", "6-311+g**", "aug-cc-pvdz")
+CREST_METHODS = (("gfn2", "GFN2-xTB"), ("gfnff", "GFN-FF (fast, large molecules)"),
+                 ("gfn2//gfnff", "GFN2-xTB // GFN-FF (needs xtb)"), ("gfn1", "GFN1-xTB"))
 
 
 def _window_settings() -> QSettings:
@@ -198,13 +206,16 @@ class MainWindow(QMainWindow):
             it.setData(0, Qt.ItemDataRole.UserRole, key)
             self.stage_tree.addTopLevelItem(it)
             self.stage_items[key] = it
-        self.stage_tree.setMaximumHeight(170)
-        self.stage_tree.setMinimumHeight(150)
+        self.stage_tree.setMaximumHeight(195)
+        self.stage_tree.setMinimumHeight(170)
         lay.addWidget(self.stage_tree)
         self.stage_stack = QStackedWidget()
         self.stage_pages = {}
         for key, _label, tip in STAGES:
             page = self._stage_page(key, tip)
+            for combo in page.findChildren(QComboBox):   # long item texts must not widen the dock
+                combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+                combo.setMinimumContentsLength(14)
             self.stage_pages[key] = self.stage_stack.addWidget(page)
         scroll = QScrollArea()             # the Properties page can list dozens of descriptors
         scroll.setWidgetResizable(True)
@@ -230,7 +241,6 @@ class MainWindow(QMainWindow):
         self.pipeline_dock = dock
         dock.setWidget(w)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        self.pipeline_dock = dock
 
     def _stage_page(self, key: str, tip: str) -> QWidget:
         page = QWidget()
@@ -273,6 +283,23 @@ class MainWindow(QMainWindow):
             form.addRow("pH", self.w_ph)
             form.addRow("Method", self.w_prot_method)
         elif key == "conformers":
+            from ..chem import crest
+
+            self.w_confsearch = QComboBox()
+            self.w_confsearch.addItem("RDKit ETKDGv3 + MMFF94s", "rdkit")
+            ok, why = crest.available()
+            self.w_confsearch.addItem("CREST iMTD-GC" + ("" if ok else " (not installed)"), "crest")
+            self.w_confsearch.setItemData(1, "CREST metadynamics conformer search (Grimme). Minutes per molecule; "
+                                          "Linux/WSL/macOS" + ("" if ok else f". {why}"), Qt.ItemDataRole.ToolTipRole)
+            self.w_crest_method = QComboBox()
+            for k, label in CREST_METHODS:
+                self.w_crest_method.addItem(label, k)
+            self.w_crest_quick = QCheckBox("Quick mode (--quick)")
+            self.w_crest_quick.setChecked(True)
+            self.w_confsearch.currentIndexChanged.connect(self._update_crest_widgets)
+            form.addRow("Search", self.w_confsearch)
+            form.addRow("CREST level", self.w_crest_method)
+            form.addRow(self.w_crest_quick)
             self.w_maxconf = QSpinBox()
             self.w_maxconf.setRange(1, 1000)
             self.w_window = QDoubleSpinBox()
@@ -303,7 +330,16 @@ class MainWindow(QMainWindow):
             self.w_steps = QSpinBox()
             self.w_steps.setRange(10, 10000)
             self.w_optimizer = QComboBox()
-            self.w_optimizer.addItems(["lbfgs", "fire"])
+            for k, label in (("lbfgs", "L-BFGS (ASE)"), ("fire", "FIRE (ASE)"),
+                             ("native", "Engine's own optimizer (xtb, MOPAC; else L-BFGS)")):
+                self.w_optimizer.addItem(label, k)
+            self.w_solvent = QComboBox()
+            self.w_solvent.addItem("Gas phase", "")
+            for name, sv in solvents.SOLVENTS.items():
+                self.w_solvent.addItem(f"{sv.label} (ε = {sv.epsilon:g})", name)
+            self.w_solvent.setToolTip("Implicit solvent for engines that have one: ALPB (xtb, tblite), COSMO (MOPAC), "
+                                      "PCM (Psi4). Engines without one run in the gas phase (noted per molecule).")
+            self.w_solvent.currentIndexChanged.connect(self._update_engine_info)
             self.w_batched = QComboBox()
             for key, label in BATCHED_CHOICES:
                 self.w_batched.addItem(label, key)
@@ -313,6 +349,7 @@ class MainWindow(QMainWindow):
             self.engine_info.setWordWrap(True)
             self.w_method.currentIndexChanged.connect(self._update_engine_info)
             form.addRow("Method", self.w_method)
+            form.addRow("Solvent", self.w_solvent)
             form.addRow("Refine lowest", self.w_refine_top)
             form.addRow("Force convergence", self.w_fmax)
             form.addRow("Max steps", self.w_steps)
@@ -343,12 +380,54 @@ class MainWindow(QMainWindow):
             self.props_view.setWordWrap(True)
             self.props_view.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             form.addRow(self.props_view)
+        elif key == "qm":
+            from ..chem import qm
+
+            ok, why = qm.available()
+            self.w_qm_on = QCheckBox("Run a QM stage" + ("" if ok else " (Psi4 not found)"))
+            self.w_qm_on.setToolTip("Psi4 runs as a separate program (its own conda environment). " +
+                                    ("" if ok else why + ". Set its Python in Settings > Engines."))
+            self.w_qm_func = QComboBox()
+            self.w_qm_func.setEditable(True)
+            self.w_qm_func.addItems(QM_FUNCTIONALS)
+            self.w_qm_basis = QComboBox()
+            self.w_qm_basis.setEditable(True)
+            self.w_qm_basis.addItems(QM_BASES)
+            self.w_qm_task = QComboBox()
+            self.w_qm_task.addItem("Single point", "energy")
+            self.w_qm_task.addItem("Optimize", "optimize")
+            self.w_qm_top = QSpinBox()
+            self.w_qm_top.setRange(1, 100)
+            self.w_qm_top.setToolTip("How many of the lowest refined conformers get the QM stage")
+            self.w_qm_task.setToolTip("Single point at the refined geometry, or a QM optimization (optking)")
+            self.w_qm_props = QCheckBox("Properties and polarizability")
+            self.w_qm_props.setToolTip("Best conformer: dipole, quadrupole, Mulliken/Löwdin/MBIS charges, HOMO/LUMO, "
+                                       "static polarizability (analytic or finite field)")
+            self.w_qm_props.setChecked(True)
+            self.w_qm_freq = QCheckBox("Frequencies + thermochemistry")
+            self.w_qm_freq.setToolTip("Best conformer: QM Hessian, IR intensities, ZPE/H/S/G. Slow for DFT "
+                                      "(finite differences: about 6N gradients)")
+            self.w_qm_cubes = QCheckBox("Density/ESP cubes + surfaces")
+            self.w_qm_cubes.setToolTip("0.002 au density surface: area, enclosed volume, ESP extrema and "
+                                       "Murray-Politzer statistics. Shown in the Surfaces panel.")
+            self.w_qm_on.toggled.connect(self._update_qm_widgets)
+            form.addRow(self.w_qm_on)
+            form.addRow("Functional", self.w_qm_func)
+            form.addRow("Basis set", self.w_qm_basis)
+            form.addRow("Task", self.w_qm_task)
+            form.addRow("Conformers", self.w_qm_top)
+            form.addRow(self.w_qm_props)
+            form.addRow(self.w_qm_freq)
+            form.addRow(self.w_qm_cubes)
         elif key == "export":
             self.w_formats = {}
             for fmt, desc in export.FORMATS.items():
-                cb = QCheckBox(f"{fmt}: {desc}")
+                cb = QCheckBox(fmt)
+                cb.setToolTip(desc)
+                lbl = QLabel(desc)
+                lbl.setWordWrap(True)
                 self.w_formats[fmt] = cb
-                form.addRow(cb)
+                form.addRow(cb, lbl)
             self.out_label = QLabel()
             self.out_label.setWordWrap(True)
             form.addRow(self.out_label)
@@ -512,6 +591,16 @@ class MainWindow(QMainWindow):
         self.w_seed.setValue(b.random_seed)
         methods = method_keys()
         self.w_method.setCurrentIndex(methods.index(b.refine_method) if b.refine_method in methods else 0)
+        self._set_combo(self.w_confsearch, b.conformer_search)
+        self._set_combo(self.w_solvent, solvents.canonical(b.solvent) if b.solvent in solvents.SOLVENTS
+                        or not b.solvent else "")
+        level = (b.qm_method or "").split("/", 1)
+        self.w_qm_on.setChecked(bool(b.qm_method))
+        if b.qm_method:
+            self.w_qm_func.setCurrentText(level[0])
+            self.w_qm_basis.setCurrentText(level[1] if len(level) > 1 else "def2-svp")
+        self._update_crest_widgets()
+        self._update_qm_widgets()
         self.w_fmax.setValue(b.fmax)
         self.w_steps.setValue(b.max_steps)
         self.w_temp.setValue(b.temperature_k)
@@ -539,16 +628,63 @@ class MainWindow(QMainWindow):
         b.temperature_k = self.w_temp.value()
         b.frequencies = self.w_freq.isChecked()
         b.batched = self.w_batched.currentData()
+        b.conformer_search = self.w_confsearch.currentData()
+        b.solvent = self.w_solvent.currentData()
+        b.qm_method = self.qm_level() if self.w_qm_on.isChecked() else ""
+
+    def qm_level(self) -> str:
+        """'functional/basis' from the QM page."""
+        func = self.w_qm_func.currentText().strip().lower() or "wb97x-d"
+        basis = self.w_qm_basis.currentText().strip().lower() or "def2-svp"
+        return f"{func}/{basis}"
+
+    @staticmethod
+    def _set_combo(combo: QComboBox, data) -> None:
+        i = combo.findData(data)
+        combo.setCurrentIndex(i if i >= 0 else 0)
+
+    def _update_crest_widgets(self, _index=0) -> None:
+        on = self.w_confsearch.currentData() == "crest"
+        self.w_crest_method.setEnabled(on)
+        self.w_crest_quick.setEnabled(on)
+
+    def _update_qm_widgets(self, _checked=False) -> None:
+        on = self.w_qm_on.isChecked()
+        for w in (self.w_qm_func, self.w_qm_basis, self.w_qm_task, self.w_qm_top, self.w_qm_props, self.w_qm_freq,
+                  self.w_qm_cubes):
+            w.setEnabled(on)
 
     def current_config(self) -> BuildConfig:
         self._store_stage_values()
         formats = tuple(f for f, cb in self.w_formats.items() if cb.isChecked()) or export.DEFAULT_FORMATS
-        if self.w_freq.isChecked() and "spectrum" not in formats:
+        if (self.w_freq.isChecked() or (self.w_qm_on.isChecked() and self.w_qm_freq.isChecked())) \
+                and "spectrum" not in formats:
             formats = (*formats, "spectrum")
         return BuildConfig.from_settings(
-            self.s, refine_top=self.w_refine_top.value(), optimizer=self.w_optimizer.currentText(),
+            self.s, refine_top=self.w_refine_top.value(), optimizer=self.w_optimizer.currentData(),
             protonation_method=self.w_prot_method.currentData(), xtb_properties=self.w_xtbprops.isChecked(),
-            symmetry_number=self.w_symmetry.value(), formats=formats)
+            symmetry_number=self.w_symmetry.value(), formats=formats,
+            crest_method=self.w_crest_method.currentData(), crest_quick=self.w_crest_quick.isChecked(),
+            qm_task=self.w_qm_task.currentData(), qm_top=self.w_qm_top.value(),
+            qm_properties=self.w_qm_props.isChecked(), qm_frequencies=self.w_qm_freq.isChecked(),
+            qm_cubes=self.w_qm_cubes.isChecked())
+
+    def _refresh_engine_lists(self) -> None:
+        """Re-label methods/CREST/QM after the user changed program paths (availability may differ)."""
+        from ..chem import crest, qm
+
+        current = self.w_method.currentData()
+        self.w_method.blockSignals(True)
+        self.w_method.clear()
+        for m in method_keys():
+            self.w_method.addItem(method_label(m), m)
+        self._set_combo(self.w_method, current)
+        self.w_method.blockSignals(False)
+        ok, _why = crest.available()
+        self.w_confsearch.setItemText(1, "CREST iMTD-GC" + ("" if ok else " (not installed)"))
+        ok, _why = qm.available()
+        self.w_qm_on.setText("Run a QM stage" + ("" if ok else " (Psi4 not found)"))
+        self._update_engine_info()
 
     def _update_engine_info(self) -> None:
         key = self.w_method.currentData()
@@ -560,6 +696,9 @@ class MainWindow(QMainWindow):
             info = engines.all_engines()[key]
             ok, why = engines.available(key)
             text = info.description + ("" if ok else f"\nNot available: {why}")
+            solvent = self.w_solvent.currentData() if hasattr(self, "w_solvent") else ""
+            if solvent and not engines.supports_solvent(key, solvent):
+                text += f"\nNo implicit solvent model for {solvent}: this engine runs in the gas phase."
         self.engine_info.setText(text)
 
     # ================================================================== hardware
@@ -769,14 +908,26 @@ class MainWindow(QMainWindow):
 
     def _show_info(self, res: MoleculeResult) -> None:
         d = res.descriptors
+        info = engines.all_engines().get(res.method)
         bits = [f"<b>{res.input.id}</b> {d.get('formula', '')}, charge {res.charge:+d}",
-                f"{engines.ENGINES[res.method].label} on {res.device}",
-                f"{res.n_embedded} embedded → {len(res.conformers)} conformers"]
+                f"{info.label} on {res.device}" if info is not None else res.method,
+                f"{res.n_embedded} embedded → {len(res.conformers)} conformers"
+                if res.conformer_search != "imported" else res.input.source]
+        if res.solvent:
+            bits[1] += f", {res.solvent} (implicit)"
         for key, label, unit in (("volume_A3_boltz", "Volume", "Å³"), ("sasa_A2_boltz", "SASA", "Å²"),
                                  ("dipole_debye_boltz", "Dipole", "D"), ("xtb_dipole_debye", "Dipole (xTB)", "D"),
-                                 ("xtb_polarizability_iso_A3", "Polarizability (xTB)", "Å³")):
-            if key in d:
+                                 ("xtb_polarizability_iso_A3", "Polarizability (xTB)", "Å³"),
+                                 ("qm_dipole_debye", "Dipole (QM)", "D"),
+                                 ("qm_polarizability_iso_A3", "Polarizability (QM)", "Å³"),
+                                 ("qm_surf_volume_A3", "Volume, 0.002 au (QM)", "Å³"),
+                                 ("qm_gap_ev", "HOMO-LUMO gap (QM)", "eV")):
+            if isinstance(d.get(key), (int, float)):
                 bits.append(f"{label}: {d[key]:.2f} {unit}")
+        if res.qm:
+            e = res.qm.get("energy_ev")
+            bits.append(f"QM: {res.qm.get('level', '')} ({res.qm.get('program', '')})"
+                        + (f", E = {e:.5f} eV" if isinstance(e, (int, float)) else ""))
         vib = res.vibrations
         thermo = (vib or {}).get("thermo")
         if thermo:
@@ -1081,6 +1232,10 @@ class MainWindow(QMainWindow):
         self.s = s
         settings_mod.save(self.s)
         resources.apply_thread_limits(self.s.resources.threads)
+        from ..chem import external
+
+        external.clear_cache()            # program paths may have changed
+        self._refresh_engine_lists()
         self._load_stage_values()
         if self.report:
             self._on_hardware(self.report)

@@ -6,7 +6,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ase import Atoms
-from ase.optimize import FIRE, LBFGS
 
 
 class Cancelled(Exception):
@@ -23,6 +22,8 @@ class OptResult:
 
 def optimize(atoms: Atoms, fmax: float = 0.03, steps: int = 500, algorithm: str = "lbfgs",
              should_stop: Callable[[], bool] | None = None) -> OptResult:
+    from ase.optimize import FIRE, LBFGS  # imported here: ase.optimize pulls in scipy (~0.4 s)
+
     opt_cls = FIRE if algorithm == "fire" else LBFGS
     opt = opt_cls(atoms, logfile=None)
 

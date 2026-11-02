@@ -6,9 +6,12 @@ charge states, searches conformers, refines them with machine-learning potential
 on your GPU, computes Boltzmann populations and descriptors, and exports for QSAR or molecular
 dynamics. Every step is visible in an OVITO-style 3D workspace.
 
-> Status: **0.2 in development, pre-alpha.** The geometry builder pipeline, the 2D/3D viewer, the
+> Status: **0.3 in development, pre-alpha.** The geometry builder pipeline, the 2D/3D viewer, the
 > GUI, CLI, surface builder, frequencies and thermochemistry, resumable batch runs and the LAMMPS
-> steered-MD bridge work. GPU paths are written but not yet verified on real hardware.
+> steered-MD bridge work. New in 0.3: CREST conformers, the xtb program, tblite and MOPAC, implicit
+> solvents, a Psi4 DFT stage with density/ESP surfaces, an IR spectrum panel and cclib import (tested
+> on Linux; the first Windows run of the external programs is pending). GPU paths are written but not
+> yet verified on real hardware.
 > See [docs/ROADMAP.md](docs/ROADMAP.md) for what comes next and [docs/VISION.md](docs/VISION.md)
 > for why this exists.
 
@@ -18,15 +21,17 @@ dynamics. Every step is visible in an OVITO-style 3D workspace.
 |---|---|
 | Input | SMILES, chemical names or CAS (PubChem), SDF/MOL/XYZ/PDB/SMI, CSV and Excel lists (CompTox exports: DTXSID, preferred name, SMILES / QSAR-ready / MS-ready fallback) |
 | Standardize & protonate | Largest fragment (strips counter-ions), neutral parent, dominant charge state at your pH. PFAS-aware: carboxylates, sulfonates and acidic perfluoroalkane sulfonamides are handled |
-| Conformer search | RDKit ETKDGv3, MMFF94s pre-optimization, energy window, symmetry-aware RMSD de-duplication |
-| Refinement | **AIMNet2** (ML, ωB97M-D3 quality, neutral and charged), **GFN1/GFN2-xTB** (dxtb, PyTorch), or MMFF94s, on GPU when available with automatic CPU fallback. On a GPU all conformers of a molecule are optimized in one batch (same results as one at a time) |
-| Properties | Boltzmann weights, volume, SASA, radius of gyration, shape, TPSA, CF2/CF3 counts, F/C ratio, xTB charges, dipole, polarizability |
+| Conformer search | RDKit ETKDGv3, MMFF94s pre-optimization, energy window, symmetry-aware RMSD de-duplication; or **CREST** (iMTD-GC metadynamics with GFN2-xTB / GFN-FF) |
+| Refinement | **AIMNet2** (ML, ωB97M-D3 quality, neutral and charged), **GFN1/GFN2-xTB** (dxtb, PyTorch; tblite; or the xtb program), **GFN-FF**, **PM7/PM6** (MOPAC), or MMFF94s, optionally in an implicit solvent (ALPB, COSMO). On GPU when available with automatic CPU fallback; on a GPU all conformers of a molecule are optimized in one batch |
+| Properties | Boltzmann weights, volume, SASA, radius of gyration, shape, TPSA, CF2/CF3 counts, F/C ratio, charges, dipoles, polarizabilities, HOMO/LUMO, heats of formation and solvation energies from each engine |
+| QM (DFT) | **Psi4** single points or optimizations of the lowest conformers at any `functional/basis` (ωB97X-D/def2-SVP, ...), with PCM: dipole, MBIS charges, orbitals, polarizability, frequencies, and density/ESP cubes with 0.002 au volume, area and ESP surface statistics |
 | Frequencies | Hessian (exact for xTB, finite differences otherwise), normal modes, IR intensities and spectrum, ZPE / H / S / G (ideal gas, Grimme qRRHO) for the best conformer |
 | Export | XYZ, extended XYZ with charges, SDF conformer ensembles, PDB, MOL, LAMMPS data, IR spectrum CSV, batch `summary.csv` and `descriptors.csv` |
 | Batches | Resumable: a SQLite job table in the run folder survives crashes and reboots; split a list across machines with `--chunk k/n` and merge the tables |
 | Surfaces | AB-stacked graphite and metal slabs; place a molecule at a set gap, grab and turn it with the mouse, overlap check |
 | Molecular dynamics | LAMMPS steered-MD setup (adsorbate pulled off a frozen graphite slab), log and pull-force analysis (detachment work, peak force) |
-| Viewer | 2D structure (RDKit) and 3D (PyVista) side by side, sharing one atom selection; distance/angle/dihedral readout; element, charge or tag coloring |
+| Viewer | 2D structure (RDKit) and 3D (PyVista) side by side, sharing one atom selection; distance/angle/dihedral readout; element, charge or tag coloring; ESP-mapped surfaces; IR spectrum panel with experimental overlay and normal-mode animation |
+| Interop | Import Gaussian, ORCA, Psi4, xtb, MOPAC outputs (cclib) and experimental spectra (CSV, JCAMP-DX) |
 
 ## Quick start
 
@@ -56,6 +61,13 @@ quantabench-cli merge combined/ run_chunk1/ run_chunk2/ run_chunk3/
 # Keep SQLite's transient files out of the sync by adding to that SyncThing folder's .stignore:
 #   jobs.sqlite-wal
 #   jobs.sqlite-shm
+
+# CREST conformers, GFN2-xTB in water, then a ωB97X-D/def2-SVP stage with density/ESP surfaces (Psi4)
+quantabench-cli build "OC(=O)C(F)(F)C(F)(F)C(F)(F)F PFBA" --conformers crest --crest-method gfnff \
+    --method xtb-gfn2 --solvent water --optimizer native --qm wb97x-d/def2-svp --cubes
+
+# import another program's output (geometry, energies, charges, frequencies)
+quantabench-cli import water_freq.out --out imported/
 
 # frequencies, thermochemistry (ZPE, H, S, G) and an IR spectrum CSV
 quantabench-cli freq "OC(=O)C(F)(F)F TFA" --method gfn1-xtb
@@ -121,12 +133,22 @@ coordinates.
 
 ## Engines
 
-| Engine | Package | GPU | Charged molecules | Notes |
+| Engine | Package / program | GPU | Solvent | Notes |
 |---|---|---|---|---|
-| MMFF94s / UFF | RDKit | no | yes | Always available; used for the conformer search |
-| GFN1-xTB | dxtb | yes (pure PyTorch) | yes | Also provides charges, dipole, polarizability |
-| GFN2-xTB | dxtb + tad-libcint | integrals on CPU | yes | Linux/WSL for now |
-| AIMNet2 | aimnet | yes* | yes | H, B, C, N, O, F, Si, P, S, Cl, As, Se, Br, I. *Some kernels use NVIDIA Warp; AMD may fall back to CPU, which `doctor --bench` will show |
+| MMFF94s / UFF | RDKit | no | no | Always available; used for the conformer search |
+| GFN1-xTB | dxtb | yes (pure PyTorch) | no | Also provides charges, dipole, polarizability |
+| GFN2-xTB | dxtb + tad-libcint | integrals on CPU | no | Linux/WSL |
+| GFN2/GFN1-xTB | tblite (pip, Linux/macOS) | no | ALPB, GBSA, CPCM | In process; no libcint needed |
+| GFN2/GFN1-xTB, GFN-FF | xtb program | no | ALPB, GBSA | Windows too; its own fast optimizer |
+| PM7, PM6-D3H4X | MOPAC | no | COSMO | Heats of formation, POLAR polarizability, COSMO volume |
+| AIMNet2 | aimnet | yes* | no | H, B, C, N, O, F, Si, P, S, Cl, As, Se, Br, I. *Some kernels use NVIDIA Warp; AMD may fall back to CPU, which `doctor --bench` will show |
+| CREST | crest program | no | ALPB | Conformer search; Linux/macOS, WSL on Windows |
+| DFT / HF | Psi4 (own conda env) | no | PCM | QM stage, properties, cubes, frequencies |
+
+The external programs install with conda from [`envs/`](envs); see [docs/ENGINES.md](docs/ENGINES.md)
+for versions, pins and pitfalls.
+
+![ESP on the 0.002 au density surface of trifluoroacetic acid (Psi4 ωB97X-D/def2-SVP)](docs/img/esp_surface.png)
 
 ## Settings
 
@@ -148,10 +170,13 @@ Apple's `mps` backend.
 
 [RDKit](https://www.rdkit.org) · [ASE](https://wiki.fysik.dtu.dk/ase/) · [PyTorch](https://pytorch.org) ·
 [dxtb](https://github.com/grimme-lab/dxtb) · [AIMNet2](https://github.com/isayevlab/aimnetcentral) ·
+[xtb](https://github.com/grimme-lab/xtb) · [CREST](https://github.com/crest-lab/crest) · [tblite](https://github.com/tblite/tblite) ·
+[MOPAC](https://github.com/openmopac/mopac) · [Psi4](https://psicode.org) · [cclib](https://cclib.github.io) · [pyqtgraph](https://www.pyqtgraph.org) ·
 [PySide6](https://doc.qt.io/qtforpython-6/) · [PyVista](https://pyvista.org) · optional [OVITO](https://www.ovito.org) and
 [LAMMPS](https://www.lammps.org)
 
-Please cite the underlying methods (GFN-xTB, AIMNet2, ETKDG, MMFF94) when you publish results.
+Please cite the underlying methods and programs (GFN-xTB, GFN-FF, CREST, PM7, Psi4, AIMNet2, ETKDG,
+MMFF94) when you publish results.
 
 ## License
 

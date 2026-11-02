@@ -15,8 +15,9 @@
                      +--+------+------+-------+-------+------+---+
                         |      |      |       |       |      |
                   inputs  standardize conformers engines properties export
-                                        batch_opt  vibrations
-                        \______________________________________/
+                                    crest   batch_opt  vibrations   qm -> surfaces/cube
+                                    eng_xtb, eng_tblite, eng_mopac (plugins)
+                        \_______ external: subprocess runner for xtb, CREST, MOPAC, Psi4 _______/
                      build.surfaces -> md.lammps (steered-MD setup) -> md.lammps_log
                                           |
                      +--------------------v---------------------+
@@ -34,7 +35,14 @@
 | `chem.inputs` | `MoleculeInput` records from SMILES, PubChem names, structure files, CSV and Excel (CompTox-aware: DTXSID, preferred name, SMILES-column fallback per row, `ReadReport` of skipped rows). |
 | `chem.standardize` | RDKit cleanup, largest fragment, neutralize, and the pH protonation rule table (or Dimorphite-DL). |
 | `chem.conformers` | ETKDGv3 embedding, MMFF94s/UFF, energy-window plus RMSD pruning, Boltzmann weights. |
-| `chem.engines` | Engine registry and ASE calculator factory: `DxtbCalculator`, AIMNet2. Element support and availability checks. |
+| `chem.engines` | Engine registry and ASE calculator factory: `DxtbCalculator`, AIMNet2, and `register()` for plugin engines (`PLUGINS`), each with an availability check, a calculator factory, optional properties and native optimizer. `method_keys`, `auto_candidates` (solvent-aware). |
+| `chem.external` | External programs: discovery (settings, `QUANTABENCH_<NAME>`, PATH, conda envs, `wsl:`), `program_env` (threads, `OMP_STACKSIZE`, `PSI_SCRATCH`, `WSLENV`), `work_dir`, `run_program` (log file, timeout, process-tree cancellation). |
+| `chem.eng_xtb`, `chem.eng_tblite`, `chem.eng_mopac` | Plugin engines: the xtb program (GFN2/GFN1/GFN-FF), tblite in process, MOPAC PM7/PM6-D3H4X. |
+| `chem.solvents` | One canonical solvent name mapped to ALPB/GBSA, COSMO (ε) and PCM keywords. |
+| `chem.crest` | CREST conformer search into a `ConformerSet` (atom order and topology checked). |
+| `chem.qm`, `chem.psi4_driver` | QM stage: the driver runs inside Psi4's own Python (stdlib + numpy + psi4) on a JSON task; the parent builds `result.qm`, descriptors and the vibrational analysis. |
+| `chem.cube`, `chem.surfaces` | Gaussian cubes; density isosurfaces, ESP mapping, GIPF descriptors, point-charge ESP surfaces. |
+| `chem.io_cclib`, `chem.spectra_io` | Import other programs' outputs (cclib) and experimental spectra (CSV, JCAMP-DX). |
 | `chem.optimize` | ASE LBFGS/FIRE with cancellation. |
 | `chem.batch_opt` | Batched L-BFGS and FIRE over `[B, N, 3]` torch tensors, batched dxtb and AIMNet2 models, `refine_batched` (drop-in for `pipeline._refine`), VRAM-based batch sizing with halving on out-of-memory. |
 | `chem.vibrations` | Hessian (dxtb autograd or finite differences), Eckart normal modes, IR intensities (km/mol), RRHO/qRRHO thermochemistry (Grimme, *Chem. Eur. J.* 2012, 18, 9955), IR spectra, mode trajectories. |
@@ -51,8 +59,9 @@
 | `gui.viewer3d` | `MoleculeViewer3D`: PyVista, instanced glyphs, NumPy ray picking, Rotate/Select/Move modes. `gui.viewer` is a compatibility shim (`MoleculeViewer`). |
 | `gui.viewer2d` | `MoleculeViewer2D`: RDKit SVG depiction in a `QGraphicsView`, full-index atom map, in-plane rotation, export. |
 | `gui.selection` | `SelectionModel` (ordered atom indices, `changed` signal), measurements, the shared accent color. |
+| `gui.spectra_panel`, `gui.surface_panel`, `gui.import_action` | Optional panels installed by `MainWindow._install_panels`; they follow `MainWindow.resultChanged`. |
 | `gui.surface_dialog`, `gui.settings_dialog`, `gui.workers` | Dialogs and `QThread` workers. |
-| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `slab`, `md smd`, `md parse`, `settings`. |
+| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`. |
 
 ## Key decisions
 
@@ -64,6 +73,11 @@
 - **Engines are optional and self-describing.** `available()` returns a reason, the GUI shows it, and
   the pipeline falls back (`auto` picks AIMNet2, then GFN2, then GFN1, then MMFF; GPU errors drop to
   CPU) and records each fallback in the molecule's notes.
+- **External programs run as subprocesses.** xtb, CREST, MOPAC and Psi4 bring their own OpenMP/BLAS
+  runtimes; in-process they would fight PyTorch over threads, and a crash would take the GUI down.
+  As subprocesses they can live in their own conda environment (Psi4 must), be cancelled by killing the
+  process tree, and run through WSL on Windows. Commands use file names relative to the job folder so
+  the same command works natively and in WSL.
 - **ASE calculators are the engine contract.** Anything that can be an ASE calculator can plug in.
   Batched engines add a second contract: `energy_and_forces(positions[B, N, 3] Å) -> (E[B] eV,
   F[B, N, 3] eV/Å)`, as a `batch_opt.BatchedModel` (with an optional per-atom charge buffer and

@@ -96,6 +96,12 @@ SCALE_FACTORS: dict[str, ScaleFactor] = {
 }
 
 
+# The same Hamiltonians through other programs (tblite in process, the xtb executable).
+for _alias, _ref in (("tblite-gfn2", "gfn2-xtb"), ("xtb-gfn2", "gfn2-xtb"), ("tblite-gfn1", "gfn1-xtb"),
+                     ("xtb-gfn1", "gfn1-xtb")):
+    SCALE_FACTORS[_alias] = SCALE_FACTORS[_ref]
+
+
 def scale_factor(method: str) -> float:
     """Frequency scale factor for ``method`` (1.0 when none is tabulated)."""
     sf = SCALE_FACTORS.get(method.lower())

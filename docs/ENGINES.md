@@ -1,0 +1,160 @@
+# Engines
+
+QuantaBench computes energies and properties with several engines. The in-process ones (MMFF, dxtb,
+AIMNet2, tblite) are Python packages. The external ones (xtb, CREST, MOPAC, Psi4) are separate
+programs that run as subprocesses: their OpenMP and BLAS stay out of PyTorch's way, a crash cannot take
+the GUI down, a run can be cancelled by killing the process tree, and Linux-only programs can run
+through WSL on Windows. `quantabench-cli doctor` lists what it found and where.
+
+| Engine key | What | Family | Runs | Solvent | Windows | Notes |
+|---|---|---|---|---|---|---|
+| `mmff` | MMFF94s / UFF (RDKit) | force field | in process | none | yes | conformer pre-optimization |
+| `gfn1-xtb` | GFN1-xTB (dxtb) | tight binding | in process, CPU/GPU | none | yes | batched on GPU |
+| `gfn2-xtb` | GFN2-xTB (dxtb + libcint) | tight binding | in process | none | no (libcint) | Linux/WSL |
+| `aimnet2` | AIMNet2 (ωB97M-D3 ML) | ML potential | in process, CPU/GPU | none | yes | weights download |
+| `tblite-gfn2`, `tblite-gfn1` | GFN-xTB (tblite) | tight binding | in process | ALPB, GBSA, CPCM | conda only | GFN2 without libcint |
+| `xtb-gfn2`, `xtb-gfn1`, `gfnff` | the xtb program | tight binding / force field | external | ALPB, GBSA | yes | native optimizer |
+| `mopac-pm7`, `mopac-pm6` | PM7, PM6-D3H4X (MOPAC) | semi-empirical | external | COSMO | yes | energy = ΔHf |
+| CREST | iMTD-GC conformer search | conformers | external | ALPB | via WSL | `--conformers crest` |
+| Psi4 | DFT/HF QM stage | DFT | external (own env) | PCM | yes | `--qm wb97x-d/def2-svp` |
+
+`method="auto"` tries AIMNet2 > GFN2-xTB (dxtb) > GFN2-xTB (tblite) > GFN2-xTB (xtb) > GFN1-xTB > MMFF,
+and with a solvent prefers the engines that can model it.
+
+## Finding programs
+
+QuantaBench looks, in this order, at: Settings > Engines (a path, or `wsl:/full/path` on Windows),
+the `QUANTABENCH_XTB` / `QUANTABENCH_CREST` / `QUANTABENCH_MOPAC` / `QUANTABENCH_PSI4_PYTHON`
+environment variables, PATH, the running Python environment, and conda/mamba environments in the usual
+places (`~/miniforge3/envs/*`, `~/mambaforge`, `~/miniconda3`, `~/micromamba`, ...).
+
+Ready-made environments are in [`envs/`](../envs): `tools.yml` (xtb, CREST, MOPAC; Linux/WSL),
+`tools-windows.yml` (xtb, MOPAC; Windows) and `psi4.yml` (Psi4 with the pins below). Keep Psi4 in its
+own environment.
+
+Each run gets a scratch folder (Settings > Engines > Scratch folder; default `%TEMP%\QuantaBench` or
+`/tmp/QuantaBench`). It is deleted on success and kept on failure, and the error message gives its
+path. Threads come from the Compute settings; `OMP_STACKSIZE` (default 4G) avoids stack overflows in
+xtb and CREST.
+
+## Solvents
+
+`--solvent water` (GUI: Refinement > Solvent) uses one name for every engine: ALPB/GBSA in xtb and
+tblite, COSMO (ε) in MOPAC, PCM in Psi4. The 16 names are in `chem/solvents.py` (water, methanol,
+ethanol, octanol, acetonitrile, acetone, DMSO, DMF, THF, dichloromethane, chloroform, toluene, benzene,
+hexane, diethyl ether, ethyl acetate). Engines without a solvent model run in the gas phase with a note.
+
+## xtb program (`xtb-gfn2`, `xtb-gfn1`, `gfnff`)
+
+- **Install.** Linux/WSL: `conda install -c conda-forge "xtb>=6.7.1"` (or `envs/tools.yml`). Windows:
+  `envs/tools-windows.yml`, or the zip from https://github.com/grimme-lab/xtb/releases; point
+  Settings > Engines > xtb at `bin\xtb.exe` if it is not on PATH. xtb ≥ 6.5 is required; 6.7.1 is
+  tested. 6.4.x is rejected.
+- **Optimizer.** `--optimizer native` uses xtb's own optimizer, 4-10x faster than ASE stepping xtb. The
+  level is the loosest xtb level whose threshold guarantees the requested fmax (0.03 eV/Å -> `vtight`).
+- **Properties.** `gfn2_dipole_debye`, `gfn2_gap_ev`, `gfn2_d4_polarizability_A3` (the D4 dispersion
+  model's molecular α(0), a good static-polarizability estimate: water 1.41 vs 1.45 Å³ experiment),
+  and with a solvent `gfn2_gsolv_kcal` (E(solvent) − E(gas) at the same geometry) and
+  `gfn2_gsolv_term_kcal` (xtb's printed Gsolv term).
+- **Pitfalls.**
+  - xtb reports an ion's dipole about its coordinate origin. QuantaBench reports it about the centre of
+    mass, which matters for carboxylates and sulfonates at pH 7.
+  - xtb writes `.xtboptok` and exits 0 even when an optimization ran out of cycles; QuantaBench reads
+    the log instead.
+
+## CREST (`--conformers crest`)
+
+- **Install.** Linux/WSL/macOS: `conda install -c conda-forge crest "xtb>=6.7.1"` in one environment
+  (`envs/tools.yml`). No Windows build: install it inside WSL2 and set Settings > Engines > CREST to
+  `wsl:/home/<you>/miniforge3/envs/qb-tools/bin/crest`. The full path is needed because WSL starts it
+  without conda's PATH.
+- **Levels.** `--crest-method gfn2 | gfnff | gfn2//gfnff | gfn1`; `--quick` is the default
+  (`--crest-full` for a full run). gfn2, gfn1 and gfnff run inside CREST 3. `gfn2//gfnff` needs
+  CREST's `--legacy` mode (added automatically) and an `xtb` on the PATH CREST sees.
+- **Timings, 1-2 threads.** Ethanol gfnff 2 s; CF3COOH gfn2 38 s; PFBA anion gfnff in water 9 s;
+  PFBA gfn2 about 2 min. For C8+ PFAS use gfnff and refine with `xtb-gfn2`.
+- Conformers whose bonds changed (CREST can find tautomers) are dropped and logged. If CREST is missing
+  or fails, the run falls back to RDKit ETKDGv3 with a note.
+
+## tblite (`tblite-gfn2`, `tblite-gfn1`)
+
+- **Install.** Linux/macOS: `pip install tblite` (part of the `xtb` extra). Windows: there is no PyPI
+  wheel; conda-forge's `tblite-python` works only if QuantaBench runs in that conda environment. On
+  Windows, use the xtb program instead.
+- Matches the xtb program to 4e-9 Eh. Solvation: ALPB (default), GBSA (falls back to ALPB where GBSA
+  lacks parameters), CPCM (ε).
+- **Polarizability.** `tblite_gfn2_polarizability_iso_A3` is the electronic response from finite fields
+  (6 SCFs). The minimal basis makes it about a third of experiment (water 0.37 vs 1.45 Å³): use it for
+  trends.
+- Threads: OpenMP reads `OMP_NUM_THREADS` when tblite is first imported. QuantaBench sets it at startup.
+
+## MOPAC (`mopac-pm7`, `mopac-pm6`)
+
+- **Install.** `conda install -c conda-forge mopac` (Windows: `Library\bin\mopac.exe`) or the
+  installer from https://openmopac.net. MOPAC ≥ 22 (open source, no license key); 23.2.5 tested.
+- **Energy is the heat of formation in eV**, because MOPAC's gradients are those of ΔHf. Compare
+  energies only within one method.
+- `--optimizer native` (MOPAC's own optimizer) is 3-15x faster than ASE stepping MOPAC.
+- **Properties.** `pm7_heat_of_formation_kcal`, dipole, HOMO/LUMO/gap, ionization energy,
+  `pm7_polarizability_iso_A3` (POLAR, closed shell; water 1.26, methanol 2.99 Å³) and, with COSMO,
+  `pm7_cosmo_area_A2` and `pm7_cosmo_volume_A3`.
+- MOPAC exits with code 0 on errors; QuantaBench reads its error messages instead. COSMO energies have
+  small steps as surface segments switch; gradients are smooth, so optimizations are fine.
+
+## Psi4 (QM stage)
+
+```
+quantabench-cli build "OC(=O)C(F)(F)C(F)(F)C(F)(F)F PFBA" --method xtb-gfn2 --solvent water \
+    --conformers crest --crest-method gfnff --qm wb97x-d/def2-svp --cubes
+```
+
+- **Install** in its own environment: `conda env create -f envs/psi4.yml`. Then set Settings > Engines
+  > Psi4 Python to that environment's `python` (`QUANTABENCH_PSI4_PYTHON` works too). Without it,
+  QuantaBench looks for a `psi4` launcher in the usual places.
+- **Levels** are `method/basis`: `wb97x-d/def2-svp` (Spartan's ωB97X-D; dispersion built in),
+  `b3lyp-d3bj/def2-tzvp`, `hf/6-31g*`. Use `def2-svpd` (diffuse functions) for anions where it matters.
+- **What the stage does** for the `qm_top` lowest conformers: a single point or an optimization (optking).
+  For the best one, optionally:
+  - properties: dipole about the centre of mass, quadrupole, Mulliken/Löwdin/MBIS charges, HOMO/LUMO;
+  - the static polarizability: analytic CPSCF for HF/LDA/GGA/hybrids including ωB97X-D; finite field for
+    meta-GGAs, VV10, double hybrids and PCM;
+  - density and ESP cubes with surface descriptors;
+  - frequencies with IR intensities and qRRHO thermochemistry, computed with QuantaBench's own
+    vibrational code.
+- **Descriptors.** `qm_energy_ev`, `qm_dipole_debye`, `qm_homo_ev`, `qm_lumo_ev`, `qm_gap_ev`,
+  `qm_polarizability_iso_A3`, `qm_mbis_*`, `qm_zpe_kcal`, ..., `qm_surf_*`.
+- **Files.** `<id>_qm_log.out`, `<id>_qm_density.cube`, `<id>_qm_esp.cube`, `<id>_qm_geometry.xyz`
+  and the QM IR spectrum, written next to the other results.
+- **Timings, 2 CPU threads, ωB97X-D/def2-SVP.** Water 1 s. PFBA anion in PCM water: SCF 31 s,
+  properties 21 s, cubes 23 s, finite-field polarizability 142 s (PCM forces finite fields).
+- **Pitfalls.**
+  - libint 2.13 makes Psi4 1.9.1 segfault: pin `libint=2.9`.
+  - pint ≥ 0.25 breaks qcelemental 0.30, so every optimization fails: pin `pint<0.25`. The driver
+    patches this for its own process and warns.
+  - `-d3bj`/`-d4` functionals need `dftd3-python` / `dftd4-python`.
+  - PCM has no analytic gradients in Psi4: optimizations and frequencies run in the gas phase;
+    energies and properties are PCM single points (noted).
+  - DFT frequencies by finite differences cost 2(3N−6)+1 gradients (≈145 for PFOA).
+
+## Surfaces (Surfaces panel, `qm_surf_*` descriptors)
+
+From the QM density and ESP cubes: the 0.002 au density isosurface (area, enclosed volume) with the ESP
+mapped on it, and the Murray-Politzer GIPF statistics: V_min, V_max, means, σ²₊, σ²₋, σ²_tot, ν, Π.
+Without QM cubes, the panel draws a vdW or solvent-accessible surface colored by the point-charge ESP
+of the current conformer's charges. Colors follow Spartan and GaussView (red = negative). Water at
+ωB97X-D/def2-SVP: 20.5 Å³ and 36.8 Å² at 0.002 au.
+
+![ESP on the 0.002 au density surface of trifluoroacetic acid](img/esp_surface.png)
+
+## Importing other programs' results
+
+`quantabench-cli import FILE...` and File > Import calculation output read Gaussian, ORCA, Psi4, xtb,
+MOPAC and other outputs through cclib (`pip install cclib`, the `interop` extra). Geometries, energies,
+charges, frequencies and IR intensities become a built molecule; the Spectra panel shows and animates
+its modes. Experimental spectra (CSV, JCAMP-DX including compressed forms) can be overlaid.
+
+## Not available yet
+
+- NMR shieldings (Psi4 has none; planned through PySCF).
+- Orbital isosurfaces (cubes of selected MOs) and local ionization potential maps.
+- CREST on native Windows without WSL.

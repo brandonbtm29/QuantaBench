@@ -74,24 +74,43 @@ Still open for 0.2:
 - [ ] Validation notebook against the Spartan Essential 76 PFAS results (RMSD, energy ranks,
       descriptors, frequencies).
 - [ ] GUI: resume a run folder from the app (today: `quantabench-cli build --resume`; GUI batches
-      already write the job table), IR spectrum plot and normal-mode animation in the viewer
-      (`vibrations.mode_trajectory` exists), live pull-force plots.
+      already write the job table) and live pull-force plots. (The IR spectrum plot and normal-mode
+      animation landed with 0.3's Spectra panel.)
 
 Known science limits to keep in mind: GFN1/GFN2-xTB place C=O and carboxylate stretches far too high
 (PFOA anion 2013 vs ~1690 cm⁻¹); the SMD model is vacuum, rigid-adsorbate and non-polarizable, so its
 work is a gas-phase lower bound, not an aqueous free energy.
 
-## 0.3: Spartan parity for properties (later)
+## 0.3: Spartan parity for properties (in progress)
+
+The original QuantaBench plan (CREST conformers, GFN2/GFN-FF, MOPAC PM6/PM7, Psi4 DFT with density and
+ESP cubes, PyQtGraph spectra, cclib, a conda environment) landed here on 2026-11-01, on top of a shared
+external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENGINES.md).
 
 - [x] Frequencies and thermochemistry (done in 0.2; AIMNet2's autograd Hessian still needs real weights
       to verify).
-- [ ] Implicit solvation for xTB (GBSA/ALPB) and solvated ML corrections.
+- [x] **External-engine layer**: program discovery (settings, env vars, PATH, conda envs, `wsl:`), thread
+      and stack control, cancellation, scratch folders; engine plugin registry; Settings > Engines tab.
+- [x] **Implicit solvation**: one solvent name for ALPB/GBSA (xtb, tblite), COSMO (MOPAC), PCM (Psi4).
+- [x] **xtb program** (GFN2, GFN1, GFN-FF) with its own optimizer: GFN2 on native Windows.
+- [x] **tblite** in process (GFN2/GFN1, ALPB/GBSA/CPCM, finite-field polarizability).
+- [x] **MOPAC** PM7 / PM6-D3H4X with COSMO, heats of formation, POLAR polarizability, COSMO area/volume.
+- [x] **CREST** iMTD-GC conformer search (GFN2, GFN-FF, GFN2//GFN-FF), RDKit fallback; WSL on Windows.
+- [x] **Psi4 QM stage**: DFT/HF single points or optimizations of the lowest conformers, dipole,
+      quadrupole, Mulliken/Löwdin/MBIS charges, HOMO/LUMO, static polarizability (analytic or finite
+      field), PCM, frequencies with IR and qRRHO thermochemistry.
+- [x] **Density and ESP surfaces**: cube reader, 0.002 au isosurface volume/area, ESP mapping,
+      Murray-Politzer GIPF descriptors, point-charge ESP fallback, Surfaces panel.
+- [x] **IR spectrum panel**: broadened spectrum + sticks, QM trace, experimental overlay (CSV, JCAMP-DX),
+      click a peak to animate its normal mode.
+- [x] **cclib import** of other programs' outputs (GUI and `quantabench-cli import`).
+- [x] Conda environment files for the external programs (`envs/`).
+- [ ] First run of all of the above on native Windows (ENG-1) and CREST through WSL (ENG-2).
+- [ ] Validation against the Spartan Essential 76 PFAS ωB97X-D results (VAL-1, now possible in-house).
+- [ ] Orbital isosurfaces (MO cubes), HOMO/LUMO and local ionization potential maps.
+- [ ] NMR shieldings (Psi4 has none: PySCF GIAO, or ORCA through cclib import).
 - [ ] Coordinate scans, constrained optimization, transition states (Sella), NEB.
-- [ ] Orbitals, density, and ESP surfaces: PySCF single points on the CPU threads, cube grids, PyVista
-      isosurfaces and mapped ESP (Spartan's signature visuals).
-- [ ] HOMO/LUMO and local ionization potential maps.
-- [ ] DFT single points and optimizations through PySCF (CPU), with gpu4pyscf on NVIDIA and a HIP port
-      when one exists.
+- [ ] GPU DFT: gpu4pyscf on NVIDIA, a HIP port when one exists.
 - [ ] More ML potentials: UMA/OMol25 (fairchem), AceFF, MACE-OFF, Egret-1; user choice per run.
 
 ## 0.4: Molecular dynamics bridge (later)

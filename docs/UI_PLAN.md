@@ -43,9 +43,10 @@ molecule/system navigator, the playback bar and the job monitor.
 
 - **Level of theory**, by family:
   - force field (MMFF94s, UFF; OpenFF/GAFF2/OPLS for MD)
-  - tight binding (GFN1/GFN2-xTB; PM6/PM7 via MOPAC later)
+  - tight binding (GFN1/GFN2-xTB via dxtb, tblite or the xtb program; GFN-FF)
+  - semi-empirical (PM7, PM6-D3H4X via MOPAC)
   - ML potential (AIMNet2; UMA/OMol25, MACE-OFF, AceFF later)
-  - DFT/HF (PySCF: functional + basis + dispersion)
+  - DFT/HF (Psi4 QM stage today: functional + basis; PySCF later for NMR and GPU DFT)
 - **Settings:** solvent and charge/multiplicity where supported.
 - **Molecular tasks:** single point, optimize, conformer distribution, frequencies + thermochemistry,
   scan, transition state, properties.
@@ -60,8 +61,10 @@ molecule/system navigator, the playback bar and the job monitor.
 
 - **Tier 1:** app shell (UI-1), project document (UI-2), spreadsheet/plots/formulas (UI-3), structure
   editor + fragments + undo (UI-4), job dialog + monitor (UI-5), Simulate design (RES-1) then v1.
-- **Tier 2:** surfaces, spectra panel, properties inspector, align/overlay, trajectory player synced
-  with telemetry plots.
+- **Tier 2:** properties inspector, align/overlay, trajectory player synced with telemetry plots.
+  (Done 2026-11-01: the Surfaces panel with ESP-mapped density and vdW/SAS surfaces, and the Spectra
+  panel with experimental overlay and mode animation; both are docks that UI-1 will place into the
+  Analyze workspace. The pipeline dock gained Conformer search (CREST), Solvent and QM (DFT) pages.)
 - **Tier 3:** constraints/scans/TS, isomer/tautomer enumeration (branched vs linear PFAS),
   substructure search, force-field assignment for full bonded MD.
 - **De-prioritized:** protein ribbons/Ramachandran, NOE/pharmacophore points, NMR entry dialogs.

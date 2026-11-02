@@ -191,8 +191,13 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
     options = calculator_options(result, cfg)
     native = engines.native_optimizer(result.method) if cfg.optimizer == "native" else None
 
+    plug = engines.plugin(result.method)
+    full_dipole = plug is not None and plug.extra.get("dipole_origin") == "com"
+
     def build(dev):
-        return engines.make_calculator(result.method, numbers, result.charge, result.multiplicity, dev, **options)
+        extra = {"should_stop": should_stop} if plug is not None else {}
+        return engines.make_calculator(result.method, numbers, result.charge, result.multiplicity, dev,
+                                       **options, **extra)
 
     def run_opt(atoms):
         if native is not None:
@@ -228,7 +233,11 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
             conf.SetAtomPosition(j, p.tolist())
         charges = calc.results.get("charges")
         charges = None if charges is None else [float(x) for x in np.ravel(charges)]
-        dip = desc.dipole_debye(atoms.get_positions(), np.asarray(charges), masses) if charges else None
+        mu = calc.results.get("dipole") if full_dipole else None
+        if mu is not None:     # the engine's own (electronic) dipole, about the centre of mass
+            dip = float(np.linalg.norm(mu)) * desc.DEBYE_PER_E_ANG
+        else:                  # point-charge dipole
+            dip = desc.dipole_debye(atoms.get_positions(), np.asarray(charges), masses) if charges else None
         out.append(ConformerResult(rank=0, conf_id=cid, energy_ev=res.energy_ev, ff_energy_kcal=e_ff,
                                    converged=res.converged, steps=res.steps, charges=charges, dipole_debye=dip))
         log(f"  conformer {i + 1}/{len(ids)}: E = {res.energy_ev:.5f} eV, {res.steps} steps"
@@ -242,11 +251,23 @@ def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: Con
     from . import vibrations
 
     atoms = export.mol_to_atoms(conf_set.mol, best.conf_id)
+    stored_positions = atoms.get_positions().copy()
     fmax = min(cfg.fmax, 0.01)    # frequencies need a tighter minimum than the conformer ranking
     calc = None
     if engines.plugin(result.method) is not None:   # plugin engines: pass the solvent/threads options through
+        options = calculator_options(result, cfg)
         calc = engines.make_calculator(result.method, atoms.numbers, result.charge, result.multiplicity,
-                                       result.device, **calculator_options(result, cfg))
+                                       result.device, should_stop=should_stop, **options)
+        native = engines.native_optimizer(result.method) if cfg.optimizer == "native" else None
+        if native is not None:   # the program's own optimizer is much faster than ASE driving it step by step
+            atoms.calc = calc
+            try:
+                native(atoms, fmax, cfg.max_steps, should_stop, log, charge=result.charge,
+                       multiplicity=result.multiplicity, **options)
+            except Cancelled:
+                raise
+            except Exception as exc:
+                log(f"  native pre-optimization failed ({type(exc).__name__}); ASE will pre-optimize")
     try:
         vr = vibrations.analyze(atoms, result.method, result.charge, result.multiplicity, device=result.device, calc=calc,
                                 temperature=cfg.temperature_k, symmetry_number=cfg.symmetry_number,
@@ -268,7 +289,7 @@ def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: Con
         pos = np.asarray(vr.positions, float)
         result.vibrations["symbols"] = atoms.get_chemical_symbols()
         result.vibrations["positions_A"] = np.round(pos, 6).tolist()
-        shift = float(np.sqrt(((pos - atoms.get_positions()) ** 2).sum(1)).max()) if len(pos) else 0.0
+        shift = float(np.sqrt(((pos - stored_positions) ** 2).sum(1)).max()) if len(pos) else 0.0
         result.vibrations["geometry_max_shift_A"] = shift
         result.descriptors["vib_geometry_max_shift_A"] = shift
     result.notes += [f"frequencies: {w}" for w in vr.warnings]

@@ -108,9 +108,10 @@ def test_panel_installs_and_draws_charge_surface(tmp_path, built):
     mapper = _actors(w)[sp.ACTOR].GetMapper()
     assert mapper.GetLookupTable().GetRange() == pytest.approx((-12.5, 12.5))
     assert _actors(w)[sp.ACTOR].GetProperty().GetOpacity() == pytest.approx(0.5)
-    assert "+12.5" in panel.legend_hi.text() and "blue = negative" in panel.legend_text.text()
+    assert "+12.5" in panel.legend_hi.text() and "red = negative" in panel.legend_text.text()   # default
+    panel.reverse_box.setChecked(False)
+    assert "blue = negative" in panel.legend_text.text()
     panel.reverse_box.setChecked(True)
-    assert "red = negative" in panel.legend_text.text()
 
     # atom picking goes through the surface (the viewer ray-casts its own spheres)
     disp = w.viewer.world_to_display(w.viewer.atoms.positions)
