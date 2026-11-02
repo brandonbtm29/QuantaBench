@@ -179,8 +179,9 @@ def test_overlap_and_bad_inputs_are_rejected(tfa, tmp_path):
 
 WIN_LAMMPS_FLAKY = pytest.mark.xfail(
     sys.platform == "win32", strict=False,
-    reason="PyPI's Windows LAMMPS build is non-deterministic on free counter-ion systems (identical input "
-           "fails ~5-10% of runs with 'Out of range atoms'; Linux is deterministic). See BACKLOG MD-1.")
+    reason="PyPI's Windows LAMMPS build is non-deterministic (identical input fails some runs with 'Out of "
+           "range atoms - cannot compute PPPM': ~5-10% with a free counter-ion, 2 of 6 for the TFA anion alone; "
+           "Linux is deterministic). See BACKLOG MD-1.")
 
 
 @WIN_LAMMPS_FLAKY
@@ -240,6 +241,7 @@ def test_molecule_across_periodic_boundary_stays_whole(tfa, tmp_path):
 # ----------------------------------------------------------------------------------------------- real run
 
 
+@WIN_LAMMPS_FLAKY
 def test_smd_run_with_lammps_module(tfa_on_graphite, tmp_path):
     pytest.importorskip("lammps")
     setup = qlmp.write_smd_setup(tfa_on_graphite, tmp_path / "run", **SHORT, config=SHORT_CFG)

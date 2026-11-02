@@ -93,9 +93,10 @@ environment (`py -3.12 -m venv .venv-rocm`) for GPU experiments.
   `QOpenGLWidget` that crashes in `initializeGL` with the AMD driver on Windows (verified on an
   RX 9060 XT, driver 26.10.1). 0.12 works. If you upgraded it by hand: `pip install "pyvistaqt==0.12.0"`.
 
-- **LAMMPS with counter-ions is intermittently unstable with the Windows wheel.** Identical SMD inputs
-  with a free Na⁺ fail ~5-10% of runs ("Out of range atoms"); Linux/WSL runs are deterministic. Adsorbate
-  runs without counter-ions are fine. Tracked as MD-1 in `docs/dev/BACKLOG.md`.
+- **LAMMPS SMD runs are intermittently unstable with the Windows wheel.** Identical SMD inputs fail some
+  runs with "Out of range atoms - cannot compute PPPM": ~5-10% with a free Na⁺, and 2 of 6 for a TFA
+  anion on graphite without a counter-ion (2026-11-01). Linux/WSL runs are deterministic. Until MD-1 is
+  solved, run production SMD with the LAMMPS Windows installer's `lmp.exe` or in WSL.
 
 ## Windows + WSL2 (Ubuntu 22.04 / 24.04)
 

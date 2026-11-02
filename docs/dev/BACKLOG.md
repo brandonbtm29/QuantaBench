@@ -108,6 +108,9 @@ Depends on: none (research only; can run any night).
   or recommend no counter-ion (PPPM neutralizing background) for adsorption SMD in vacuum.
 - Acceptance: a documented protocol that keeps T within ±20% of target after the soft start, and a
   minimal upstream LAMMPS issue (or a confirmed local cause) for the Windows failures.
+- 2026-11-01: not only counter-ions: `test_smd_run_with_lammps_module` (TFA⁻ alone on graphite, PPPM)
+  failed 2 of 6 identical runs on BTM NOVA with the same error; now also marked flaky on Windows.
+  Compare with `lmp.exe` from the LAMMPS Windows installer to tell a wheel problem from an input problem.
 
 ## GPU-1: AIMNet2 on AMD GPUs (replace NVIDIA Warp D3) · ready
 - `aimnet` 0.2 computes DFT-D3 (and neighbor lists) through `nvalchemi-toolkit-ops` / NVIDIA Warp, which
