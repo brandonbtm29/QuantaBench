@@ -3,13 +3,16 @@
     input (SMILES / name / file / CSV)
       -> standardize (largest fragment, neutral parent)
       -> protonation state at pH
-      -> 3D embedding, conformer search (ETKDGv3) + MMFF94s pre-optimization
+      -> 3D embedding, conformer search: ETKDGv3 + MMFF94s pre-optimization, or CREST iMTD-GC (``chem.crest``)
       -> energy-window + RMSD pruning
-      -> refinement of the lowest conformers with the chosen engine (AIMNet2 / xTB / MMFF), GPU when possible;
-         all conformers in one torch batch on a GPU (``chem.batch_opt``), one at a time with ASE otherwise
-      -> re-pruning, Boltzmann weights, descriptors
+      -> refinement of the lowest conformers with the chosen engine (AIMNet2 / xTB / tblite / MOPAC / MMFF),
+         in an implicit solvent when the engine has one; GPU when possible; all conformers in one torch batch
+         on a GPU (``chem.batch_opt``), one at a time with ASE (or the program's own optimizer) otherwise
+      -> re-pruning, Boltzmann weights, descriptors, the engine's own properties (charges, dipole, ...)
       -> optional: frequencies, IR and RRHO/qRRHO thermochemistry of the best conformer
-      -> export (XYZ, SDF ensemble, extXYZ with charges, PDB, MOL, LAMMPS data) + batch tables
+      -> optional QM stage (``chem.qm``): DFT single point / optimization of the lowest conformers with Psi4,
+         properties (dipole, charges, MBIS, orbitals), density/ESP cubes and surface descriptors
+      -> export (XYZ, SDF ensemble, extXYZ with charges, PDB, MOL, LAMMPS data, cubes) + batch tables
 
 The pipeline is UI-agnostic: the CLI and the GUI both call ``run`` with a progress callback and a
 cancel check.
@@ -51,7 +54,7 @@ class BuildConfig:
     rmsd_threshold: float = 0.5
     fmax: float = 0.03
     max_steps: int = 500
-    optimizer: str = "lbfgs"
+    optimizer: str = "lbfgs"              # "lbfgs" | "fire" | "native" (the engine's own optimizer, if it has one)
     temperature_k: float = 298.15
     xtb_properties: bool = True           # GFN1-xTB charges, dipole, polarizability of the best conformer
     batched: str = "auto"                 # "auto" (batched on a GPU) | "on" | "off": see use_batched()
@@ -60,6 +63,17 @@ class BuildConfig:
     symmetry_number: int = 0              # rotational symmetry number σ for the entropy; 0 = detect per molecule
     freq_qrrho: bool = True               # Grimme's quasi-RRHO entropy for low-frequency modes
     seed: int = 42
+    solvent: str = ""                     # implicit solvent (chem.solvents name), "" = gas phase
+    conformer_search: str = "rdkit"       # "rdkit" (ETKDGv3 + MMFF94s) | "crest" (CREST iMTD-GC, external)
+    crest_method: str = "gfn2"            # "gfn2" | "gfnff" | "gfn2//gfnff" | "gfn1"
+    crest_quick: bool = True              # CREST --quick (fewer metadynamics runs): minutes instead of hours
+    qm_method: str = ""                   # "functional/basis", e.g. "wb97x-d/def2-svp"; "" = no QM stage
+    qm_task: str = "energy"               # "energy" (single point) | "optimize"
+    qm_top: int = 1                       # how many of the lowest conformers get the QM stage
+    qm_properties: bool = True            # dipole, quadrupole, Mulliken/Lowdin/MBIS charges, orbital energies
+    qm_frequencies: bool = False          # QM Hessian + IR + thermochemistry of the best QM conformer
+    qm_cubes: bool = False                # density + ESP cubes and molecular-surface descriptors (best conformer)
+    qm_program: str = "psi4"
     threads: int = 0
     gpu: str = "auto"
     gpu_index: int = 0
@@ -75,7 +89,8 @@ class BuildConfig:
                   max_conformers=b.max_conformers, energy_window_kcal=b.energy_window_kcal,
                   rmsd_threshold=b.rmsd_threshold, fmax=b.fmax, max_steps=b.max_steps, temperature_k=b.temperature_k,
                   seed=b.random_seed, batched=b.batched, frequencies=b.frequencies, threads=r.threads, gpu=r.gpu, gpu_index=r.gpu_index,
-                  gpu_memory_fraction=r.gpu_memory_fraction, output_dir=str(s.output_path()))
+                  gpu_memory_fraction=r.gpu_memory_fraction, output_dir=str(s.output_path()),
+                  conformer_search=b.conformer_search, solvent=b.solvent, qm_method=b.qm_method)
         return replace(cfg, **overrides)
 
 
@@ -111,7 +126,10 @@ class MoleculeResult:
     descriptors: dict = field(default_factory=dict)
     timings: dict = field(default_factory=dict)
     files: list[str] = field(default_factory=list)
-    vibrations: dict | None = None     # VibrationalResult.to_dict() when cfg.frequencies
+    vibrations: dict | None = None     # VibrationalResult.to_dict(include_modes=True) when cfg.frequencies
+    solvent: str = ""                  # implicit solvent actually used by the refinement ("" = gas phase)
+    conformer_search: str = ""         # "rdkit" | "crest" (what actually produced the conformers)
+    qm: dict | None = None             # chem.qm stage results (see qm.QM_RESULT_KEYS)
 
     def to_dict(self) -> dict:
         d = {k: v for k, v in asdict(self).items() if k not in ("mol", "input")}
@@ -123,9 +141,11 @@ class MoleculeResult:
         return {
             "id": self.input.id, "name": self.input.name, "status": self.status, "error": self.error,
             "input_smiles": self.input.smiles, "smiles": self.smiles, "charge": self.charge, "method": self.method,
-            "device": self.device, "n_embedded": self.n_embedded, "n_conformers": len(self.conformers),
+            "device": self.device, "solvent": self.solvent, "conformer_search": self.conformer_search,
+            "n_embedded": self.n_embedded, "n_conformers": len(self.conformers),
             "best_energy_eV": best.energy_ev if best else "", "best_converged": best.converged if best else "",
             "dipole_debye": best.dipole_debye if best and best.dipole_debye is not None else "",
+            "qm_method": (self.qm or {}).get("level", ""), "qm_energy_eV": (self.qm or {}).get("energy_ev", ""),
             "seconds": round(sum(self.timings.values()), 2), "notes": " | ".join(self.notes),
         }
 
@@ -153,6 +173,11 @@ def _noop(*_args) -> None:
     pass
 
 
+def calculator_options(result: MoleculeResult, cfg: BuildConfig) -> dict:
+    """Options every engine factory receives (see ``engines`` module docstring)."""
+    return {"solvent": result.solvent, "threads": resources.resolve_threads(cfg.threads)}
+
+
 def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConfig, device: str,
             should_stop: Callable[[], bool], log: Callable[[str], None]) -> list[ConformerResult]:
     mol = conf_set.mol
@@ -163,9 +188,18 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
                 for cid, e in zip(ids, ff)]
     numbers = [a.GetAtomicNum() for a in mol.GetAtoms()]
     masses = np.array([a.GetMass() for a in mol.GetAtoms()])
+    options = calculator_options(result, cfg)
+    native = engines.native_optimizer(result.method) if cfg.optimizer == "native" else None
 
     def build(dev):
-        return engines.make_calculator(result.method, numbers, result.charge, result.multiplicity, dev)
+        return engines.make_calculator(result.method, numbers, result.charge, result.multiplicity, dev, **options)
+
+    def run_opt(atoms):
+        if native is not None:
+            return native(atoms, cfg.fmax, cfg.max_steps, should_stop, log, charge=result.charge,
+                          multiplicity=result.multiplicity, **options)
+        return optimize(atoms, cfg.fmax, cfg.max_steps, "lbfgs" if cfg.optimizer == "native" else cfg.optimizer,
+                        should_stop)
 
     calc = build(device)
     out = []
@@ -175,7 +209,7 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
         atoms = export.mol_to_atoms(mol, cid)
         atoms.calc = calc
         try:
-            res = optimize(atoms, cfg.fmax, cfg.max_steps, cfg.optimizer, should_stop)
+            res = run_opt(atoms)
         except Cancelled:
             raise
         except Exception as exc:
@@ -188,7 +222,7 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
             calc = build("cpu")
             atoms = export.mol_to_atoms(mol, cid)
             atoms.calc = calc
-            res = optimize(atoms, cfg.fmax, cfg.max_steps, cfg.optimizer, should_stop)
+            res = run_opt(atoms)
         conf = mol.GetConformer(cid)
         for j, p in enumerate(atoms.get_positions()):
             conf.SetAtomPosition(j, p.tolist())
@@ -209,8 +243,12 @@ def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: Con
 
     atoms = export.mol_to_atoms(conf_set.mol, best.conf_id)
     fmax = min(cfg.fmax, 0.01)    # frequencies need a tighter minimum than the conformer ranking
+    calc = None
+    if engines.plugin(result.method) is not None:   # plugin engines: pass the solvent/threads options through
+        calc = engines.make_calculator(result.method, atoms.numbers, result.charge, result.multiplicity,
+                                       result.device, **calculator_options(result, cfg))
     try:
-        vr = vibrations.analyze(atoms, result.method, result.charge, result.multiplicity, device=result.device,
+        vr = vibrations.analyze(atoms, result.method, result.charge, result.multiplicity, device=result.device, calc=calc,
                                 temperature=cfg.temperature_k, symmetry_number=cfg.symmetry_number,
                                 hessian=cfg.freq_hessian, mol=conf_set.mol, qrrho=cfg.freq_qrrho,
                                 preoptimize_fmax=fmax, should_stop=should_stop, log=log)
@@ -224,7 +262,7 @@ def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: Con
     # The stored conformer is left alone, so its ranking energy, charges, dipole and 3D descriptors still
     # belong to its exported geometry; the frequency geometry is kept separately (``positions_A``, written
     # as <id>_freq.xyz by the spectrum export) together with its own energy (thermo.potential_energy_ev).
-    result.vibrations = vr.to_dict()
+    result.vibrations = vr.to_dict(include_modes=True)   # displacements: the spectra panel animates modes
     result.descriptors.update({f"vib_{k}": v for k, v in vr.descriptors().items()})
     if vr.positions is not None:
         pos = np.asarray(vr.positions, float)
@@ -237,6 +275,88 @@ def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: Con
     t = vr.thermo
     log(f"  frequencies ({vr.hessian_method} Hessian): {vr.n_modes} modes, {vr.n_imaginary} imaginary"
         + (f", ZPE {t.zpe_kcal:.2f} kcal/mol, S {t.entropy_cal_molK:.2f} cal/(mol K)" if t else ""))
+
+
+def _solvent_for(method: str, solvent: str, notes: list[str]) -> str:
+    """The solvent ``method`` will actually use: ``solvent`` if it can model it, else gas phase (noted)."""
+    if not solvent:
+        return ""
+    if engines.supports_solvent(method, solvent):
+        return solvent
+    msg = f"{engines.all_engines()[method].label} has no implicit solvent model for {solvent}: gas phase"
+    if msg not in notes:
+        notes.append(msg)
+    return ""
+
+
+def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConfig, threads: int,
+                      should_stop: Callable[[], bool], log: Callable[[str], None]) -> confs.ConformerSet:
+    """RDKit ETKDGv3 + MMFF94s, or CREST (falls back to RDKit with a note if CREST is missing or fails)."""
+    if cfg.conformer_search == "crest":
+        from . import crest
+
+        try:
+            cs = crest.generate(prepared, cfg, threads=threads, solvent=result.solvent, charge=result.charge,
+                                multiplicity=result.multiplicity, should_stop=should_stop, log=log)
+            result.conformer_search = "crest"
+            return cs
+        except Cancelled:
+            raise
+        except Exception as exc:
+            result.notes.append(f"CREST conformer search failed ({type(exc).__name__}: {str(exc).splitlines()[0]}); "
+                                "used RDKit ETKDGv3 + MMFF94s")
+            log(f"  {result.notes[-1]}")
+    elif cfg.conformer_search not in ("rdkit", ""):
+        raise ValueError(f"conformer_search must be 'rdkit' or 'crest', not {cfg.conformer_search!r}")
+    result.conformer_search = "rdkit"
+    # Keep a wider force-field window: the refined ranking can differ from MMFF's.
+    return confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,
+                          cfg.seed, threads)
+
+
+def _engine_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,
+                       log: Callable[[str], None]) -> None:
+    """Properties from the refinement engine itself (e.g. MOPAC heat of formation, xtb GFN2 dipole)."""
+    fn = engines.properties_function(result.method)
+    if fn is None:
+        return
+    atoms = export.mol_to_atoms(mol, best.conf_id)
+    try:
+        props = dict(fn(atoms.numbers, atoms.positions, result.charge, result.multiplicity,
+                        **calculator_options(result, cfg)))
+    except Cancelled:
+        raise
+    except Exception as exc:
+        result.notes.append(f"{engines.ENGINES[result.method].label} properties skipped "
+                            f"({type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''})")
+        log(f"  {result.notes[-1]}")
+        return
+    charges = props.pop("charges", None)
+    for note in props.pop("_notes", []):
+        result.notes.append(note)
+    result.descriptors.update(props)
+    if charges is not None and best.charges is None:
+        best.charges = [float(x) for x in charges]
+        if best.dipole_debye is None:
+            prefix = engines.ENGINES[result.method].prop_prefix
+            dip = props.get(f"{prefix}_dipole_debye")
+            best.dipole_debye = float(dip) if dip is not None else None
+        result.notes.append(f"atomic charges: {engines.ENGINES[result.method].label}")
+
+
+def _qm_stage(result: MoleculeResult, cs: confs.ConformerSet, cfg: BuildConfig, threads: int,
+              should_stop: Callable[[], bool], log: Callable[[str], None]) -> None:
+    """QM (DFT) calculations on the lowest conformers; a failure becomes a note, not a failed molecule."""
+    from . import qm
+
+    try:
+        qm.run_stage(result, cs, cfg, threads=threads, should_stop=should_stop, log=log)
+    except Cancelled:
+        raise
+    except Exception as exc:
+        first = str(exc).splitlines()[0] if str(exc) else ""
+        result.notes.append(f"QM stage skipped ({type(exc).__name__}: {first})")
+        log(f"  {result.notes[-1]}")
 
 
 def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", threads: int = 1,
@@ -252,30 +372,33 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         result.smiles = Chem.MolToSmiles(Chem.RemoveHs(prepared))
         result.charge = inp.charge if inp.charge is not None else formal_charge(prepared)
         numbers = [a.GetAtomicNum() for a in prepared.GetAtoms()]
+        from . import solvents
+
+        solvent = solvents.canonical(cfg.solvent)
         method = cfg.method
         if method == "auto":
-            method = engines.resolve_auto(numbers)
+            method = engines.resolve_auto(numbers, solvent)
         else:
             ok, why = engines.available(method)
             if ok:
                 ok, why = engines.supports(method, numbers)
             if not ok:
-                fallback = engines.resolve_auto(numbers)
+                fallback = engines.resolve_auto(numbers, solvent)
                 result.notes.append(f"{method} not usable ({why}); using {fallback}")
                 method = fallback
         result.method = method
+        result.solvent = _solvent_for(method, solvent, result.notes)
         if method == "mmff" or not engines.ENGINES[method].gpu_capable:
             result.device = "cpu"
         result.timings["prepare"] = time.perf_counter() - t
-        log(f"{inp.id}: {result.smiles} (charge {result.charge:+d}) -> {engines.ENGINES[method].label} on {result.device}")
+        log(f"{inp.id}: {result.smiles} (charge {result.charge:+d}) -> {engines.ENGINES[method].label} on {result.device}"
+            + (f" in {result.solvent}" if result.solvent else ""))
         for n in notes:
             log(f"  {n}")
 
         stage("conformers")
         t = time.perf_counter()
-        # Keep a wider force-field window: the refined ranking can differ from MMFF's.
-        cs = confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,
-                            cfg.seed, threads)
+        cs = _conformer_search(prepared, result, cfg, threads, should_stop, log)
         result.forcefield, result.n_embedded = cs.forcefield, cs.n_embedded
         result.timings["conformers"] = time.perf_counter() - t
         log(f"  {cs.n_embedded} embedded, {len(cs.conf_ids)} unique after {cs.forcefield} + pruning")
@@ -286,11 +409,11 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         t = time.perf_counter()
         candidates = [method]
         if cfg.method == "auto":  # if the first choice cannot start (e.g. model download offline), try the next
-            order = ("aimnet2", "gfn2-xtb", "gfn1-xtb", "mmff")
-            candidates += [k for k in order[order.index(method) + 1:]
-                           if k == "mmff" or (engines.available(k)[0] and engines.supports(k, numbers)[0])]
+            order = engines.auto_candidates(numbers, solvent)
+            candidates += order[order.index(method) + 1:] if method in order else []
         for n_try, candidate in enumerate(candidates):
             result.method = candidate
+            result.solvent = _solvent_for(candidate, solvent, result.notes if n_try else [])
             result.device = device if engines.ENGINES[candidate].gpu_capable else "cpu"
             refine = batch_opt.refine_batched if use_batched(cfg, candidate, result.device) else _refine
             if refine is not _refine:
@@ -333,6 +456,9 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             if all(d is not None for d in dips):
                 result.descriptors["dipole_debye_boltz"] = float(np.dot(weights, dips))
         result.descriptors["method"] = method
+        if result.solvent:
+            result.descriptors["solvent"] = result.solvent
+        _engine_properties(result, cs.mol, kept[0], cfg, log)
         if cfg.xtb_properties and properties.available():
             stage("properties")
             best = kept[0]
@@ -364,6 +490,11 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             t = time.perf_counter()
             _frequencies(result, cs, kept[0], cfg, should_stop, log)
             result.timings["frequencies"] = time.perf_counter() - t
+        if cfg.qm_method:
+            stage("qm")
+            t = time.perf_counter()
+            _qm_stage(result, cs, cfg, threads, should_stop, log)
+            result.timings["qm"] = time.perf_counter() - t
         result.status = "ok"
         log(f"  done: {len(kept)} conformer(s), best E = {e0:.5f} eV")
     except Cancelled:

@@ -59,7 +59,7 @@ class Harmonic(Calculator):
 def test_engine_gpu_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(engines, "available", lambda key: (True, ""))
     monkeypatch.setattr(engines, "supports", lambda key, numbers: (True, ""))
-    monkeypatch.setattr(engines, "make_calculator", lambda key, numbers, q, m, dev: Harmonic(dev))
+    monkeypatch.setattr(engines, "make_calculator", lambda key, numbers, q, m, dev, **_: Harmonic(dev))
     inp = from_smiles(PFOA, id="PFOA")
     # sequential path: batched refinement is tested below with its own toy model
     r = pipeline.run_molecule(inp, cfg(tmp_path, method="gfn1-xtb", batched="off"), device="cuda:0", threads=1)

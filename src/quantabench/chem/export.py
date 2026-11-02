@@ -101,6 +101,8 @@ def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMAT
         else:
             raise ValueError(f"Unknown export format {fmt!r} (known: {', '.join(FORMATS)})")
         written.append(p)
+    if result.qm:
+        written += write_qm(result.qm, out_dir, stem, spectrum="spectrum" in formats)
     summary = out_dir / f"{stem}_summary.json"
     summary.write_text(json.dumps(result.to_dict(), indent=2, default=str) + "\n", encoding="utf-8")
     written.append(summary)
@@ -130,6 +132,27 @@ def write_vibrations(vib: dict, out_dir: Path, stem: str, fwhm: float = 20.0) ->
         p.write_text("\n".join(lines) + "\n", encoding="utf-8")
         paths.append(p)
     return paths
+
+
+def write_qm(qm: dict, out_dir: Path, stem: str, spectrum: bool = False) -> list[Path]:
+    """Copy the QM stage's files (cubes, logs; ``qm["files"]`` label -> path) next to the other results as
+    ``<stem>_qm_<label><suffix>`` and point ``qm["files"]`` at the copies. Plus the QM IR spectrum."""
+    import shutil
+
+    written: list[Path] = []
+    files = qm.get("files") or {}
+    for label, src in list(files.items()):
+        src = Path(src)
+        if not src.is_file():
+            continue
+        dst = out_dir / f"{stem}_qm_{label}{src.suffix}"
+        if src.resolve() != dst.resolve():
+            shutil.copy2(src, dst)
+        files[label] = str(dst)
+        written.append(dst)
+    if spectrum and qm.get("vibrations"):
+        written += write_vibrations(qm["vibrations"], out_dir, f"{stem}_qm")
+    return written
 
 
 def write_batch_tables(results: list[MoleculeResult], run_dir: Path) -> list[Path]:

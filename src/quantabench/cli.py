@@ -54,9 +54,21 @@ def _doctor(args) -> int:
     from .chem import engines
 
     print("  Engines")
-    for key, info in engines.ENGINES.items():
+    for key, info in engines.all_engines().items():
         ok, why = engines.available(key)
         print(f"    {'OK ' if ok else '-- '} {info.label:30s} {why}")
+    for name, err in engines.PLUGIN_ERRORS.items():
+        print(f"    !!  plugin {name}: {err}")
+    from .chem import external
+
+    print("  External programs")
+    for name, info, hint in external.report():
+        if info is None:
+            print(f"    --  {name:30s} not found: {hint}")
+        else:
+            print(f"    OK  {name + ' ' + info.version:30s} {info.path} ({info.source})")
+    py = external.find_python_with("psi4", "psi4_python")
+    print(f"    {'OK ' if py else '-- '} {'psi4 Python':30s} {py or 'no interpreter that can import psi4'}")
     print("  Optional      " + ", ".join(f"{k}={'yes' if v else 'no'}" for k, v in rep.optional_packages.items()))
     print(f"  Settings      {settings_mod.settings_dir() / settings_mod.SETTINGS_FILE}")
     for note in rep.notes:
@@ -106,7 +118,10 @@ def _bench(rep) -> None:
                   + (f" {res.error}" if res.error else ""))
 
 
-METHODS = ["auto", "mmff", "gfn1-xtb", "gfn2-xtb", "aimnet2"]
+def method_choices() -> list[str]:
+    from .chem import engines
+
+    return engines.method_keys()
 
 
 def _read_inputs(args) -> list:
@@ -132,8 +147,17 @@ def _config(args, base=None, **extra):
         "fmax": getattr(args, "fmax", None), "output_dir": getattr(args, "out", None),
         "protonation_method": getattr(args, "protonation", None), "batched": getattr(args, "batched", None),
         "freq_hessian": getattr(args, "freq_hessian", None), "symmetry_number": getattr(args, "symmetry_number", None),
-        "temperature_k": getattr(args, "temperature", None),
+        "temperature_k": getattr(args, "temperature", None), "solvent": getattr(args, "solvent", None),
+        "optimizer": getattr(args, "optimizer", None), "conformer_search": getattr(args, "conformers", None),
+        "crest_method": getattr(args, "crest_method", None), "qm_method": getattr(args, "qm", None),
+        "qm_task": getattr(args, "qm_task", None), "qm_top": getattr(args, "qm_top", None),
     }.items() if v is not None}
+    if getattr(args, "crest_full", False):
+        overrides["crest_quick"] = False
+    if getattr(args, "qm_freq", None) is not None:
+        overrides["qm_frequencies"] = args.qm_freq
+    if getattr(args, "cubes", None) is not None:
+        overrides["qm_cubes"] = args.cubes
     # --protonate/--no-protonate and --freq/--no-freq: None = keep settings.json (the GUI saves its
     # checkboxes there), so a box ticked in the GUI can always be overridden from the command line
     if getattr(args, "protonate", None) is not None:
@@ -488,7 +512,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="which SMILES column of a CompTox export to prefer (falls back row by row)")
 
     def engine_args(q):
-        q.add_argument("--method", choices=METHODS)
+        q.add_argument("--method", choices=method_choices())
+        q.add_argument("--solvent", help="implicit solvent for engines that have one (water, octanol, ...; "
+                                         "'none' = gas phase)")
+        q.add_argument("--optimizer", choices=["lbfgs", "fire", "native"],
+                       help="native = the engine's own optimizer (xtb, MOPAC) when it has one")
         q.add_argument("--fmax", type=float, help="force convergence, eV/Å")
         q.add_argument("--threads", type=int, help="CPU threads (0 = all but one)")
         q.add_argument("--gpu", choices=["auto", "on", "off"])
@@ -508,6 +536,18 @@ def build_parser() -> argparse.ArgumentParser:
     inputs_args(b)
     engine_args(b)
     b.add_argument("--ph", type=float)
+    b.add_argument("--conformers", choices=["rdkit", "crest"],
+                   help="conformer search: RDKit ETKDGv3 + MMFF94s (default) or CREST iMTD-GC (external)")
+    b.add_argument("--crest-method", choices=["gfn2", "gfnff", "gfn2//gfnff", "gfn1"])
+    b.add_argument("--crest-full", action="store_true", help="full CREST run instead of --quick (much slower)")
+    b.add_argument("--qm", metavar="FUNCTIONAL/BASIS",
+                   help="QM stage with Psi4 on the lowest conformers, e.g. wb97x-d/def2-svp")
+    b.add_argument("--qm-task", choices=["energy", "optimize"], help="QM single point (default) or optimization")
+    b.add_argument("--qm-top", type=int, help="number of lowest conformers for the QM stage (default 1)")
+    b.add_argument("--qm-freq", action=argparse.BooleanOptionalAction, default=None,
+                   help="QM frequencies + IR + thermochemistry of the best QM conformer")
+    b.add_argument("--cubes", action=argparse.BooleanOptionalAction, default=None,
+                   help="QM density + ESP cubes and molecular-surface (GIPF) descriptors")
     b.add_argument("--protonate", action=argparse.BooleanOptionalAction, default=None,
                    help="assign the charge state at --ph (--no-protonate keeps the input's; default from settings)")
     b.add_argument("--protonation", choices=["rules", "dimorphite"])
@@ -558,7 +598,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--vacuum", type=float, default=30.0)
     s.add_argument("--fix-layers", type=int, default=1)
     s.add_argument("--molecule", help="SMILES, name, or structure file to place on the surface")
-    s.add_argument("--method", choices=["auto", "mmff", "gfn1-xtb", "gfn2-xtb", "aimnet2"])
+    s.add_argument("--method", choices=method_choices())
     s.add_argument("--height", type=float, default=3.5)
     s.add_argument("--orientation", choices=["flat", "upright", "as-is"], default="flat")
     s.add_argument("-o", "--output", default="system.extxyz")

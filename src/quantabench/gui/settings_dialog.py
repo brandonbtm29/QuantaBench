@@ -30,13 +30,16 @@ from .. import resources
 from .. import settings as settings_mod
 from ..chem import engines
 
-METHODS = ["auto", "aimnet2", "gfn2-xtb", "gfn1-xtb", "mmff"]
+
+def method_keys() -> list[str]:
+    """'auto' and every registered engine (plugins included), grouped by family."""
+    return engines.method_keys()
 
 
 def method_label(key: str) -> str:
     if key == "auto":
         return "Auto (best available)"
-    info = engines.ENGINES[key]
+    info = engines.all_engines()[key]
     ok, why = engines.available(key)
     return info.label + ("" if ok else "  (not installed)")
 
@@ -99,9 +102,10 @@ class SettingsDialog(QDialog):
         form = QFormLayout(w)
         b = self.s.build
         self.method = QComboBox()
-        for m in METHODS:
+        methods = method_keys()
+        for m in methods:
             self.method.addItem(method_label(m), m)
-        self.method.setCurrentIndex(max(0, METHODS.index(b.refine_method) if b.refine_method in METHODS else 0))
+        self.method.setCurrentIndex(max(0, methods.index(b.refine_method) if b.refine_method in methods else 0))
         form.addRow("Refinement method", self.method)
         self.ph = QDoubleSpinBox()
         self.ph.setRange(0, 14)

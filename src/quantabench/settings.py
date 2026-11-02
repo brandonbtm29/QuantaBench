@@ -51,6 +51,21 @@ class BuildDefaults:
     random_seed: int = 42
     batched: str = "auto"             # batched conformer refinement: "auto" (GPU only) | "on" | "off"
     frequencies: bool = False         # frequencies + thermochemistry of the best conformer
+    conformer_search: str = "rdkit"   # "rdkit" (ETKDGv3 + MMFF) | "crest" (iMTD-GC, external)
+    solvent: str = ""                 # implicit solvent for engines that support one ("" = gas phase)
+    qm_method: str = ""               # final QM level, e.g. "wb97x-d/def2-svp" ("" = no QM stage)
+
+
+@dataclass
+class EngineSettings:
+    """External programs (see ``chem/external.py``). Paths may use ``~``; ``wsl:<command>`` runs a
+    Linux program inside WSL on Windows (e.g. ``wsl:crest``)."""
+    paths: dict[str, str] = field(default_factory=dict)  # {"xtb": ..., "crest": ..., "mopac": ..., "psi4_python": ...}
+    scratch_dir: str = ""             # "" = <system temp>/QuantaBench
+    keep_scratch: bool = False        # keep job folders of successful external runs
+    omp_stacksize: str = "4G"         # OMP_STACKSIZE for xtb/CREST/MOPAC/Psi4 child processes
+    qm_memory_gb: float = 4.0         # memory per Psi4 job
+    timeout_s: float = 0.0            # 0 = no limit per external run
 
 
 @dataclass
@@ -58,6 +73,7 @@ class Settings:
     output_dir: str = ""              # "" = Documents/QuantaBench/Runs
     resources: ResourceSettings = field(default_factory=ResourceSettings)
     build: BuildDefaults = field(default_factory=BuildDefaults)
+    engines: EngineSettings = field(default_factory=EngineSettings)
     recent_files: list[str] = field(default_factory=list)
 
     # ---------------------------------------------------------------- paths

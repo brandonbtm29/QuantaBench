@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -58,7 +58,7 @@ from ..chem import inputs as inputs_mod
 from ..chem.pipeline import BuildConfig, MoleculeResult
 from . import workers
 from .selection import SelectionModel
-from .settings_dialog import METHODS, SettingsDialog, method_label
+from .settings_dialog import SettingsDialog, method_keys, method_label
 from .viewer2d import MoleculeViewer2D
 from .viewer3d import COLOR_MODES, LABEL_MODES, STYLES, MoleculeViewer3D
 
@@ -91,6 +91,10 @@ STATUS_ICON = {"ok": "✔", "failed": "✖", "cancelled": "○", "pending": "…
 
 
 class MainWindow(QMainWindow):
+    #: The selected molecule changed, or its results did (MoleculeResult, or None when not built).
+    #: Panels (spectra, surfaces) listen to this instead of reaching into the molecule list.
+    resultChanged = Signal(object)
+
     def __init__(self, s: settings_mod.Settings):
         super().__init__()
         self.s = s
@@ -126,11 +130,28 @@ class MainWindow(QMainWindow):
         self._build_bottom_dock()
         self._build_toolbar_and_menus()
         self._build_statusbar()
+        self._install_panels()
         self._load_stage_values()
         self._restore_window()
         QTimer.singleShot(50, self._detect_hardware)
 
     # ================================================================== UI construction
+    def _install_panels(self) -> None:
+        """Optional analysis panels; one that fails to load is logged and skipped."""
+        from . import spectra_panel, surface_panel
+
+        for panel in (spectra_panel, surface_panel):
+            try:
+                panel.install(self)
+            except Exception as exc:  # a broken panel must not stop the app from starting
+                self.log(f"{panel.__name__.rsplit('.', 1)[-1]} unavailable: {type(exc).__name__}: {exc}")
+
+    def current_result(self) -> MoleculeResult | None:
+        """Result of the selected molecule (None if nothing is selected or it is not built)."""
+        inp = self.selected_input()
+        res = self.results.get(inp.id) if inp is not None else None
+        return res if res is not None and res.status == "ok" else None
+
     def _build_molecule_dock(self) -> None:
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -206,6 +227,7 @@ class MainWindow(QMainWindow):
         lay.addLayout(run_row)
         dock = QDockWidget("Pipeline", self)
         dock.setObjectName("pipeline")
+        self.pipeline_dock = dock
         dock.setWidget(w)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         self.pipeline_dock = dock
@@ -268,7 +290,7 @@ class MainWindow(QMainWindow):
             form.addRow("Random seed", self.w_seed)
         elif key == "refine":
             self.w_method = QComboBox()
-            for m in METHODS:
+            for m in method_keys():
                 self.w_method.addItem(method_label(m), m)
             self.w_refine_top = QSpinBox()
             self.w_refine_top.setRange(1, 1000)
@@ -353,6 +375,7 @@ class MainWindow(QMainWindow):
         self.bottom_tabs = tabs
         dock = QDockWidget("Results", self)
         dock.setObjectName("results")
+        self.results_dock = dock
         dock.setWidget(tabs)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
         self.bottom_dock = dock
@@ -487,7 +510,8 @@ class MainWindow(QMainWindow):
         self.w_window.setValue(b.energy_window_kcal)
         self.w_rmsd.setValue(b.rmsd_threshold)
         self.w_seed.setValue(b.random_seed)
-        self.w_method.setCurrentIndex(METHODS.index(b.refine_method) if b.refine_method in METHODS else 0)
+        methods = method_keys()
+        self.w_method.setCurrentIndex(methods.index(b.refine_method) if b.refine_method in methods else 0)
         self.w_fmax.setValue(b.fmax)
         self.w_steps.setValue(b.max_steps)
         self.w_temp.setValue(b.temperature_k)
@@ -529,11 +553,11 @@ class MainWindow(QMainWindow):
     def _update_engine_info(self) -> None:
         key = self.w_method.currentData()
         if key == "auto":
-            order = [k for k in ("aimnet2", "gfn2-xtb", "gfn1-xtb") if engines.available(k)[0]]
+            order = [k for k in engines.AUTO_ORDER if k in engines.all_engines() and engines.available(k)[0]]
             text = "Uses the best installed engine the molecule's elements allow: " + \
                    (" > ".join(engines.ENGINES[k].label for k in order) or "none") + " > MMFF94s."
         else:
-            info = engines.ENGINES[key]
+            info = engines.all_engines()[key]
             ok, why = engines.available(key)
             text = info.description + ("" if ok else f"\nNot available: {why}")
         self.engine_info.setText(text)
@@ -696,6 +720,7 @@ class MainWindow(QMainWindow):
             self.mol_info.setText(res.error if res and res.error else "Not built yet. Press Run.")
             self.props_view.setText("")
         if self._surface_preview:
+            self.resultChanged.emit(res if built else None)
             return                       # the open Surface Builder owns the 3D view until it is closed
         key = (inp.id, res if built else None)
         if self._shown_key is None or self._shown_key[0] != key[0] or self._shown_key[1] is not key[1]:
@@ -708,6 +733,7 @@ class MainWindow(QMainWindow):
             self._show_conformer(res, 0, reset_camera=True)
         else:
             self._preview_input(inp)
+        self.resultChanged.emit(res if built else None)   # after the views: panels add to the 3D scene
 
     def _show_conformer(self, res: MoleculeResult, row: int, reset_camera: bool) -> None:
         """Show conformer ``row`` of a built molecule in both views, with its charges when it has them."""

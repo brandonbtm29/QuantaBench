@@ -35,19 +35,23 @@ dependencies = [
     "PySide6-Essentials>=6.8",
     "pyvista>=0.44",
     "pyvistaqt>=0.11,<0.13",  # 0.13 (FBO QOpenGLWidget) crashes in initializeGL on AMD/Windows; 0.12 uses a native window
+    "pyqtgraph>=0.13.7",      # spectra and plots (pure Python)
 ]
 
 [project.optional-dependencies]
 # PyTorch is NOT listed here on purpose: install the build that matches your GPU first
 # (AMD ROCm on Windows/Linux, NVIDIA CUDA, or CPU). See docs/INSTALL.md.
 ml = ["aimnet>=0.2"]                       # AIMNet2 neutral + charged organics (needs torch)
-xtb = ["dxtb>=0.4"]                        # GFN1-xTB in PyTorch (GFN2 also needs tad-libcint, Linux)
+xtb = ["dxtb>=0.4",                        # GFN1-xTB in PyTorch (GFN2 also needs tad-libcint, Linux)
+       "tblite>=0.4; sys_platform != 'win32'"]  # in-process GFN2-xTB (PyPI wheels: Linux, macOS; conda-forge: Windows)
+interop = ["cclib>=1.8"]                   # import Gaussian/ORCA/Psi4/xtb/MOPAC/... output files
 protonate = ["dimorphite-dl>=2.0"]         # pH-dependent protonation states
 ovito = ["ovito>=3.12"]                    # embedded OVITO viewport for big systems / trajectories
 md = ["lammps>=2023.8"]                    # LAMMPS Python module (CPU + OpenMP) for `md smd --run` and checks
 excel = ["openpyxl>=3.1"]                  # .xlsx/.xlsm input (CompTox dashboard exports)
 # lammps ships wheels for Windows (win_amd64), Linux and macOS; openpyxl is pure Python
-all = ["quantabench[ml,xtb,protonate,md,excel]"]
+all = ["quantabench[ml,xtb,protonate,md,excel,interop]"]
+# External programs (xtb, CREST, MOPAC, Psi4) are not pip packages: see environment.yml and docs/ENGINES.md
 dev = ["pytest>=8", "pytest-timeout>=2.3", "ruff>=0.6"]
 
 [project.urls]
@@ -87,3 +91,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S603", "S607"]
+# running external chemistry programs (xtb, CREST, MOPAC, Psi4) is what these modules are for
+"src/quantabench/chem/external.py" = ["S603", "S607", "S110"]
+"src/quantabench/chem/eng_*.py" = ["S603", "S607"]
+"src/quantabench/chem/crest.py" = ["S603", "S607"]
+"src/quantabench/chem/qm.py" = ["S603", "S607"]
