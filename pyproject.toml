@@ -75,6 +75,9 @@ packages = ["src/quantabench"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "external: needs an external program (xtb, CREST, MOPAC, Psi4); skipped when it is not installed",
+]
 
 [tool.ruff]
 line-length = 110

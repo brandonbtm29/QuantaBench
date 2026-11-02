@@ -138,9 +138,9 @@ class MainWindow(QMainWindow):
     # ================================================================== UI construction
     def _install_panels(self) -> None:
         """Optional analysis panels; one that fails to load is logged and skipped."""
-        from . import spectra_panel, surface_panel
+        from . import import_action, spectra_panel, surface_panel
 
-        for panel in (spectra_panel, surface_panel):
+        for panel in (spectra_panel, surface_panel, import_action):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
@@ -610,6 +610,13 @@ class MainWindow(QMainWindow):
         if items:
             self.mol_list.setCurrentRow(self.mol_list.count() - 1)
             self.log(f"Added {len(items)} molecule(s).")
+
+    def add_result(self, res: MoleculeResult) -> None:
+        """Add an already-built molecule (e.g. imported from another program's output) and select it."""
+        self.add_inputs([res.input])          # may rename the id to keep ids unique
+        self.results[res.input.id] = res
+        self._refresh_item(res.input.id)
+        self._on_molecule_selected(self.mol_list.currentRow())
 
     def _item_text(self, ident: str) -> str:
         if ident in self.running:
