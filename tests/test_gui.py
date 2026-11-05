@@ -220,3 +220,24 @@ def test_surface_preview_survives_list_selection_and_selection_resets_on_build(t
     app.processEvents()
     assert len(w.viewer.atoms) != n_system                # back to the molecule
     _close(app, w)
+
+
+def test_opening_and_closing_the_window_keeps_the_pipeline_settings(tmp_path):
+    """A panel built during start-up (the Machines dock asks for current_config) must not copy the Pipeline
+    widgets into the settings before they were filled from them: that saved pH 0, 1 conformer and 1 K."""
+    from quantabench import settings as sm
+    from quantabench.gui.main_window import MainWindow
+
+    app = _app()
+    s = sm.Settings(output_dir=str(tmp_path))
+    b = s.build
+    b.ph, b.protonate, b.max_conformers, b.temperature_k, b.max_steps, b.random_seed = 6.5, True, 33, 310.0, 222, 7
+    want = sm.Settings.from_dict(s.to_dict()).build
+    w = MainWindow(s)
+    assert (w.w_ph.value(), w.w_maxconf.value(), w.w_temp.value()) == (6.5, 33, 310.0)
+    assert w.s.build == want                                     # nothing changed by building the window
+    cfg = w.current_config()
+    assert (cfg.ph, cfg.max_conformers, cfg.temperature_k) == (6.5, 33, 310.0)
+    w.close()
+    assert _wait(app, lambda: getattr(w, "closed", True))
+    assert sm.load().build == want                               # and closing saved the same values

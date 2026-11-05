@@ -2,6 +2,13 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Fixed: the GUI reset the Pipeline settings at start-up (2026-11-05)
+- Opening the window copied the Pipeline widgets into the settings before they had been filled from them (the
+  Machines dock asks for the current configuration while it is built), so pH, protonation, conformer count,
+  temperature, steps and seed took their minimums (pH 0, 1 conformer, 1 K), and closing the window saved them.
+  CLI runs were not affected. If you closed the GUI since the Machines dock arrived, check Settings and the
+  Pipeline values once.
+
 ### Research inputs: salts, metals, charges, spin (stress sample, 2026-11-05)
 From a 325-molecule stratified sample of the PFAS QSAR set (PFAS and baseline cohorts: salts,
 organometallics, ions from -5 to +2, up to 157 heavy atoms), run through MMFF, GFN2-xTB (tblite), GFN1-xTB

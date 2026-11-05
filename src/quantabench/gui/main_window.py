@@ -152,13 +152,17 @@ class MainWindow(QMainWindow):
         self.splitter.setSizes([380, 620])
         self.splitter.setCollapsible(1, False)
         self.setCentralWidget(self.splitter)
+        # The Pipeline widgets hold settings only once _load_stage_values has filled them: until then, storing
+        # them (current_config, e.g. from a panel built during start-up) would write their minimums into the
+        # settings, and closing the window would save those (pH 0, 1 conformer, 1 K).
+        self._stage_loaded = False
         self._build_molecule_dock()
         self._build_pipeline_dock()
         self._build_bottom_dock()
         self._build_toolbar_and_menus()
         self._build_statusbar()
-        self._install_panels()
         self._load_stage_values()
+        self._install_panels()
         self._restore_window()
         QTimer.singleShot(50, self._detect_hardware)
 
@@ -695,8 +699,11 @@ class MainWindow(QMainWindow):
             cb.setChecked(fmt in export.DEFAULT_FORMATS)
         self.out_label.setText(f"Output folder: {self.s.output_path()}")
         self._update_engine_info()
+        self._stage_loaded = True
 
     def _store_stage_values(self) -> None:
+        if not getattr(self, "_stage_loaded", False):
+            return                                   # widgets not filled from the settings yet
         b = self.s.build
         b.keep_largest_fragment = self.w_desalt.isChecked()
         b.protonate = self.w_protonate.isChecked()
