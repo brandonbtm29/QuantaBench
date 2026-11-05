@@ -494,24 +494,40 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
         for mol_id in crashed:
             log(f"{mol_id}: crashed the process {MAX_CRASHES} times; marked failed (--retry-failed redoes it)")
 
-        if lanes and len(lanes) > 1:
-            log(f"Note: {len(lanes)} lanes requested; parallel lanes are not implemented yet, using one")
-        threads = resources.apply_thread_limits(cfg.threads)
-        device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
-        log(f"Resources: {threads} CPU threads, device {device}")
-
         todo = store.todo(retry_failed)
         total = sum(store.counts().values())
         done_before = total - len(todo)
         if done_before:
             log(f"{done_before} of {total} molecule(s) already finished; {len(todo)} to do")
+        lanes = list(lanes or [])[:max(1, len(todo))]   # no more lanes than molecules (GPU lanes come first)
+        if len(lanes) > 1:            # worker processes (dist.lanes); this process stays the only DB writer
+            from ..dist import lanes as lanes_mod
+
+            results = lanes_mod.run_parallel(store, todo, cfg, lanes, run_dir, total=total, done_before=done_before,
+                                             progress=progress, should_stop=should_stop, log=log,
+                                             on_result=on_result)
+            todo = []
+        elif lanes and lanes[0].device != "auto":       # one explicit lane, e.g. "cpu:1x4": its device and threads
+            from dataclasses import replace
+
+            from ..dist import lanes as lanes_mod
+
+            threads = resources.apply_thread_limits(lanes[0].threads)
+            cfg_run = replace(cfg, threads=threads)
+            device = lanes_mod.lane_device(lanes[0], cfg, cfg.gpu_memory_fraction)
+            log(f"Resources: {threads} CPU threads, device {device} (lane {lanes[0].name})")
+        else:
+            threads = resources.apply_thread_limits(cfg.threads)
+            cfg_run = cfg
+            device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
+            log(f"Resources: {threads} CPU threads, device {device}")
         for k, (mol_id, inp) in enumerate(todo):
             if should_stop():
                 break
             i = done_before + k
             progress(i, total, "start", mol_id)
             store.mark_running(mol_id)
-            res = pipeline.run_molecule(inp, cfg, device, threads, should_stop, log,
+            res = pipeline.run_molecule(inp, cfg_run, device, threads, should_stop, log,
                                         stage=lambda s, i=i, mol_id=mol_id: progress(i, total, s, mol_id))
             result_dir = ""
             if cfg.write_files and res.status == "ok":

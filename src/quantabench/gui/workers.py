@@ -15,18 +15,38 @@ class BuildWorker(QObject):
     finished = Signal(list, object)            # results, run_dir (Path | None)
     failed = Signal(str)
 
-    def __init__(self, inputs, cfg):
+    def __init__(self, inputs, cfg, lanes=None):
+        """``lanes``: a lane spec ("1", "auto", "4", "gpu:1x4,cpu:5x2"), a list of ``dist.lanes.Lane``, or
+        None for the "Parallel lanes" setting (``settings.dist.lanes``)."""
         super().__init__()
         self.inputs = inputs
         self.cfg = cfg
+        self.lanes = lanes
         self._stop = threading.Event()
 
     def cancel(self) -> None:
         self._stop.set()
 
+    def _lanes(self) -> list:
+        """The lanes for a batch (parsed here, off the GUI thread: "auto" may detect the GPU). A setting that
+        cannot be used on this machine is reported and the batch runs in one lane."""
+        from ..dist import lanes as lanes_mod
+        from ..settings import load
+
+        spec = self.lanes if self.lanes is not None else load().dist.lanes
+        if isinstance(spec, list):
+            return spec
+        try:
+            return lanes_mod.parse_lanes(spec, self.cfg)
+        except ValueError as exc:
+            self.log.emit(f"Parallel lanes {spec!r} not usable here ({exc}); running in one lane")
+            return lanes_mod.parse_lanes("1", self.cfg)
+
     def run(self) -> None:
         """One molecule runs directly; a batch goes through the resumable job table (``chem.jobs``), so an
-        interrupted GUI batch can be finished with ``quantabench-cli build --resume RUN_DIR``."""
+        interrupted GUI batch can be finished with ``quantabench-cli build --resume RUN_DIR``. A batch runs in
+        the lanes of the settings (worker processes; ``dist.lanes``); results still arrive one molecule at a
+        time through ``molecule_done``."""
         from ..chem import jobs, pipeline
         from ..settings import Settings
 
@@ -37,7 +57,7 @@ class BuildWorker(QObject):
                 results, run_dir = jobs.run_resumable(
                     self.inputs, self.cfg, run_dir,
                     progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
-                    on_result=self.molecule_done.emit)
+                    on_result=self.molecule_done.emit, lanes=self._lanes())
             else:
                 results, run_dir = pipeline.run(
                     self.inputs, self.cfg,

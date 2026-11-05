@@ -64,6 +64,32 @@ class SettingsDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.addWidget(tabs)
         lay.addWidget(buttons)
+        # the lane plan depends on the threads, the GPU and the method (Build defaults tab)
+        self.lanes.currentTextChanged.connect(self._update_lane_plan)
+        self.threads.valueChanged.connect(self._update_lane_plan)
+        self.gpu.currentIndexChanged.connect(self._update_lane_plan)
+        self.gpu_index.currentIndexChanged.connect(self._update_lane_plan)
+        self.method.currentIndexChanged.connect(self._update_lane_plan)
+        self._update_lane_plan()
+
+    #: suggestions in the editable "Parallel lanes" box
+    LANE_PRESETS = ("1", "auto", "2", "4", "6", "gpu:1x4,cpu:5x2")
+
+    def _lane_config(self):
+        from ..chem.pipeline import BuildConfig
+
+        b = self.s.build
+        return BuildConfig(method=self.method.currentData() or b.refine_method, threads=self.threads.value(),
+                           gpu=self.gpu.currentText(), gpu_index=int(self.gpu_index.currentData() or 0),
+                           conformer_search=b.conformer_search, qm_method=b.qm_method, solvent=b.solvent)
+
+    def _update_lane_plan(self, *_args) -> None:
+        """Show what the lane spec means on this machine (no torch import: uses the detection report if any)."""
+        from ..dist import lanes as lanes_mod
+
+        text = self.lanes.currentText().strip() or "1"
+        self.lane_plan.setText(lanes_mod.plan_text(text, self._lane_config(), self._report,
+                                                   self.s.resources.parallel_molecules))
 
     # ------------------------------------------------------------------ tabs
     def _resources_tab(self, report) -> QWidget:
@@ -95,6 +121,19 @@ class SettingsDialog(QDialog):
         self.mem.setValue(r.gpu_memory_fraction)
         self.mem.setToolTip("Upper limit on the share of GPU memory PyTorch may allocate")
         form.addRow("GPU memory cap", self.mem)
+        self._report = report
+        self.lanes = QComboBox()
+        self.lanes.setEditable(True)
+        self.lanes.addItems(self.LANE_PRESETS)
+        self.lanes.setCurrentText(self.s.dist.lanes or "1")
+        self.lanes.setToolTip("Batches run in this many worker processes, each on its own molecule:\n"
+                              "1 = one process with all threads; auto = from the hardware and the method;\n"
+                              "N = N CPU lanes sharing the threads; or a list such as gpu:1x4,cpu:5x2\n"
+                              "(1 GPU lane with 4 threads + 5 CPU lanes with 2 threads)")
+        form.addRow("Parallel lanes", self.lanes)
+        self.lane_plan = QLabel()
+        self.lane_plan.setWordWrap(True)
+        form.addRow("", self.lane_plan)
         if report:
             info = QLabel(report.summary() + ("\n" + "\n".join(report.notes) if report.notes else ""))
             info.setWordWrap(True)
@@ -332,6 +371,11 @@ class SettingsDialog(QDialog):
         s.resources.gpu = self.gpu.currentText()
         s.resources.gpu_index = int(self.gpu_index.currentData() or 0)
         s.resources.gpu_memory_fraction = self.mem.value()
+        from ..dist import lanes as lanes_mod
+
+        lanes = self.lanes.currentText().strip().lower() or "1"
+        if not lanes_mod.spec_error(lanes):       # a malformed spec keeps the previous one (the plan line says why)
+            s.dist.lanes = lanes
         b = s.build
         b.refine_method = self.method.currentData()
         b.ph = self.ph.value()
