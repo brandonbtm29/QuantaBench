@@ -161,25 +161,82 @@ def supports_solvent(key: str, solvent: str) -> bool:
     return any(solvents.for_engine(solvent, m) is not None for m in info.solvation)
 
 
-_LIBCINT_OK: bool | None = None
+_LIBCINT_STATUS: tuple[bool, str] | None = None
+
+# dxtb 0.4 ported to tad-mctc >= 0.11 / tad-libcint >= 0.4 (FORK-1, docs/PLATFORMS.md section 4)
+DXTB_FORK_REQ = "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1"
+LIBCINT_FORK_INSTALL = f'pip install "{DXTB_FORK_REQ}" "tad-libcint>=0.4"'
+
+
+def _dist_version(name: str) -> str:
+    from importlib import metadata
+
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return ""
+
+
+def libcint_status() -> tuple[bool, str]:
+    """``(ok, reason)`` for dxtb's libcint integral backend; ``reason`` says what to install when not ok.
+
+    Distinguishes tad-libcint missing from tad-libcint installed but incompatible: tad-libcint 0.4
+    (the first release with Windows and macOS arm64 wheels) needs tad-mctc >= 0.11, which PyPI's
+    dxtb 0.4 (pinned to tad-mctc 0.7) does not run with; the dxtb fork (``DXTB_FORK_REQ``) does.
+    PyPI's dxtb 0.4 with ``tad-libcint<0.4`` (Linux only) stays valid. Cached after the first call.
+    """
+    global _LIBCINT_STATUS
+    if _LIBCINT_STATUS is not None:
+        return _LIBCINT_STATUS
+
+    import importlib.util
+    import sys
+
+    cint, mctc, dxtb_v = _dist_version("tad-libcint"), _dist_version("tad-mctc"), _dist_version("dxtb")
+    linux = sys.platform.startswith("linux")
+    status = (True, "")
+    if not dxtb_v and importlib.util.find_spec("dxtb") is None:
+        status = (False, "dxtb is not installed")
+    elif not cint:
+        try:  # the fork's tad-mctc compatibility layer (finding it imports dxtb, which may fail)
+            fork = importlib.util.find_spec("dxtb._src.exlibs.mctc_compat") is not None
+        except Exception:
+            fork = False
+        if fork:
+            hint = 'pip install "tad-libcint>=0.4"'
+        elif linux:
+            hint = f"pip install 'tad-libcint<0.4' (PyPI dxtb), or the dxtb fork: {LIBCINT_FORK_INSTALL}"
+        else:
+            hint = LIBCINT_FORK_INSTALL
+        status = (False, f"tad-libcint is not installed: {hint}")
+    else:
+        try:
+            import tad_libcint  # noqa: F401
+        except Exception as exc:
+            status = (False, f"tad-libcint {cint} is installed but does not import with tad-mctc {mctc or '?'} "
+                             f"({type(exc).__name__}: {exc}); tad-libcint 0.4 needs dxtb from "
+                             f"brandonbtm29/dxtb@qb-v0.4.0.post1: {LIBCINT_FORK_INSTALL}"
+                             + (" (or keep PyPI dxtb with 'tad-libcint<0.4')" if linux else ""))
+        else:
+            try:
+                from dxtb._src.exlibs import libcint
+
+                libcint.LibcintWrapper  # noqa: B018 - the lazy import that fails on an incompatible pair
+            except Exception as exc:
+                status = (False, f"dxtb {dxtb_v or '?'} cannot use tad-libcint {cint} with tad-mctc {mctc or '?'} "
+                                 f"({type(exc).__name__}: {exc}); {LIBCINT_FORK_INSTALL}")
+    _LIBCINT_STATUS = status
+    return status
 
 
 def has_libcint() -> bool:
     """True when dxtb's libcint integral backend is importable *and* compatible.
 
     It provides the multipole integrals needed for GFN2-xTB and for any dxtb electric-field quantity
-    (dipole moment, polarizability, IR intensities). There is no compatible Windows build yet:
-    tad-libcint 0.4 (the only release with a Windows wheel) needs a newer tad-mctc than dxtb 0.4 pins.
+    (dipole moment, polarizability, IR intensities). On Windows and macOS it needs the dxtb fork with
+    tad-libcint >= 0.4; ``libcint_status()`` gives the reason when it is False.
     """
-    global _LIBCINT_OK
-    if _LIBCINT_OK is None:
-        try:
-            import tad_libcint  # noqa: F401
-
-            _LIBCINT_OK = True
-        except Exception:
-            _LIBCINT_OK = False
-    return _LIBCINT_OK
+    return libcint_status()[0]
 
 
 def available(key: str) -> tuple[bool, str]:
@@ -197,7 +254,7 @@ def available(key: str) -> tuple[bool, str]:
         if not has_package("dxtb"):
             return False, "install with: pip install dxtb"
         if key == "gfn2-xtb" and not has_libcint():
-            return False, "GFN2 needs tad-libcint, currently Linux/WSL only (pip install 'tad-libcint<0.4')"
+            return False, f"GFN2 needs dxtb's libcint backend: {libcint_status()[1]}"
         return True, ""
     if key == "aimnet2":
         if not has_package("aimnet"):

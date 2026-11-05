@@ -42,7 +42,10 @@ dependencies = [
 # PyTorch is NOT listed here on purpose: install the build that matches your GPU first
 # (AMD ROCm on Windows/Linux, NVIDIA CUDA, or CPU). See docs/INSTALL.md.
 ml = ["aimnet>=0.2"]                       # AIMNet2 neutral + charged organics (needs torch)
-xtb = ["dxtb>=0.4",                        # GFN1-xTB in PyTorch (GFN2 also needs tad-libcint, Linux)
+# dxtb>=0.4: GFN1-xTB in PyTorch. GFN2, polarizability and IR intensities also need tad-libcint: PyPI's
+# dxtb with "tad-libcint<0.4" (Linux), or on any OS the fork (a direct URL, so not listed here; FORK-1):
+#   pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"
+xtb = ["dxtb>=0.4",
        "tblite>=0.4; sys_platform != 'win32'"]  # in-process GFN2-xTB (PyPI wheels: Linux, macOS; conda-forge: Windows)
 interop = ["cclib>=1.8"]                   # import Gaussian/ORCA/Psi4/xtb/MOPAC/... output files
 protonate = ["dimorphite-dl>=2.0"]         # pH-dependent protonation states

@@ -42,6 +42,8 @@ found WSL2 GPU pass-through fragile on consumer Radeons.
 
    ```powershell
    pip install -e ".[all,dev]"
+   # dxtb GFN2-xTB, polarizability and IR intensities (libcint backend, see below):
+   pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"
    quantabench-cli doctor --bench
    quantabench
    ```
@@ -82,13 +84,15 @@ environment (`py -3.12 -m venv .venv-rocm`) for GPU experiments.
 
 ### What native Windows can't do yet
 
-- **GFN2-xTB, xTB polarizability and xTB IR intensities** need dxtb's `libcint` integral backend.
-  The only `tad-libcint` release with a Windows wheel (0.4) is incompatible with dxtb 0.4. On Windows,
+- **dxtb's GFN2-xTB, xTB polarizability and xTB IR intensities need the dxtb fork** on Windows. They
+  use dxtb's `libcint` integral backend, and the only `tad-libcint` release with a Windows wheel (0.4)
+  does not work with PyPI's dxtb 0.4; install the fork as in step 4 (details in
+  [dxtb's libcint backend](#dxtbs-libcint-backend-gfn2-polarizability-ir-intensities)). Without it,
   GFN1-xTB optimizations, frequencies, thermochemistry, Mulliken charges and charge-based dipoles all
-  work; polarizability and IR intensities are skipped with a note. **GFN2-xTB itself is available on
-  Windows through the xtb program** (`xtb-gfn2`, with ALPB solvation, its own optimizer, dipoles,
-  D4 polarizability and finite-difference IR intensities): install `envs/tools-windows.yml`. Tested on
-  Linux so far; the first Windows run is backlog ENG-1.
+  work; polarizability and IR intensities are skipped with a note, and `quantabench-cli doctor` says
+  what is missing. GFN2-xTB is also available through the xtb program (`xtb-gfn2`, with ALPB
+  solvation, its own optimizer, dipoles, D4 polarizability and finite-difference IR intensities):
+  install `envs/tools-windows.yml`. Tested on Linux so far; the first Windows run is backlog ENG-1.
 - **pyvistaqt is pinned below 0.13.** 0.13 replaced the native-window VTK widget with a framebuffer
   `QOpenGLWidget` that crashes in `initializeGL` with the AMD driver on Windows (verified on an
   RX 9060 XT, driver 26.10.1). 0.12 works. If you upgraded it by hand: `pip install "pyvistaqt==0.12.0"`.
@@ -103,11 +107,11 @@ environment (`py -3.12 -m venv .venv-rocm`) for GPU experiments.
 AMD lists the RX 9060 XT as supported on WSL2 with ROCm 7.2.1 and the *Adrenalin 26.1.1 for WSL2*
 driver. Follow AMD's "Radeon on WSL" guide, then install the Linux ROCm PyTorch wheels inside WSL as
 in the Linux section. If `torch.cuda.is_available()` is `False` or WSL logs `Ioctl failed: -22`, use
-native Windows for GPU work. WSL2 is still useful on the CPU, for example to run GFN2-xTB, whose
-libcint backend has no Windows build yet:
+native Windows for GPU work. WSL2 is still useful on the CPU, for example for CREST. dxtb's GFN2
+works there with PyPI's dxtb, as on Linux:
 
 ```bash
-pip install "tad-libcint<0.4"   # enables gfn2-xtb in dxtb on Linux/WSL
+pip install "tad-libcint<0.4"   # enables gfn2-xtb in PyPI's dxtb on Linux/WSL (or the fork, see below)
 ```
 
 ## Linux (native)
@@ -118,6 +122,8 @@ python3.12 -m venv .venv && source .venv/bin/activate
 # for your GPU (ROCm for AMD, CUDA for NVIDIA, or CPU). For example, CPU only:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e ".[all,dev]" "tad-libcint<0.4"
+# or, the same stack as on Windows/macOS (dxtb fork, tad-libcint 0.4):
+#   pip install -e ".[all,dev]" "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"
 quantabench-cli doctor --bench
 ```
 
@@ -132,6 +138,7 @@ Not tested on a Mac yet. The steps below are expected to work; report what doesn
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install torch                 # PyPI's macOS build includes the Apple GPU backend (mps)
 pip install -e ".[all,dev]"       # tblite's wheel needs macOS 15 or newer
+pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"   # dxtb GFN2, IR
 quantabench-cli doctor --bench
 conda env create -f envs/tools.yml    # xtb, CREST and MOPAC have native osx-arm64 builds
 conda env create -f envs/psi4.yml
@@ -140,8 +147,33 @@ conda env create -f envs/psi4.yml
 What to expect on a Mac today:
 - The Apple GPU (`mps`) has no float64. GPU engines run in float32.
 - AIMNet2 and dxtb need FORK-3 and FORK-4 before they run on the Mac GPU. Until then they use the CPU.
-- dxtb's GFN2 (libcint) is not available yet (FORK-1). Use `tblite-gfn2` or `xtb-gfn2` for GFN2.
+- dxtb's GFN2, polarizability and IR intensities (libcint) need the dxtb fork with tad-libcint 0.4,
+  whose macOS arm64 wheel is the first one (FORK-1). Tested in the fork's CI on `macos-14`, not on a Mac
+  yet. `tblite-gfn2` and `xtb-gfn2` also give GFN2.
 - CREST runs natively, unlike on Windows.
+
+## dxtb's libcint backend (GFN2, polarizability, IR intensities)
+
+dxtb's GFN2-xTB (`gfn2-xtb`) and every dxtb electric-field property (xTB polarizability, IR
+intensities from dipole derivatives) use dipole and quadrupole integrals from `tad-libcint`. Two
+working stacks exist (FORK-1 in [PLATFORMS.md](PLATFORMS.md)):
+
+| | PyPI dxtb 0.4 | dxtb fork 0.4.0.post1 |
+|---|---|---|
+| Install | `pip install "tad-libcint<0.4"` | `pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"` |
+| Linux, WSL | yes | yes |
+| Windows | no (tad-libcint 0.3 has no Windows wheel) | yes |
+| macOS arm64 | no | yes (fork CI; not tried on a Mac yet) |
+| Pulls in | tad-mctc 0.7 | tad-mctc 0.11, tad-multicharge 0.8 (tad-dftd3/-dftd4 are vendored in the fork) |
+
+The fork is dxtb 0.4.0 ported to the new tad-mctc API. Its results match PyPI's stack to about 1e-8
+(relative): tad-mctc 0.9 moved to CODATA 2018 constants, which shifts GFN2 energies by ~1e-6 eV for
+water; frequencies and IR intensities agree to better than 1e-5 cm⁻¹ and 1e-5 km/mol. It installs
+as `dxtb 0.4.0.post1`, so `dxtb>=0.4` (the `xtb` extra) stays satisfied and later installs keep it;
+add it to the same `pip install -e ".[all,dev]" ...` command or run it afterwards. pip refuses to
+combine `tad-libcint>=0.4` with PyPI's dxtb (conflicting tad-mctc pins). If both got installed anyway
+(e.g. with `--no-deps`), `quantabench-cli doctor` reports why GFN2 is unavailable and prints the
+install line above.
 
 ## External programs: xtb, CREST, MOPAC, Psi4 (optional)
 
@@ -162,7 +194,7 @@ program are in [ENGINES.md](ENGINES.md).
 | Extra | Installs | Enables |
 |---|---|---|
 | `ml` | `aimnet` | AIMNet2 ML potential (downloads model weights on first use) |
-| `xtb` | `dxtb`, `tblite` (not on Windows) | GFN1-xTB (dxtb), GFN2-xTB in process (tblite; dxtb with `tad-libcint`) |
+| `xtb` | `dxtb`, `tblite` (not on Windows) | GFN1-xTB (dxtb), GFN2-xTB in process (tblite; dxtb with `tad-libcint`, see [above](#dxtbs-libcint-backend-gfn2-polarizability-ir-intensities)) |
 | `interop` | `cclib` | Import Gaussian/ORCA/Psi4/xtb/MOPAC output files |
 | `protonate` | `dimorphite-dl` | Alternative pH protonation |
 | `ovito` | `ovito` | Embedded OVITO viewport |

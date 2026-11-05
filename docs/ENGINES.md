@@ -10,7 +10,7 @@ through WSL on Windows. `quantabench-cli doctor` lists what it found and where.
 |---|---|---|---|---|---|---|
 | `mmff` | MMFF94s / UFF (RDKit) | force field | in process | none | yes | conformer pre-optimization |
 | `gfn1-xtb` | GFN1-xTB (dxtb) | tight binding | in process, CPU/GPU | none | yes | batched on GPU |
-| `gfn2-xtb` | GFN2-xTB (dxtb + libcint) | tight binding | in process | none | no (libcint) | Linux/WSL |
+| `gfn2-xtb` | GFN2-xTB (dxtb + libcint) | tight binding | in process | none | dxtb fork | PyPI dxtb: Linux/WSL with `tad-libcint<0.4`; fork: all OSes (below) |
 | `aimnet2` | AIMNet2 (ωB97M-D3 ML) | ML potential | in process, CPU/GPU | none | yes | weights download |
 | `tblite-gfn2`, `tblite-gfn1` | GFN-xTB (tblite) | tight binding | in process | ALPB, GBSA, CPCM | conda only | GFN2 without libcint |
 | `xtb-gfn2`, `xtb-gfn1`, `gfnff` | the xtb program | tight binding / force field | external | ALPB, GBSA | yes | native optimizer |
@@ -20,6 +20,17 @@ through WSL on Windows. `quantabench-cli doctor` lists what it found and where.
 
 `method="auto"` tries AIMNet2 > GFN2-xTB (dxtb) > GFN2-xTB (tblite) > GFN2-xTB (xtb) > GFN1-xTB > MMFF,
 and with a solvent prefers the engines that can model it.
+
+dxtb's GFN2 and its field properties (xTB polarizability, IR intensities) need the libcint backend.
+On Windows and macOS that is the dxtb fork with tad-libcint 0.4 (FORK-1; Linux can use either):
+
+```bash
+pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"
+```
+
+`engines.libcint_status()` (shown by `quantabench-cli doctor` and the GUI as the reason `gfn2-xtb` is
+unavailable) tells a missing tad-libcint from an incompatible one, e.g. tad-libcint 0.4 next to PyPI's
+dxtb 0.4 and tad-mctc 0.7. See [INSTALL.md](INSTALL.md#dxtbs-libcint-backend-gfn2-polarizability-ir-intensities).
 
 ## Finding programs
 
