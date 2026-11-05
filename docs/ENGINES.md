@@ -207,6 +207,29 @@ MOPAC and other outputs through cclib (`pip install cclib`, the `interop` extra)
 charges, frequencies and IR intensities become a built molecule; the Spectra panel shows and animates
 its modes. Experimental spectra (CSV, JCAMP-DX including compressed forms) can be overlaid.
 
+### Spartan documents (`.spartan`)
+
+Spartan '24 documents go through the same command and menu item, but all documents given become **one
+table**: one row per molecule and document, keyed by the molecule label (the CAS number in the PFAS QSAR
+batches), so a project split into many documents needs no manual recombination:
+
+```bash
+quantabench-cli import batches/*.spartan --table all.csv --sdf all.sdf     # --conformers all: one row each
+```
+
+- Every row has `source_file`, `molecule_index` (position in its document), `storage` (`M0001`), `label` and
+  `duplicate_label` (1 when the label occurs in more than one row; nothing is overwritten), then `formula`,
+  `smiles`, `n_atoms`, `charge`, `multiplicity`, `n_conformers`, and every scalar Spartan property as
+  `spartan_<name>`. A Spartan value takes a QuantaBench column only when it is the same quantity in the same
+  units; the mapping and the units are documented in `chem/io_spartan.py`.
+- Conformer libraries (conformer searches): `n_conformers` and the lowest-energy saved conformer's values
+  (`spartan_conf_energy_kcal`, `spartan_conf_boltzmann_weight`, ...; Spartan's kcal/mol).
+- `--sdf` writes the reported geometries (bonds from Spartan) with the label and source columns, ready for a
+  QuantaBench run; per-atom Spartan values (e.g. MMFF charges) are SDF atom properties.
+- Documents are read molecule by molecule (olefile, pure Python), so memory stays flat: a 100-molecule
+  conformer-search batch takes ~0.7 s and the process stays under 100 MB.
+- In the GUI, every molecule of a document becomes one result with its saved conformers ranked.
+
 ## Not available yet
 
 - NMR shieldings (Psi4 has none; planned through PySCF).

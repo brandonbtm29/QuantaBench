@@ -2,6 +2,15 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Spartan documents in one table (IMPORT-2, 2026-11-05)
+- `quantabench-cli import *.spartan --table out.csv [--sdf out.sdf] [--conformers all]` reads any number of
+  Spartan '24 documents into one CSV: one row per molecule and document, keyed by the label, with
+  `source_file`, `molecule_index` and a `duplicate_label` flag (all rows kept). Scalar Spartan properties
+  become `spartan_<name>` columns; conformer libraries report the conformer count and the lowest-energy
+  conformer. Streams molecule by molecule (~0.7 s and < 100 MB for a 100-molecule batch).
+- File > Import calculation output accepts `.spartan` documents (one result per molecule, conformers ranked).
+- New core dependency `olefile` (pure Python, BSD) for the OLE container.
+
 ### Installing with the dxtb fork (2026-11-05)
 - Fixed `pip` `ResolutionImpossible` when installing `.[all]` together with the dxtb fork (Windows and macOS
   installers): the `ml` extra no longer lists `tad-dftd3`, whose every release pins an old tad-mctc. AIMNet2's

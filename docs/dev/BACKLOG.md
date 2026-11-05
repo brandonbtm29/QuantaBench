@@ -264,7 +264,7 @@ Depends on: none (research only; can run any night).
 - Acceptance: open a 14,000-molecule run folder in under 5 s and under 500 MB, scroll, search and select
   any molecule; a GUI batch of 14,000 runs with flat memory.
 
-### IMPORT-2: Read Spartan '24 `.spartan` documents · ready
+### IMPORT-2: Read Spartan '24 `.spartan` documents · in review 2026-11-05 (branch `feat/spartan-import`; acceptance pending)
 - A `.spartan` file is an OLE compound document with one storage per molecule (`Molecules/M0001/...`):
   `Input.gz` holds the keywords, the label (CAS number in Brandon's files), charge and multiplicity and the
   Cartesian coordinates; `PropertyArchive.gz` holds about 50 scalar properties (`PROP VALUE NAME = value`:
@@ -274,6 +274,13 @@ Depends on: none (research only; can run any night).
   property names mapped to QuantaBench's columns where they match; one row per molecule and file, keyed by
   label, so all 1,067 batch files become one table.
 - Acceptance: one batch's values equal Spartan's own spreadsheet export; the 76-PFAS document imports whole.
+- 2026-11-05: `chem/io_spartan.py`, `import *.spartan --table/--sdf/--conformers`, GUI routing. Checked on a
+  100-molecule MMFF/DLFF03 conformer-search batch (labels match its input SDF), its extracted-conformers
+  document and one small conformer document. Still open: (1) a Spartan spreadsheet export with values (the
+  staged `.xlsx` was empty) to compare; (2) the 570 MB 76-PFAS document; (3) a document with the QSAR
+  (quantum-chemical) properties, to confirm their Spartan names/units and fill `io_spartan.COLUMN_MAP`
+  (HOMO/LUMO, dipole); (4) Spartan's own rule for the atoms its conformer libraries leave out (placed here
+  by a rigid fit, typically ~0.5 Å from Spartan's placement).
 
 ### QSAR-1: First real test: the PFAS QSAR cohorts · after SCALE-1 and IMPORT-2
 - Input: the 14,223 molecules of cohorts 1-6 (`data_engineering/Cohort */*.sdf`, CAS-labelled), one run per
