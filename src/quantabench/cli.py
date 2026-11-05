@@ -188,6 +188,8 @@ def _config(args, base=None, **extra):
         "optimizer": getattr(args, "optimizer", None), "conformer_search": getattr(args, "conformers", None),
         "crest_method": getattr(args, "crest_method", None), "qm_method": getattr(args, "qm", None),
         "qm_task": getattr(args, "qm_task", None), "qm_top": getattr(args, "qm_top", None),
+        "memory_budget_gb": getattr(args, "memory_budget", None),
+        "molecule_timeout_s": getattr(args, "molecule_timeout", None),
     }.items() if v is not None}
     if getattr(args, "crest_full", False):
         overrides["crest_quick"] = False
@@ -744,6 +746,14 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--chunk", metavar="K/N", help="build only chunk K of N (1-based) of the list, e.g. 2/3")
     b.add_argument("--retry-failed", action="store_true", help="also redo molecules that failed before")
     b.add_argument("--force", action="store_true", help="continue a run folder even if the settings differ")
+    b.add_argument("--memory-budget", type=float, metavar="GB",
+                   help="memory per process for the dxtb steps: larger estimates take a cheaper path or skip the "
+                        "step with a note (0 = available memory / lanes, at least 1.5 GB; < 0 = no guard; "
+                        "default from settings); see docs/ENGINES.md")
+    b.add_argument("--molecule-timeout", type=float, metavar="S",
+                   help="wall-clock limit per molecule, s (0 = none; default from settings, 1800): a lane past it is "
+                        "killed and restarted, one process stops at the next checkpoint; the molecule is marked "
+                        "failed 'time limit (S s)' and --retry-failed redoes it")
     b.set_defaults(func=_build)
 
     st = sub.add_parser("status", help="progress of a (resumable) run folder")

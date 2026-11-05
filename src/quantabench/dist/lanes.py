@@ -47,6 +47,13 @@ How a parallel run works (``run_parallel``):
   process N times") and the run goes on. Only a closed pipe means a lane died: an exception from a callback
   (``log``, ``progress``, ``on_result``) or the job table stops the run like any other exception, and a
   molecule that could not be handed to a lane (it died while idle) goes back to the queue uncounted.
+* per-molecule time limit (``BuildConfig.molecule_timeout_s`` > 0, ``build --molecule-timeout``): the parent
+  notes when it hands each lane its molecule. A lane still on it after the limit is killed (with its programs),
+  the molecule is recorded failed with "time limit (N s) in <stage>" (no crash counted, so it is not retried in
+  this run; ``--retry-failed`` redoes it) and the lane is restarted if work is left. A result that arrives just
+  before the kill wins.
+* memory: ``cfg.memory_budget_gb`` 0 (auto) is resolved once, here, to the available memory divided by the
+  lanes (``chem.memory_guard``); every lane's dxtb steps are guarded against that share.
 * external programs a lane starts (xtb, CREST, Psi4: own process group/session) are recorded by
   ``external.run_program`` in a per-lane folder; when a lane dies or is killed the parent kills what it
   left running (``LanePool.kill_programs``; on Windows with ``taskkill /T`` and, for ``wsl:`` programs, on
@@ -634,6 +641,8 @@ class _LaneProcess:
         self.done = 0
         self.started_at = 0.0       # time.monotonic() of the last start
         self.ever_ready = False     # has been ready once (a restart is not a first start)
+        self.busy_since = 0.0       # time.monotonic() when the running molecule was handed over (time limit)
+        self.stage = ""             # the running molecule's last stage, for the time-limit error
 
     @property
     def alive(self) -> bool:
@@ -821,10 +830,14 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     ``speed_aware`` (None: ``settings.resources.speed_aware_lanes``): near the end of the batch, a lane
     leaves the last molecules to clearly faster lanes when they would finish them first (``dist.speed``).
     Off, every free lane takes the next molecule."""
+    from dataclasses import replace
+
     from ..chem import jobs
+    from ..chem import pipeline as pipeline_mod
     from ..chem.pipeline import MoleculeResult
     from . import speed
 
+    limit = max(0.0, float(getattr(cfg, "molecule_timeout_s", 0) or 0))
     cap = max_lanes()
     if cap is not None and len(lanes) > cap:
         log(f"Lanes: {len(lanes)} requested, {cap} is the most one process can run on Windows; using the first {cap}")
@@ -842,6 +855,8 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         log(f"Note: {cfg.method} on GPU and CPU lanes: where dxtb stays on the GPU (torch_compat.dxtb_device) it "
             "computes in float32, on the CPU lanes in float64, so one table mixes both precisions. CPU lanes "
             "only (or one GPU lane) keep one precision per run.")
+    # each lane gets its share of the machine's memory for the dxtb steps (chem.memory_guard), resolved once here
+    cfg = replace(cfg, memory_budget_gb=pipeline_mod.resolved_budget(cfg, len(lanes), log))
     pool = LanePool(lanes, cfg, run_dir, log)
     queue = deque((k, mol_id, inp) for k, (mol_id, inp) in enumerate(todo))
     texts = {mol_id: jobs.input_to_json(inp) for mol_id, inp in todo}
@@ -925,6 +940,30 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         if not w.retired and not stopping and queue:
             pool.start(w)
 
+    def lane_timed_out(w: _LaneProcess) -> None:
+        """The molecule of lane ``w`` ran past the time limit: kill the lane (and the programs it started), record
+        the molecule failed with "time limit (N s)" (not a crash: it is not tried again in this run;
+        --retry-failed redoes it) and restart the lane if work is left."""
+        k, mol_id, inp = w.busy
+        w.busy = None
+        if policy is not None:
+            policy.lost(w.lane.name)
+        err = pipeline_mod.time_limit_error(limit, w.stage)
+        elapsed = time.monotonic() - w.busy_since
+        pool._close_conn(w)
+        if w.proc is not None:
+            _kill_tree(w.proc)
+            with contextlib.suppress(ValueError):
+                w.proc.close()
+        w.proc = None
+        left = pool.kill_programs(w)
+        log(f"[{w.lane.name}] {mol_id}: {err} after {elapsed:.0f} s; lane killed"
+            + (f" with {left} external program(s)" if left else "")
+            + ("; restarting it" if queue and not stopping else "") + " (--retry-failed redoes the molecule)")
+        finish(None, k, mol_id, MoleculeResult(input=inp, status="failed", error=err, device=w.device))
+        if not w.retired and not stopping and queue:
+            pool.start(w)
+
     def drain(w: _LaneProcess) -> bool:
         """Handle every message waiting on ``w``'s pipe; False once the pipe is closed (the lane ended).
         Only reading the pipe counts as the lane's failure: an exception from ``handle`` (a ``log``,
@@ -946,6 +985,8 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             log(f"[{w.lane.name}] {msg[2]}")
         elif kind == "stage":
             _, _, k, mol_id, stage = msg
+            if w.busy is not None and w.busy[1] == mol_id:
+                w.stage = stage
             progress(done_before + k, total, stage, mol_id)
         elif kind == "result":
             _, _, k, mol_id, res, result_dir = msg
@@ -1001,6 +1042,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                             queue.appendleft((k, mol_id, inp))
                             continue
                         w.busy = (k, mol_id, inp)
+                        w.busy_since, w.stage = time.monotonic(), ""
                         if policy is not None:
                             policy.started(w.lane.name, size_of(mol_id))
                         store.mark_running(mol_id)
@@ -1020,6 +1062,14 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                     continue                      # a sentinel: handled below
                 if not drain(w):
                     lane_died(w)
+            if limit and not stopping:
+                now = time.monotonic()
+                for w in pool.workers:
+                    if w.busy is not None and w.proc is not None and now - w.busy_since > limit:
+                        if not drain(w):          # a result that just arrived wins over the limit
+                            lane_died(w)
+                        elif w.busy is not None and w.proc is not None:
+                            lane_timed_out(w)
             for w in pool.workers:
                 if w.proc is not None and not w.alive:
                     drain(w)                      # what the lane sent before it ended, then its death

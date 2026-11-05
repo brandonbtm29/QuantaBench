@@ -39,8 +39,23 @@ def unphysical_polarizability(eigenvalues_A3, numbers, charge: int = 0) -> str:
             f"atoms at charge {charge:+d}" + (" (gas-phase anion: unbound electrons)" if charge < 0 else ""))
 
 
+def tblite_polarizability_A3(numbers, positions_ang, charge: int = 0, multiplicity: int = 1) -> np.ndarray:
+    """The GFN1-xTB static polarizability tensor (Å^3) from tblite: central finite differences of the dipole in
+    ±field (``eng_tblite.TBLiteCalculator.polarizability_au``), gas phase. The same quantity as dxtb's autograd
+    polarizability (39.1012 vs 39.1009 Å^3 for deca-alanine) without its autograd graph (``chem.memory_guard``)."""
+    from .eng_tblite import AU_POLARIZABILITY_A3 as BOHR3_A3
+    from .eng_tblite import TBLiteCalculator
+
+    calc = TBLiteCalculator(numbers, "GFN1-xTB", charge, multiplicity)
+    calc.singlepoint(np.asarray(positions_ang, float))
+    return calc.polarizability_au(np.asarray(positions_ang, float)) * BOHR3_A3
+
+
 def xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity: int = 1,
-                   device: str = "cpu", polarizability: bool = True) -> dict:
+                   device: str = "cpu", polarizability: bool = True, polarizability_engine: str = "dxtb") -> dict:
+    """GFN1-xTB charges, charge dipole and (``polarizability``) static polarizability. ``polarizability_engine``
+    "tblite" takes the polarizability from tblite's finite-field GFN1-xTB instead of dxtb's autograd (the memory
+    guard's cheaper path; the charges and dipole stay dxtb's)."""
     import dxtb
     import torch
     from dxtb.components.field import new_efield
@@ -64,13 +79,19 @@ def xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity
         "xtb_charges": [float(x) for x in q],
         "xtb_dipole_debye": dipole_debye(np.asarray(positions_ang), q, np.asarray(masses)),
     }
-    if polarizability and not has_libcint():
+    if polarizability and polarizability_engine == "dxtb" and not has_libcint():
         out["_notes"] = [f"xTB polarizability skipped: needs dxtb's libcint backend ({libcint_status()[1]})"]
     elif polarizability:
-        field = torch.zeros(3, device=dev, dtype=dtype, requires_grad=True)
-        fcalc = dxtb.Calculator(z, dxtb.GFN1_XTB, interaction=new_efield(field), opts=opts, device=dev, dtype=dtype)
-        with torch_compat.linalg_routing(dev):
-            alpha = fcalc.get_polarizability(pos, **kwargs).detach().cpu().double().numpy() * AU_POLARIZABILITY_A3
+        if polarizability_engine == "tblite":
+            alpha = tblite_polarizability_A3(numbers, positions_ang, charge, multiplicity)
+        elif polarizability_engine == "dxtb":
+            field = torch.zeros(3, device=dev, dtype=dtype, requires_grad=True)
+            fcalc = dxtb.Calculator(z, dxtb.GFN1_XTB, interaction=new_efield(field), opts=opts, device=dev,
+                                    dtype=dtype)
+            with torch_compat.linalg_routing(dev):
+                alpha = fcalc.get_polarizability(pos, **kwargs).detach().cpu().double().numpy() * AU_POLARIZABILITY_A3
+        else:
+            raise ValueError(f"polarizability_engine must be 'dxtb' or 'tblite', not {polarizability_engine!r}")
         eig = np.linalg.eigvalsh(0.5 * (alpha + alpha.T))
         why = unphysical_polarizability(eig, numbers, charge)
         if why:

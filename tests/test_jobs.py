@@ -353,3 +353,20 @@ def test_light_results_for_big_batches(tmp_path):
     assert all(r.mol is None and r.vibrations is None for r in results)            # nothing big kept
     assert all(r.mol is not None for r in full)                                     # callbacks get it all
     assert results[0].conformers and results[0].descriptors == full[0].descriptors and results[0].files
+
+
+def test_time_limit_in_one_process_fails_the_molecule_and_retry_redoes_it(tmp_path):
+    """One process: a molecule past molecule_timeout_s stops at its next checkpoint and is recorded failed "time
+    limit (...)" (not cancelled, so a plain resume does not redo it); --retry-failed with no limit computes it."""
+    run_dir = tmp_path / "run"
+    logs = []
+    results, _ = jobs.run_resumable(inputs(["ethanol", "TFE"]), cfg(tmp_path, molecule_timeout_s=1e-4), run_dir,
+                                    log=logs.append)
+    assert [r.status for r in results] == ["failed", "failed"]
+    assert all(r.error.startswith("time limit (0.0001 s) in ") for r in results)
+    assert any(m.startswith("Per-molecule time limit: 0.0001 s (best effort in one process") for m in logs)
+    st = jobs.open_run(run_dir)
+    assert st.counts["failed"] == 2 and st.failures[0][1].startswith("time limit")
+    assert jobs.run_resumable(None, cfg(tmp_path, molecule_timeout_s=1e-4), run_dir)[0] == []
+    redone, _ = jobs.run_resumable(None, cfg(tmp_path), run_dir, retry_failed=True)
+    assert [r.status for r in redone] == ["ok", "ok"] and jobs.open_run(run_dir).counts["ok"] == 2
