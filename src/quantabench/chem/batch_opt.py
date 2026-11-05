@@ -74,6 +74,10 @@ larger dxtb calls (batched eigh and einsum instead of eight Python-level SCF loo
 cost of one call is nearly flat in B until the device fills, so the wall time should approach
 (max steps) x (one call) instead of (sum of steps) x (one call): at most 297/45 = 6.6x for this
 case, more for larger ensembles. Verify on real hardware before quoting GPU numbers.
+Measured for dxtb 0.4 on BTM NOVA's RX 9060 XT (2026-11-04): it does not happen. dxtb evaluates the
+overlap integrals of each system of a batch in a Python loop full of host synchronizations, so a
+batched GPU call costs ~B single calls and the GPU is 6-7x slower than the CPU at B = 1..20
+(``torch_compat.DXTB_GPU_BENCHMARK``); dxtb therefore stays on the CPU there by default.
 """
 
 
@@ -335,7 +339,9 @@ class DxtbBatched(BatchedModel):
 
     Units: dxtb works in Hartree and Bohr; we convert to eV and Å. Forces come from autograd of
     E.sum(): systems are independent, so d(sum E)/dR_b = dE_b/dR_b. As in ``engines.DxtbCalculator``
-    the CPU runs in float64 and GPUs in float32. One dxtb Calculator is built (and cached) per batch
+    the CPU runs in float64 and GPUs in float32, with the dense linear algebra a GPU lacks (Cholesky
+    on Windows ROCm, everything on MPS) run on the CPU by ``torch_compat.linalg_routing``; the batched
+    eigensolver stays on the GPU when it works there. One dxtb Calculator is built (and cached) per batch
     size, which compaction keeps to about log2(B) sizes. dxtb's batch mode rejects B = 1, so a
     single system uses an unbatched Calculator. No charges are returned, matching the sequential
     ``DxtbCalculator`` (the pipeline adds GFN1 charges for the best conformer afterwards).
@@ -347,9 +353,15 @@ class DxtbBatched(BatchedModel):
         import dxtb
         import torch
 
+        from . import torch_compat
+
         self._dxtb = dxtb
-        self.device = torch.device(device)
-        self.dtype = torch.float64 if self.device.type == "cpu" else torch.float32
+        self._compat = torch_compat
+        self.requested_device = str(device)
+        run_on, self.device_note = torch_compat.dxtb_device(device)   # CPU where dxtb is slower on the GPU
+        self.device = torch.device(run_on)
+        self.dtype = torch_compat.compute_dtype(self.device)
+        self.linalg_routed: frozenset[str] = frozenset()   # ops run on the CPU (torch_compat), last call
         self._par = dxtb.GFN2_XTB if method == "gfn2-xtb" else dxtb.GFN1_XTB
         self._opts: dict[str, Any] = {"verbosity": 0}
         if method == "gfn2-xtb":
@@ -387,11 +399,14 @@ class DxtbBatched(BatchedModel):
             kwargs = {"chrg": torch.full((b,), float(self.charge), device=self.device, dtype=self.dtype)}
             if self.spin:
                 kwargs["spin"] = torch.full((b,), float(self.spin), device=self.device, dtype=self.dtype)
-        energy = calc.get_energy(pos, **kwargs)
-        (grad,) = torch.autograd.grad(energy.sum(), pos)
+        with self._compat.linalg_routing(self.device) as routed:
+            energy = calc.get_energy(pos, **kwargs)
+            (grad,) = torch.autograd.grad(energy.sum(), pos)
+        self.linalg_routed = routed
         e = energy.detach().reshape(b) * HARTREE_EV
         f = -grad.detach().reshape(b, -1, 3) * (HARTREE_EV / BOHR_ANG)
-        return e, f, None
+        # back to the optimizer's dtype and device (cast first: MPS takes no float64)
+        return (e.to(positions.dtype).to(positions.device), f.to(positions.dtype).to(positions.device), None)
 
 
 class AIMNet2Batched(BatchedModel):
