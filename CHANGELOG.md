@@ -20,6 +20,9 @@ organometallics, ions from -5 to +2, up to 157 heavy atoms), run through MMFF, G
 - **`auto` says why** it passed an engine over ("AIMNet2 ... has no parameters for Sn; using GFN2-xTB").
 - **MMFF94s -> UFF** is noted (the energies of method `mmff` are then UFF's; descriptor `method` = UFF). With
   no force field at all (e.g. Cr(III) complexes) method `mmff` fails instead of reporting 0 eV.
+- **Cyclopentanes embed again**: RDKit 2026.09's ETKDG small-ring torsions abort plain cyclopentanes
+  (cyclopentane, cyclopentanol, cis-1,2-cyclopentanediol) with "Invariant Violation: bad direction in
+  linearSearch" for every seed; the embedding is repeated without small-ring torsions, with a note.
 - R groups, `*` and molfile atom lists fail with "not a definite structure" (ETKDG aborted with an RDKit
   invariant violation and a C++ stack trace in the log).
 - GFN1-xTB polarizabilities that cannot be physical (4x10^5 Å³ for a gas-phase phosphate dianion) are

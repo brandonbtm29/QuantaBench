@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from conftest import PFOA
 from rdkit import Chem
 
@@ -23,3 +24,18 @@ def test_prune_removes_duplicates():
 def test_boltzmann():
     w = confs.boltzmann_weights([0.0, 0.0, 10.0])
     assert np.isclose(w.sum(), 1) and np.isclose(w[0], w[1]) and w[2] < 1e-6
+
+
+@pytest.mark.parametrize("smiles", ["C1CCCC1", "O[C@@H]1CCC[C@@H]1O"])
+def test_cyclopentanes_embed(smiles):
+    """RDKit 2026.09's small-ring torsions abort plain cyclopentanes with an invariant violation (every
+    seed); the embedding is repeated without them, with a note."""
+    from quantabench.chem.standardize import prepare
+
+    mol, _ = prepare(Chem.MolFromSmiles(smiles), 7.0)
+    cs = confs.generate(mol, max_conformers=4)
+    assert cs.n_embedded >= 1 and cs.forcefield == "MMFF94s"
+    from rdkit import rdBase
+
+    if rdBase.rdkitVersion.startswith("2026.09"):
+        assert any("small-ring torsions" in n for n in cs.notes)

@@ -470,6 +470,9 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         result.forcefield, result.n_embedded = cs.forcefield, cs.n_embedded
         result.timings["conformers"] = time.perf_counter() - t
         log(f"  {cs.n_embedded} embedded, {len(cs.conf_ids)} unique after {cs.forcefield} + pruning")
+        for note in cs.notes:
+            result.notes.append(note)
+            log(f"  {note}")
         if result.conformer_search == "rdkit" and cs.forcefield != "MMFF94s":
             _forcefield_fallback(result, cs.forcefield, method, log)
         if should_stop():

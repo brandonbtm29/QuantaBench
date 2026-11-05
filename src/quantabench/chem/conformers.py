@@ -3,7 +3,7 @@ energy-window filtering and symmetry-aware RMSD de-duplication."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from rdkit import Chem, rdBase
@@ -19,6 +19,7 @@ class ConformerSet:
     energies_kcal: list[float]    # force-field energies, same order
     forcefield: str               # "MMFF94s" | "UFF" | "none"
     n_embedded: int
+    notes: list[str] = field(default_factory=list)   # what the conformer search had to work around
 
 
 def suggested_count(mol: Chem.Mol, cap: int) -> int:
@@ -28,20 +29,46 @@ def suggested_count(mol: Chem.Mol, cap: int) -> int:
     return max(1, min(n, cap))
 
 
-def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1) -> list[int]:
-    params = AllChem.ETKDGv3()
-    params.randomSeed = int(seed)
-    params.numThreads = int(threads)
-    params.pruneRmsThresh = 0.1
-    params.useSmallRingTorsions = True
-    try:
-        ids = list(AllChem.EmbedMultipleConfs(mol, numConfs=n, params=params))
-        if not ids:  # hard cases (cages, crowded stereo): random starting coordinates
-            params.useRandomCoords = True
-            ids = list(AllChem.EmbedMultipleConfs(mol, numConfs=max(1, n // 2), params=params))
-    except RuntimeError as exc:   # an RDKit invariant violation: its message is a C++ stack trace
-        first = next((ln.strip() for ln in str(exc).splitlines() if ln.strip() and "*" not in ln), "")
-        raise RuntimeError(f"RDKit could not embed 3D coordinates for this structure ({first or 'internal error'})") from None
+def _invariant(exc: Exception) -> str:
+    """The one informative line of an RDKit invariant violation (its message is a C++ stack trace)."""
+    lines = [ln.strip() for ln in str(exc).splitlines() if ln.strip() and "*" not in ln]
+    return next((ln for ln in lines if ln != "Invariant Violation"), lines[0] if lines else type(exc).__name__)
+
+
+def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1, notes: list[str] | None = None) -> list[int]:
+    """ETKDGv3 conformers (with small-ring torsions); random starting coordinates if that finds none.
+
+    RDKit 2026.09's small-ring torsion terms abort the embedding of plain cyclopentanes (cyclopentane,
+    cyclopentanol, cis-1,2-cyclopentanediol: "Invariant Violation: bad direction in linearSearch", for every
+    seed). On such an error the embedding is repeated without small-ring torsions, then with the next seed
+    and random coordinates (still deterministic); ``notes`` (optional list) gets a line saying so."""
+    def attempt(seed_: int, small_rings: bool, random_coords: bool) -> list[int]:
+        params = AllChem.ETKDGv3()
+        params.randomSeed = int(seed_)
+        params.numThreads = int(threads)
+        params.pruneRmsThresh = 0.1
+        params.useSmallRingTorsions = small_rings
+        params.useRandomCoords = random_coords
+        with rdBase.BlockLogs():      # an invariant's C++ stack trace goes to the log; the exception is enough
+            ids = list(AllChem.EmbedMultipleConfs(mol, numConfs=n, params=params))
+            if not ids and not random_coords:  # hard cases (cages, crowded stereo): random starting coordinates
+                params.useRandomCoords = True
+                ids = list(AllChem.EmbedMultipleConfs(mol, numConfs=max(1, n // 2), params=params))
+        return ids
+
+    first: RuntimeError | None = None
+    for seed_, small_rings, random_coords in ((seed, True, False), (seed, False, False), (seed + 1, False, True)):
+        try:
+            ids = attempt(seed_, small_rings, random_coords)
+        except RuntimeError as exc:
+            first = first or exc
+            continue
+        if first is not None and notes is not None:
+            notes.append(f"RDKit ETKDG aborted ({_invariant(first)}); embedded without small-ring torsions"
+                         + (f", seed {seed_}, random start" if random_coords else ""))
+        break
+    else:
+        raise RuntimeError(f"RDKit could not embed 3D coordinates for this structure ({_invariant(first)})")
     if not ids:
         raise RuntimeError("RDKit could not embed 3D coordinates for this structure")
     return ids
@@ -96,11 +123,12 @@ def generate(mol: Chem.Mol, max_conformers: int = 50, window_kcal: float = 6.0, 
         mol = Chem.AddHs(mol)
     n = suggested_count(mol, max_conformers)
     mol.RemoveAllConformers()
-    ids = embed(mol, n, seed=seed, threads=threads)
+    notes: list[str] = []
+    ids = embed(mol, n, seed=seed, threads=threads, notes=notes)
     energies, ff = forcefield_optimize(mol, threads=threads)
     # forcefield_optimize returns energies in conformer order, which matches ``ids``
     kept, kept_e = prune(mol, ids, energies, window_kcal, rmsd_threshold)
-    return ConformerSet(mol=mol, conf_ids=kept, energies_kcal=kept_e, forcefield=ff, n_embedded=len(ids))
+    return ConformerSet(mol=mol, conf_ids=kept, energies_kcal=kept_e, forcefield=ff, n_embedded=len(ids), notes=notes)
 
 
 def boltzmann_weights(energies_kcal: list[float], temperature_k: float = 298.15) -> np.ndarray:
