@@ -10,7 +10,8 @@ Engine        Package        Device        Charged molecules   Notes
 mmff          rdkit          CPU threads   yes                 already applied during conformer search
 gfn1-xtb      dxtb           CPU or GPU    yes                 pure PyTorch: runs on ROCm and CUDA
 gfn2-xtb      dxtb+libcint   CPU (ints)    yes                 libcint backend: Linux/WSL for now
-aimnet2       aimnet         CPU or GPU    yes                 wB97M-D3 quality for H,B,C,N,O,F,Si,P,S,Cl,As,Se,Br,I
+aimnet2       aimnet         CPU or GPU    yes                 wB97M-D3 quality for H,B,C,N,O,F,Si,P,S,Cl,As,Se,Br,I;
+                                                               ROCm/Apple GPUs through ``aimnet_torch`` (no Warp)
 
 More engines register themselves from plugin modules (``PLUGINS``): the xtb program (GFN2/GFN1/GFN-FF
 with ALPB solvation), tblite (in-process GFN2/GFN1), MOPAC (PM7/PM6). A plugin calls ``register`` with
@@ -75,7 +76,8 @@ ENGINES: dict[str, EngineInfo] = {
     "gfn2-xtb": EngineInfo("gfn2-xtb", "GFN2-xTB (dxtb + libcint)", "GFN2 tight binding; needs tad-libcint (Linux/WSL).",
                            True, frozenset(range(1, 87)), batched=True),
     "aimnet2": EngineInfo("aimnet2", "AIMNet2 (ML, wB97M-D3)", "Neural network potential trained on wB97M-D3/def2-TZVPP; "
-                          "neutral and charged molecules. GPU-capable.", True, frozenset(AIMNET2_ELEMENTS),
+                          "neutral and charged molecules. GPU-capable: NVIDIA (stock aimnet), AMD ROCm and "
+                          "Apple GPUs (Warp-free path with tad-dftd3 dispersion).", True, frozenset(AIMNET2_ELEMENTS),
                           family="ML potential", batched=True),
 }
 
@@ -259,6 +261,8 @@ def available(key: str) -> tuple[bool, str]:
     if key == "aimnet2":
         if not has_package("aimnet"):
             return False, "install with: pip install aimnet"
+        if not has_package("warp") or not has_package("nvalchemiops"):
+            return False, "aimnet needs warp-lang and nvalchemi-toolkit-ops importable (CPU-only Warp is enough)"
         return True, ""
     return False, f"unknown engine {key!r}"
 
@@ -332,18 +336,19 @@ class DxtbCalculator(Calculator):
 
 
 # ---------------------------------------------------------------------------- AIMNet2
-_AIMNET_CACHE: dict[tuple[str, str], object] = {}
+_AIMNET_CACHE: dict[tuple[str, str, str], object] = {}
 
 
 def _aimnet_base(model: str, device: str):
-    key = (model, device)
-    if key not in _AIMNET_CACHE:
-        from aimnet.calculators import AIMNet2Calculator
+    """Cached AIMNet2 base calculator for ``device``: aimnet's stock ``AIMNet2Calculator`` where NVIDIA
+    Warp serves the device (CUDA, CPU), the Warp-free ``aimnet_torch.AIMNet2TorchCalculator`` on ROCm,
+    Apple GPUs or when the stock one fails at load (``QUANTABENCH_AIMNET_BACKEND`` forces either). Its
+    ``qb_backend`` attribute says which one it is."""
+    from . import aimnet_torch
 
-        try:
-            _AIMNET_CACHE[key] = AIMNet2Calculator(model, device=device)
-        except TypeError:  # older aimnet without the device argument
-            _AIMNET_CACHE[key] = AIMNet2Calculator(model)
+    key = (model, device, aimnet_torch.requested_backend())
+    if key not in _AIMNET_CACHE:
+        _AIMNET_CACHE[key] = aimnet_torch.load_calculator(model, device)
     return _AIMNET_CACHE[key]
 
 

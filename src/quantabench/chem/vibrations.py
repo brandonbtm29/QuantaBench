@@ -440,10 +440,11 @@ def dxtb_dipole_derivatives(numbers, positions, method: str = "gfn1-xtb", charge
 
 
 def aimnet_hessian(calc, atoms: Atoms) -> np.ndarray:
-    """Analytic AIMNet2 Hessian (eV/Å²) through ``AIMNet2Calculator.eval(hessian=True)``.
+    """Analytic AIMNet2 Hessian (eV/Å²) through the base calculator's ``eval(hessian=True)``: aimnet's
+    ``AIMNet2Calculator`` or, on ROCm/Apple GPUs, ``aimnet_torch.AIMNet2TorchCalculator`` (double
+    backward through the dense model and tad-dftd3 D3; it matches the stock Hessian on the CPU).
 
-    Only used with ``hessian='analytic'``; it could not be validated against real model weights in
-    development, so 'auto' uses finite differences for AIMNet2.
+    Only used with ``hessian='analytic'``; 'auto' uses finite differences for AIMNet2.
     """
     import torch
 

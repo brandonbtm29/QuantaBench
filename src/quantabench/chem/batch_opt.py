@@ -395,12 +395,16 @@ class DxtbBatched(BatchedModel):
 
 
 class AIMNet2Batched(BatchedModel):
-    """AIMNet2 through ``AIMNet2Calculator``'s batched dict input.
+    """AIMNet2 through the base calculator's batched dict input: aimnet's ``AIMNet2Calculator`` or,
+    on ROCm and Apple GPUs, the Warp-free ``aimnet_torch.AIMNet2TorchCalculator`` (same interface;
+    ``engines._aimnet_base`` picks one per device).
 
     Input:  coord [b, N, 3] float32 Å, numbers [b, N] int, charge [b] float, mult [b] float.
     Output: energy [b] eV, forces [b, N, 3] eV/Å, charges [b, N] e (AIMNet2 predicts its own
-    charges, so dipoles come for free). On CPU the calculator flattens the batch internally; on a GPU
-    molecules up to ``nb_threshold`` (120) atoms keep the dense [b, N, N] neighbor path.
+    charges, so dipoles come for free). The stock calculator flattens the batch on the CPU and keeps
+    the dense [b, N, N] path on CUDA up to ``nb_threshold`` (120) atoms; the Warp-free one is always
+    dense. ``energies_ev`` holds each system's last energy in float64 on the CPU: on Apple GPUs the
+    optimizer state is float32, which would round absolute energies (~5e4 eV for PFOA) to ~4 meV.
     """
 
     provides_charges = True
@@ -414,6 +418,7 @@ class AIMNet2Batched(BatchedModel):
         self._numbers = torch.as_tensor(np.asarray(numbers), dtype=torch.long, device=self.device)
         self.charge = float(charge)
         self.mult = float(multiplicity)
+        self.energies_ev: torch.Tensor | None = None   # [B] float64 CPU, aligned like ``charges``
 
     def _compute(self, positions, index):
         import torch
@@ -427,6 +432,11 @@ class AIMNet2Batched(BatchedModel):
         }
         out = self.calc(data, forces=True)
         e = out["energy"].detach().reshape(b)
+        e64 = e.to("cpu", torch.float64)
+        if index is None:
+            self.energies_ev = e64.clone()
+        elif self.energies_ev is not None:
+            self.energies_ev[index.cpu()] = e64
         f = out["forces"].detach().reshape(b, n, 3)
         q = out.get("charges")
         q = None if q is None else q.detach().reshape(b, n)
