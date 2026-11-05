@@ -11,14 +11,15 @@ Mac: quantabench-cli grid build --file pfas.csv --method gfn2-xtb --machines btm
         |--- HTTP/JSON over Tailscale ---> btm-nova worker -> ~/SyncThing/QuantaBench/Runs/<date>_<label>_btm-nova
         |--- in this process ------------> local share     -> ~/SyncThing/QuantaBench/Runs/<date>_<label>_<mac>
         '-- when all are done: summary.csv + descriptors.csv in Runs/<date>_grid_<label>/
-            (a worker's run folder that has synced here is read in place; otherwise it is downloaded as a zip)
+            (a worker's run folder that has synced here completely is read in place; otherwise it is
+             downloaded as a zip)
 ```
 
 ## What is shared, and what is not
 
 | Where | What |
 |---|---|
-| `~/SyncThing/QuantaBench/Settings/settings.json` (synced) | `dist.worker_token` (the shared secret), `dist.worker_port`, `dist.worker_bind`, `dist.workers` (name -> URL overrides) |
+| `~/SyncThing/QuantaBench/Settings/settings.json` (synced) | `dist.worker_token` (the shared secret), `dist.worker_port`, `dist.worker_bind`, `dist.workers` (name -> URL overrides), `dist.machine_lanes` (each machine's own lane spec, by machine name) and `dist.lanes` (the default for a machine without one) |
 | `~/SyncThing/QuantaBench/Settings/machines/<name>.json` (synced) | each machine's profile; a running worker writes its URL into `address`, which is how `grid` finds it |
 | `~/SyncThing/QuantaBench/Runs/` (synced) | run folders. Each one has a single writer: the worker that runs it |
 | Per-machine state folder (not synced) | the worker's job list and queued inputs: `%LOCALAPPDATA%\QuantaBench\worker` on Windows, `~/Library/Application Support/QuantaBench/worker` on macOS (`--state-dir` to change) |
@@ -57,9 +58,28 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
   is done (with `--wait`, until everything is done and merged). Ctrl+C stops following; remote shares keep
   running (`grid status`, then `grid merge`).
 - A worker runs one job at a time (`--max-jobs`) and each job through `jobs.run_resumable`, so `--lanes` (or
-  `settings.dist.lanes`) spreads one job over this machine's GPU and CPU lanes.
-- Stopping a worker with Ctrl+C, Ctrl+Break or SIGTERM stops its job after the current molecule; a killed or
-  crashed worker loses only the molecule in progress. Either way the next start resumes its unfinished jobs.
+  this machine's lane spec from the settings) spreads one job over this machine's GPU and CPU lanes. The
+  settings file is shared, so each machine keeps its own spec in `dist.machine_lanes` (Settings > Compute >
+  Parallel lanes saves this machine's entry; `build`, the GUI, the worker and the local share of `grid build`
+  all read it). A spec from the settings that does not fit this machine (a GPU lane on the Mac) is logged and
+  the job runs in one lane; an explicit `--lanes` that does not fit is an error.
+- **Molecule ids** that differ only in letter case (`c1ccccc1` and `C1CCCCC1`, ids made from SMILES) would
+  share one folder on Windows and macOS: the list is renamed `..._2` before it is split, and a worker refuses
+  such a pair.
+- `grid build` warns when a worker runs another git commit than this machine (the version number does not
+  change with every commit), and records each machine's commit in `grid.json`.
+- Stopping a worker with Ctrl+C, Ctrl+Break or SIGTERM stops its job after the current molecule (it waits up
+  to a minute, then exits); a killed or crashed worker loses only the molecule in progress. Either way the next
+  start resumes its unfinished jobs, except those cancelled before it stopped. The job list is written with
+  fsync, followed by a backup copy (`jobs.json.bak`), so a power cut cannot lose both.
+- **Following and merging.** A worker that answers a status request with a 4xx (it does not know the job,
+  or the token changed) marks that share `lost` and `grid build --wait` stops waiting for it; an unreachable
+  worker is waited for. A share that cannot be collected is reported and left out of the merge
+  (its molecules are listed as missing) instead of stopping it. `grid merge --partial` merges what is
+  finished so far, reading unfinished shares from the synced copy of their run folder (from a private copy
+  of its job table, so nothing is written into another machine's folder). A share run by `local` on the
+  other machine is found in the synced output folder. Molecules that crashed their worker process twice have
+  no summary row; `grid.json` lists them in `failed_without_result`.
 
 ## API (version 1)
 
@@ -72,7 +92,7 @@ Every request needs `Authorization: Bearer <settings.dist.worker_token>`.
 | `POST /v1/jobs` | body `{inputs: [jobs.input_to_json(...)], config: {BuildConfig fields}, label, chunk?, lanes?, client?, allow_version_mismatch?}`; header `X-QuantaBench-Version`. 201 `{id, job}` |
 | `GET /v1/jobs/<id>?tail=20` | state (`queued`, `running`, `done`, `failed`, `cancelled`, `interrupted`), counts from the run folder's job table, `run_dir`, `run_folder`, progress, log tail |
 | `POST /v1/jobs/<id>/cancel` | a queued job is dropped; a running one stops after the current molecule (its run folder stays resumable) |
-| `GET /v1/jobs/<id>/archive` | zip stream of the run folder (finished jobs; 409 while running) |
+| `GET /v1/jobs/<id>/archive` | zip stream of the run folder (finished jobs; 409 while running); its last member, `<run folder>/.qb-archive.json`, lists every other member and its size |
 | `POST /v1/pause` `{"paused": true}` | running jobs finish, new ones wait (keeps the machine responsive) |
 
 `chunk` is `{"index": i}` for a share the client already split (recorded only), `{"index": i, "count": n}`
@@ -93,9 +113,21 @@ still running), 411/413/415 (body).
   `qm_method` and `solvent` go through their parsers, `formats` from the export list); `output_dir` is always
   the worker's own; labels and molecule ids must be single folder-safe names (no separators, `..`, or Windows
   device names); unknown fields anywhere are refused.
+- The client checks **every connection** before it writes the Authorization header: the address it connects
+  to must be loopback or Tailscale, and for a Tailscale address this machine's end of the connection must be a
+  Tailscale address too. 100.64.0.0/10 is also carrier-grade NAT space: with Tailscale stopped or not yet
+  reconnected on the Mac, a connection to `100.x` would leave through the café's Wi-Fi, and it is refused
+  ("Tailscale is not connected on this machine"; `--allow-any-host` does not change that).
 - The client never uses a proxy and never follows redirects (urllib would forward the Authorization header).
   Downloaded archives are extracted only after every member path is checked (no absolute paths, `..`, drive
-  letters or links).
+  letters or links), the archive holds the job's own run folder, and it ends with the worker's manifest
+  listing exactly the other members: a stream that failed or was cut off is refused, not merged short. A
+  machine name a worker reports must be a single folder name (it names `parts/<machine>/`).
+- A synced run folder is read in place only when the job has ended and its `worker.json` (written last, after
+  the tables) lists the size and SHA-256 of `summary.csv` and `descriptors.csv` and the copies here match:
+  SyncThing brings files in any order. SyncThing's temporary files never go into an archive.
+- A settings file that exists but cannot be read stops the worker (`cannot read ... settings.json`) rather than
+  being replaced by defaults and a new token.
 - On Windows the socket uses `SO_EXCLUSIVEADDRUSE`, so no other program can bind the same port.
 
 ## Setup on BTM NOVA (Windows 11)
@@ -142,7 +174,18 @@ still running), 411/413/415 (body).
    `-ExecutionTimeLimit 0` matters: the default (3 days) would end the worker. Stop and start it with
    `Stop-ScheduledTask "QuantaBench worker"` / `Start-ScheduledTask "QuantaBench worker"`; remove it with
    `Unregister-ScheduledTask "QuantaBench worker"`. Stopping the task ends the process at once; the molecule in
-   progress is redone on the next start. While a job runs the worker asks Windows not to sleep.
+   progress is redone on the next start (the worker's lock records its process start time, so a stale lock
+   whose process id now belongs to another program does not block the next start). While a job runs the
+   worker asks Windows not to sleep.
+
+   **Restarts are not verified.** Task Scheduler's restart settings (`-RestartCount`, `-RestartInterval`) are
+   documented for a task that *fails*, and it is not clear (not tested on NOVA) that a worker exiting with an
+   error code, or crashing, counts as that. The worker itself retries what is most likely at login: it waits
+   `--tailscale-wait` (120 s) for Tailscale's address and then for the address to be usable. To check, after a
+   reboot or a crash: `Get-ScheduledTaskInfo "QuantaBench worker"` (`LastTaskResult` 267009 = 0x41301 while it runs,
+   2 for a start the worker refused; the reason is at the end of `%LOCALAPPDATA%\QuantaBench\worker.log`) and
+   `quantabench-cli grid machines` from the Mac. If it does not come back by itself, start it with
+   `Start-ScheduledTask "QuantaBench worker"`.
 
 ## Setup on the MacBook (macOS, Apple Silicon)
 
@@ -205,8 +248,8 @@ version (`--allow-version-mismatch` on either side overrides).
 ## Limits
 
 - One lane (the default) runs molecules in the worker process: a segfault in a native library ends the worker.
-  The autostart above restarts it, and `jobs.py` marks a molecule failed after it has crashed the process
-  twice. Several lanes (`--lanes`, see `dist.lanes`) run molecules in child processes.
+  launchd restarts it on the Mac; on Windows the Task Scheduler restart is unverified (see the setup section),
+  so check `grid machines`. `jobs.py` marks a molecule failed after it has crashed the process twice. Several lanes (`--lanes`, see `dist.lanes`) run molecules in child processes.
 - No work stealing: each share stays on the machine it was given to. If a machine is slower than its weight
   says, the others finish first and wait; measured throughput (`--weights auto`) keeps that small.
 - The archive of a large run folder (cubes, trajectories) is a large download; prefer the synced folder.
