@@ -387,6 +387,79 @@ def read_table(path: str | Path, smiles_col: str | None = None, id_col: str | No
     raise ValueError(f"Not a table file: {path.name} (expected {', '.join(sorted(TABLE_TYPES))})")
 
 
+SDF_ID_PROPERTIES = ("DTXSID", "ID")
+
+
+def _sdf_failure(supplier: Chem.SDMolSupplier, index: int) -> tuple[str, str]:
+    """(title, reason) for SD record ``index`` (0-based) that RDKit could not read."""
+    try:
+        text = supplier.GetItemText(index)
+    except Exception:  # noqa: BLE001
+        return "", "RDKit could not read the record"
+    title = text.split("\n", 1)[0].strip()
+    with rdBase.BlockLogs():
+        raw = Chem.MolFromMolBlock(text, sanitize=False, removeHs=False)
+        if raw is None:
+            return title, "unreadable connection table"
+        try:
+            Chem.SanitizeMol(raw)
+        except Exception as exc:  # noqa: BLE001 - RDKit's message is the reason
+            return title, str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+    return title, "RDKit could not read the record"
+
+
+def read_sdf(path: str | Path, id_col: str | None = None,
+             log: Callable[[str], None] | None = None) -> list[MoleculeInput]:
+    """Read every record of an SD file as a ``MoleculeInput`` (3D coordinates, explicit H and charges kept).
+
+    The id is the SD property ``id_col`` when given (matched ignoring case, e.g. ``CAS_RN``), else DTXSID or
+    ID, else the title line, else ``<stem>_<record>``; ``name`` is the title. Records RDKit cannot read are
+    skipped and reported through ``log`` with their record number, title and RDKit's reason, and so are
+    records without the ``id_col`` property (they fall back to the title). Ids are made unique
+    (``dedupe_ids``), as for tables."""
+    path = Path(path)
+    out: list[MoleculeInput] = []
+    skipped: list[str] = []
+    no_id: list[str] = []
+    with rdBase.BlockLogs():   # the reasons are collected per record below, not printed by RDKit
+        supplier = Chem.SDMolSupplier(str(path), removeHs=False)
+        mols = list(supplier)
+    for i, mol in enumerate(mols, 1):
+        if mol is None:
+            title, why = _sdf_failure(supplier, i - 1)
+            skipped.append(f"record {i}{' (' + title + ')' if title else ''}: {why}")
+            continue
+        title = mol.GetProp("_Name").strip() if mol.HasProp("_Name") else ""
+        props = mol.GetPropsAsDict()
+        ident = ""
+        if id_col:
+            lower = {k.lower(): k for k in props}
+            key = lower.get(id_col.strip().lower())
+            ident = str(props[key]).strip() if key is not None else ""
+            if not ident:
+                no_id.append(f"record {i}{' (' + title + ')' if title else ''}")
+        ident = (ident or next((str(props[k]).strip() for k in SDF_ID_PROPERTIES if str(props.get(k, "")).strip()), "")
+                 or title or f"{path.stem}_{i}")
+        with rdBase.BlockLogs():   # "not removing hydrogen atom without neighbors" for H- fragments
+            smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+        out.append(MoleculeInput(id=safe_id(ident, fallback=f"{path.stem}_{i}"), name=title or ident,
+                                 source=f"{path.name}#{i}", mol=mol, smiles=smiles,
+                                 meta={k: str(v) for k, v in props.items()}))
+    warnings: list[str] = []
+    if skipped:
+        warnings.append(f"{path.name}: skipped {len(skipped)} record(s) RDKit cannot read: " + "; ".join(skipped[:10])
+                        + (f" (and {len(skipped) - 10} more)" if len(skipped) > 10 else ""))
+    if no_id:
+        warnings.append(f"{path.name}: {len(no_id)} record(s) have no {id_col} property; used the title: "
+                        + ", ".join(no_id[:10]) + (", ..." if len(no_id) > 10 else ""))
+    out = dedupe_ids(out, warnings)
+    for w in warnings:
+        (log or _log.warning)(w)
+    if skipped and not out:
+        raise ValueError(f"No molecule could be read from {path.name}: " + "; ".join(skipped[:5]))
+    return out
+
+
 def read_file(path: str | Path, smiles_col: str | None = None, id_col: str | None = None,
               charge: int = 0, sheet: str | int | None = None,
               smiles_preference: str | Sequence[str] | None = None,
@@ -402,17 +475,7 @@ def read_file(path: str | Path, smiles_col: str | None = None, id_col: str | Non
     if ext in (".smi", ".smiles", ".txt"):
         return parse_text(path.read_text(encoding="utf-8"), skip_errors=True, log=log, source=path.name)
     if ext == ".sdf":
-        out = []
-        for i, mol in enumerate(Chem.SDMolSupplier(str(path), removeHs=False), 1):
-            if mol is None:
-                continue
-            props = mol.GetPropsAsDict()
-            ident = (props.get("DTXSID") or props.get("ID") or (mol.GetProp("_Name") if mol.HasProp("_Name") else "")
-                     or f"{path.stem}_{i}")
-            out.append(MoleculeInput(id=safe_id(str(ident)), name=str(ident), source=f"{path.name}#{i}", mol=mol,
-                                     smiles=Chem.MolToSmiles(Chem.RemoveHs(mol)),
-                                     meta={k: str(v) for k, v in props.items()}))
-        return out
+        return read_sdf(path, id_col=id_col, log=log)
     if ext == ".mol":
         mol = Chem.MolFromMolFile(str(path), removeHs=False)
     elif ext == ".pdb":

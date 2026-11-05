@@ -42,6 +42,56 @@ def test_safe_id():
     assert inputs.safe_id("8:2 FTOH / test") == "8_2_FTOH_test"
 
 
+def _sdf(path, records):
+    """records: (title, SMILES or None for a broken record, {property: value})."""
+    from rdkit import Chem
+
+    blocks = []
+    for title, smi, props in records:
+        if smi is None:   # a five-valent carbon: the connection table reads, sanitization fails
+            m = Chem.MolFromSmiles("C(C)(C)(C)(C)C", sanitize=False)
+            block = Chem.MolToMolBlock(m, kekulize=False)
+        else:
+            block = Chem.MolToMolBlock(Chem.MolFromSmiles(smi))
+        block = title + block[block.index("\n"):]
+        blocks.append(block + "".join(f">  <{k}>\n{v}\n\n" for k, v in props.items()) + "$$$$\n")
+    path.write_text("".join(blocks))
+    return path
+
+
+def test_sdf_titles_are_ids_and_bad_records_are_reported(tmp_path):
+    """CAS-number titles become ids unchanged; a record RDKit cannot read is reported with its record number,
+    title and reason (it used to vanish without a word); a repeated title gets a suffix."""
+    path = _sdf(tmp_path / "set.sdf", [("335-67-1", "OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F", {}),
+                                       ("75-07-0", None, {}),
+                                       ("2706-90-3", "OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F", {}),
+                                       ("2706-90-3", "OC(=O)C(F)(F)C(F)(F)C(F)(F)F", {})])
+    seen = []
+    items = inputs.read_file(path, log=seen.append)
+    assert [i.id for i in items] == ["335-67-1", "2706-90-3", "2706-90-3_2"]
+    assert items[0].name == "335-67-1" and items[0].source == "set.sdf#1"
+    assert any("record 2 (75-07-0)" in w and "valence" in w.lower() for w in seen), seen
+    assert any("Duplicate id '2706-90-3'" in w for w in seen)
+
+
+def test_sdf_id_property(tmp_path):
+    """--id-col names an SD property for SD files too (it was ignored); records without it keep the title."""
+    path = _sdf(tmp_path / "set.sdf", [("Trifluoroacetic acid", "OC(=O)C(F)(F)F", {"CAS_RN": "76-05-1"}),
+                                       ("Acetic acid", "CC(=O)O", {})])
+    seen = []
+    items = inputs.read_file(path, id_col="cas_rn", log=seen.append)
+    assert [i.id for i in items] == ["76-05-1", "Acetic_acid"]
+    assert items[0].name == "Trifluoroacetic acid" and items[0].meta["CAS_RN"] == "76-05-1"
+    assert any("1 record(s) have no cas_rn property" in w for w in seen)
+
+
+def test_sdf_with_hydride_fragment_reads_quietly(tmp_path, capfd):
+    path = _sdf(tmp_path / "h.sdf", [("hydride salt", "[H-].[Na+]", {})])
+    capfd.readouterr()           # writing the test file warns too
+    assert len(inputs.read_file(path)) == 1
+    assert "not removing hydrogen" not in capfd.readouterr().err
+
+
 def test_all_letter_smiles_are_not_sent_to_pubchem():
     from quantabench.chem.inputs import looks_like_smiles
 
