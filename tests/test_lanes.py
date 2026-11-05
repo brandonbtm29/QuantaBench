@@ -2,9 +2,12 @@
 
 Spawned lane processes take a second or two to start, so each test starts as few pools as it can."""
 
+import contextlib
 import csv
 import os
+import shutil
 import sqlite3
+import time
 
 import psutil
 import pytest
@@ -124,9 +127,17 @@ def test_auto_plans(cores, monkeypatch):
     assert mmff == [Lane(f"cpu{i}", "cpu", 1) for i in range(1, 13)]             # lanes = physical cores
     cpu_xtb = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12, gpu="off"), nova)[0]
     assert cpu_xtb == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
-    gpu_xtb, reason = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=0), nova)
-    assert gpu_xtb[0] == Lane("gpu0", "cuda:0", 4) and {x.threads for x in gpu_xtb[1:]} == {2}
-    assert len(gpu_xtb) == 5 and "GPU lane" in reason       # 4 GPU-lane threads + 4 x 2 on the other 8 cores
+    # a GPU-capable engine gets one GPU lane + CPU lanes on the rest
+    gpu_ml, reason = L.plan_auto(pipeline.BuildConfig(method="aimnet2", threads=0), nova)
+    assert gpu_ml[0] == Lane("gpu0", "cuda:0", 4) and {x.threads for x in gpu_ml[1:]} == {2}
+    assert len(gpu_ml) == 5 and "GPU lane" in reason        # 4 GPU-lane threads + 4 x 2 on the other 8 cores
+    # dxtb never mixes a float32 GPU lane with float64 CPU lanes: CPU lanes, or with dxtb GPU = on one GPU lane
+    gpu_xtb, reason = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), nova)
+    assert gpu_xtb == cpu_xtb and "one precision per run" in reason
+    on, reason = L.plan_auto(pipeline.BuildConfig(method="gfn2-xtb", threads=12, dxtb_gpu="on"), nova)
+    assert on == [Lane("main", "auto", 12)] and "same precision" in reason
+    pm_xtb = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), nova, parallel_molecules=3)[0]
+    assert {x.device for x in pm_xtb} == {"cpu"}
     monkeypatch.setattr(L, "gpu_linalg_available", lambda: False)    # AMD's Windows ROCm wheels: no MAGMA
     no_linalg, reason = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), nova)
     assert no_linalg == cpu_xtb and "linear algebra" in reason
@@ -148,6 +159,22 @@ def test_auto_plans(cores, monkeypatch):
     # the settings dialog's text never raises and does not import torch for the GPU
     assert L.plan_text("gpu:1x4", pipeline.BuildConfig(threads=12)).startswith("Not usable here")
     assert "6 CPU lanes" in L.plan_text("6", pipeline.BuildConfig(threads=12))
+
+
+def test_windows_caps_lanes_at_31(monkeypatch):
+    """Windows waits on at most 63 handles and a pool waits on two per lane: 32+ lanes would fail every wait."""
+    monkeypatch.setattr(resources, "logical_cores", lambda: 64)
+    monkeypatch.setattr(resources, "physical_cores", lambda: 64)
+    c = pipeline.BuildConfig(method="mmff", threads=64)
+    assert len(L.parse_lanes("40", c)) == 40 and L.max_lanes() is None
+    monkeypatch.setattr(L, "_platform", lambda: "win32")
+    assert L.max_lanes() == 31 and len(L.parse_lanes("31", c)) == 31
+    for spec in ("32", "cpu:40x1"):
+        with pytest.raises(ValueError, match="31 one process can run on Windows"):
+            L.parse_lanes(spec, c)
+    lanes, reason = L.plan_auto(c, report(physical=64, logical=64))
+    assert len(lanes) == 31 and "capped at 31 lanes" in reason
+    assert len(L.plan_auto(c, report(physical=64, logical=64), parallel_molecules=50)[0]) == 31
 
 
 # ------------------------------------------------------------------------------------ parallel runs
@@ -197,6 +224,136 @@ def test_lane_crash_is_counted_and_the_run_goes_on(tmp_path, monkeypatch):
     monkeypatch.delenv(L.TEST_CRASH_ENV)
     jobs.run_resumable(None, c, out, retry_failed=True)
     assert jobs.open_run(out).counts["ok"] == 4
+
+
+def test_callback_errors_stop_the_run_instead_of_counting_crashes(tmp_path):
+    """An OSError from a callback (print to a closed pipe, a full disk under the worker's job log) is not a
+    lane death: it ends the run like in the single-process loop, with no crash counted and no lane left."""
+    c = cfg(tmp_path)
+
+    def log(msg):
+        if msg.startswith("[cpu") and "MMFF94s" in msg:
+            raise BrokenPipeError(32, "Broken pipe")
+
+    run_dir = tmp_path / "run"
+    with pytest.raises(BrokenPipeError):
+        jobs.run_resumable(inputs(), c, run_dir, log=log, lanes=L.parse_lanes("2", c))
+    assert lane_processes() == []
+    with sqlite3.connect(run_dir / jobs.DB_NAME) as con:
+        assert con.execute("SELECT MAX(crashes) FROM molecules").fetchone()[0] == 0
+        assert con.execute("SELECT COUNT(*) FROM molecules WHERE status IN ('failed', 'running')").fetchone()[0] == 0
+    results, _ = jobs.run_resumable(None, c, run_dir, lanes=L.parse_lanes("2", c))
+    assert jobs.open_run(run_dir).counts["ok"] == 4 and lane_processes() == []
+
+
+def test_lane_dead_while_idle_costs_no_crash(tmp_path, monkeypatch):
+    """A molecule handed to a lane that already died (the send fails) goes back to the queue uncounted."""
+    started = []
+    real_start = L.LanePool.start
+
+    class DeadOnSend:
+        def __init__(self, conn, proc):
+            self._conn, self._proc = conn, proc
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def send(self, obj):
+            if obj is not None:
+                self._proc.kill()
+                self._proc.join(5)
+                raise BrokenPipeError(32, "Broken pipe")
+            return self._conn.send(obj)
+
+    def start(self, w):
+        real_start(self, w)
+        if w.lane.name == "cpu1" and not started:
+            started.append(w.lane.name)
+            w.conn = DeadOnSend(w.conn, w.proc)
+
+    monkeypatch.setattr(L.LanePool, "start", start)
+    c = cfg(tmp_path)
+    logs = []
+    results, out = jobs.run_resumable(inputs(), c, tmp_path / "run", log=logs.append, lanes=L.parse_lanes("2", c))
+    assert started and all(r.status == "ok" for r in results) and len(results) == 4
+    assert any("lane died while idle" in m for m in logs)
+    with sqlite3.connect(out / jobs.DB_NAME) as con:
+        assert con.execute("SELECT MAX(crashes) FROM molecules").fetchone()[0] == 0
+    assert lane_processes() == []
+
+
+def _lane_that_dies_running_a_program(folder, marker):
+    """A lane stand-in: starts an external program through run_program, then dies (segfault/OOM kill)."""
+    import threading
+    import time
+
+    from quantabench.chem import external
+
+    external.set_program_registry(folder)
+    threading.Thread(target=lambda: external.run_program(["sleep", marker], folder, check=False),
+                     daemon=True).start()
+    time.sleep(1.5)
+    os._exit(86)
+
+
+def program_pids(marker):
+    out = []
+    for p in psutil.process_iter(["cmdline"]):
+        with contextlib.suppress(psutil.Error):
+            if p.info["cmdline"] and marker in p.info["cmdline"] and "sleep" in " ".join(p.info["cmdline"]):
+                out.append(p.pid)
+    return out
+
+
+@pytest.mark.skipif(os.name == "nt" or not shutil.which("sleep"), reason="needs a POSIX sleep program")
+def test_programs_of_a_dead_lane_are_killed(tmp_path):
+    """External programs run in their own session and outlived a lane that died; the recorded ones are
+    killed by the parent, records removed; a pid that now belongs to another process is left alone."""
+    import multiprocessing
+
+    marker = "41.25"
+    folder = tmp_path / "programs"
+    proc = multiprocessing.get_context("spawn").Process(target=_lane_that_dies_running_a_program,
+                                                        args=(str(folder), marker), daemon=True)
+    proc.start()
+    proc.join(20)
+    assert proc.exitcode == 86
+    assert program_pids(marker) and len(list(folder.glob("*.json"))) == 1     # orphaned, and recorded
+    from quantabench.chem import external
+
+    assert external.kill_recorded_programs(folder) == 1
+    deadline = time.monotonic() + 5
+    while program_pids(marker) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert program_pids(marker) == [] and list(folder.glob("*.json")) == []
+    # a program that ended normally leaves no record; a stale record of a reused pid kills nothing
+    external.set_program_registry(folder)
+    try:
+        external.run_program(["true"], tmp_path, check=False)
+    finally:
+        external.set_program_registry(None)
+    assert list(folder.glob("*.json")) == []
+    (folder / "1.json").write_text('{"pid": 1, "started": 12345.0}')
+    assert external.kill_recorded_programs(folder) == 0 and psutil.pid_exists(1)
+
+
+def test_lane_death_kills_its_recorded_programs(tmp_path, monkeypatch):
+    """lane_died asks the pool to kill what the dead lane recorded (and close() does for every lane)."""
+    monkeypatch.setenv(L.TEST_CRASH_ENV, "acetic_acid")
+    killed, dirs = [], set()
+    real = L.LanePool.kill_programs
+
+    def spy(self, w):
+        killed.append(w.lane.name)
+        dirs.add(self.programs_dir)
+        assert self.programs_of(w).parent == self.programs_dir
+        return real(self, w)
+
+    monkeypatch.setattr(L.LanePool, "kill_programs", spy)
+    c = cfg(tmp_path)
+    jobs.run_resumable(inputs(), c, tmp_path / "run", lanes=L.parse_lanes("2", c))
+    assert len(killed) >= jobs.MAX_CRASHES + 2          # each death, then every lane at close
+    assert len(dirs) == 1 and not next(iter(dirs)).exists()              # the records folder is removed
 
 
 def test_cancel_reaches_running_lanes_and_leaves_no_processes(tmp_path):

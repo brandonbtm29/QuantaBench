@@ -23,6 +23,7 @@ through WSL (where ``cwd`` is translated to ``/mnt/c/...``).
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -496,6 +497,104 @@ def _kill_tree(proc: subprocess.Popen, cwd: Path | None = None, via_wsl: bool = 
         proc.wait(10)
 
 
+# ------------------------------------------------------------------------- programs a dead process left
+#: Folder where ``run_program`` records each program it starts (``<pid>.json``, removed when the program
+#: ends), set by a supervised process (a ``dist.lanes`` lane). A program runs in its own session/process
+#: group, so it outlives a process that is killed or dies while waiting on it; the supervisor then kills
+#: what is recorded (``kill_recorded_programs``). None (the default): nothing is recorded.
+_program_registry: Path | None = None
+
+
+def set_program_registry(folder: str | Path | None) -> None:
+    global _program_registry
+    _program_registry = Path(folder) if folder else None
+
+
+def _record_program(proc: subprocess.Popen, cwd: Path, via_wsl: bool, shown: Sequence[str]) -> Path | None:
+    if _program_registry is None:
+        return None
+    try:
+        import psutil
+
+        started = psutil.Process(proc.pid).create_time()
+    except Exception:  # noqa: BLE001 - already gone, or no access: the pid alone is still worth recording
+        started = 0.0
+    path = _program_registry / f"{proc.pid}.json"
+    tmp = _program_registry / f".{proc.pid}.tmp"
+    try:
+        _program_registry.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps({"pid": proc.pid, "started": started, "cwd": str(cwd), "via_wsl": via_wsl,
+                                   "cmd": [str(c) for c in shown[:3]]}), encoding="utf-8")
+        os.replace(tmp, path)            # never a half-written record
+    except OSError:
+        return None
+    return path
+
+
+def _kill_recorded(info: dict) -> bool:
+    """Kill one recorded program and its children. Returns whether something was (still) running."""
+    import psutil
+
+    pid = int(info.get("pid", 0))
+    if pid <= 0:
+        return False
+    cwd = Path(str(info.get("cwd", "")))
+    if info.get("via_wsl") and IS_WINDOWS:
+        _kill_wsl_side(cwd)              # wsl.exe going away does not stop the Linux side
+    try:
+        same = abs(psutil.Process(pid).create_time() - float(info.get("started") or 0.0)) < 1.0
+        alive = True
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        alive, same = False, False
+    except psutil.AccessDenied:
+        alive, same = True, False
+    if alive and not same:
+        return False                     # the pid now belongs to an unrelated process
+    if IS_WINDOWS:
+        if not alive:
+            return False
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True,
+                           creationflags=_NO_WINDOW, timeout=20)
+        return True
+    # POSIX: the program leads its own process group (start_new_session); the group can outlive its leader
+    hit = False
+    for sig, wait in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 0.0)):
+        try:
+            os.killpg(pid, sig)
+            hit = True
+        except (ProcessLookupError, PermissionError):
+            break
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < wait:
+            try:
+                os.killpg(pid, 0)
+            except (ProcessLookupError, PermissionError):
+                return hit
+            time.sleep(0.05)
+    return hit
+
+
+def kill_recorded_programs(folder: str | Path) -> int:
+    """Kill every program recorded in ``folder`` (by a process that can no longer clean up after itself)
+    and remove the records. Returns the number of programs that were still running."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return 0
+    n = 0
+    for path in sorted(folder.glob("*.json")):
+        try:
+            info = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            info = None
+        if isinstance(info, dict):
+            with contextlib.suppress(Exception):
+                n += bool(_kill_recorded(info))
+        with contextlib.suppress(OSError):
+            path.unlink()
+    return n
+
+
 def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: dict[str, str] | None = None,
                 stdin_text: str | None = None, timeout: float | None = None, log_name: str = "program.log",
                 should_stop: Callable[[], bool] | None = None, log: Callable[[str], None] | None = None,
@@ -539,13 +638,14 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
             proc = subprocess.Popen(cmd, **kwargs)
         except OSError as exc:
             raise ExternalProgramError(f"could not start {shown[0]}: {exc}") from exc
-        if stdin_text is not None:
-            try:
-                proc.stdin.write(stdin_text.encode())
-                proc.stdin.close()
-            except OSError:
-                pass
+        record = _record_program(proc, cwd, via_wsl, shown)
         try:
+            if stdin_text is not None:
+                try:
+                    proc.stdin.write(stdin_text.encode())
+                    proc.stdin.close()
+                except OSError:
+                    pass
             while True:
                 try:
                     proc.wait(poll_s)
@@ -564,6 +664,10 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
             # should_stop/log: never leave the program running.
             _kill_tree(proc, cwd, via_wsl)
             raise
+        finally:
+            if record is not None:
+                with contextlib.suppress(OSError):
+                    record.unlink()
     run = ProgramRun(proc.returncode, time.perf_counter() - t0, log_file)
     if check and run.returncode != 0:
         raise ExternalProgramError(f"{' '.join(shown[:3])} exited with code {run.returncode}\n{run.tail()}")
