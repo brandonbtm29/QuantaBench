@@ -239,6 +239,45 @@ def test_open_run_folder_select_search_and_resume(tmp_path, template, monkeypatc
 
 
 @needs_display
+def test_one_3d_render_per_selection(tmp_path, template):
+    """Selecting a molecule rebuilds the 3D scene, clears the atom selection and lets panels add actors, each
+    asking for a render; they share one (~65-150 ms each under software OpenGL). No idle re-renders either."""
+    from quantabench import settings as sm
+    from quantabench.gui.main_window import MainWindow
+
+    run = tmp_path / "run"
+    _run_folder(run, template, n=8, pending=(), failed=())
+    app = _app()
+    w = MainWindow(sm.Settings(output_dir=str(tmp_path / "out")))
+    try:
+        w.show()
+        w.open_run_folder(folder=str(run))
+        assert _wait(app, lambda: w.current_result() is not None)
+        if w.viewer.plotter is None:
+            pytest.skip(w.viewer.error)
+        calls = []
+        real = w.viewer.plotter.render
+        w.viewer.plotter.render = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+        _wait(app, lambda: False, 0.5)
+        assert calls == []                                       # idle: nothing re-renders on a timer
+        for i in (2, 5, 1, 6):
+            before = len(calls)
+            w.mol_list.setCurrentRow(i)
+            ident = w.mol_list.current_id()
+            assert _wait(app, lambda ident=ident: w.current_result() is not None
+                         and w.current_result().input.id == ident)
+            _wait(app, lambda: False, 0.3)
+            assert len(calls) - before == 1, f"{len(calls) - before} renders for one selection"
+            assert w.viewer.atoms is not None and len(w.viewer.atoms) == template.mol.GetNumAtoms()
+        before = len(calls)
+        w.conf_table.setCurrentCell(min(1, w.conf_table.rowCount() - 1), 0)   # another conformer: one more
+        _wait(app, lambda: False, 0.3)
+        assert len(calls) - before <= 1
+    finally:
+        _close(app, w)
+
+
+@needs_display
 def test_gui_batch_keeps_summary_rows_not_results(tmp_path, monkeypatch):
     """A batch's finished molecules become rows; only the selected molecule's full result stays in memory."""
     from PySide6.QtWidgets import QMessageBox
