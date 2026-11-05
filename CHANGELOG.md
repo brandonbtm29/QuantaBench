@@ -2,6 +2,27 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Review fixes for lanes, weighted splits and GPU paths (0.3.0.dev1, 2026-11-05)
+- **Named `--chunk-weights` are a mapping**: `a=3,b=1` and `b=1,a=3` give the same split (chunks are the
+  names sorted; this machine's is found by name). In typed order, two machines could overlap and leave a
+  quarter of a list out.
+- **`--chunk-weights auto` is resolved once per list**: the first machine stores the split in
+  `<settings>/machines/splits/`, the others reuse it even after a re-benchmark (SyncThing conflict copies:
+  the oldest wins, with a warning).
+- Equal weights: the printed plan, `grid build`'s split and the worker's weights filter now select exactly
+  what runs (the modulo split).
+- **Lanes**: an error raised by a callback (a closed stdout, a full disk under the job log) no longer counts
+  as a lane crash (it marked whole batches "crashed the process 2 times"); a molecule sent to a lane that
+  had just died goes back to the queue uncounted; external programs (xtb, CREST, Psi4) a dead or killed lane
+  left running are killed, `wsl:` programs on the Linux side too; at most 31 lanes on Windows.
+- `--lanes auto` never mixes a float32 dxtb GPU lane with float64 CPU lanes (CPU lanes, or one GPU lane
+  with dxtb GPU = on).
+- The aimnet neighbor-list guard is applied to the class, so lists aimnet creates later are covered too.
+  Resuming an `aimnet2`/`auto` run started before 0.3.0.dev1 is refused unless forced: its earlier AIMNet2
+  energies may carry the neighbor-list error.
+- Settings > Compute's dxtb linear-algebra and GPU modes now apply to every CLI command and GUI action, not
+  only to builds.
+
 ### Splitting work across cores, GPUs and machines; forks for Windows and macOS (2026-11-05)
 - **Lanes** (`dist.lanes`, `build --lanes auto | N | gpu:1x4,cpu:5x2`, Settings > Compute > Parallel
   lanes): a batch runs in parallel worker processes that share this machine's threads and GPU; the parent

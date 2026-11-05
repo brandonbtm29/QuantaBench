@@ -1234,8 +1234,9 @@ class MainWindow(QMainWindow):
         self.s = s
         settings_mod.save(self.s)
         resources.apply_thread_limits(self.s.resources.threads)
-        from ..chem import external
+        from ..chem import external, torch_compat
 
+        torch_compat.apply_settings(self.s, strict=False)   # dxtb linear algebra / GPU modes (Settings > Compute)
         external.clear_cache()            # program paths may have changed
         self._refresh_engine_lists()
         self._load_stage_values()

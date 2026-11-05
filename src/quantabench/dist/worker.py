@@ -410,7 +410,7 @@ def validate_job(body: dict, client_version: str = "") -> JobSpec:
     if chunk and "weights" in chunk:  # a client may send the whole list: keep this worker's share
         from . import plan
 
-        inputs = [x for x in inputs if plan.weighted_index(x.id, chunk["weights"]) == chunk["index"]]
+        inputs = [x for x in inputs if plan.assign(x.id, chunk["weights"]) == chunk["index"]]  # = build --chunk-weights
     elif chunk and "count" in chunk:  # run_resumable applies the chunk again and records it
         from ..chem import jobs
 

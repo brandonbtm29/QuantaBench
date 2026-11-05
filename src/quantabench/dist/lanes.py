@@ -36,7 +36,13 @@ How a parallel run works (``run_parallel``):
 * a lane that dies (segfault, OOM kill, ``os._exit``) is restarted. Its molecule's crash count goes up,
   exactly like a crash of the single-process loop (``JobStore.reset_interrupted``): below ``MAX_CRASHES``
   it is tried again at the end of the queue, at ``MAX_CRASHES`` it is recorded as failed ("crashed the
-  process N times") and the run goes on.
+  process N times") and the run goes on. Only a closed pipe means a lane died: an exception from a callback
+  (``log``, ``progress``, ``on_result``) or the job table stops the run like any other exception, and a
+  molecule that could not be handed to a lane (it died while idle) goes back to the queue uncounted.
+* external programs a lane starts (xtb, CREST, Psi4: own process group/session) are recorded by
+  ``external.run_program`` in a per-lane folder; when a lane dies or is killed the parent kills what it
+  left running (``LanePool.kill_programs``; on Windows with ``taskkill /T`` and, for ``wsl:`` programs, on
+  the Linux side too).
 * shutdown: lanes get an end-of-work message and are joined; on cancel the parent first waits for the
   running molecules to come back cancelled. On KeyboardInterrupt or an exception the lanes get the stop
   flag, a few seconds to stop their external programs, then are killed with their process trees; the
@@ -66,13 +72,16 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
 * external programs (an engine with ``.external``, CREST conformer search, a QM stage): 2-thread lanes on
   all threads (the programs spend part of their time in I/O and start-up).
 * a GPU-capable engine with a GPU: one GPU lane with 4 threads (RDKit embedding and the host side of the
-  batch run on the CPU) plus CPU lanes on the remaining threads by the rules above. Not for dxtb when torch
-  has no GPU linear algebra (``gpu_linalg_available``): on NOVA's ROCm wheels (no MAGMA) dxtb's cholesky
-  fails on cuda:0, the GPU lane's molecules fall back to the CPU, and 1 GPU + 4 x 2 CPU lanes took 77.4 s
-  for the 12 PFAS against 49.9 s for 6 x 2 CPU lanes. ``auto`` gives 6 x 2 CPU lanes there.
+  batch run on the CPU) plus CPU lanes on the remaining threads by the rules above. Not for dxtb (GFN1/GFN2):
+  it computes in float32 on a GPU and float64 on the CPU, and a GPU lane next to CPU lanes would mix both in
+  one table, molecule by molecule as timing decides. ``auto`` gives dxtb CPU lanes only, or with dxtb GPU =
+  on (``BuildConfig.dxtb_gpu``) one lane on the GPU. It was not faster either: on NOVA's ROCm wheels (no
+  MAGMA, ``gpu_linalg_available``) 1 GPU + 4 x 2 CPU lanes took 77.4 s for the 12 PFAS against 49.9 s for
+  6 x 2 CPU lanes.
 * lanes are capped by memory (0.75 x RAM over a per-lane working set; Psi4 adds its memory per job) and
   ``settings.resources.parallel_molecules`` (> 0) fixes the number of lanes. The plan never uses more
-  threads than ``resolve_threads(cfg.threads)``.
+  threads than ``resolve_threads(cfg.threads)``. On Windows a pool runs at most ``WINDOWS_MAX_LANES`` (31)
+  lanes: it waits on two handles per lane and Windows waits on at most 63.
 """
 
 from __future__ import annotations
@@ -80,11 +89,15 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import shutil
+import sys
+import tempfile
 import threading
 import time
 import traceback
 from collections import deque
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 #: Test hook: a lane whose molecule id is listed here (comma separated) calls ``os._exit(TEST_CRASH_EXIT)``,
 #: standing in for a segfault or OOM kill. Only tests set it.
@@ -96,6 +109,9 @@ TYPICAL_ELEMENTS = (1, 6, 7, 8, 9, 16)
 LANE_MEMORY_GB = {"mmff": 0.4, "torch": 1.2, "external": 0.6}
 GPU_LANE_THREADS = 4
 STARTUP_FAILURES = 3          # a lane that dies this often before it is ready is given up
+#: Windows waits on at most 63 handles at once (WaitForMultipleObjects) and the pool waits on two per lane
+#: (its pipe and its process), so more lanes would make every wait raise ValueError.
+WINDOWS_MAX_LANES = 31
 SHUTDOWN_GRACE_S = 5.0        # after stop: time for lanes to stop their programs before they are killed
 POLL_S = 0.1
 
@@ -108,6 +124,22 @@ class Lane:
 
     def to_dict(self) -> dict:
         return {"name": self.name, "device": self.device, "threads": self.threads}
+
+
+def _platform() -> str:
+    return sys.platform
+
+
+def max_lanes() -> int | None:
+    """Most lanes one pool can run on this OS (``WINDOWS_MAX_LANES`` on Windows), None for no limit."""
+    return WINDOWS_MAX_LANES if _platform() == "win32" else None
+
+
+def _check_lane_count(n: int, spec) -> None:
+    cap = max_lanes()
+    if cap is not None and n > cap:
+        raise ValueError(f"lane spec {spec!r}: {n} lanes is more than the {cap} one process can run on Windows "
+                         "(it waits on two handles per lane, at most 63 at once)")
 
 
 # ------------------------------------------------------------------------------------------ plans
@@ -247,14 +279,27 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0) -> tuple[list[
                        else "no usable GPU")
     elif gpu_capable:
         why_gpu = "GPU off"
-    if device.startswith("cuda") and method in GPU_LINALG_ENGINES and not gpu_linalg_available():
-        device, why_gpu = "cpu", "no GPU lane: this torch build has no GPU linear algebra (MAGMA), which dxtb needs"
+    if device != "cpu" and method in GPU_LINALG_ENGINES:
+        # dxtb computes in float32 on a GPU and in float64 on the CPU: a GPU lane next to CPU lanes would mix
+        # both in one table, molecule by molecule as timing decides. One device per run instead.
+        from ..chem.torch_compat import DXTB_GPU_ENV
+
+        if (os.environ.get(DXTB_GPU_ENV, "").strip().lower() or getattr(cfg, "dxtb_gpu", "auto")) == "on":
+            return [Lane("main", "auto", total)], (f"{method} with dxtb GPU = on: one lane on {device}, so every "
+                                                    "molecule of the run is computed in the same precision")
+        if device.startswith("cuda") and not gpu_linalg_available():
+            why_gpu = "no GPU lane: this torch build has no GPU linear algebra (MAGMA), which dxtb needs"
+        else:
+            why_gpu = ("no GPU lane: dxtb would compute its molecules in float32 next to float64 CPU lanes; "
+                       "one precision per run (dxtb GPU = on runs everything on the GPU)")
+        device = "cpu"
+    cap = max_lanes()
     per_lane_gb = LANE_MEMORY_GB[kind] + (_qm_memory_gb() if cfg.qm_method else 0.0)
     by_memory = max(1, int(float(hw.ram_gb or 0) * 0.75 / per_lane_gb)) if hw.ram_gb else total
 
     lanes: list[Lane] = []
     if parallel_molecules > 0:
-        n = max(1, min(int(parallel_molecules), total))
+        n = max(1, min(int(parallel_molecules), total, cap or total))
         per = max(1, total // n)
         if device != "cpu":
             lanes.append(Lane(_gpu_lane_name(device, 1), device, per))
@@ -279,6 +324,9 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0) -> tuple[list[
         n = max(0, min(wanted, by_memory - len(lanes)))
         if n < wanted:
             reason += f", capped by memory ({hw.ram_gb:.0f} GB)"
+        if cap is not None and n + len(lanes) > cap:
+            n = cap - len(lanes)
+            reason += f", capped at {cap} lanes (Windows)"
         if not lanes and n <= 1:
             return [Lane("main", "auto", total)], f"{reason}: room for one lane only"
         lanes += [Lane(f"cpu{i + 1}", "cpu", per) for i in range(n)]
@@ -339,6 +387,7 @@ def _explicit(text: str, cfg, report, total: int) -> list[Lane]:
     if used > logical:
         raise ValueError(f"lane spec {text!r} uses {used} threads, more than the {logical} logical cores of this "
                          "machine")
+    _check_lane_count(len(lanes), text)
     # GPU lanes first: a run with fewer molecules than lanes uses the first lanes of the list
     return sorted(lanes, key=lambda x: x.device == "cpu")
 
@@ -362,6 +411,7 @@ def parse_lanes(spec: str | int | None, cfg=None, report=None) -> list[Lane]:
         logical = int(getattr(report, "logical_cores", 0) or resources.logical_cores())
         if n > logical:
             raise ValueError(f"lane spec {spec!r}: {n} lanes is more than the {logical} logical cores of this machine")
+        _check_lane_count(n, spec)
         return [Lane(f"cpu{i + 1}", "cpu", max(1, total // n)) for i in range(n)]
     return _explicit(text, cfg, report, total)
 
@@ -462,8 +512,11 @@ def lane_device(lane: Lane, cfg, memory_fraction: float) -> str:
     return lane.device
 
 
-def _lane_main(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memory_fraction: float) -> None:
-    """Body of one lane process. Module level, so the spawn start method can import it on every OS."""
+def _lane_main(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memory_fraction: float,
+               programs_dir: str = "") -> None:
+    """Body of one lane process. Module level, so the spawn start method can import it on every OS.
+    ``programs_dir``: where ``external.run_program`` records the programs this lane starts, so the parent
+    can kill them if the lane dies before it can (``LanePool.kill_programs``)."""
     import signal
 
     with contextlib.suppress(ValueError, OSError, AttributeError):
@@ -481,7 +534,9 @@ def _lane_main(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
         from rdkit import Chem
 
         Chem.SetDefaultPickleProperties(Chem.PropertyPickleOptions.AllProps)
-        from ..chem import export, jobs, pipeline
+        from ..chem import export, external, jobs, pipeline
+
+        external.set_program_registry(programs_dir or None)
 
         cfg = pipeline.BuildConfig(**{**cfg_dict, "threads": threads})
         device = lane_device(lane, cfg, memory_fraction)
@@ -602,13 +657,16 @@ class LanePool:
             shares[x.device] = shares.get(x.device, 0) + 1
         self.fractions = {x.device: (cfg.gpu_memory_fraction or 0.0) / shares[x.device] for x in lanes}
         self.last_fatal = ""
+        # external programs each lane started (xtb, CREST, Psi4 run in their own process groups and would
+        # outlive a lane that dies or is killed): kill_programs() ends them
+        self.programs_dir = Path(tempfile.mkdtemp(prefix="qb_lane_programs_"))
 
     # -- processes
     def start(self, w: _LaneProcess) -> None:
         parent_conn, child_conn = self.ctx.Pipe(duplex=True)
         proc = self.ctx.Process(target=_lane_main, name=f"quantabench-lane-{w.lane.name}", daemon=True,
                                 args=(w.lane, self.cfg_dict, self.run_dir, child_conn, self.stop_event,
-                                      self.fractions.get(w.lane.device, 0.0)))
+                                      self.fractions.get(w.lane.device, 0.0), str(self.programs_of(w))))
         with _child_env(w.lane.threads):
             proc.start()
         child_conn.close()
@@ -634,6 +692,18 @@ class LanePool:
 
     def owner(self, conn) -> _LaneProcess | None:
         return next((w for w in self.workers if w.conn is not None and w.conn is conn), None)
+
+    def programs_of(self, w: _LaneProcess) -> Path:
+        return self.programs_dir / w.lane.name
+
+    def kill_programs(self, w: _LaneProcess) -> int:
+        """Kill the external programs lane ``w`` recorded and left running (call once it has ended)."""
+        from ..chem import external
+
+        try:
+            return external.kill_recorded_programs(self.programs_of(w))
+        except Exception:  # noqa: BLE001 - best effort, must not end the run
+            return 0
 
     def close(self, graceful: bool = True) -> None:
         """End every lane: an end-of-work message, then join. Lanes still running after the grace time (30 s,
@@ -666,6 +736,10 @@ class LanePool:
                     w.proc.close()
                 w.proc = None
             self._close_conn(w)
+            n = self.kill_programs(w)
+            if n:
+                self.log(f"[{w.lane.name}] stopped {n} external program(s) the lane left running")
+        shutil.rmtree(self.programs_dir, ignore_errors=True)
 
     @staticmethod
     def _close_conn(w: _LaneProcess) -> None:
@@ -683,7 +757,15 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     from ..chem import jobs
     from ..chem.pipeline import MoleculeResult
 
+    cap = max_lanes()
+    if cap is not None and len(lanes) > cap:
+        log(f"Lanes: {len(lanes)} requested, {cap} is the most one process can run on Windows; using the first {cap}")
+        lanes = lanes[:cap]
     log(f"Lanes: {describe(lanes)}; molecules go to whichever lane is free")
+    if cfg.method in GPU_LINALG_ENGINES and len({x.device == "cpu" for x in lanes}) == 2:
+        log(f"Note: {cfg.method} on GPU and CPU lanes: where dxtb stays on the GPU (torch_compat.dxtb_device) it "
+            "computes in float32, on the CPU lanes in float64, so one table mixes both precisions. CPU lanes "
+            "only (or one GPU lane) keep one precision per run.")
     pool = LanePool(lanes, cfg, run_dir, log)
     queue = deque((k, mol_id, inp) for k, (mol_id, inp) in enumerate(todo))
     texts = {mol_id: jobs.input_to_json(inp) for mol_id, inp in todo}
@@ -716,6 +798,9 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             with contextlib.suppress(ValueError):
                 w.proc.close()
         w.proc = None
+        left = pool.kill_programs(w)        # xtb/CREST/Psi4 runs in its own session and outlives the lane
+        if left:
+            log(f"[{w.lane.name}] stopped {left} external program(s) the lane left running")
         if w.busy is not None:
             k, mol_id, inp = w.busy
             w.busy = None
@@ -741,6 +826,20 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             log(f"[{w.lane.name}] lane died while idle (exit code {code}); restarting it")
         if not w.retired and not stopping and queue:
             pool.start(w)
+
+    def drain(w: _LaneProcess) -> bool:
+        """Handle every message waiting on ``w``'s pipe; False once the pipe is closed (the lane ended).
+        Only reading the pipe counts as the lane's failure: an exception from ``handle`` (a ``log``,
+        ``progress`` or ``on_result`` callback, the job table) propagates and stops the run."""
+        while w.conn is not None:
+            try:
+                if not w.conn.poll():
+                    return True
+                msg = w.conn.recv()
+            except (EOFError, OSError):
+                return False
+            handle(w, msg)
+        return False
 
     def handle(w: _LaneProcess, msg) -> None:
         nonlocal announced
@@ -784,13 +883,16 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                 for w in pool.workers:
                     if queue and w.ready and w.busy is None and w.conn is not None and w.alive:
                         k, mol_id, inp = queue.popleft()
-                        store.mark_running(mol_id)
-                        w.busy = (k, mol_id, inp)
-                        progress(done_before + k, total, "start", mol_id)
                         try:
                             w.conn.send((k, mol_id, texts[mol_id]))
                         except (OSError, ValueError):
-                            pass                 # the lane died: its sentinel/EOF is handled below
+                            # the lane died while idle (its end is handled below): the molecule never
+                            # reached it, so it goes back to the front of the queue without a crash
+                            queue.appendleft((k, mol_id, inp))
+                            continue
+                        w.busy = (k, mol_id, inp)
+                        store.mark_running(mol_id)
+                        progress(done_before + k, total, "start", mol_id)
             busy = any(w.busy is not None for w in pool.workers)
             if not busy and (stopping or not queue):
                 break
@@ -801,19 +903,11 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                 w = pool.owner(obj)
                 if w is None:
                     continue                      # a sentinel: handled below
-                try:
-                    while w.conn is not None and w.conn.poll():
-                        handle(w, w.conn.recv())
-                except (EOFError, OSError):
+                if not drain(w):
                     lane_died(w)
             for w in pool.workers:
                 if w.proc is not None and not w.alive:
-                    # read what the lane sent before it ended, then deal with its death
-                    try:
-                        while w.conn is not None and w.conn.poll():
-                            handle(w, w.conn.recv())
-                    except (EOFError, OSError):
-                        pass
+                    drain(w)                      # what the lane sent before it ended, then its death
                     lane_died(w)
                 elif w.proc is None and not w.retired and not stopping and queue:
                     pool.start(w)

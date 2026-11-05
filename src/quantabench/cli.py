@@ -20,7 +20,8 @@ Splitting work (``quantabench.dist``):
     quantabench-cli build --file cohort.xlsx --method gfn1-xtb --lanes auto     # parallel processes here
     quantabench-cli lanes auto                                                  # what a lane spec means here
     quantabench-cli machines [--refresh] [--bench mmff,gfn1-xtb]                # machine registry + throughput
-    quantabench-cli build --file cohort.xlsx --method mmff --chunk-weights auto # this machine's weighted share
+    quantabench-cli build --file cohort.xlsx --method mmff --chunk-weights auto # this machine's weighted share;
+        # the first machine stores the split (settings/machines/splits), the others reuse it for that list
     quantabench-cli worker                                                      # serve jobs over Tailscale
     quantabench-cli grid build --file cohort.xlsx --method gfn2-xtb --machines btm-nova,local --wait
     quantabench-cli grid status|cancel|merge GRID_ID
@@ -245,7 +246,7 @@ def _build(args) -> int:
 
         try:
             chunk, weights, warnings = plan.resolve_chunk(args.chunk_weights, chunk, cfg.method,
-                                                         profile.load_profiles())
+                                                         profile.load_profiles(), ids=[x.id for x in items])
             print(plan.chunk_plan(weights, chunk, [x.id for x in items], warnings) + "\n")
         except ValueError as exc:
             print(exc, file=sys.stderr)
@@ -691,8 +692,10 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--lanes", help="parallel worker processes on this machine: 1 (default), auto, N, or a list "
                                    "like gpu:1x4,cpu:5x2 (lanes x threads each); see docs/PLATFORMS.md")
     b.add_argument("--chunk-weights", metavar="SPEC",
-                   help="with --chunk: weighted split, e.g. 3,1 or auto (from the machine registry's "
-                        "throughput); see `quantabench-cli machines`")
+                   help="weighted split: 3,1 (with --chunk K/N), name=weight pairs in any order (chunks are "
+                        "the names sorted; this machine's is found by name), or auto (the machine registry's "
+                        "throughput, stored for the list on first use so every machine reuses the same split); "
+                        "see `quantabench-cli machines`")
     b.add_argument("--run-dir", help="run folder for the job table (created if missing; continues if present)")
     b.add_argument("--resume", metavar="RUN_DIR", help="continue an interrupted run with its stored settings")
     b.add_argument("--chunk", metavar="K/N", help="build only chunk K of N (1-based) of the list, e.g. 2/3")
@@ -781,8 +784,21 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _apply_gpu_policies() -> None:
+    """Settings > Compute's dxtb linear-algebra and GPU modes for commands that do not build a BuildConfig
+    (freq, doctor, ...); ``build`` passes them through BuildConfig as well. Bad settings never stop a command."""
+    from . import settings as settings_mod
+    from .chem import torch_compat
+
+    try:
+        torch_compat.apply_settings(settings_mod.load(), strict=False)
+    except Exception:  # noqa: BLE001, S110 - unreadable or invalid settings: keep the defaults
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _apply_gpu_policies()
     return args.func(args)
 
 

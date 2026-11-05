@@ -130,38 +130,38 @@ def choose_backend(device) -> tuple[str, str]:
     return ("torch", why) if why else ("stock", "")
 
 
-_CHECKED_NBLIST: list[type] = []
-
-
-def guard_neighbor_lists(calc) -> int:
-    """Make a stock ``AIMNet2Calculator``'s adaptive neighbor lists grow when they overflow.
+def guard_neighbor_lists(calc=None) -> bool:
+    """Make aimnet's adaptive neighbor lists grow when they overflow, for every list (class level).
 
     aimnet 0.2's ``AdaptiveNeighborList`` shrinks its buffer after small molecules (down to 16
     neighbors) and grows it again only when nvalchemiops raises ``NeighborOverflowError``. nvalchemiops
     0.5 does not raise: it returns the true neighbor counts with a truncated matrix. So once a small
     molecule has been evaluated, larger ones silently lose neighbors (0.1-0.2 eV on PFOA after water,
-    random-weight model). This re-classes the calculator's lists (in place) to check the counts and
-    retry with a larger buffer. Returns the number of lists guarded."""
-    from aimnet.calculators.calculator import AdaptiveNeighborList
+    random-weight model). This patches ``AdaptiveNeighborList.__call__`` (once per process) to check the
+    counts and retry with a larger buffer, so it also covers the lists a calculator creates later
+    (``set_lrcoulomb_method``, ``set_lr_cutoff``, ``set_dftd3_cutoff``, the automatic switch to DSF for
+    periodic input, the per-call Ewald/PME list). ``calc`` is accepted for the old call form and ignored.
+    Returns True once the class is guarded."""
+    from aimnet.calculators import calculator as aimnet_calculator
 
-    if not _CHECKED_NBLIST:
-        class CheckedAdaptiveNeighborList(AdaptiveNeighborList):
-            def __call__(self, positions, cell=None, pbc=None, batch_idx=None, fill_value=None):
-                while True:
-                    nbmat, num, shifts = super().__call__(positions, cell, pbc, batch_idx, fill_value)
-                    need = int(num.max().item()) if num.numel() else 0
-                    if need <= nbmat.shape[1]:
-                        return nbmat, num, shifts
-                    self.max_neighbors = self._round_to_16(int(need / self.target_utilization) + 1)
+    cls = aimnet_calculator.AdaptiveNeighborList
+    if getattr(cls.__call__, "qb_checked", False):
+        return True
+    unchecked = cls.__call__
 
-        _CHECKED_NBLIST.append(CheckedAdaptiveNeighborList)
-    n = 0
-    for name in ("_nblist", "_nblist_lr", "_nblist_dftd3", "_nblist_coulomb"):
-        nl = getattr(calc, name, None)
-        if type(nl) is AdaptiveNeighborList:
-            nl.__class__ = _CHECKED_NBLIST[0]
-            n += 1
-    return n
+    def checked_call(self, *args, **kwargs):
+        while True:
+            nbmat, num, shifts = unchecked(self, *args, **kwargs)
+            need = int(num.max().item()) if num.numel() else 0
+            if need <= nbmat.shape[1]:
+                return nbmat, num, shifts
+            self.max_neighbors = self._round_to_16(int(need / self.target_utilization) + 1)
+
+    checked_call.qb_checked = True              # type: ignore[attr-defined]
+    checked_call.__wrapped__ = unchecked        # type: ignore[attr-defined]
+    checked_call.__doc__ = unchecked.__doc__
+    cls.__call__ = checked_call
+    return True
 
 
 def _probe(calc) -> None:
@@ -184,11 +184,11 @@ def load_calculator(model: str = "aimnet2", device: str = "cpu"):
     if backend == "stock":
         from aimnet.calculators import AIMNet2Calculator
 
+        guard_neighbor_lists()
         try:
             calc = AIMNet2Calculator(model, device=device)
         except TypeError:  # older aimnet without the device argument
             calc = AIMNet2Calculator(model)
-        guard_neighbor_lists(calc)
         if requested_backend() == "stock":
             calc.qb_backend, calc.qb_backend_reason = "stock", why
             return calc

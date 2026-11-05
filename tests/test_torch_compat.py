@@ -503,3 +503,29 @@ def test_mps_hessian_runs_on_cpu_in_float64(monkeypatch):
     atoms = molecule("H2O")
     vib.dxtb_hessian(atoms.numbers, atoms.positions, "gfn1-xtb", device="mps")
     assert seen == {"device": "cpu", "dtype": torch.float64}
+
+
+def test_settings_reach_the_policies_at_every_entry_point(capsys):
+    """apply_settings takes a BuildConfig, ResourceSettings or Settings; the CLI applies Settings > Compute
+    for every command (freq and doctor build no BuildConfig); invalid stored values mean 'auto' there."""
+    from quantabench import cli
+    from quantabench import settings as sm
+    from quantabench.chem.pipeline import BuildConfig
+
+    tc.apply_settings(BuildConfig(linalg="cpu", dxtb_gpu="on"))
+    assert tc.current_policy() == "cpu" and tc.dxtb_gpu_mode() == "on"
+    s = sm.Settings()
+    s.resources.linalg, s.resources.dxtb_gpu = "device", "off"
+    tc.apply_settings(s.resources)
+    assert tc.current_policy() == "device" and tc.dxtb_gpu_mode() == "off"
+    tc.set_policy("auto")
+    tc.set_dxtb_gpu("auto")
+    sm.save(s)
+    assert cli.main(["settings"]) == 0
+    capsys.readouterr()
+    assert tc.current_policy() == "device" and tc.dxtb_gpu_mode() == "off"
+    s.resources.dxtb_gpu = "sometimes"
+    with pytest.raises(ValueError):
+        tc.apply_settings(s)
+    tc.apply_settings(s, strict=False)
+    assert tc.dxtb_gpu_mode() == "auto" and tc.current_policy() == "device"
