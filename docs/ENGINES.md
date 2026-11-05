@@ -19,7 +19,43 @@ through WSL on Windows. `quantabench-cli doctor` lists what it found and where.
 | Psi4 | DFT/HF QM stage | DFT | external (own env) | PCM | yes | `--qm wb97x-d/def2-svp` |
 
 `method="auto"` tries AIMNet2 > GFN2-xTB (dxtb) > GFN2-xTB (tblite) > GFN2-xTB (xtb) > GFN1-xTB > MMFF,
-and with a solvent prefers the engines that can model it.
+and with a solvent prefers the engines that can model it. When it passes an installed engine over for a
+molecule's elements, the notes say so ("auto: AIMNet2 (ML, wB97M-D3) has no parameters for Sn; using
+GFN2-xTB (dxtb + libcint)"), so a batch that mixes levels of theory is visible in `summary.csv`.
+
+## Elements, salts, metals, charge and spin
+
+| Engine | Elements |
+|---|---|
+| AIMNet2 | H, B, C, N, O, F, Si, P, S, Cl, As, Se, Br, I |
+| GFN1/GFN2-xTB (dxtb, tblite, xtb), GFN-FF | H to Rn (Z = 1-86) |
+| MMFF94s | organic elements and common ions; **UFF** takes over for the rest (Sn, Hg, hypervalent iodine, B, radicals), noted in the results and in the `forcefield` column |
+
+What the standardization does with research records (every step is in the molecule's notes):
+
+- **Counter-ions.** The largest fragment is kept and the others are named in the notes and in the
+  `removed_fragments` column (`[Na+]`, `2 x [Br-]`, a second copy of the parent, a co-crystallized acid).
+  Bonds to alkali and alkaline-earth metals are ionic and are disconnected first (`CC(=O)O[Na]` is
+  sodium acetate). Turn off *keep largest fragment* to compute the whole record instead.
+- **Metal complexes.** A removed fragment that holds any other metal fails the molecule with
+  `UnsupportedStructure: metal complex: keeping the largest fragment (...) would remove Co (...)`. A
+  carbonyl complex, a cobalamin or a ferrocene drawn as separate ions would otherwise be computed as CO,
+  a bare corrin or cyclopentadiene. The batch continues.
+- **Organometallics drawn with their bonds** (tributyltin chloride, phenylmercury acetate,
+  bis(tributyltin) oxide) are computed whole: bonds to metals other than group 1/2 are kept as drawn
+  (RDKit's default metal disconnector would turn R-Hg-OAc into R-Hg+ and TBTO into Bu3Sn+). Conformers
+  come from ETKDG + UFF; `auto` refines them with GFN2-xTB.
+- **Charge.** With protonation on, the parent is neutralized and protonated for the pH. When the charge
+  differs from the record's (`input_charge` column), a note says so: `charge +0 as drawn, -1 computed
+  (counter-ions removed, then neutralized and protonated for pH 7)`.
+- **Spin.** The multiplicity (`multiplicity` column) is 1 for closed shells; radicals drawn in the
+  record give the high-spin multiplicity (2 unpaired electrons: triplet) and an odd electron count
+  without drawn radicals a doublet, both with a note (radicals in databases are often a missing H or
+  charge). An explicit multiplicity that cannot fit the electron count fails the molecule.
+- **Not a structure.** R groups, `*` and molfile atom lists (`M  ALS`) fail with "not a definite
+  structure".
+- **xTB polarizability** of a multiply charged anion in the gas phase can diverge (unbound HOMO); a value
+  above 10 Å³ per heavy atom (or with negative eigenvalues) is discarded with a note.
 
 dxtb's GFN2 and its field properties (xTB polarizability, IR intensities) need the libcint backend.
 On Windows and macOS that is the dxtb fork with tad-libcint 0.4 (FORK-1; Linux can use either):
@@ -40,6 +76,11 @@ dxtb 0.4 and tad-mctc 0.7. See [INSTALL.md](INSTALL.md#dxtbs-libcint-backend-gfn
   copy, else PyPI's) with aimnet's
   parameters and reference tables. It matches the stock calculator to < 1e-5 eV (CPU and an RX 9060 XT).
   `QUANTABENCH_AIMNET_BACKEND=stock|torch` overrides the choice.
+- **"Warp CUDA warning: Could not find or load the NVIDIA CUDA driver".** Warp's C library prints this
+  on every process start on machines without an NVIDIA driver, and no Warp setting turns it off.
+  QuantaBench initializes Warp itself before aimnet does (`resources.init_warp_quietly`) and drops only
+  that line; other Warp messages still show. Verified on Linux; on Windows it depends on Warp's DLL
+  sharing Python's C runtime (if the line still shows there, it is harmless).
 - **aimnet neighbor-list bug (fixed in QuantaBench, 2026-11-05).** aimnet 0.2's adaptive neighbor list
   shrinks after a small molecule and only grows again on an overflow error that nvalchemiops 0.5 never
   raises. In one process, a larger molecule evaluated after a small one silently lost neighbors (with the

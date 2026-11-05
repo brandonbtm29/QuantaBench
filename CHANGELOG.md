@@ -2,6 +2,34 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Research inputs: salts, metals, charges, spin (stress sample, 2026-11-05)
+From a 325-molecule stratified sample of the PFAS QSAR set (PFAS and baseline cohorts: salts,
+organometallics, ions from -5 to +2, up to 157 heavy atoms), run through MMFF, GFN2-xTB (tblite), GFN1-xTB
+(dxtb), AIMNet2 and `auto`:
+- **No metal is dropped silently.** Keeping the largest fragment of a complex drawn as ions computed CO for
+  metal carbonyls, a bare corrin for cobalamins and cyclopentadiene for ferrocene; those records now fail
+  with `metal complex: ... would remove Co (...)` and the batch goes on. Alkali/alkaline-earth ions are
+  counter-ions as before.
+- **Organometallics are computed whole.** Only bonds to group 1/2 metals are disconnected; RDKit's default
+  also split Hg-O and Sn-O, so R-Hg-OAc became R-Hg+ (charge +1) and bis(trialkyltin) oxides half a molecule.
+- **What standardization did is in the notes and `summary.csv`:** new columns `input_charge` (as drawn),
+  `multiplicity`, `removed_fragments` and `forcefield`; notes such as `removed 2 x [Br-]` and
+  `charge +0 as drawn, -1 computed (counter-ions removed, then neutralized and protonated for pH 7)`.
+- **Spin**: drawn radicals give the high-spin multiplicity (it was always 1), an odd electron count a
+  doublet, with a note; an impossible explicit multiplicity fails the molecule.
+- **`auto` says why** it passed an engine over ("AIMNet2 ... has no parameters for Sn; using GFN2-xTB").
+- **MMFF94s -> UFF** is noted (the energies of method `mmff` are then UFF's; descriptor `method` = UFF). With
+  no force field at all (e.g. Cr(III) complexes) method `mmff` fails instead of reporting 0 eV.
+- R groups, `*` and molfile atom lists fail with "not a definite structure" (ETKDG aborted with an RDKit
+  invariant violation and a C++ stack trace in the log).
+- GFN1-xTB polarizabilities that cannot be physical (4x10^5 Å³ for a gas-phase phosphate dianion) are
+  discarded with a note.
+- **SD files**: unreadable records are reported (record number, title, RDKit's reason) instead of vanishing;
+  `--id-col` works for SD properties (e.g. `--id-col CAS_RN`); repeated titles get `_2`; RDKit's
+  per-record hydrogen warnings and UFFTYPER messages no longer flood the log.
+- The "Warp CUDA warning: Could not find or load the NVIDIA CUDA driver" line every aimnet lane printed on
+  AMD/CPU machines is filtered (other Warp output passes through).
+
 ### The GUI at 14,000 molecules (SCALE-1, 2026-11-05)
 - **The Molecules dock is a virtualized table** (`gui.molecule_list`): one light row per molecule (input
   order, status, id, conformers, best energy, name, method, formula) instead of a list item plus the full

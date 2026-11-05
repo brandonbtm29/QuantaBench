@@ -148,7 +148,8 @@ aborts the process).
 
 ```
 <output_dir>/<YYYY-MM-DD_HHMMSS>_<label>/
-    summary.csv            one row per molecule: status, charge, method, device, best energy, notes
+    summary.csv            one row per molecule: status, error, charge as drawn and computed, multiplicity,
+                           removed fragments, method, force field, device, best energy, notes
     descriptors.csv        one row per molecule: graph + 3D (best/Boltzmann) + xTB + vib_* (frequencies)
     jobs.sqlite            batch runs: job table (config, inputs, status, per-molecule summaries)
     jobs.lock              batch runs: host + pid of the process working on the folder (removed on exit)

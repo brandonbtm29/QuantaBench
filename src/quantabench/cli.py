@@ -651,7 +651,9 @@ def add_input_args(q: argparse.ArgumentParser) -> None:
     q.add_argument("molecules", nargs="*", help="SMILES (optionally 'SMILES id') or names to look up in PubChem")
     q.add_argument("--file", action="append",
                    help="SDF, MOL, XYZ, PDB, SMI, CSV or Excel (.xlsx/.xlsm) file (repeatable)")
-    q.add_argument("--smiles-col"), q.add_argument("--id-col")
+    q.add_argument("--smiles-col", help="tables: the SMILES column (default: smiles, qsar_ready_smiles, ...)")
+    q.add_argument("--id-col", help="tables: the id column; SD files: the SD property to use as id, e.g. CAS_RN "
+                                    "(default: DTXSID, ID, then the title line)")
     q.add_argument("--sheet", help="Excel sheet name or 0-based index (default: the first sheet)")
     q.add_argument("--smiles-pref", choices=["smiles", "qsar", "ms"],
                    help="which SMILES column of a CompTox export to prefer (falls back row by row)")

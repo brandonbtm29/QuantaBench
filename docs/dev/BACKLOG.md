@@ -347,6 +347,38 @@ Depends on: none (research only; can run any night).
 - Acceptance: one merged table for all 14,223 molecules, no manual recombination, and the overlap with the
   Spartan results compared.
 
+### QSAR-2: Follow-ups from the 325-molecule stress sample (2026-11-05) · ready (decisions: needs-Brandon)
+Fixed on `fix/stress-sample`: metal complexes refused instead of computed without their metal, Hg/Sn bonds
+kept, counter-ions/charge/multiplicity/force field in the notes and `summary.csv`, SDF record errors,
+`--id-col` for SD files, placeholder atoms, unphysical xTB polarizabilities, the Warp CUDA-driver line.
+Still open:
+- **Protonation rules on polyamines and phosphonates** (chemistry): every aliphatic amine is protonated
+  independently, so piperazines and 1,4-dimethylpiperazine come out +2 at pH 7 (pKa2 about 5.3 and 3.8:
+  should be +1); every P-OH is deprotonated with the 1st-pKa rule (alkylphosphonic acids pKa2 about 7.5).
+  Needs a site-interaction rule (no second protonation within 2-3 bonds of a charged site) or dimorphite-dl
+  as default; 77 of 325 records change charge at pH 7, most of them correctly.
+- **Al3+/Zn2+ salts** (needs-Brandon): monoatomic Al3+ or Zn2+ next to organic anions (fosetyl-Al) now
+  fails as a metal complex. If Brandon treats them as counter-ions like Na+, add them to
+  `standardize.COUNTERION_METALS` (one line; the anion is then computed).
+- **Metal complexes that need a 3D builder**: Cr(III) azo dyes have no UFF parameters (method `mmff`
+  fails; xTB methods refine unoptimized ETKDG geometries). Cobalamins, carbonyls and Rh/PPh3 complexes
+  drawn as ions fail by design. A route: GFN-FF pre-optimization (xtb `--gfnff`) instead of UFF, or a
+  coordination-geometry builder.
+- **Per-molecule time limit**: no wall-clock limit for embedding + refinement (ETKDG has
+  `EmbedParameters.timeout` since RDKit 2024.03). Large records (90-157 heavy atoms) took minutes on 1 CPU
+  thread with MMFF; with xTB on the CPU much longer. A `max_seconds` per stage with a clear failure.
+- **Ids of the baseline cohorts** (needs-Brandon): cohorts 1-3 are titled by CAS number, cohorts 4-6 by a
+  name that is sometimes cut off ("Paraquat C", "Hectane C") with the CAS in `CAS_RN`. `--id-col CAS_RN`
+  now gives CAS ids for those; decide which the merged QSAR table uses.
+- **Broken records with radicals**: trimethylamine borane is stored with a bare B (2 unpaired electrons,
+  +1); it is now computed as a triplet cation with a "check the record" note. A heuristic for
+  hydrogen-deficient B/N/C could fail such records instead.
+- **The xTB properties step on dications** (Esaprazole, +2 at pH 7) took minutes of GFN1-xTB SCF in the
+  MMFF run; measure and cap its SCF iterations.
+- Settings isolation: during this work `~/.config/QuantaBench/settings.json` (and `QuantaBench.conf`) were
+  rewritten with test-like values (pH 0, 1 conformer, 1 K) by another process on the machine; check
+  that no test or GUI path writes there when `QUANTABENCH_SETTINGS_DIR` is set.
+
 ### DIST-4: Per-stage routing · later
 - Different stages of one molecule on different machines (CREST + Psi4 on the Mac, GPU refinement +
   LAMMPS on NOVA), handed over through run-folder artifacts.

@@ -20,7 +20,7 @@ dynamics. Every step is visible in an OVITO-style 3D workspace.
 | Stage | What happens |
 |---|---|
 | Input | SMILES, chemical names or CAS (PubChem), SDF/MOL/XYZ/PDB/SMI, CSV and Excel lists (CompTox exports: DTXSID, preferred name, SMILES / QSAR-ready / MS-ready fallback) |
-| Standardize & protonate | Largest fragment (strips counter-ions), neutral parent, dominant charge state at your pH. PFAS-aware: carboxylates, sulfonates and acidic perfluoroalkane sulfonamides are handled |
+| Standardize & protonate | Largest fragment (strips counter-ions, named in the results; metal complexes drawn as ions are refused, not computed without their metal), neutral parent, dominant charge state at your pH, spin from drawn radicals. PFAS-aware: carboxylates, sulfonates and acidic perfluoroalkane sulfonamides are handled |
 | Conformer search | RDKit ETKDGv3, MMFF94s pre-optimization, energy window, symmetry-aware RMSD de-duplication; or **CREST** (iMTD-GC metadynamics with GFN2-xTB / GFN-FF) |
 | Refinement | **AIMNet2** (ML, ωB97M-D3 quality, neutral and charged), **GFN1/GFN2-xTB** (dxtb, PyTorch; tblite; or the xtb program), **GFN-FF**, **PM7/PM6** (MOPAC), or MMFF94s, optionally in an implicit solvent (ALPB, COSMO). On GPU when available with automatic CPU fallback; on a GPU all conformers of a molecule are optimized in one batch |
 | Properties | Boltzmann weights, volume, SASA, radius of gyration, shape, TPSA, CF2/CF3 counts, F/C ratio, charges, dipoles, polarizabilities, HOMO/LUMO, heats of formation and solvation energies from each engine |
