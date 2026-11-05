@@ -151,6 +151,33 @@ def machine_name() -> str:
     return f"{name}-wsl" if resources.is_wsl() else name
 
 
+def resolve_lanes(explicit: str | None = None, cfg=None, log: Callable[[str], None] | None = None,
+                  settings=None) -> tuple[list, str]:
+    """(lanes, spec) for a batch on this machine: the one lookup that ``build``, the GUI, the worker and the
+    local share of ``grid build`` use.
+
+    ``explicit`` (``--lanes``, a job's own spec): parsed as given, and a spec this machine cannot use raises
+    ``ValueError`` (a usage error). Otherwise this machine's spec from the settings (``Settings.lanes_for``:
+    its ``dist.machine_lanes`` entry, else ``dist.lanes``); the settings file is shared by every machine, so a
+    spec that does not fit here is logged and the batch runs in one lane instead.
+    """
+    from .. import settings as settings_mod
+    from . import lanes as lanes_mod
+
+    if explicit is not None and str(explicit).strip():
+        spec = str(explicit).strip()
+        return lanes_mod.parse_lanes(spec, cfg), spec
+    s = settings if settings is not None else settings_mod.load()
+    spec = s.lanes_for(machine_name())
+    try:
+        return lanes_mod.parse_lanes(spec, cfg), spec
+    except ValueError as exc:
+        if log is not None:
+            log(f"Warning: lane spec {spec!r} from the settings does not fit {machine_name()} ({exc}); running "
+                "in one lane. Set this machine's own spec in Settings > Compute > Parallel lanes.")
+        return lanes_mod.parse_lanes("1", cfg), "1"
+
+
 def registry_dir() -> Path:
     from .. import settings as settings_mod
 

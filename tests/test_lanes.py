@@ -269,13 +269,14 @@ def test_settings_dialog_parallel_lanes():
     assert dlg.lanes.currentText() == "1" and dlg.lane_plan.text().startswith("1 lane (one process)")
     dlg.lanes.setCurrentText("2")
     assert "2 CPU lanes" in dlg.lane_plan.text()
-    assert dlg.result_settings().dist.lanes == "2"
+    assert dlg.result_settings().lanes_for() == "2"
+    assert dlg.result_settings().dist.lanes == "1"      # the shared default is left for the other machines
     dlg.lanes.setCurrentText("gpu:1x4")      # well formed: stored, though no GPU has been detected here
     assert "Not usable here" in dlg.lane_plan.text() and "not detected yet" in dlg.lane_plan.text()
-    assert dlg.result_settings().dist.lanes == "gpu:1x4"
+    assert dlg.result_settings().lanes_for() == "gpu:1x4"
     dlg.lanes.setCurrentText("two")          # malformed: the plan line says why, the setting is kept
     assert "cannot read" in dlg.lane_plan.text()
-    assert dlg.result_settings().dist.lanes == "gpu:1x4"
+    assert dlg.result_settings().lanes_for() == "gpu:1x4"
     dlg.reject()
     dlg.deleteLater()
     app.processEvents()

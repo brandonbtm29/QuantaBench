@@ -72,8 +72,13 @@ class EngineSettings:
 
 @dataclass
 class DistSettings:
-    """Splitting work across lanes and machines (``quantabench.dist``, docs/PLATFORMS.md)."""
+    """Splitting work across lanes and machines (``quantabench.dist``, docs/PLATFORMS.md).
+
+    The settings file is shared by every machine (synced folder), but a lane spec describes one machine's
+    hardware: ``machine_lanes`` holds each machine's own spec (keyed by ``machine_key`` of its name), and
+    ``lanes`` is only the default for a machine without an entry. Use ``Settings.lanes_for``."""
     lanes: str = "1"                  # default lane spec: "1" (one process), "auto", "N", "gpu:1x4,cpu:5x2"
+    machine_lanes: dict[str, str] = field(default_factory=dict)   # machine name -> that machine's lane spec
     worker_port: int = 8765
     worker_bind: str = "tailscale"    # "tailscale" (this machine's 100.x address) | "localhost" | an address
     worker_token: str = ""            # shared secret for workers; generated on first `worker` start
@@ -126,6 +131,35 @@ class Settings:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    # ---------------------------------------------------------------- per-machine values
+    def lanes_for(self, machine: str | None = None) -> str:
+        """The lane spec of ``machine`` (default: this one): its ``dist.machine_lanes`` entry, else
+        ``dist.lanes``. Resolve it into lanes with ``dist.profile.resolve_lanes``."""
+        key = machine_key(machine if machine is not None else _this_machine())
+        for name, spec in self.dist.machine_lanes.items():
+            if machine_key(name) == key and str(spec).strip():
+                return str(spec).strip()
+        return (self.dist.lanes or "1").strip() or "1"
+
+    def set_lanes_for(self, spec: str, machine: str | None = None) -> None:
+        """Store ``spec`` as the lane spec of ``machine`` (default: this one) only."""
+        key = machine_key(machine if machine is not None else _this_machine())
+        lanes = {k: v for k, v in self.dist.machine_lanes.items() if machine_key(k) != key}
+        lanes[key] = spec
+        self.dist.machine_lanes = lanes
+
+
+def machine_key(name: str) -> str:
+    """Machine names compared like Tailscale MagicDNS names (lowercase, spaces and underscores as '-'): the
+    same rule as ``dist.plan.norm_name``."""
+    return "-".join(str(name).strip().lower().replace("_", " ").split())
+
+
+def _this_machine() -> str:
+    from .dist.profile import machine_name
+
+    return machine_name()
 
 
 def _coerce(default, value) -> tuple[bool, object]:
