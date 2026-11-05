@@ -222,10 +222,14 @@ def test_counter_ion_uses_ion_parameters_and_stays_stable(tfa, tmp_path):
         assert log.ok and not log.lost_atoms, f"seed {seed}"
 
 
-def test_molecule_across_periodic_boundary_stays_whole(tfa, tmp_path):
+def _setup_across_boundary(tfa, tmp_path):
     slab = surfaces.graphite_slab(6, 4, layers=2, vacuum=20)
     system = surfaces.place_on_surface(slab, tfa, height=3.5, xy=(0.2, 0.2))   # straddles x = 0 and y = 0
-    setup = qlmp.write_smd_setup(system, tmp_path / "pbc", **SHORT, config=SHORT_CFG)
+    return system, qlmp.write_smd_setup(system, tmp_path / "pbc", **SHORT, config=SHORT_CFG)
+
+
+def test_molecule_across_periodic_boundary_stays_whole(tfa, tmp_path):
+    system, setup = _setup_across_boundary(tfa, tmp_path)
     data = qlmp.read_data_atoms(setup.data)
     ns = setup.n_surface
     assert (data["image"][ns:, :2] != 0).any()                     # some atoms carry image flags
@@ -233,7 +237,12 @@ def test_molecule_across_periodic_boundary_stays_whole(tfa, tmp_path):
     d_in = np.linalg.norm(system.positions[ns:, None] - system.positions[None, ns:], axis=-1)
     d_data = np.linalg.norm(data["unwrapped"][ns:, None] - data["unwrapped"][None, ns:], axis=-1)
     assert np.allclose(d_in, d_data, atol=1e-6)
+
+
+@WIN_LAMMPS_FLAKY
+def test_molecule_across_periodic_boundary_runs(tfa, tmp_path):
     pytest.importorskip("lammps")
+    _, setup = _setup_across_boundary(tfa, tmp_path)
     log = qlog.parse_log(qlmp.run_lammps(setup.out_dir))
     assert log.ok and not log.lost_atoms
 

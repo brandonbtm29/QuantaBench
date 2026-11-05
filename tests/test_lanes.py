@@ -166,6 +166,7 @@ def test_windows_caps_lanes_at_31(monkeypatch):
     monkeypatch.setattr(resources, "logical_cores", lambda: 64)
     monkeypatch.setattr(resources, "physical_cores", lambda: 64)
     c = pipeline.BuildConfig(method="mmff", threads=64)
+    monkeypatch.setattr(L, "_platform", lambda: "linux")
     assert len(L.parse_lanes("40", c)) == 40 and L.max_lanes() is None
     monkeypatch.setattr(L, "_platform", lambda: "win32")
     assert L.max_lanes() == 31 and len(L.parse_lanes("31", c)) == 31

@@ -31,17 +31,18 @@ def test_machines_dock_lists_registry_and_checks_workers(tmp_path, monkeypatch):
     from quantabench.gui.main_window import MainWindow
 
     here = profile.machine_name()
-    profs = [profile.MachineProfile(name="btm-nova", os="Windows 11", cpu="Ryzen 9 7900X", physical_cores=12,
+    assert here not in ("nova-test", "mac-test")
+    profs = [profile.MachineProfile(name="nova-test", os="Windows 11", cpu="Ryzen 9 7900X", physical_cores=12,
                                     logical_cores=24, ram_gb=32, gpus=[{"name": "RX 9060 XT"}],
                                     throughput={"mmff@cpu": 9000.0, "aimnet2@cuda:0": 4000.0},
                                     address="http://100.101.1.2:8765"),
              profile.MachineProfile(name=here, physical_cores=4, logical_cores=8)]
     monkeypatch.setattr(profile, "load_profiles", lambda *a, **k: list(profs))
-    nova = client.WorkerRef(name="btm-nova", url="http://100.101.1.2:8765", source="registry",
+    nova = client.WorkerRef(name="nova-test", url="http://100.101.1.2:8765", source="registry",
                             info={"queue": {"running": ["j1"], "queued": ["j2"]},
                                   "quantabench_version": "0.0.0-other"})
-    mac = client.WorkerRef(name="mac", url="http://100.101.1.3:8765", source="settings", error="timed out")
-    monkeypatch.setattr(client, "discover", lambda *a, **k: {"btm-nova": nova, "mac": mac})
+    mac = client.WorkerRef(name="mac-test", url="http://100.101.1.3:8765", source="settings", error="timed out")
+    monkeypatch.setattr(client, "discover", lambda *a, **k: {"nova-test": nova, "mac-test": mac})
 
     app = _app()
     w = MainWindow(sm.Settings(output_dir=str(tmp_path)))
@@ -55,15 +56,15 @@ def test_machines_dock_lists_registry_and_checks_workers(tmp_path, monkeypatch):
 
     got = rows()
     assert got[f"{here}  (this computer)"][1] == "this computer"
-    assert got["btm-nova"][1] == "worker (not checked)"
-    assert "RX 9060 XT" in got["btm-nova"][2] and got["btm-nova"][3].startswith("mmff@cpu 9,000")
+    assert got["nova-test"][1] == "worker (not checked)"
+    assert "RX 9060 XT" in got["nova-test"][2] and got["nova-test"][3].startswith("mmff@cpu 9,000")
     assert "Parallel lanes" in panel.here.text()
 
     panel.check_workers()
     assert _wait(app, lambda: not panel._busy)
     got = rows()
-    assert got["btm-nova"][1].startswith("busy, 1 queued, version 0.0.0-other")
-    assert got["mac"][1] == "unreachable"             # known from settings only: listed after the check
+    assert got["nova-test"][1].startswith("busy, 1 queued, version 0.0.0-other")
+    assert got["mac-test"][1] == "unreachable"             # known from settings only: listed after the check
     w.close()
     assert _wait(app, lambda: w.closed)
 

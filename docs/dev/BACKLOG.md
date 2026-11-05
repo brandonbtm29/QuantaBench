@@ -114,6 +114,7 @@ Depends on: none (research only; can run any night).
 - 2026-11-01: not only counter-ions: `test_smd_run_with_lammps_module` (TFA⁻ alone on graphite, PPPM)
   failed 2 of 6 identical runs on BTM NOVA with the same error; now also marked flaky on Windows.
   Compare with `lmp.exe` from the LAMMPS Windows installer to tell a wheel problem from an input problem.
+- 2026-11-05: a third test fails the same way on NOVA, 1 of 6 identical runs: the LAMMPS run of the periodic-boundary test (TFA alone, 2-layer slab, now `test_molecule_across_periodic_boundary_runs`); marked flaky on Windows too.
 
 ## GPU-1 (= FORK-3): AIMNet2 on AMD and Apple GPUs (replace NVIDIA Warp D3) · done on ROCm 2026-11-05; MPS needs-Brandon
 - 2026-11-04: Warp is CPU-only on macOS too, so the same adapter enables AIMNet2 on the MacBook's GPU (MPS,
