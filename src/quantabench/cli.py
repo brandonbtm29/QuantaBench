@@ -35,7 +35,18 @@ from . import settings as settings_mod
 def _doctor(args) -> int:
     rep = resources.detect()
     if args.json:
-        print(json.dumps(rep.to_dict(), indent=2))
+        from .dist import profile
+
+        out = rep.to_dict()
+        if args.bench:  # progress goes to stderr, so stdout stays one JSON document
+            prof, path = profile.refresh_from_cli(True, out=sys.stderr)
+            if prof is None:
+                return 130
+            out["profile_saved"] = str(path)
+        else:
+            prof = profile.local_profile()
+        out["profile"] = prof.to_dict()
+        print(json.dumps(out, indent=2))
         return 0
     print(f"QuantaBench {__version__}")
     print(f"  OS            {rep.os}{' (WSL2)' if rep.wsl else ''}, Python {rep.python}")
@@ -73,6 +84,9 @@ def _doctor(args) -> int:
     print(f"    {'OK ' if py else '-- '} {'psi4 Python':30s} {py or 'no interpreter that can import psi4'}")
     print("  Optional      " + ", ".join(f"{k}={'yes' if v else 'no'}" for k, v in rep.optional_packages.items()))
     print(f"  Settings      {settings_mod.settings_dir() / settings_mod.SETTINGS_FILE}")
+    from .dist import profile
+
+    print(f"  Machine       {profile.machine_name()} (registry {profile.registry_dir()}: `quantabench-cli machines`)")
     for note in rep.notes:
         print(f"  note: {note}")
     if args.bench:
@@ -84,40 +98,21 @@ def _doctor(args) -> int:
 
 
 def _bench(rep) -> None:
-    if not resources.has_package("torch"):
-        print("\nBenchmark skipped: PyTorch not installed.")
-        return
+    """matmul GFLOP/s per device, then molecules/hour per engine and device on the PFAS benchmark set
+    (``dist.profile.benchmark``), saved to this machine's profile in the machine registry."""
     print("\nBenchmark")
-    devices = ["cpu"] + [f"cuda:{g.index}" for g in rep.gpus if g.backend in ("cuda", "rocm")]
-    for dev in devices:
-        try:
-            print(f"  matmul {dev:8s} {resources.matmul_benchmark(dev):9.1f} GFLOP/s")
-        except Exception as exc:
-            print(f"  matmul {dev:8s} FAILED: {exc}")
-    import time
-
-    from .chem import engines
-    from .chem.inputs import from_smiles
-    from .chem.pipeline import BuildConfig, run_molecule
-
-    pfoa = from_smiles("OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F", id="PFOA")
-    for key in ("gfn1-xtb", "gfn2-xtb", "aimnet2"):
-        ok, why = engines.available(key)
-        if not ok:
-            print(f"  {key:9s} skipped ({why})")
-            continue
+    if resources.has_package("torch"):
+        devices = ["cpu"] + [f"cuda:{g.index}" for g in rep.gpus if g.backend in ("cuda", "rocm")]
         for dev in devices:
-            cfg = BuildConfig(method=key, max_conformers=4, refine_top=2, write_files=False, xtb_properties=False)
-            t = time.perf_counter()
             try:
-                res = run_molecule(pfoa, cfg, device=dev, threads=resources.current_threads())
-            except Exception as exc:  # e.g. a DLL blocked while importing an engine
-                print(f"  {key:9s} {dev:8s} FAILED: {type(exc).__name__}: {exc}")
-                continue
-            dt = time.perf_counter() - t
-            status = res.status if res.device == dev else f"{res.status}, fell back to {res.device}"
-            print(f"  {key:9s} {dev:8s} PFOA anion, 2 conformers: {dt:6.1f} s ({status})"
-                  + (f" {res.error}" if res.error else ""))
+                print(f"  matmul {dev:8s} {resources.matmul_benchmark(dev):9.1f} GFLOP/s")
+            except Exception as exc:
+                print(f"  matmul {dev:8s} FAILED: {exc}")
+    else:
+        print("  matmul skipped: PyTorch not installed (MMFF is still timed)")
+    from .dist import profile
+
+    profile.refresh_from_cli(True)
 
 
 def method_choices() -> list[str]:
@@ -190,8 +185,6 @@ def _build(args) -> int:
     try:
         items = _read_inputs(args)
         chunk = jobs.parse_chunk(args.chunk) if args.chunk else None
-        if args.chunk_weights:
-            raise ValueError("--chunk-weights is not implemented yet")
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -206,6 +199,16 @@ def _build(args) -> int:
         if "formats" in stored:
             base = replace(base, formats=tuple(stored["formats"]))
     cfg = _config(args, base)
+    if args.chunk_weights:  # weighted split (dist.plan): chunk becomes (i, n, weights), stored with the run
+        from .dist import plan, profile
+
+        try:
+            chunk, weights, warnings = plan.resolve_chunk(args.chunk_weights, chunk, cfg.method,
+                                                         profile.load_profiles())
+            print(plan.chunk_plan(weights, chunk, [x.id for x in items], warnings) + "\n")
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
 
     resumable = bool(run_dir or chunk or args.retry_failed or len(items) > 1)
     if not resumable:
