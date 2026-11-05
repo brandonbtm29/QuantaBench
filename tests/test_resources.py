@@ -78,3 +78,32 @@ def test_warp_no_driver_warning_is_filtered(monkeypatch, capfd):
     err = capfd.readouterr().err
     assert "NVIDIA CUDA driver" not in err and "Warp CUDA error: something real" in err
     assert fake.config.log_level == 2
+
+
+def test_detect_isolated_runs_in_a_child_and_can_be_cancelled(monkeypatch):
+    """The GUI's hardware probe: the same report and libcint verdict as in this process, torch only in the child."""
+    import threading
+
+    from quantabench.chem import engines
+
+    monkeypatch.setattr(resources, "_ISOLATED", None)
+    stop = threading.Event()
+    stop.set()
+    assert resources.detect_isolated(cancel=stop) is None and resources._ISOLATED is None
+    rep, checks = resources.detect_isolated()
+    here = resources.detect()
+    assert (rep.logical_cores, rep.torch_version, rep.torch_backend) == \
+        (here.logical_cores, here.torch_version, here.torch_backend), rep.notes
+    assert [g.name for g in rep.gpus] == [g.name for g in here.gpus]
+    assert tuple(checks["libcint"]) == engines.libcint_status()
+    assert resources.detect_isolated() is resources._ISOLATED                 # cached
+
+
+def test_detect_isolated_falls_back_without_torch(monkeypatch):
+    import sys
+
+    monkeypatch.setattr(resources, "_ISOLATED", None)
+    monkeypatch.setattr(sys, "executable", sys.executable + "-missing")
+    rep, checks = resources.detect_isolated()
+    assert checks == {} and rep.gpus == [] and "GPU" in rep.notes[-1] and resources._ISOLATED is None
+    assert rep.torch_backend in ("unknown", "none") and rep.logical_cores >= 1

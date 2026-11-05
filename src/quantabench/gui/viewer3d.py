@@ -51,7 +51,7 @@ import numpy as np
 from ase import Atoms
 from ase.data import atomic_numbers, chemical_symbols, covalent_radii, vdw_radii
 from ase.data.colors import jmol_colors
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from .selection import ACCENT_RGB, SelectionModel, format_measurement, measure
@@ -306,12 +306,20 @@ class MoleculeViewer3D(QWidget):
         self._camera_drag = False
         self._style_obj = None
         self._band_actor = None
+        # One render per event-loop pass: a new molecule rebuilds the scene, clears the selection, and panels
+        # add their actors, each asking for a render; under software OpenGL each costs ~65 ms (SCALE-1).
+        self.renders = 0                   # renders done (tests count them)
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.setInterval(0)
+        self._render_timer.timeout.connect(self.render_now)
         try:
             import pyvista as pv
             from pyvistaqt import QtInteractor
 
             pv.global_theme.smooth_shading = True
-            self.plotter = QtInteractor(self)
+            # auto_update=False: pyvistaqt's default re-renders 5 times a second forever, idle or not
+            self.plotter = QtInteractor(self, auto_update=False)
             lay.addWidget(self.plotter.interactor)
             self._aa = ""
             self._set_anti_aliasing(0)
@@ -396,7 +404,7 @@ class MoleculeViewer3D(QWidget):
         """Default (isometric) orientation, zoomed to fit, rotating about the center of the structure."""
         if self.plotter is not None:
             self._reset_view()
-            self.plotter.render()
+            self._render()
 
     def _reset_view(self) -> None:
         p = self.plotter
@@ -406,9 +414,10 @@ class MoleculeViewer3D(QWidget):
             pos = self._atoms.positions
             pad = (float(self._radii.max()) if len(self._radii) else 1.0) + 0.5
             lo, hi = pos.min(axis=0) - pad, pos.max(axis=0) + pad
-            p.reset_camera(render=False, bounds=(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]))
+            # the renderer's, not the plotter's: Plotter.reset_camera renders whatever ``render`` says
+            p.renderer.reset_camera(render=False, bounds=(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]))
         else:
-            p.reset_camera(render=False)
+            p.renderer.reset_camera(render=False)
         # pyvista resets the camera on the first real render unless told the camera is set,
         # which would silently undo double-click recentering and axis views
         p.camera_set = True
@@ -419,7 +428,7 @@ class MoleculeViewer3D(QWidget):
             return
         view = {"x": self.plotter.view_yz, "y": self.plotter.view_xz, "z": self.plotter.view_xy}[axis.lower()]
         view(negative=negative, render=False)
-        self.plotter.reset_camera(render=False)
+        self.plotter.renderer.reset_camera(render=False)
         self.plotter.camera_set = True
         self._render()
 
@@ -457,7 +466,7 @@ class MoleculeViewer3D(QWidget):
         scale = max(1, int(scale))
         restore = self._scale_overlays(scale) if scale > 1 else []
         try:
-            self.plotter.render()
+            self.render_now()
             self.plotter.screenshot(str(path), transparent_background=transparent, scale=scale)
         finally:
             for fn in restore:
@@ -484,8 +493,10 @@ class MoleculeViewer3D(QWidget):
         return undo
 
     def close_viewer(self) -> None:
+        self._render_timer.stop()
         if self.plotter is not None:
             self.plotter.close()
+            self.plotter = None
 
     # ------------------------------------------------------------------ moving atoms
     def move_group(self) -> np.ndarray:
@@ -762,7 +773,17 @@ class MoleculeViewer3D(QWidget):
 
     # ================================================================== drawing
     def _render(self) -> None:
+        """Ask for a render at the next pass of the event loop; requests until then share it."""
         if self.plotter is not None:
+            self._render_timer.start()
+
+    request_render = _render
+
+    def render_now(self) -> None:
+        """Render at once (a pending request is then done)."""
+        self._render_timer.stop()
+        if self.plotter is not None:
+            self.renders += 1
             self.plotter.render()
 
     def changeEvent(self, event) -> None:

@@ -13,6 +13,7 @@ status bar.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
@@ -88,6 +89,7 @@ STAGES = [
 ]
 QM_FUNCTIONALS = ("wb97x-d", "b3lyp-d3bj", "pbe0-d3bj", "r2scan", "m06-2x", "hf")
 QM_BASES = ("def2-svp", "def2-svpd", "def2-tzvp", "6-31g*", "6-31+g*", "6-311+g**", "aug-cc-pvdz")
+LOG_LINES = 5000          # Log view's line cap (see _build_bottom_dock)
 CREST_METHODS = (("gfn2", "GFN2-xTB"), ("gfnff", "GFN-FF (fast, large molecules)"),
                  ("gfn2//gfnff", "GFN2-xTB // GFN-FF (needs xtb)"), ("gfn1", "GFN1-xTB"))
 
@@ -129,6 +131,7 @@ class MainWindow(QMainWindow):
         self._wanted: str | None = None        # molecule to read next
         self._shown_res: MoleculeResult | None = None   # built result in the views
         self._closing = False
+        self._probe_cancel = threading.Event()   # stops the hardware probe's child process (closeEvent)
         self._quit_pending = False         # close() asked while workers run: closes when they finish
         self.closed = False
         self.setWindowTitle(f"QuantaBench {__version__}")
@@ -522,7 +525,9 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.conf_table, "Conformers")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setMaximumBlockCount(20000)
+        # Each line costs ~7 KB of RSS (its laid-out text block); a batch logs ~3 lines per molecule, so this cap,
+        # not the molecule count, bounds the log: ~35 MB at 5,000 lines (20,000 lines were ~140 MB, SCALE-1).
+        self.log_view.setMaximumBlockCount(LOG_LINES)
         tabs.addTab(self.log_view, "Log")
         self.bottom_tabs = tabs
         dock = QDockWidget("Results", self)
@@ -767,12 +772,12 @@ class MainWindow(QMainWindow):
     def _update_engine_info(self) -> None:
         key = self.w_method.currentData()
         if key == "auto":
-            order = [k for k in engines.AUTO_ORDER if k in engines.all_engines() and engines.available(k)[0]]
+            order = [k for k in engines.AUTO_ORDER if k in engines.all_engines() and engines.available(k, quick=True)[0]]
             text = "Uses the best installed engine the molecule's elements allow: " + \
                    (" > ".join(engines.ENGINES[k].label for k in order) or "none") + " > MMFF94s."
         else:
             info = engines.all_engines()[key]
-            ok, why = engines.available(key)
+            ok, why = engines.available(key, quick=True)
             text = info.description + ("" if ok else f"\nNot available: {why}")
             solvent = self.w_solvent.currentData() if hasattr(self, "w_solvent") else ""
             if solvent and not engines.supports_solvent(key, solvent):
@@ -781,11 +786,26 @@ class MainWindow(QMainWindow):
 
     # ================================================================== hardware
     def _detect_hardware(self) -> None:
+        """GPU list and the checks that need torch (GFN2's libcint backend), in a child process: the window never
+        imports torch just to label them (~500 MB). Engines import it when a run uses them."""
         if self._closing:
             return
-        w = workers.FunctionWorker(resources.detect)
-        w.done.connect(self._on_hardware)
+        w = workers.FunctionWorker(resources.detect_isolated, cancel=self._probe_cancel)
+        w.done.connect(self._on_probe)
         workers.start(w, self, on_failed=lambda msg: self.hw_label.setText(f"Hardware detection failed: {msg}"))
+
+    def _on_probe(self, result) -> None:
+        if result is None or self._closing:
+            return                        # cancelled (the window is closing)
+        rep, checks = result
+        if "libcint" in checks:
+            before = engines.libcint_status(check_import=False)
+            engines.set_probed_libcint_status(checks["libcint"])
+            if engines.libcint_status(check_import=False) != before:
+                for i in range(self.w_method.count()):    # the version-based guess was wrong: relabel GFN2
+                    self.w_method.setItemText(i, method_label(self.w_method.itemData(i)))
+                self._update_engine_info()
+        self._on_hardware(rep)
 
     def _on_hardware(self, rep) -> None:
         self.report = rep
@@ -801,11 +821,11 @@ class MainWindow(QMainWindow):
             self.log(f"note: {n}")
 
     def show_hardware_report(self) -> None:
-        rep = self.report or resources.detect()
+        rep = self.report or resources.detect_light("GPU detection is still running.")
         lines = [rep.summary(), f"OS: {rep.os}{' (WSL2)' if rep.wsl else ''}, Python {rep.python}",
                  f"PyTorch: {rep.torch_version or 'not installed'} ({rep.torch_backend})", "", "Engines:"]
         for key, info in engines.ENGINES.items():
-            ok, why = engines.available(key)
+            ok, why = engines.available(key, quick=True)
             lines.append(f"  {'✔' if ok else '✖'} {info.label} {why}")
         lines += ["", "Settings: " + str(settings_mod.settings_dir() / settings_mod.SETTINGS_FILE)] + rep.notes
         QMessageBox.information(self, "Hardware report", "\n".join(lines))
@@ -1530,6 +1550,7 @@ class MainWindow(QMainWindow):
         """Never blocks: with work still running, cancel it, say so, and close again once every worker thread
         has stopped. (Waiting here froze the UI, and a QThread destroyed while running aborts the process,
         which could leave jobs.sqlite mid-write.) Cancellation takes effect at the pipeline's next checkpoint."""
+        self._probe_cancel.set()
         if self.worker is not None and not self._quit_pending:
             if QMessageBox.question(self, "Quit", "A build is running. Cancel it and quit?") != \
                     QMessageBox.StandardButton.Yes:

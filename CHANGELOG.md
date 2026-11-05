@@ -50,6 +50,20 @@ organometallics, ions from -5 to +2, up to 157 heavy atoms), run through MMFF, G
 - New read helpers: `export.read_molecule` (a molecule's folder back into a `MoleculeResult`, every
   conformer from the SDF), `jobs.molecule_rows`, `jobs.load_result`, `jobs.load_inputs`, `jobs.stored_config`.
 
+### GUI start-up memory and selection speed (SCALE-1 follow-ups, 2026-11-05)
+- **The window no longer imports torch, dxtb or tad-libcint** (~500 MB) to label engines and GPUs. Menus and
+  labels use `engines.available(key, quick=True)` / `libcint_status(check_import=False)`: installed versions
+  and files only (`libcint_status_from_versions`). The GPU list and the full libcint check run in a child
+  Python process after the window shows (`resources.detect_isolated`, killed when the window closes); its
+  verdict replaces the version-based guess, so an unusable GFN2 is still marked, with its reason. Runs and
+  `quantabench-cli doctor` keep the full checks. Idle memory with a 14,000-molecule run folder open: 1,133 →
+  634 MB (Linux, software OpenGL), of which VTK is ~355 MB; without VTK the window would be ~280 MB.
+- **One 3D render per selection** (was 3-9): render requests within one event-loop pass share one render, the
+  camera fit no longer renders by itself, and pyvistaqt's default 5-per-second idle re-render is off.
+  Selecting a molecule: median 557 → 224 ms under software OpenGL; scrolling the 14,000 rows 10 → 2.5 s.
+- The Log view keeps 5,000 lines (was 20,000): each line holds ~7 KB, so the old cap let a long batch's log
+  grow to ~140 MB; this was most of a GUI batch's per-molecule memory growth (~3 lines, ~21 KB per molecule).
+
 ### Spartan documents in one table (IMPORT-2, 2026-11-05)
 - `quantabench-cli import *.spartan --table out.csv [--sdf out.sdf] [--conformers all]` reads any number of
   Spartan '24 documents into one CSV: one row per molecule and document, keyed by the label, with

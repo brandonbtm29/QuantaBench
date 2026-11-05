@@ -316,10 +316,28 @@ Depends on: none (research only; can run any night).
   `engines.libcint_status` -> dxtb) and VTK under software OpenGL. Selecting a molecule takes ~0.4 s
   there, almost all VTK renders (~65 ms each, 3-4 per selection) under llvmpipe.
 - Follow-ups: (1) a 400-molecule MMFF batch from the GUI grew RSS by 8 MB (~20-29 KB/molecule) with the
-  list keeping rows only; ~5 KB/molecule of that is the light results `run_resumable` still returns,
-  the rest is not yet attributed (the Log view up to its 20,000-line cap is a candidate). Find it, and
-  let a GUI batch keep no per-molecule results at all (touches `dist/lanes.py`, after DIST-5). (2) Do not
+  list keeping rows only; ~5 KB/molecule of that is the light results `run_resumable` still returns.
+  Let a GUI batch keep no per-molecule results at all (touches `dist/lanes.py`, after DIST-5). (2) Do not
   import torch at startup just to label GFN2. (3) One VTK render per selection instead of 3-4.
+- 2026-11-05 (branch `perf/gui-startup`), same synthetic folder and machine:
+  - (2) done: no torch/dxtb/tad-libcint/aimnet/ovito in the GUI process at start-up. Labels use
+    `engines.available(key, quick=True)` (versions and files, `libcint_status_from_versions`); GPU list and
+    the full libcint check run in a child process (`resources.detect_isolated`) whose verdict relabels GFN2.
+    Idle RSS with the 14,000-molecule folder open: **1,133 -> 634 MB** (window alone 1,102 -> 602 MB). VTK
+    is ~355 MB of that (libraries ~155 MB, llvmpipe context and buffers ~200 MB); without VTK ~280 MB. So
+    the 500 MB target holds only without VTK under software OpenGL; on a GPU the buffers leave RSS. Check
+    the number on NOVA and the Mac before deciding on more.
+  - (3) done: one render per selection (was 3-9: `Plotter.reset_camera` renders even with `render=False`,
+    the selection clear rendered, and pyvistaqt's `auto_update` re-rendered 5x/s while idle). Selection
+    median **557 -> 224 ms**; scrolling 14,000 rows in 200 steps 10.0 -> 2.5 s. What is left of a selection
+    is one render with SSAA: ~150 ms under llvmpipe, ~40 ms with FXAA (RSS about the same). Possible next
+    step: FXAA when the OpenGL renderer is software (llvmpipe, WSL without GPU).
+  - (1) attributed: a Log line costs ~7 KB RSS (laid-out text block, shown or not) and a GUI MMFF batch logs
+    ~3 lines per molecule (~21 KB/molecule), so the log grew until its 20,000-line cap (~140 MB). Cap now
+    5,000 lines (~35 MB). Still open: the light results above, and an MMFF batch imports torch at its start
+    (`jobs.run_resumable` and `pipeline.run` call `resources.select_device` before knowing whether the
+    method needs torch: +~500 MB for the rest of the session). Select the device lazily, or only for
+    torch engines (chem/jobs.py, chem/pipeline.py).
 
 ### IMPORT-2: Read Spartan '24 `.spartan` documents · in review 2026-11-05 (branch `feat/spartan-import`; acceptance pending)
 - A `.spartan` file is an OLE compound document with one storage per molecule (`Molecules/M0001/...`):

@@ -41,7 +41,7 @@ def method_label(key: str) -> str:
     if key == "auto":
         return "Auto (best available)"
     info = engines.all_engines()[key]
-    ok, why = engines.available(key)
+    ok, _why = engines.available(key, quick=True)     # no torch import for a menu label
     return info.label + ("" if ok else "  (not installed)")
 
 
@@ -112,7 +112,8 @@ class SettingsDialog(QDialog):
         for g in gpus:
             self.gpu_index.addItem(f"{g.index}: {g.name} ({g.total_memory_gb:.0f} GB, {g.backend.upper()})", g.index)
         if not gpus:
-            self.gpu_index.addItem("No GPU visible to PyTorch", 0)
+            known = report is not None and report.torch_backend != "unknown"   # the probe may still be running
+            self.gpu_index.addItem("No GPU visible to PyTorch" if known else "GPU not detected yet", 0)
         self.gpu_index.setCurrentIndex(max(0, min(r.gpu_index, self.gpu_index.count() - 1)))
         form.addRow("Device", self.gpu_index)
         self.mem = QDoubleSpinBox()

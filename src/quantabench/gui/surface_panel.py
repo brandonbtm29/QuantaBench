@@ -549,12 +549,12 @@ class SurfacePanel(QWidget):
         # a closed surface with outward normals: culling its back faces keeps a translucent shell from
         # blending its far side over the near side in the wrong order (no depth peeling needed)
         prop.SetBackfaceCulling(opacity < 0.999)
-        self.plotter.render()
+        self.viewer.request_render()
 
     def remove_surface(self) -> None:
         if self.plotter is not None and ACTOR in self.plotter.renderer.actors:
             self.plotter.remove_actor(ACTOR, render=False)
-            self.plotter.render()
+            self.viewer.request_render()
         self.current, self._key = None, None
         self.readout.setText("")
         self.status.setText("")
