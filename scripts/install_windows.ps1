@@ -120,7 +120,14 @@ function Get-TorchFlavor([string]$Version) {
     if ($Version -match "\+cu") { return "cuda" }
     return "cpu"                             # +cpu or no tag: PyPI's Windows build is the CPU build
 }
-function Get-Sha256([string]$Path) { return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLower() }
+# .NET instead of Get-FileHash: Windows PowerShell started from PowerShell 7 (as on GitHub's runners) inherits
+# PowerShell 7's PSModulePath and then cannot load the module that provides Get-FileHash.
+function Get-Sha256([string]$Path) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try { $bytes = $sha.ComputeHash($stream) } finally { $stream.Dispose(); $sha.Dispose() }
+    return -join ($bytes | ForEach-Object { $_.ToString("x2") })
+}
 function Test-Interactive { try { return -not [Console]::IsInputRedirected } catch { return $false } }
 
 # ------------------------------------------------------------------------------------------------ start

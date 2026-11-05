@@ -218,3 +218,16 @@ def test_doctor_json_includes_the_profile(capsys, monkeypatch):
     data = json.loads(captured.out)
     assert data["profile"]["throughput"] == {"mmff@cpu": 7.0} and "Benchmarking" in captured.err
     assert profile.load_profile(profile.machine_name()).throughput == {"mmff@cpu": 7.0}
+
+
+def test_machine_names_are_folder_safe_and_short():
+    from quantabench.dist import worker
+
+    long = "sjc22-bt149-7e2e954b-e1e6-4932-b73d-ceb1546a53b8-2a200862263a"     # a GitHub macOS runner
+    name = profile.safe_machine_name(long)
+    assert len(name) <= profile.MAX_MACHINE_NAME and name.startswith("sjc22-bt149-")
+    assert name != profile.safe_machine_name(long[:-1] + "b")                 # still unique
+    assert worker.check_label(name + "-wsl") and worker.check_label(name)
+    assert profile.safe_machine_name("BTM NOVA") == "btm-nova"
+    assert profile.safe_machine_name("Brandon's MacBook Pro") == "brandon-s-macbook-pro"
+    assert profile.safe_machine_name("---") == "localhost"

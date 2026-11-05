@@ -147,8 +147,27 @@ def machine_name() -> str:
     from .. import resources
     from .plan import norm_name
 
-    name = norm_name(socket.gethostname().split(".")[0]) or "localhost"
+    name = safe_machine_name(socket.gethostname().split(".")[0])
     return f"{name}-wsl" if resources.is_wsl() else name
+
+
+MAX_MACHINE_NAME = 48     # room for "-wsl" and run-folder suffixes within the 60-character label limit
+
+
+def safe_machine_name(hostname: str) -> str:
+    """``norm_name`` of a hostname, reduced to the characters a folder name and a worker label accept and at
+    most ``MAX_MACHINE_NAME`` long (a long name keeps its start plus a short hash, so it stays unique; cloud
+    runners have names like "sjc22-bt149-7e2e954b-e1e6-...")."""
+    import hashlib
+    import re
+
+    from .plan import norm_name
+
+    name = re.sub(r"[^a-z0-9._+-]", "-", norm_name(hostname)).strip("-._+") or "localhost"
+    if len(name) > MAX_MACHINE_NAME:
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:6]
+        name = f"{name[:MAX_MACHINE_NAME - 7].rstrip('-._+')}-{digest}"
+    return name
 
 
 def resolve_lanes(explicit: str | None = None, cfg=None, log: Callable[[str], None] | None = None,

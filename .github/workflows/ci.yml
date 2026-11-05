@@ -24,7 +24,13 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Qt runtime libraries (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxcb-cursor0 libegl1 libgl1 xvfb
+        # Qt 6's xcb platform plugin aborts the process (in QApplication()) when one of these is missing
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libgl1 libglib2.0-0 libdbus-1-3 libfontconfig1 \
+            libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0 \
+            libxcb-xkb1
       - name: OpenGL for Qt and VTK (Windows)
         # GitHub's Windows runners have no GPU and only GDI's OpenGL 1.1; VTK 9 needs 3.2+. This installs
         # Mesa's llvmpipe opengl32.dll system-wide (not the off-screen-only build: the viewer embeds an
