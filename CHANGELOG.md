@@ -7,6 +7,7 @@
   installers): the `ml` extra no longer lists `tad-dftd3`, whose every release pins an old tad-mctc. AIMNet2's
   Warp-free path takes D3 from the fork's vendored tad-dftd3 (else PyPI's), and the ROCm/MPS linear-algebra
   routing also patches the fork's vendored D3 weights, `storch.eighb` and EEQ guess.
+- The Windows and macOS installers remove a tad-dftd3/tad-dftd4 left over from PyPI's dxtb once the fork is in.
 
 ### Large batches and joining machines (2026-11-05)
 - A worker measures its machine's throughput on its first start (a machine joining the pool), holding jobs

@@ -218,6 +218,11 @@ else
   else
     run "$VPY" -m pip install -e ".[$EXTRAS]" "${FORK_PKGS[@]}" $PIP_FLAGS || die "pip install failed (output above)"
   fi
+  # PyPI's dxtb brought tad-dftd3 0.6 / tad-dftd4 0.8 (pinned to tad-mctc 0.7). The fork carries its own copies,
+  # so a leftover install is unused and only makes `pip check` fail against tad-mctc 0.11.
+  stale=$("$VPY" -c "from importlib import metadata as m; print(' '.join(n for n in ('tad-dftd3', 'tad-dftd4') if any((d.metadata['Name'] or '').lower().replace('_', '-') == n for d in m.distributions())))" 2>/dev/null || true)
+  # shellcheck disable=SC2086  # one word per package
+  if [ -n "$stale" ]; then run "$VPY" -m pip uninstall -y $stale || warn "could not remove $stale (harmless)"; fi
   if [ "$DRY_RUN" = 0 ]; then
     printf '%s\n' "$(sha256 "$REPO/pyproject.toml") extras=$EXTRAS $PIP_FLAGS ${FORK_PKGS[*]}" > "$STAMP"
   fi

@@ -327,7 +327,8 @@ AIMNet2's Warp-free GPU path uses the same `tad-dftd3` as the installed dxtb: th
 with the fork, PyPI's `tad-dftd3` 0.6 with PyPI's dxtb. Don't add `tad-dftd3` to a fork install: every
 tad-dftd3 release pins tad-mctc exactly (0.6 → 0.7, 0.7 → 0.8), so pip reports `ResolutionImpossible`
 against the fork's tad-mctc 0.11. A `tad-dftd3`/`tad-dftd4` left over from an earlier PyPI install is
-harmless (QuantaBench uses the fork's copy first; `pip uninstall tad-dftd3 tad-dftd4` tidies it up).
+harmless (QuantaBench uses the fork's copy first); the Windows and macOS installers remove it, or run
+`pip uninstall tad-dftd3 tad-dftd4`.
 
 ## External programs: xtb, CREST, MOPAC, Psi4 (optional)
 

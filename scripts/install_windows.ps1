@@ -116,6 +116,8 @@ $PyVersionCode = "import sys; print('%d.%d' % sys.version_info[:2])"
 $PyExeCode = "import sys; print(sys.executable)"
 $TorchCode = "import importlib.metadata as m; print(m.version('torch'))"
 $WhereCode = "import os, quantabench; print(os.path.realpath(quantabench.__file__))"
+$StaleTadCode = "from importlib import metadata as m; print(' '.join(n for n in ('tad-dftd3', 'tad-dftd4') " +
+                "if any((d.metadata['Name'] or '').lower().replace('_', '-') == n for d in m.distributions())))"
 
 function Get-PyVersion([string]$Exe) { if (-not (Test-Path $Exe)) { return $null }; return Get-Output $Exe @("-c", $PyVersionCode) }
 function Get-TorchVersion([string]$Exe) { if (-not (Test-Path $Exe)) { return "" }; $v = Get-Output $Exe @("-c", $TorchCode); if ($v) { return $v }; return "" }
@@ -292,6 +294,10 @@ function Install-QuantaBench([string]$Dir) {
     Push-Location $Repo
     try { Run $exe $pipArgs -FailMessage "pip install failed (output above); docs\INSTALL.md has fixes" | Out-Null }
     finally { Pop-Location }
+    # PyPI's dxtb brought tad-dftd3 0.6 / tad-dftd4 0.8 (pinned to tad-mctc 0.7). The fork carries its own copies,
+    # so a leftover install is unused and only makes `pip check` fail against tad-mctc 0.11.
+    $stale = Get-Output $exe @("-c", $StaleTadCode)
+    if ($stale) { Run $exe (@("-m", "pip", "uninstall", "-y") + ($stale -split " ")) -AllowFail | Out-Null }
     if (-not $DryRun) { [IO.File]::WriteAllText($stamp, $want + "`r`n", (New-Object Text.ASCIIEncoding)) }
 }
 Step "QuantaBench in .venv (pip install -e "".[$Extras]"")"
