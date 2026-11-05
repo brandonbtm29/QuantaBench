@@ -14,6 +14,9 @@ def main() -> int:
     s = settings_mod.load()
     # Thread caps must be in the environment before NumPy/PyTorch load their thread pools.
     resources.apply_thread_limits(s.resources.threads)
+    from ..chem import torch_compat
+
+    torch_compat.apply_settings(s, strict=False)       # dxtb linear algebra / GPU modes for everything the GUI runs
     os.environ.setdefault("QT_API", "pyside6")  # pyvistaqt/qtpy: use PySide6 even if PyQt is installed
 
     from PySide6.QtCore import Qt

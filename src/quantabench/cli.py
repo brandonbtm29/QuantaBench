@@ -784,8 +784,21 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _apply_gpu_policies() -> None:
+    """Settings > Compute's dxtb linear-algebra and GPU modes for commands that do not build a BuildConfig
+    (freq, doctor, ...); ``build`` passes them through BuildConfig as well. Bad settings never stop a command."""
+    from . import settings as settings_mod
+    from .chem import torch_compat
+
+    try:
+        torch_compat.apply_settings(settings_mod.load(), strict=False)
+    except Exception:  # noqa: BLE001, S110 - unreadable or invalid settings: keep the defaults
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _apply_gpu_policies()
     return args.func(args)
 
 

@@ -50,7 +50,7 @@ from .pipeline import BuildConfig, MoleculeResult, ProgressFn
 
 DB_NAME = "jobs.sqlite"
 LOCK_NAME = "jobs.lock"
-SCHEMA_VERSION = 2                 # 2: molecules.crashes
+SCHEMA_VERSION = 3                 # 2: molecules.crashes, 3: run.accepted
 STATUSES = ("pending", "running", "ok", "failed", "cancelled")
 MAX_CRASHES = 2                    # a molecule that killed the process this often is marked failed
 
@@ -64,6 +64,12 @@ SCIENCE_FIELDS = (
     "solvent", "conformer_search", "crest_method", "crest_quick", "qm_method", "qm_task", "qm_top",
     "qm_properties", "qm_frequencies", "qm_cubes", "qm_program",
 )
+
+#: Versions before this one ran the stock AIMNet2 calculator with aimnet 0.2's adaptive neighbor lists
+#: unguarded: after a smaller molecule they silently dropped neighbors of larger ones (0.1-0.2 eV). Results of
+#: an aimnet2 (or method "auto") run started before it cannot be mixed with results computed now.
+AIMNET_NBLIST_FIX_VERSION = "0.3.0.dev1"
+AIMNET_METHODS = ("aimnet2", "auto")
 
 # (i, n): 0-based chunk i of n, by ``chunk_index`` (modulo). (i, n, weights): weighted chunk, by
 # ``dist.plan.weighted_index(id, weights) == i`` with one weight per chunk (``--chunk-weights``).
@@ -91,14 +97,40 @@ def _dumps(obj) -> str:
 
 
 class ConfigMismatchError(ValueError):
-    """The run folder was started with different science settings."""
+    """The run folder was started with different science settings (or a QuantaBench version whose results
+    differ, ``reasons`` says why)."""
 
-    def __init__(self, differences: dict[str, tuple], run_dir: Path):
+    def __init__(self, differences: dict[str, tuple], run_dir: Path, reasons: Sequence[str] = ()):
         self.differences = differences
+        self.reasons = list(reasons)
         lines = ", ".join(f"{k}: stored {a!r} vs now {b!r}" for k, (a, b) in differences.items())
-        super().__init__(f"{run_dir} was started with different settings ({lines}). Resuming would mix two "
+        why = "".join(f" {r}" for r in self.reasons)
+        super().__init__(f"{run_dir} was started with different settings ({lines}).{why} Resuming would mix two "
                          "protocols in one table: use the stored settings, start a new run folder, or pass "
                          "force=True to continue anyway.")
+
+
+def version_key(version: str) -> tuple:
+    """Sortable form of a QuantaBench version ("0.3.0.dev1" < "0.3.0" < "0.3.1"); unreadable -> oldest."""
+    import re
+
+    m = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?(?:\.?dev(\d+))?.*", str(version or "").strip())
+    if m is None:
+        return (-1,)
+    major, minor, patch, dev = m.groups()
+    return (int(major), int(minor), int(patch or 0), 0 if dev is not None else 1, int(dev or 0))
+
+
+def version_differences(stored_version: str, stored_config: dict) -> tuple[dict[str, tuple], list[str]]:
+    """Versions whose results for this run's method differ from today's: ({"version": (old, new)}, reasons)."""
+    method = stored_config.get("method", BuildConfig().method)
+    if method in AIMNET_METHODS and version_key(stored_version) < version_key(AIMNET_NBLIST_FIX_VERSION):
+        return ({"version": (stored_version, __version__)},
+                [f"It was started with QuantaBench {stored_version or '?'}, before {AIMNET_NBLIST_FIX_VERSION} fixed "
+                 "aimnet's neighbor lists: AIMNet2 energies of molecules computed after a smaller one in the same "
+                 f"process were wrong by up to ~0.2 eV, so method {method!r} results would mix old and corrected "
+                 "numbers."])
+    return {}, []
 
 
 class RunInUseError(RuntimeError):
@@ -269,6 +301,9 @@ class JobStore:
             cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(molecules)")}
             if "crashes" not in cols:     # version 1 tables
                 self.conn.execute("ALTER TABLE molecules ADD COLUMN crashes INTEGER NOT NULL DEFAULT 0")
+            if "accepted" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(run)")}:
+                # newest version a forced resume accepted results from (version_differences); NULL = none
+                self.conn.execute("ALTER TABLE run ADD COLUMN accepted TEXT")
             self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def close(self) -> None:
@@ -287,17 +322,21 @@ class JobStore:
             return None
         chunk = json.loads(row["chunk"]) if row["chunk"] else None
         return {"config": json.loads(row["config"]), "version": row["version"], "created": row["created"],
-                "updated": row["updated"], "chunk": tuple(chunk) if chunk else None}
+                "updated": row["updated"], "chunk": tuple(chunk) if chunk else None,
+                "accepted": row["accepted"] if "accepted" in row.keys() else None}
 
     def init_run(self, cfg: BuildConfig, chunk: Chunk | None) -> None:
         with self.conn:
             self.conn.execute("INSERT INTO run (id, config, version, created, chunk, updated) VALUES (1, ?, ?, ?, ?, ?)",
                               (_dumps(asdict(cfg)), __version__, _now(), _dumps(chunk) if chunk else None, _now()))
 
-    def update_run(self, cfg: BuildConfig, chunk: Chunk | None) -> None:
+    def update_run(self, cfg: BuildConfig, chunk: Chunk | None, accepted: str | None = None) -> None:
+        """Store the settings in force; ``accepted``: a forced resume took this version's results in."""
         with self.conn:
             self.conn.execute("UPDATE run SET config = ?, chunk = ?, updated = ? WHERE id = 1",
                               (_dumps(asdict(cfg)), _dumps(chunk) if chunk else None, _now()))
+            if accepted:
+                self.conn.execute("UPDATE run SET accepted = ? WHERE id = 1", (accepted,))
 
     # -- molecules
     def add_inputs(self, inputs: Iterable[MoleculeInput], log: Callable[[str], None] = _noop) -> int:
@@ -506,13 +545,17 @@ def _prepare_run(store: JobStore, cfg: BuildConfig, chunk: Chunk | None, force: 
     diffs = config_differences(run["config"], cfg)
     if not same_chunk(stored, chunk):
         diffs["chunk"] = (stored, chunk)
+    version_diffs, reasons = version_differences(run.get("accepted") or run["version"], run["config"])
+    diffs.update(version_diffs)
     if diffs and not force:
-        raise ConfigMismatchError(diffs, store.run_dir)
+        raise ConfigMismatchError(diffs, store.run_dir, reasons)
     if diffs:
         log("Continuing with changed settings (force): " + ", ".join(f"{k} {a!r} -> {b!r}" for k, (a, b) in diffs.items()))
+        for r in reasons:
+            log(f"  {r}")
     if run["version"] != __version__:
         log(f"Run started with QuantaBench {run['version']}, continuing with {__version__}")
-    store.update_run(cfg, chunk)
+    store.update_run(cfg, chunk, accepted=__version__ if version_diffs else None)
     return chunk
 
 

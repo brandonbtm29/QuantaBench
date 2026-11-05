@@ -311,3 +311,33 @@ def test_solvent_and_qm_changes_are_config_mismatches(tmp_path, counting):
 
         with pytest.raises(jobs.ConfigMismatchError):
             jobs.run_resumable(None, replace(cfg, **change), tmp_path)
+
+
+def test_aimnet2_runs_from_before_the_neighbor_list_fix_are_not_resumed_silently(tmp_path, monkeypatch):
+    """Versions before AIMNET_NBLIST_FIX_VERSION gave wrong AIMNet2 energies for molecules after a smaller one:
+    resuming such an aimnet2/auto run is refused (with the reason) unless forced; other methods resume."""
+    monkeypatch.setattr(pipeline, "run_molecule",
+                        lambda inp, *a, **k: pipeline.MoleculeResult(input=inp, status="ok", method="aimnet2"))
+
+    def started_with(version, method):
+        run_dir = tmp_path / f"{method}-{version}"
+        jobs.run_resumable(inputs(["ethanol"]), cfg(tmp_path, method=method, write_files=False), run_dir)
+        with sqlite3.connect(run_dir / jobs.DB_NAME) as con:
+            con.execute("UPDATE run SET version = ?", (version,))
+        return run_dir
+
+    old = started_with("0.3.0.dev0", "aimnet2")
+    with pytest.raises(jobs.ConfigMismatchError) as exc:
+        jobs.run_resumable(inputs(), cfg(tmp_path, method="aimnet2", write_files=False), old)
+    assert exc.value.differences == {"version": ("0.3.0.dev0", jobs.__version__)}
+    assert "neighbor lists" in str(exc.value) and "force=True" in str(exc.value)
+    logs = []
+    jobs.run_resumable(inputs(), cfg(tmp_path, method="aimnet2", write_files=False), old, force=True, log=logs.append)
+    assert any("neighbor lists" in m for m in logs) and jobs.open_run(old).counts["ok"] == 4
+    jobs.run_resumable(None, cfg(tmp_path, method="aimnet2", write_files=False), old)   # now recorded as current
+    with pytest.raises(jobs.ConfigMismatchError):
+        jobs.run_resumable(None, cfg(tmp_path, method="auto", write_files=False), started_with("0.2.1", "auto"))
+    jobs.run_resumable(None, cfg(tmp_path, write_files=False), started_with("0.3.0.dev0", "mmff"))    # unaffected
+    jobs.run_resumable(None, cfg(tmp_path, method="aimnet2", write_files=False),
+                       started_with(jobs.AIMNET_NBLIST_FIX_VERSION, "aimnet2"))
+    assert jobs.version_key("0.3.0.dev0") < jobs.version_key("0.3.0.dev1") < jobs.version_key("0.3.0")

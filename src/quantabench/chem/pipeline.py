@@ -395,8 +395,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         if device != "cpu":   # GPU policies for dxtb (also set in lane processes, which get cfg, not settings)
             from . import torch_compat
 
-            torch_compat.set_policy(cfg.linalg)
-            torch_compat.set_dxtb_gpu(cfg.dxtb_gpu)
+            torch_compat.apply_settings(cfg)
         stage("prepare")
         prepared, notes = prepare(inp.to_mol(), cfg.ph if cfg.protonate else None, cfg.keep_largest_fragment,
                                   cfg.protonation_method)

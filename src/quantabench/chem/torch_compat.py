@@ -47,7 +47,7 @@ factorization of the overlap and the inverse of its factor run on the CPU, while
 is 10-20x faster than this wheel's CPU LAPACK. When ``eigh`` is routed too (MPS, or ``cpu`` policy),
 the whole ``eighb`` call runs on the CPU with one copy in and one copy out.
 
-Policy (``QUANTABENCH_LINALG`` overrides ``set_policy``, which the app sets from Settings)
+Policy (``QUANTABENCH_LINALG`` overrides ``set_policy``; ``apply_settings`` sets it from Settings/BuildConfig)
 -------------------------------------------------------------------------------------------
 - ``auto`` (default): CPU devices are never routed; ``mps`` routes everything; any other device is
   probed once per process (``probe``: float64 support, then a tiny batched cholesky / cholesky_solve /
@@ -140,6 +140,22 @@ def compute_dtype(device):
 def float64_device(device) -> str:
     """Where a calculation that needs float64 (Hessians) can run: ``device``, except MPS -> 'cpu'."""
     return "cpu" if device_type(device) == "mps" else str(device)
+
+
+def apply_settings(source, strict: bool = True) -> None:
+    """Set the linear-algebra policy and the dxtb GPU mode from ``source``: a ``BuildConfig``, a
+    ``settings.ResourceSettings`` or a whole ``Settings`` (its ``resources``), anything with ``linalg`` and
+    ``dxtb_gpu``. Entry points (CLI, GUI) call it once with ``strict=False`` (an invalid value, say from a
+    hand-edited settings.json, means 'auto'), ``pipeline.run_molecule`` for each molecule run on a GPU
+    (an invalid value raises). The environment variables still win (``current_policy``, ``dxtb_gpu_mode``)."""
+    src = getattr(source, "resources", source)
+    for setter, value in ((set_policy, getattr(src, "linalg", "auto")), (set_dxtb_gpu, getattr(src, "dxtb_gpu", "auto"))):
+        try:
+            setter(value or "auto")
+        except (ValueError, AttributeError, TypeError):
+            if strict:
+                raise
+            setter("auto")
 
 
 # ============================================================================ capability probe

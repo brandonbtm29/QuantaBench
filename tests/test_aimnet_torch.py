@@ -272,6 +272,25 @@ def test_guarded_stock_neighbor_lists_grow_after_small_molecule(random_model, ca
     assert float((out["energy"].detach() - calcs["ad64"](dict(pfoa))["energy"]).abs().max()) < 1e-5
 
 
+@needs_aimnet
+def test_neighbor_lists_made_later_are_guarded_too():
+    """The guard is on the class: a list created after the calculator (set_lrcoulomb_method, set_dftd3_cutoff,
+    the per-call Ewald/PME list) with a shrunken buffer still returns every neighbor."""
+    from aimnet.calculators.calculator import AdaptiveNeighborList
+
+    assert at.guard_neighbor_lists() and at.guard_neighbor_lists()          # idempotent
+    torch.manual_seed(0)
+    pos = torch.rand(60, 3) * 4.0                                            # dense: ~55 neighbors within 5 Å
+    nl = AdaptiveNeighborList(cutoff=5.0)
+    nl.max_neighbors = 16
+    nbmat, num, _ = nl(pos, batch_idx=torch.zeros(60, dtype=torch.int32))
+    assert int(num.max()) > 16 and nbmat.shape[1] >= int(num.max()) and nl.max_neighbors > 16
+    for i in range(0, 60, 7):                                                # the neighbor sets are complete
+        d = (pos - pos[i]).norm(dim=1)
+        expected = {j for j in range(60) if j != i and float(d[j]) < 5.0}
+        assert {int(j) for j in nbmat[i, : int(num[i])]} == expected
+
+
 # ---------------------------------------------------------------------------- integration
 @needs_aimnet
 def test_load_calculator_routes_and_falls_back(random_model, monkeypatch):
@@ -283,7 +302,7 @@ def test_load_calculator_routes_and_falls_back(random_model, monkeypatch):
     monkeypatch.setenv(at.BACKEND_ENV, "stock")
     stock = at.load_calculator(path, "cpu")
     assert isinstance(stock, AIMNet2Calculator) and stock.qb_backend == "stock"
-    assert type(stock._nblist).__name__ == "CheckedAdaptiveNeighborList"
+    assert type(stock._nblist).__call__.qb_checked
     monkeypatch.setenv(at.BACKEND_ENV, "auto")
     monkeypatch.setattr(at, "warp_problem", lambda device: "ROCm GPU: Warp supports NVIDIA CUDA only")
     calc = at.load_calculator(path, "cpu")
