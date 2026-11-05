@@ -18,9 +18,11 @@ crash, and rows ``cancelled`` by a stop request, are simply done again on the ne
 
 Splitting across machines: ``chunk=(i, n)`` (0-based ``i``) selects the molecules whose id hashes
 to ``i`` modulo ``n``. The hash depends only on the id, not on row order, so every machine computes
-the same partition even if the list is re-sorted or extended. Give each machine its own run_dir
-(SQLite must not be written by two machines through a synced folder) and combine the tables with
-``merge_tables``.
+the same partition even if the list is re-sorted or extended. ``chunk=(i, n, weights)`` splits in
+proportion to ``weights`` instead (``dist.plan.weighted_index``; ``--chunk-weights 3,1`` or ``auto`` from
+the machine registry); the weights are stored with the chunk, so a resume keeps the same split. Give each
+machine its own run_dir (SQLite must not be written by two machines through a synced folder) and combine
+the tables with ``merge_tables``.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 import os
 import platform
 import socket
@@ -61,7 +64,9 @@ SCIENCE_FIELDS = (
     "temperature_k", "xtb_properties", "seed", "frequencies", "freq_hessian", "symmetry_number", "freq_qrrho",
 )
 
-Chunk = tuple[int, int]
+# (i, n): 0-based chunk i of n, by ``chunk_index`` (modulo). (i, n, weights): weighted chunk, by
+# ``dist.plan.weighted_index(id, weights) == i`` with one weight per chunk (``--chunk-weights``).
+Chunk = tuple[int, int] | tuple[int, int, tuple[float, ...]]
 
 
 def _noop(*_args) -> None:
@@ -111,12 +116,55 @@ def chunk_index(mol_id: str, n: int) -> int:
 
 
 def check_chunk(chunk: Chunk | None) -> Chunk | None:
+    """Validate and normalize a chunk: ``(i, n)``, or ``(i, n, weights)`` with n weights >= 0 of which
+    chunk i's is positive. Equal weights become the plain ``(i, n)`` (modulo) split, so a machine given
+    ``--chunk-weights 1,1`` agrees with one given only ``--chunk``. Lists (from JSON) become tuples."""
     if chunk is None:
         return None
+    if len(chunk) not in (2, 3):
+        raise ValueError(f"chunk must be (i, n) or (i, n, weights), got {chunk!r}")
     i, n = int(chunk[0]), int(chunk[1])
     if n < 1 or not 0 <= i < n:
         raise ValueError(f"chunk must be (i, n) with 0 <= i < n (0-based), got {chunk!r}")
-    return (i, n)
+    if len(chunk) == 2 or chunk[2] is None:
+        return (i, n)
+    try:
+        weights = tuple(float(x) for x in chunk[2])
+    except (TypeError, ValueError):
+        raise ValueError(f"chunk weights must be numbers, got {chunk[2]!r}") from None
+    if len(weights) != n:
+        raise ValueError(f"chunk {i + 1}/{n} needs {n} weights, got {len(weights)}")
+    if any(not math.isfinite(w) or w < 0 for w in weights):
+        raise ValueError(f"chunk weights must be finite and >= 0, got {weights!r}")
+    if weights[i] <= 0:
+        raise ValueError(f"chunk {i + 1}/{n} has weight 0: it would get no molecules")
+    if len(set(weights)) == 1:
+        return (i, n)
+    return (i, n, weights)
+
+
+def chunk_share(chunk: Chunk | None) -> float:
+    """Expected fraction of the list that falls in ``chunk`` (1.0 for an unsplit run)."""
+    chunk = check_chunk(chunk)
+    if chunk is None:
+        return 1.0
+    if len(chunk) == 2:
+        return 1.0 / chunk[1]
+    return chunk[2][chunk[0]] / sum(chunk[2])
+
+
+def same_chunk(a: Chunk | None, b: Chunk | None) -> bool:
+    """Whether two chunks select the same molecules: same position and count, and weights in the same
+    ratio (3,1 and 6,2 are one split)."""
+    a, b = check_chunk(a), check_chunk(b)
+    if a is None or b is None or len(a) != len(b):
+        return a == b
+    if a[:2] != b[:2]:
+        return False
+    if len(a) == 2:
+        return True
+    sa, sb = sum(a[2]), sum(b[2])
+    return all(math.isclose(x / sa, y / sb, rel_tol=1e-9, abs_tol=1e-12) for x, y in zip(a[2], b[2], strict=True))
 
 
 def parse_chunk(text: str) -> Chunk:
@@ -131,12 +179,25 @@ def parse_chunk(text: str) -> Chunk:
 
 
 def chunk_label(chunk: Chunk | None) -> str:
-    """'chunk2of3' (1-based) for folder names; '' for an unsplit run."""
-    return "" if chunk is None else f"chunk{chunk[0] + 1}of{chunk[1]}"
+    """'chunk2of3' (1-based) for folder names, 'chunk1of2-75pct' for a weighted chunk; '' for an unsplit run."""
+    if chunk is None:
+        return ""
+    label = f"chunk{int(chunk[0]) + 1}of{int(chunk[1])}"
+    if len(chunk) > 2 and chunk[2] is not None:
+        weights = [float(x) for x in chunk[2]]
+        if len(set(weights)) > 1 and sum(weights) > 0:
+            label += f"-{round(100 * weights[int(chunk[0])] / sum(weights))}pct"
+    return label
 
 
 def in_chunk(mol_id: str, chunk: Chunk | None) -> bool:
-    return chunk is None or chunk_index(mol_id, chunk[1]) == chunk[0]
+    if chunk is None:
+        return True
+    if len(chunk) > 2 and chunk[2] is not None:
+        from ..dist.plan import weighted_index
+
+        return weighted_index(mol_id, chunk[2]) == chunk[0]
+    return chunk_index(mol_id, chunk[1]) == chunk[0]
 
 
 # ------------------------------------------------------------------------------ input round trip
@@ -422,16 +483,18 @@ def config_differences(stored: dict, cfg: BuildConfig) -> dict[str, tuple]:
 def _prepare_run(store: JobStore, cfg: BuildConfig, chunk: Chunk | None, force: bool,
                  log: Callable[[str], None]) -> Chunk | None:
     """Create or check the run record; returns the chunk in force (a resume without a chunk keeps
-    the stored one)."""
+    the stored one, weights included). A different chunk, or the same chunk with other weights, is a
+    mismatch like a different method: it would select other molecules."""
     run = store.get_run()
     if run is None:
         store.init_run(cfg, chunk)
         return chunk
+    stored = check_chunk(run["chunk"])     # JSON lists -> tuples
     if chunk is None:
-        chunk = run["chunk"]
+        chunk = stored
     diffs = config_differences(run["config"], cfg)
-    if run["chunk"] != chunk:
-        diffs["chunk"] = (run["chunk"], chunk)
+    if not same_chunk(stored, chunk):
+        diffs["chunk"] = (stored, chunk)
     if diffs and not force:
         raise ConfigMismatchError(diffs, store.run_dir)
     if diffs:
