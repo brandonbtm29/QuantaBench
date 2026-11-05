@@ -45,8 +45,12 @@ ml = ["aimnet>=0.2"]                       # AIMNet2 neutral + charged organics 
 # dxtb>=0.4: GFN1-xTB in PyTorch. GFN2, polarizability and IR intensities also need tad-libcint: PyPI's
 # dxtb with "tad-libcint<0.4" (Linux), or on any OS the fork (a direct URL, so not listed here; FORK-1):
 #   pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"
+# tblite: in-process GFN2-xTB. PyPI has wheels for Linux and macOS only; on Windows pip would try to
+# compile PyPI's sdist (needs gfortran) and fail, hence the marker. Windows wheels come from the
+# brandonbtm29/tblite fork's GitHub release, installed with a separate pip line (docs/INSTALL.md):
+# a direct URL or --find-links cannot go into the metadata of a package published on PyPI (FORK-2).
 xtb = ["dxtb>=0.4",
-       "tblite>=0.4; sys_platform != 'win32'"]  # in-process GFN2-xTB (PyPI wheels: Linux, macOS; conda-forge: Windows)
+       "tblite>=0.4; sys_platform != 'win32'"]
 interop = ["cclib>=1.8"]                   # import Gaussian/ORCA/Psi4/xtb/MOPAC/... output files
 protonate = ["dimorphite-dl>=2.0"]         # pH-dependent protonation states
 ovito = ["ovito>=3.12"]                    # embedded OVITO viewport for big systems / trajectories

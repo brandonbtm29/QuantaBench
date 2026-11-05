@@ -165,9 +165,17 @@ steps 2 to 4 in a second environment, `.venv-rocm`, and keeps the CPU build in `
    pip install -e ".[all,dev]"
    # dxtb GFN2-xTB, polarizability and IR intensities (libcint backend, see below):
    pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"
+   # tblite: in-process GFN2/GFN1-xTB with ALPB/GBSA/CPCM (Windows wheels from the fork):
+   pip install tblite --only-binary tblite --find-links https://github.com/brandonbtm29/tblite/releases/expanded_assets/qb-v0.8.0-win1
    quantabench-cli doctor --bench
    quantabench
    ```
+
+   The tblite line adds `tblite-gfn2`/`tblite-gfn1` (in-process GFN2/GFN1-xTB with ALPB, GBSA
+   and CPCM). PyPI has no Windows wheel for it, so the `xtb` extra skips it on Windows; these wheels
+   (CPython 3.11-3.13, win_amd64) are built from tblite 0.8.0 in Brandon's fork (FORK-2; one build-file
+   fix, no source changes), with the MinGW-w64 runtime and reference BLAS/LAPACK bundled.
+   `--only-binary tblite` stops pip from picking a newer PyPI sdist that it cannot compile.
 
    If `doctor` reports a PyTorch version ending in `+cpu` (for example `2.14.1+cpu`), pip pulled the
    generic CPU build from PyPI because step 3 was skipped or ran afterwards. Rerun step 3 with
@@ -211,9 +219,11 @@ environment (`py -3.12 -m venv .venv-rocm`) for GPU experiments.
   [dxtb's libcint backend](#dxtbs-libcint-backend-gfn2-polarizability-ir-intensities)). Without it,
   GFN1-xTB optimizations, frequencies, thermochemistry, Mulliken charges and charge-based dipoles all
   work; polarizability and IR intensities are skipped with a note, and `quantabench-cli doctor` says
-  what is missing. GFN2-xTB is also available through the xtb program (`xtb-gfn2`, with ALPB
-  solvation, its own optimizer, dipoles, D4 polarizability and finite-difference IR intensities):
-  install `envs/tools-windows.yml`. Tested on Linux so far; the first Windows run is backlog ENG-1.
+  what is missing. **GFN2-xTB itself is available on Windows through the xtb program** (`xtb-gfn2`,
+  with ALPB solvation, its own optimizer, dipoles, D4 polarizability and finite-difference IR
+  intensities): install `envs/tools-windows.yml`. Tested on Linux so far; the first Windows run is
+  backlog ENG-1. It also runs in process through tblite (`tblite-gfn2`, the third pip line of step 4),
+  with dipoles, a finite-field polarizability and ALPB/GBSA/CPCM solvation.
 - **pyvistaqt is pinned below 0.13.** 0.13 replaced the native-window VTK widget with a framebuffer
   `QOpenGLWidget` that crashes in `initializeGL` with the AMD driver on Windows (verified on an
   RX 9060 XT, driver 26.10.1). 0.12 works. If you upgraded it by hand: `pip install "pyvistaqt==0.12.0"`.
@@ -316,7 +326,7 @@ program are in [ENGINES.md](ENGINES.md).
 | Extra | Installs | Enables |
 |---|---|---|
 | `ml` | `aimnet` | AIMNet2 ML potential (downloads model weights on first use) |
-| `xtb` | `dxtb`, `tblite` (not on Windows) | GFN1-xTB (dxtb), GFN2-xTB in process (tblite; dxtb with `tad-libcint`, see [above](#dxtbs-libcint-backend-gfn2-polarizability-ir-intensities)) |
+| `xtb` | `dxtb`, `tblite` (Windows: separate line, step 4 above) | GFN1-xTB (dxtb), GFN2-xTB in process (tblite; dxtb with `tad-libcint`, see [above](#dxtbs-libcint-backend-gfn2-polarizability-ir-intensities)) |
 | `interop` | `cclib` | Import Gaussian/ORCA/Psi4/xtb/MOPAC output files |
 | `protonate` | `dimorphite-dl` | Alternative pH protonation |
 | `ovito` | `ovito` | Embedded OVITO viewport |
