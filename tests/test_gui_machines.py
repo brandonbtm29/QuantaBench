@@ -87,3 +87,47 @@ def test_compute_tab_gpu_policies_round_trip():
     assert (cfg.dxtb_gpu, cfg.linalg) == ("off", "device")
     d.reject()
     d.deleteLater()
+
+
+def test_benchmark_this_computer_button(tmp_path, monkeypatch):
+    from quantabench import settings as sm
+    from quantabench.dist import profile
+    from quantabench.gui.main_window import MainWindow
+
+    here = profile.machine_name()
+    calls = []
+
+    def fake(bench=False, should_stop=None, **kw):
+        calls.append(bench)
+        return profile.MachineProfile(name=here, physical_cores=4, logical_cores=8,
+                                      throughput={"mmff@cpu": 4321.0} if bench else {})
+
+    saved = []
+    monkeypatch.setattr(profile, "local_profile", fake)
+    monkeypatch.setattr(profile, "save_profile", lambda p: saved.append(p) or tmp_path / "x.json")
+    monkeypatch.setattr(profile, "load_profiles", lambda *a, **k: list(saved))
+    app = _app()
+    w = MainWindow(sm.Settings(output_dir=str(tmp_path)))
+    panel = w.machines_panel
+    t = panel.table
+    assert t.item(0, 3).text() == "not measured"
+    panel.benchmark_here()
+    assert _wait(app, lambda: not panel._benching)
+    assert calls == [True] and saved and "mmff@cpu 4,321" in panel.note.text()
+    assert t.item(0, 3).text().startswith("mmff@cpu 4,321") and panel.bench_btn.isEnabled()
+    w.close()
+    assert _wait(app, lambda: w.closed)
+
+
+def test_app_collects_cycles_in_the_gui_thread():
+    import gc
+
+    from quantabench.gui import app as app_mod
+
+    qapp = _app()
+    try:
+        app_mod._collect_in_gui_thread(qapp)
+        assert not gc.isenabled() and qapp._qb_gc_timer.isActive() and qapp._qb_gc_timer.interval() == 5000
+    finally:
+        qapp._qb_gc_timer.stop()
+        gc.enable()

@@ -1242,7 +1242,7 @@ def _cli_machines(args) -> int:
         print(f"{ref.name:24s} {ref.url:30s} QuantaBench {info.get('quantabench_version')}{mark}"
               f"{' @' + info['commit'] if info.get('commit') else ''}; "
               f"{len(q.get('running', []))} running, {len(q.get('queued', []))} queued"
-              f"{', paused' if q.get('paused') else ''}" + (f"; {hw}" if hw else ""))
+              f"{', paused' if q.get('paused') else ''}{', ' + q['hold'] if q.get('hold') else ''}" + (f"; {hw}" if hw else ""))
         if prof.throughput:
             print(" " * 25 + "throughput: " + ", ".join(f"{k} {v:g}/h" for k, v in sorted(prof.throughput.items())))
     return 0 if any(r.reachable for r in refs.values()) else 1

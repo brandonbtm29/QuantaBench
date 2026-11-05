@@ -15,6 +15,18 @@ def pytest_unconfigure(config):
     resources.hard_exit_if_needed(_EXIT_STATUS[0])
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _collect_in_main_thread():
+    """Collect each test module's reference cycles here, in the main thread. Left to chance, a cycle that
+    holds a Qt window (a panel and its window refer to each other) may be collected by a worker thread of a
+    later module (the HTTP worker tests), and Qt aborts the process when a widget is destroyed outside the
+    GUI thread. The app itself collects in its GUI thread on a timer (gui/app.py)."""
+    yield
+    import gc
+
+    gc.collect()
+
+
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path, monkeypatch):
     """Never touch the real settings folder (or the GUI's saved window layout) from tests."""

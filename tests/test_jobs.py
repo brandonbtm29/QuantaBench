@@ -341,3 +341,15 @@ def test_aimnet2_runs_from_before_the_neighbor_list_fix_are_not_resumed_silently
     jobs.run_resumable(None, cfg(tmp_path, method="aimnet2", write_files=False),
                        started_with(jobs.AIMNET_NBLIST_FIX_VERSION, "aimnet2"))
     assert jobs.version_key("0.3.0.dev0") < jobs.version_key("0.3.0.dev1") < jobs.version_key("0.3.0")
+
+
+def test_light_results_for_big_batches(tmp_path):
+    full = []
+    cfg = pipeline.BuildConfig(method="mmff", max_conformers=3, refine_top=1, xtb_properties=False,
+                               formats=("xyz",))
+    results, _ = jobs.run_resumable([from_smiles("CCO", id="ethanol"), from_smiles("CCCO", id="propanol")], cfg,
+                                    tmp_path, on_result=full.append, keep_results=False)
+    assert [r.input.id for r in results] == ["ethanol", "propanol"] and all(r.status == "ok" for r in results)
+    assert all(r.mol is None and r.vibrations is None for r in results)            # nothing big kept
+    assert all(r.mol is not None for r in full)                                     # callbacks get it all
+    assert results[0].conformers and results[0].descriptors == full[0].descriptors and results[0].files

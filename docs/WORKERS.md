@@ -156,6 +156,13 @@ still running), 411/413/415 (body).
 
    It should print `worker 'btm-nova' at http://100.90.226.110:8765`. Ctrl+C stops it.
 
+   **A machine that joins is measured once.** On its first start (no throughput in its profile yet) the
+   worker runs the throughput benchmark before it takes jobs: molecules/hour per installed engine on the CPU
+   and each GPU, a few minutes, with submitted jobs held (`grid machines` shows it as benchmarking). The result
+   goes into its profile, so `grid build --weights auto` gives it the right share. Later starts skip it;
+   `--bench always` measures again (after a hardware or PyTorch change), `--bench never` never does. The GUI's
+   Machines dock has the same as a button, "Benchmark this computer".
+
 3. **Start at login** (normal PowerShell; no console window, log in `%LOCALAPPDATA%\QuantaBench\worker.log`):
 
    ```powershell

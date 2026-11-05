@@ -45,7 +45,25 @@ def main() -> int:
         return 1
     win = MainWindow(s)
     win.show()
+    _collect_in_gui_thread(app)
     return app.exec()
+
+
+def _collect_in_gui_thread(app) -> None:
+    """Python's cyclic garbage collector runs in whichever thread happens to allocate; when that is a worker
+    thread (a batch, a benchmark) and the garbage holds a closed dialog or panel, Qt destroys a widget outside
+    the GUI thread and aborts the process. So automatic collection is off and cycles are collected here, in
+    the GUI thread, every few seconds."""
+    import gc
+
+    from PySide6.QtCore import QTimer
+
+    gc.disable()
+    timer = QTimer(app)
+    timer.setInterval(5000)
+    timer.timeout.connect(gc.collect)
+    timer.start()
+    app._qb_gc_timer = timer
 
 
 def entry() -> None:

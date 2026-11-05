@@ -134,7 +134,7 @@ def test_auth_info_and_discovery(make_worker, capsys):
     status, info = raw(w1.url + "/v1/info")
     assert status == 200 and info["name"] == "w1" and info["api"] == worker_mod.API_VERSION
     assert info["quantabench_version"] == __version__ and info["profile"]["address"] == w1.url
-    assert info["queue"] == {"running": [], "queued": [], "paused": False, "max_jobs": 1}
+    assert info["queue"] == {"running": [], "queued": [], "paused": False, "max_jobs": 1, "hold": ""}
     assert TOKEN not in json.dumps(info)
     assert raw(w1.url + "/v1/nothing")[0] == 404
     assert raw(w1.url + "/v1/info", "POST", {})[0] == 405
@@ -750,3 +750,41 @@ def test_job_list_survives_a_torn_file_and_save_errors(tmp_path, monkeypatch):
         assert all(t.is_alive() for t in m3._threads)
     finally:
         m3.stop(5)
+
+
+# ------------------------------------------------------------------------------- join-time benchmark
+def test_new_machine_benchmarks_once_with_jobs_held(make_worker, qb_settings, monkeypatch):
+    calls, gate = [], threading.Event()
+    real = profile.local_profile
+
+    def fake_local_profile(bench=False, methods=None, **kw):
+        prof = real(**{k: v for k, v in kw.items() if k in ("address", "keep_previous")})
+        if bench:
+            calls.append(methods)
+            gate.wait(10)                      # the test checks the hold while the "benchmark" runs
+            prof.throughput = {"mmff@cpu": 1234.0}
+        return prof
+
+    monkeypatch.setattr(profile, "local_profile", fake_local_profile)
+    w = make_worker("joiner", bench="auto", publish=True)
+    c = WorkerClient(w.url, TOKEN)
+    assert c.info()["queue"]["hold"] == "benchmarking this machine"
+    job = c.submit(inputs(["ethanol"]), dict(CONFIG), "held")
+    time.sleep(0.5)
+    assert c.status(job)["state"] == "queued"                   # waits for the benchmark
+    gate.set()
+    assert c.wait(job, poll=0.1, timeout=60)["state"] == "done"
+    assert calls == [None] and c.info()["queue"]["hold"] == ""
+    assert w.profile.throughput == {"mmff@cpu": 1234.0}
+    saved = {p.name: p for p in profile.load_profiles()}["joiner"]
+    assert saved.throughput == {"mmff@cpu": 1234.0} and saved.address == w.url
+    w.stop(timeout=30)
+    # a machine that already has a measurement does not benchmark again on its next start
+    again = make_worker("joiner", bench="auto", state=Path(qb_settings.output_dir).parent / "joiner2_state")
+    assert not again.needs_benchmark() and again.info()["queue"]["hold"] == "" and calls == [None]
+
+
+def test_benchmark_modes():
+    assert worker_mod.BENCH_MODES == ("auto", "always", "never")
+    with pytest.raises(ValueError, match="bench must be"):
+        worker_mod.Worker("127.0.0.1", 0, TOKEN, "out", bench="sometimes")

@@ -759,7 +759,7 @@ class LanePool:
 
 
 def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, done_before: int,
-                 progress, should_stop, log, on_result) -> list:
+                 progress, should_stop, log, on_result, keep_results: bool = True) -> list:
     """Run ``todo`` ([(id, MoleculeInput)], from ``JobStore.todo``) in ``lanes`` worker processes. The
     calling thread is the only one that writes ``store`` and calls the callbacks. Returns the results in
     ``todo`` order (molecules not started because of a cancel are absent)."""
@@ -788,7 +788,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     def finish(w: _LaneProcess | None, k: int, mol_id: str, res, result_dir: str = "") -> None:
         nonlocal n_done
         store.record(res, result_dir)
-        results[k] = res
+        results[k] = res if keep_results else jobs.light_result(res)
         n_done += 1
         if w is not None:
             w.done += 1

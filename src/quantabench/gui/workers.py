@@ -58,7 +58,7 @@ class BuildWorker(QObject):
                 results, run_dir = jobs.run_resumable(
                     self.inputs, self.cfg, run_dir,
                     progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
-                    on_result=self.molecule_done.emit, lanes=self._lanes())
+                    on_result=self.molecule_done.emit, lanes=self._lanes(), keep_results=False)
             else:
                 results, run_dir = pipeline.run(
                     self.inputs, self.cfg,

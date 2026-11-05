@@ -251,6 +251,38 @@ Depends on: none (research only; can run any night).
   Use each lane's measured time per molecule: when the queue is shorter than (slow lane's time / fast lane's
   time), leave the rest to the fast lanes. Measure on NOVA with 8, 50 and 500 PFAS.
 
+### SCALE-1: The GUI at 14,000 molecules · ready
+- From the PFAS QSAR project (2026-11-05): Spartan could not take 14,000 molecules in one document, so the
+  work was cut into 200-molecule batches (1,067 `.spartan` files) that now have to be recombined by hand.
+  QuantaBench's engine side already runs any number in one run folder (one job table, one `summary.csv` and
+  `descriptors.csv`, per-molecule folders, resumable) and, since 2026-11-05, does not keep the ensembles in
+  memory. The GUI still keeps every finished molecule's full result in memory and builds one list item per
+  molecule.
+- To do: a virtualized molecule list (QListView + model), results kept as summary rows with the full result
+  loaded from the molecule's folder on selection (small LRU cache), the conformer table and descriptors from
+  `summary.csv`/the job table, and "Open run folder..." (also the 0.2 item "resume a run folder from the GUI").
+- Acceptance: open a 14,000-molecule run folder in under 5 s and under 500 MB, scroll, search and select
+  any molecule; a GUI batch of 14,000 runs with flat memory.
+
+### IMPORT-2: Read Spartan '24 `.spartan` documents · ready
+- A `.spartan` file is an OLE compound document with one storage per molecule (`Molecules/M0001/...`):
+  `Input.gz` holds the keywords, the label (CAS number in Brandon's files), charge and multiplicity and the
+  Cartesian coordinates; `PropertyArchive.gz` holds about 50 scalar properties (`PROP VALUE NAME = value`:
+  energies, dipole, HOMO/LUMO, CPK area/volume, ovality, QSAR ESP areas, polarizability) and per-atom blocks
+  (Mulliken/NAO/ESP charges, atomic CPK areas). Checked on the PFAS QSAR files with `olefile` (pure Python).
+- To do: `chem/io_spartan.py` + `quantabench-cli import *.spartan --table out.csv` (and the GUI import),
+  property names mapped to QuantaBench's columns where they match; one row per molecule and file, keyed by
+  label, so all 1,067 batch files become one table.
+- Acceptance: one batch's values equal Spartan's own spreadsheet export; the 76-PFAS document imports whole.
+
+### QSAR-1: First real test: the PFAS QSAR cohorts · after SCALE-1 and IMPORT-2
+- Input: the 14,223 molecules of cohorts 1-6 (`data_engineering/Cohort */*.sdf`, CAS-labelled), one run per
+  cohort or one run for all, split across NOVA and the MacBook with `grid build`.
+- Protocol to agree with Brandon: conformers (RDKit or CREST) -> GFN2-xTB or AIMNet2 refinement in water ->
+  QSAR descriptors for all; the QM stage (Psi4, his Spartan level) on a validated subset (VAL-1/VAL-2).
+- Acceptance: one merged table for all 14,223 molecules, no manual recombination, and the overlap with the
+  Spartan results compared.
+
 ### DIST-4: Per-stage routing · later
 - Different stages of one molecule on different machines (CREST + Psi4 on the Mac, GPU refinement +
   LAMMPS on NOVA), handed over through run-folder artifacts.

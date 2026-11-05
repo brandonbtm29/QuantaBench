@@ -48,7 +48,7 @@ import threading
 import time
 import traceback
 import zipfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -80,6 +80,7 @@ STATES = ("queued", "running", "done", "failed", "cancelled", "interrupted")
 FINAL_STATES = ("done", "failed", "cancelled")
 #: BuildConfig fields that only say how fast this machine runs a job. A client normally leaves them out and
 #: the worker uses its own settings; the science fields must be the same on every machine.
+BENCH_MODES = ("auto", "always", "never")
 RESOURCE_FIELDS = ("threads", "gpu", "gpu_index", "gpu_memory_fraction", "linalg", "dxtb_gpu")
 TAILSCALE_NET4 = ipaddress.ip_network("100.64.0.0/10")
 TAILSCALE_NET6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
@@ -738,6 +739,7 @@ class JobManager:
         self.max_jobs = max(1, int(max_jobs))
         self.environment: dict = {}
         self.paused = False
+        self.hold = ""          # why new jobs wait besides a pause (the join-time benchmark); "" = not held
         self._log = log
         self._awake = awake
         self._lock = threading.RLock()
@@ -973,11 +975,17 @@ class JobManager:
             self._cond.notify_all()
         self._log("Paused: running jobs finish, new ones wait" if paused else "Resumed")
 
+    def set_hold(self, reason: str) -> None:
+        """Hold new jobs for ``reason`` (running ones finish), or release with ""; separate from a user's pause."""
+        with self._cond:
+            self.hold = reason
+            self._cond.notify_all()
+
     def queue_state(self) -> dict:
         with self._lock:
             running = [j.id for j in self._jobs.values() if j.state == "running"]
             return {"running": running, "queued": list(self._queue), "paused": self.paused,
-                    "max_jobs": self.max_jobs}
+                    "max_jobs": self.max_jobs, "hold": self.hold}
 
     def wait_idle(self, timeout: float = 60.0) -> bool:
         """Block until no job is queued or running (tests and the local grid share)."""
@@ -993,7 +1001,7 @@ class JobManager:
     def _runner(self) -> None:
         while True:
             with self._cond:
-                while not self._stopping and (self.paused or not self._queue):
+                while not self._stopping and (self.paused or self.hold or not self._queue):
                     self._cond.wait(1.0)
                 if self._stopping:
                     return
@@ -1043,7 +1051,8 @@ class JobManager:
                 inputs = self._load_inputs(job.id)
                 with keep_awake(log) if self._awake else contextlib.nullcontext():
                     jobs_mod.run_resumable(inputs or None, cfg, run_dir, progress=progress,
-                                           should_stop=job.stop.is_set, log=log, lanes=lanes, chunk=chunk)
+                                           should_stop=job.stop.is_set, log=log, lanes=lanes, chunk=chunk,
+                                           keep_results=False)
                 # final counts before the state changes, so no client sees "done" with old counts
                 job.counts = self._counts(job)
                 tables = self._final_tables(run_dir)
@@ -1415,9 +1424,17 @@ class Worker:
                  state_dir: str | Path | None = None, name: str | None = None, lanes: str | None = None,
                  max_jobs: int = 1, allow_version_mismatch: bool = False,
                  max_request_bytes: int = MAX_REQUEST_BYTES, publish: bool | None = None,
-                 log: Callable[[str], None] = _noop, awake: bool = True):
+                 log: Callable[[str], None] = _noop, awake: bool = True, bench: str = "never",
+                 bench_methods: Sequence[str] | None = None, bench_seconds: float | None = None):
         from . import profile as profile_mod
 
+        if bench not in BENCH_MODES:
+            raise ValueError(f"bench must be one of {', '.join(BENCH_MODES)}, not {bench!r}")
+        self.bench = bench
+        self.bench_methods = list(bench_methods) if bench_methods else None
+        self.bench_seconds = bench_seconds
+        self._bench_stop = threading.Event()
+        self._bench_thread: threading.Thread | None = None
         if not token or len(token) < 8:
             raise ValueError("a worker needs a token")
         self.token = token
@@ -1434,6 +1451,11 @@ class Worker:
                                   log=log, awake=awake)
         self.commit = git_commit()
         prof = profile_mod.local_profile()
+        if not prof.throughput and self.name != prof.name:   # --name: the registry keeps it under that name
+            stored = profile_mod.load_profile(self.name)
+            if stored is not None and stored.throughput:
+                prof = dataclasses.replace(prof, throughput=dict(stored.throughput),
+                                           benchmarks=dict(stored.benchmarks))
         prof = dataclasses.replace(prof, name=self.name, address=self.url, updated=_now())
         self.profile = prof
         loopback = ipaddress.ip_address(self.host).is_loopback
@@ -1475,10 +1497,52 @@ class Worker:
         except OSError as exc:
             self.log(f"Could not write the machine profile ({exc}); clients need --worker {self.url}")
 
+    # -------------------------------------------------------------- join-time benchmark
+    def needs_benchmark(self) -> bool:
+        """``bench``: "always"; "auto" when this machine has no throughput measurement yet (a machine joining
+        the pool: ``grid build --weights auto`` would otherwise only guess its share from its core count)."""
+        if self.bench == "always":
+            return True
+        return self.bench == "auto" and not self.profile.throughput
+
+    def _start_benchmark(self) -> None:
+        if not self.needs_benchmark():
+            return
+        self.manager.set_hold("benchmarking this machine")
+        self._bench_thread = threading.Thread(target=self._run_benchmark, name="qb-worker-bench", daemon=True)
+        self._bench_thread.start()
+
+    def _run_benchmark(self) -> None:
+        """Measure molecules/hour once (``profile.local_profile(bench=True)``), with new jobs held meanwhile,
+        then publish the profile. A stop (Ctrl+C, the service stopping) ends it after the current molecule
+        and saves nothing; it runs again on the next start."""
+        from . import profile as profile_mod
+
+        self.log("Measuring this machine's throughput once, so other machines can size its share of a split "
+                 "(a few minutes; jobs wait meanwhile; `worker --bench never` skips this)")
+        try:
+            kw = {"max_seconds": self.bench_seconds} if self.bench_seconds else {}
+            prof = profile_mod.local_profile(bench=True, methods=self.bench_methods, address=self.url,
+                                             should_stop=self._bench_stop.is_set, log=self.log, **kw)
+            if self._bench_stop.is_set():
+                self.log("Benchmark stopped; nothing saved (it runs again on the next start)")
+                return
+            self.profile = dataclasses.replace(prof, name=self.name, address=self.url, updated=_now())
+            self.manager.environment["profile"] = self.profile.to_dict()
+            measured = ", ".join(f"{k} {v:,.0f}/h" for k, v in sorted(self.profile.throughput.items()))
+            self.log(f"Benchmark done: {measured or 'nothing measured'}")
+            self._publish_profile()
+        except Exception as exc:  # a failed benchmark must not keep jobs waiting
+            self.log(f"Benchmark failed ({type(exc).__name__}: {exc}); jobs run anyway, and `grid build` "
+                     "estimates this machine's share from its core count")
+        finally:
+            self.manager.set_hold("")
+
     def start(self) -> Worker:
         self.manager.start()
         self._started = True
         self._publish_profile()
+        self._start_benchmark()
         self._thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.2},
                                         name="qb-worker-http", daemon=True)
         self._thread.start()
@@ -1488,6 +1552,7 @@ class Worker:
         self.manager.start()
         self._started = True
         self._publish_profile()
+        self._start_benchmark()
         try:
             self.server.serve_forever(poll_interval=0.5)
         except KeyboardInterrupt:
@@ -1496,6 +1561,10 @@ class Worker:
             self.stop()
 
     def stop(self, timeout: float = 60.0) -> None:
+        self._bench_stop.set()
+        if self._bench_thread is not None:
+            self._bench_thread.join(min(timeout, 120.0))
+            self._bench_thread = None
         if self._thread is not None:
             self.server.shutdown()
             self._thread.join(10)
@@ -1574,7 +1643,9 @@ def _cli_worker(args) -> int:
         return Worker(host, port, token, output, state_dir=args.state_dir or default_state_dir(), name=args.name,
                       lanes=args.lanes or None, max_jobs=args.max_jobs,
                       allow_version_mismatch=args.allow_version_mismatch,
-                      max_request_bytes=int(args.max_request_mb * 1024 * 1024), publish=args.publish, log=log)
+                      max_request_bytes=int(args.max_request_mb * 1024 * 1024), publish=args.publish, log=log,
+                      bench=args.bench, bench_methods=[m for m in (args.bench_methods or "").split(",") if m.strip()]
+                      or None)
 
     tailscale = (args.bind or s.dist.worker_bind or "tailscale").strip() == "tailscale"
     try:
@@ -1610,6 +1681,11 @@ def register_cli(subparsers) -> None:
     w.add_argument("--port", type=int, help=f"TCP port (default from settings, {DEFAULT_PORT})")
     w.add_argument("--lanes", help="lane spec for jobs that do not set one (default from settings)")
     w.add_argument("--max-jobs", type=int, default=1, help="jobs at a time (default 1)")
+    w.add_argument("--bench", choices=BENCH_MODES, default="auto",
+                   help="measure this machine's throughput at start: auto (default: only when it has no "
+                        "measurement yet, i.e. a machine joining), always, or never")
+    w.add_argument("--bench-methods", metavar="METHODS",
+                   help="with --bench: comma list (default: the available ones of mmff, gfn1-xtb, gfn2-xtb, aimnet2)")
     w.add_argument("--name", help="worker name (default: this machine's name)")
     w.add_argument("--state-dir", help="folder for the job list and queued inputs (default: the per-user "
                                        "state folder; not the synced settings)")

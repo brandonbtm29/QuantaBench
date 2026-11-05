@@ -2,6 +2,15 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Large batches and joining machines (2026-11-05)
+- A worker measures its machine's throughput on its first start (a machine joining the pool), holding jobs
+  meanwhile; `worker --bench auto|always|never`. Machines dock: "Benchmark this computer"; this computer is
+  always listed, "not measured" until it is.
+- Batch runs from the CLI, the GUI and workers no longer keep every molecule's RDKit ensemble and normal
+  modes in memory (`run_resumable(keep_results=False)`, `jobs.light_result`): everything is on disk already.
+- GUI: Python's cyclic garbage collection runs in the GUI thread on a timer, so a closed window or panel is
+  never destroyed by a worker thread (Qt aborts the process when that happens; seen in the test suite).
+
 ### Review fixes for lanes, weighted splits and GPU paths (0.3.0.dev1, 2026-11-05)
 - **Named `--chunk-weights` are a mapping**: `a=3,b=1` and `b=1,a=3` give the same split (chunks are the
   names sorted; this machine's is found by name). In typed order, two machines could overlap and leave a

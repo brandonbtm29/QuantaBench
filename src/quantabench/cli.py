@@ -272,7 +272,7 @@ def _build(args) -> int:
         try:
             results, out = jobs.run_resumable(items or None, cfg, run_dir, progress=_progress, log=print,
                                               retry_failed=args.retry_failed, chunk=chunk, force=args.force,
-                                              lanes=lanes)
+                                              lanes=lanes, keep_results=False)
         except (jobs.ConfigMismatchError, jobs.RunInUseError) as exc:
             print(exc, file=sys.stderr)
             return 2

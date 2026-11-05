@@ -559,6 +559,16 @@ def _prepare_run(store: JobStore, cfg: BuildConfig, chunk: Chunk | None, force: 
     return chunk
 
 
+def light_result(res: MoleculeResult) -> MoleculeResult:
+    """``res`` without what is big and already on disk: the RDKit molecule with every conformer, the other
+    conformers' records, the normal modes, the QM stage's arrays. Status, error, SMILES, the best conformer,
+    descriptors and files stay (about 20 KB per molecule instead of 100 KB and more)."""
+    from dataclasses import replace
+
+    return replace(res, mol=None, vibrations=None, qm=None, conformers=list(res.conformers[:1]),
+                   input=replace(res.input, mol=None))
+
+
 def rebuild_tables(run_dir: str | Path) -> list[Path]:
     """Rewrite summary.csv (every finished molecule, ok and failed, in input order) and
     descriptors.csv (ok molecules) from the job table."""
@@ -572,8 +582,12 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
                   log: Callable[[str], None] = _noop,
                   on_result: Callable[[MoleculeResult], None] = _noop, retry_failed: bool = False,
                   chunk: Chunk | None = None, force: bool = False,
-                  lanes: list | None = None) -> tuple[list[MoleculeResult], Path]:
+                  lanes: list | None = None, keep_results: bool = True) -> tuple[list[MoleculeResult], Path]:
     """Run (or continue) a batch in ``run_dir``; returns the results computed by this call.
+
+    ``keep_results=False`` returns light copies (``light_result``: no RDKit molecule, no normal modes) so a
+    14,000-molecule batch does not hold every conformer ensemble in memory; everything is on disk in the run
+    folder and in the job table, and ``on_result`` still gets the full result.
 
     ``inputs`` are added to the job table (``None`` resumes with what is stored). Finished molecules
     are skipped; ``retry_failed`` also redoes failed ones. ``chunk=(i, n)``, 0-based, keeps only the
@@ -622,7 +636,7 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
 
             results = lanes_mod.run_parallel(store, todo, cfg, lanes, run_dir, total=total, done_before=done_before,
                                              progress=progress, should_stop=should_stop, log=log,
-                                             on_result=on_result)
+                                             on_result=on_result, keep_results=keep_results)
             todo = []
         elif lanes and lanes[0].device != "auto":       # one explicit lane, e.g. "cpu:1x4": its device and threads
             from dataclasses import replace
@@ -656,8 +670,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
                     res.status, res.error = "failed", f"export failed: {type(exc).__name__}: {exc}"
                     log(f"  {mol_id}: {res.error}")
             store.record(res, result_dir)
-            results.append(res)
             on_result(res)
+            results.append(res if keep_results else light_result(res))
             progress(i + 1, total, res.status, mol_id)
         counts = store.counts()
     if cfg.write_files:
