@@ -45,6 +45,10 @@ $SettingsDir = $SettingsDir.TrimEnd("\", "/")
 $Venv = Join-Path $Repo ".venv"
 $VenvRocm = Join-Path $Repo ".venv-rocm"
 $Extras = "all,dev"
+# Not on PyPI for Windows (docs/PLATFORMS.md section 4): dxtb ported to tad-libcint 0.4 (GFN2, polarizability and IR
+# intensities; FORK-1) and tblite wheels (in-process GFN2 with ALPB; FORK-2), both from Brandon's forks
+$ForkPkgs = @("dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1", "tad-libcint>=0.4", "tblite")
+$TbliteLinks = "https://github.com/brandonbtm29/tblite/releases/expanded_assets/qb-v0.8.0-win1"
 if (-not $MiniforgeDir) { $MiniforgeDir = Join-Path $env:USERPROFILE "miniforge3" }
 $MiniforgeUrl = "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe"
 $TorchCudaIndex = "https://download.pytorch.org/whl/cu132"
@@ -265,7 +269,7 @@ Set-Torch $VPy $venvFlavor ".venv"
 function Install-QuantaBench([string]$Dir) {
     $exe = Join-Path $Dir "Scripts\python.exe"
     $stamp = Join-Path $Dir ".quantabench-install"
-    $want = "$(Get-Sha256 (Join-Path $Repo 'pyproject.toml')) extras=$Extras"
+    $want = "$(Get-Sha256 (Join-Path $Repo 'pyproject.toml')) extras=$Extras forks=$($ForkPkgs -join ',') $TbliteLinks"
     $here = $false
     if (Test-Path $exe) {
         $where = Get-Output $exe @("-c", $WhereCode)
@@ -277,7 +281,8 @@ function Install-QuantaBench([string]$Dir) {
         return
     }
     $tv = Get-TorchVersion $exe
-    $pipArgs = @("-m", "pip", "install", "-e", ".[$Extras]")
+    $pipArgs = @("-m", "pip", "install", "-e", ".[$Extras]") + $ForkPkgs +
+               @("--only-binary", "tblite", "--find-links", $TbliteLinks)
     if ($tv) {
         # keep the PyTorch build chosen above: an extra that wants another torch fails loudly instead
         $constraints = Join-Path $Dir ".torch-constraint.txt"

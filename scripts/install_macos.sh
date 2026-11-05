@@ -27,6 +27,9 @@ VPY="$VENV/bin/python"
 EXTRAS="all,dev"
 # tblite's newest wheels need macOS 15; never build it from source (an older wheel is used on macOS 14)
 PIP_FLAGS="--only-binary tblite"
+# GFN2-xTB, polarizability and IR intensities in dxtb: PyPI's dxtb cannot use tad-libcint on macOS; the dxtb fork
+# ported to tad-libcint 0.4 (macOS arm64 wheels) can (docs/PLATFORMS.md section 4, FORK-1)
+FORK_PKGS=("dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4")
 MINIFORGE_DIR="$HOME/miniforge3"
 MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
 APP="$HOME/Applications/QuantaBench.app"
@@ -198,7 +201,7 @@ step "QuantaBench (pip install -e \".[$EXTRAS]\")"
 STAMP="$VENV/.quantabench-install"
 want=""
 if [ -x "$VPY" ]; then
-  want="$(sha256 "$REPO/pyproject.toml") extras=$EXTRAS $PIP_FLAGS"
+  want="$(sha256 "$REPO/pyproject.toml") extras=$EXTRAS $PIP_FLAGS ${FORK_PKGS[*]}"
 fi
 installed_here() { "$VPY" -c 'import os, sys, quantabench; sys.exit(0 if os.path.realpath(quantabench.__file__).startswith(os.path.realpath(sys.argv[1]) + os.sep) else 1)' "$REPO/src" 2>/dev/null; }
 if [ "$REINSTALL" = 0 ] && [ -n "$want" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$want" ] && installed_here; then
@@ -210,13 +213,13 @@ else
   if [ -n "$TV" ]; then
     # keep the installed PyTorch: an extra that wants another torch fails loudly instead of swapping it
     write_file "$CONSTRAINTS" "torch==$TV"
-    run "$VPY" -m pip install -e ".[$EXTRAS]" $PIP_FLAGS --constraint "$CONSTRAINTS" ||
+    run "$VPY" -m pip install -e ".[$EXTRAS]" "${FORK_PKGS[@]}" $PIP_FLAGS --constraint "$CONSTRAINTS" ||
       die "pip install failed (output above). If it wants a different torch, see docs/INSTALL.md."
   else
-    run "$VPY" -m pip install -e ".[$EXTRAS]" $PIP_FLAGS || die "pip install failed (output above)"
+    run "$VPY" -m pip install -e ".[$EXTRAS]" "${FORK_PKGS[@]}" $PIP_FLAGS || die "pip install failed (output above)"
   fi
   if [ "$DRY_RUN" = 0 ]; then
-    printf '%s\n' "$(sha256 "$REPO/pyproject.toml") extras=$EXTRAS $PIP_FLAGS" > "$STAMP"
+    printf '%s\n' "$(sha256 "$REPO/pyproject.toml") extras=$EXTRAS $PIP_FLAGS ${FORK_PKGS[*]}" > "$STAMP"
   fi
 fi
 

@@ -49,9 +49,14 @@ Start QuantaBench from the **Start Menu** ("QuantaBench"), or double-click `Quan
 opens a console window.
 
 On BTM NOVA, `.venv` currently holds AMD's ROCm PyTorch. The script asks before it replaces it. Answering
-`y` installs PyPI's CPU build, which is the faster one for everything QuantaBench runs today (PERF-1).
-Add `-Gpu rocm` to keep a separate GPU environment, `.venv-rocm`, with AMD's wheels and its own Start Menu
-entry, "QuantaBench (AMD GPU)".
+`y` installs PyPI's CPU build, which is much faster for CPU work (MMFF, dxtb, xtb). Add `-Gpu rocm` to keep a
+separate GPU environment, `.venv-rocm`, with AMD's wheels and its own Start Menu entry, "QuantaBench (AMD
+GPU)": AIMNet2 runs about 10x faster there on the RX 9060 XT. Which one should be the default is backlog
+PERF-1. Answering `n` keeps the ROCm build in `.venv`.
+
+The Windows and macOS scripts also install the two packages PyPI cannot provide there: the dxtb fork with
+tad-libcint 0.4 (GFN2-xTB, polarizability and IR intensities in dxtb) and, on Windows, tblite from the
+fork's wheels (details below and in [PLATFORMS.md](PLATFORMS.md#4-forks-builds-and-upstream-fixes)).
 
 ### Linux and WSL2
 
