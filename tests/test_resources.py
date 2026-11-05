@@ -66,7 +66,7 @@ def test_detect_isolated_runs_in_a_child_and_can_be_cancelled(monkeypatch):
     rep, checks = resources.detect_isolated()
     here = resources.detect()
     assert (rep.logical_cores, rep.torch_version, rep.torch_backend) == \
-        (here.logical_cores, here.torch_version, here.torch_backend)
+        (here.logical_cores, here.torch_version, here.torch_backend), rep.notes
     assert [g.name for g in rep.gpus] == [g.name for g in here.gpus]
     assert tuple(checks["libcint"]) == engines.libcint_status()
     assert resources.detect_isolated() is resources._ISOLATED                 # cached

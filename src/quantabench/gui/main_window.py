@@ -89,6 +89,7 @@ STAGES = [
 ]
 QM_FUNCTIONALS = ("wb97x-d", "b3lyp-d3bj", "pbe0-d3bj", "r2scan", "m06-2x", "hf")
 QM_BASES = ("def2-svp", "def2-svpd", "def2-tzvp", "6-31g*", "6-31+g*", "6-311+g**", "aug-cc-pvdz")
+LOG_LINES = 5000          # Log view's line cap (see _build_bottom_dock)
 CREST_METHODS = (("gfn2", "GFN2-xTB"), ("gfnff", "GFN-FF (fast, large molecules)"),
                  ("gfn2//gfnff", "GFN2-xTB // GFN-FF (needs xtb)"), ("gfn1", "GFN1-xTB"))
 
@@ -524,7 +525,9 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.conf_table, "Conformers")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setMaximumBlockCount(20000)
+        # Each line costs ~7 KB of RSS (its laid-out text block); a batch logs ~3 lines per molecule, so this cap,
+        # not the molecule count, bounds the log: ~35 MB at 5,000 lines (20,000 lines were ~140 MB, SCALE-1).
+        self.log_view.setMaximumBlockCount(LOG_LINES)
         tabs.addTab(self.log_view, "Log")
         self.bottom_tabs = tabs
         dock = QDockWidget("Results", self)
