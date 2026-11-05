@@ -262,6 +262,7 @@ def test_write_table_streams_documents_and_flags_duplicate_labels(tmp_path, monk
 
 
 def test_cli_import_routes_spartan_documents(tmp_path, monkeypatch):
+    pytest.importorskip("olefile")          # the CLI checks for it before reading (a .venv from before it)
     from quantabench import cli
 
     monkeypatch.setattr(io_spartan, "open_container", lambda path: _doc([(INPUT, None)]))

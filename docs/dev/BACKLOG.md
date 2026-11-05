@@ -199,6 +199,18 @@ Depends on: none (research only; can run any night).
 
 ## Platform and multi-machine track (plan: docs/PLATFORMS.md)
 
+### WIN-2: xtb and MOPAC on Windows disagree with the Linux reference values · ready
+- First full run of the external-engine tests on NOVA (2026-11-05, conda envs `qb-tools`/`qb-psi4` from
+  `install_windows.ps1 -WithEngines`): 4 failures, all values the program prints, not QuantaBench's math:
+  - xtb 6.7.1 (conda-forge win-64 build of 2026-06-10): water GFN2 dipole z -0.332 e·Å instead of -0.474
+    (`test_eng_xtb.py::test_real_singlepoints_match_xtb_printout`); water in water `gfn2_dipole_debye` 2.032
+    instead of 2.546 (`test_real_properties_water_in_water`). Energies and forces passed.
+  - MOPAC 23.2.5: PM7 water `pm7_polarizability_iso_A3` 1.347 instead of 1.259, methanol 3.22 instead of
+    3.0 ± 0.2 (`test_eng_mopac.py`); heat of formation, dipole, HOMO/LUMO and COSMO area/volume passed.
+- To do: compare the same inputs on Linux and NOVA (xtb `--json` dipole, MOPAC `.out` polarizability block):
+  a build difference (report upstream / pin), or QuantaBench reading a different block of the output.
+  Until then, don't use xtb dipoles or MOPAC polarizabilities from Windows in QSAR tables.
+
 ### PLAT-1: First run on the MacBook · needs-Brandon
 - INSTALL.md's macOS steps on the MacBook: `doctor --bench`, full suite, `pytest -m external` with
   `envs/tools.yml` + `envs/psi4.yml`, GUI by hand (HiDPI picking, trackpad pinch/rotate, dark mode).
