@@ -35,12 +35,14 @@ count is whatever was in the environment then. ``resources.apply_thread_limits``
 is built, which is how the pipeline's thread setting reaches tblite; the ``threads`` engine option itself
 is ignored. To change it later in the same process use ``threadpoolctl.threadpool_limits(n, "openmp")``.
 
-Install: ``pip install tblite`` (wheels for Linux and macOS), ``conda install -c conda-forge tblite-python``
-(all platforms, the only option on native Windows).
+Install: ``pip install tblite`` (wheels for Linux and macOS). Native Windows: PyPI has no wheel, so install
+the brandonbtm29/tblite fork's wheels (``INSTALL_HINT_WINDOWS``, docs/INSTALL.md), or use conda-forge's
+``tblite-python`` when running in that conda environment.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import ClassVar
 
 import numpy as np
@@ -55,11 +57,15 @@ AU_POLARIZABILITY_A3 = BOHR_ANG**3       # 1 bohr³ = 0.148185 Å³
 FIELD_STEP_AU = 5e-4                     # finite-field step (Hartree/(e·bohr) = 514 MV/cm per au)
 SOLVATION_MODELS = ("alpb", "gbsa", "cpcm")
 INSTALL_HINT = "pip install tblite (Linux/macOS) or conda install -c conda-forge tblite-python (Windows)"
+# PyPI has no Windows wheel: the brandonbtm29/tblite fork builds them (docs/INSTALL.md, FORK-2)
+WINDOWS_WHEELS = "https://github.com/brandonbtm29/tblite/releases/expanded_assets/qb-v0.8.0-win1"
+INSTALL_HINT_WINDOWS = (f"pip install tblite --only-binary tblite --find-links {WINDOWS_WHEELS} "
+                        "(or, in a conda environment, conda install -c conda-forge tblite-python)")
 
 
 def available() -> tuple[bool, str]:
     if not has_package("tblite"):
-        return False, INSTALL_HINT
+        return False, INSTALL_HINT_WINDOWS if sys.platform == "win32" else INSTALL_HINT
     return True, ""
 
 

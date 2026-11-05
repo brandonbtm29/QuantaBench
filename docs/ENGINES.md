@@ -12,7 +12,7 @@ through WSL on Windows. `quantabench-cli doctor` lists what it found and where.
 | `gfn1-xtb` | GFN1-xTB (dxtb) | tight binding | in process, CPU/GPU | none | yes | batched on GPU |
 | `gfn2-xtb` | GFN2-xTB (dxtb + libcint) | tight binding | in process | none | no (libcint) | Linux/WSL |
 | `aimnet2` | AIMNet2 (ωB97M-D3 ML) | ML potential | in process, CPU/GPU | none | yes | weights download |
-| `tblite-gfn2`, `tblite-gfn1` | GFN-xTB (tblite) | tight binding | in process | ALPB, GBSA, CPCM | conda only | GFN2 without libcint |
+| `tblite-gfn2`, `tblite-gfn1` | GFN-xTB (tblite) | tight binding | in process | ALPB, GBSA, CPCM | yes (fork wheel) | GFN2 without libcint |
 | `xtb-gfn2`, `xtb-gfn1`, `gfnff` | the xtb program | tight binding / force field | external | ALPB, GBSA | yes | native optimizer |
 | `mopac-pm7`, `mopac-pm6` | PM7, PM6-D3H4X (MOPAC) | semi-empirical | external | COSMO | yes | energy = ΔHf |
 | CREST | iMTD-GC conformer search | conformers | external | ALPB | via WSL | `--conformers crest` |
@@ -79,9 +79,22 @@ hexane, diethyl ether, ethyl acetate). Engines without a solvent model run in th
 
 ## tblite (`tblite-gfn2`, `tblite-gfn1`)
 
-- **Install.** Linux/macOS: `pip install tblite` (part of the `xtb` extra). Windows: there is no PyPI
-  wheel; conda-forge's `tblite-python` works only if QuantaBench runs in that conda environment. On
-  Windows, use the xtb program instead.
+- **Install.** Linux/macOS: `pip install tblite` (part of the `xtb` extra). Windows: PyPI has no wheel,
+  so the `xtb` extra skips tblite there. Install the wheels from Brandon's fork (FORK-2) into the venv:
+
+  ```powershell
+  pip install tblite --only-binary tblite --find-links https://github.com/brandonbtm29/tblite/releases/expanded_assets/qb-v0.8.0-win1
+  ```
+
+  They are tblite 0.8.0 for CPython 3.11-3.13 (win_amd64), built in GitHub Actions
+  ([workflow](https://github.com/brandonbtm29/tblite/blob/qb/windows-wheels/.github/workflows/qb-windows-wheels.yml))
+  with MSYS2's MinGW-w64 gfortran, OpenMP and ddX (CPCM). The only change to upstream is in a build file
+  (`config/meson.build` also links the GFortran runtime on Windows). delvewheel bundles the GCC runtime
+  and reference BLAS/LAPACK DLLs, the same BLAS as the PyPI Linux wheel. On BTM NOVA they reproduce
+  the Linux wheel's water energies (GFN2, GFN1, ALPB, GBSA, CPCM) to 1e-14 Eh, and
+  `tests/test_eng_tblite.py` passes. This is not an official tblite release: drop it once upstream
+  ships Windows wheels. conda-forge's `tblite-python` works too, but only if QuantaBench runs in that
+  conda environment, and its win-64 build has no ddX, so no CPCM.
 - Matches the xtb program to 4e-9 Eh. Solvation: ALPB (default), GBSA (falls back to ALPB where GBSA
   lacks parameters), CPCM (ε).
 - **Polarizability.** `tblite_gfn2_polarizability_iso_A3` is the electronic response from finite fields
