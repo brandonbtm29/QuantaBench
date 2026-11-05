@@ -577,6 +577,19 @@ def rebuild_tables(run_dir: str | Path) -> list[Path]:
     return export.write_batch_tables(stored, Path(run_dir)) if stored else []
 
 
+def log_time_limit(cfg: BuildConfig, parallel: bool, log: Callable[[str], None]) -> None:
+    """One line at the start of a batch about the per-molecule time limit (``BuildConfig.molecule_timeout_s``)."""
+    limit = float(cfg.molecule_timeout_s or 0)
+    if limit <= 0:
+        return
+    how = ("a lane past it is killed and restarted" if parallel else
+           "best effort in one process: the molecule stops at its next checkpoint")
+    log(f"Per-molecule time limit: {limit:g} s ({how}; the molecule is marked failed, --retry-failed redoes it, "
+        "--molecule-timeout 0 turns the limit off)")
+    if cfg.qm_method or cfg.conformer_search == "crest":
+        log("  Note: QM stages and CREST can take longer than that per molecule; raise --molecule-timeout if they do")
+
+
 def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_dir: str | Path,
                   progress: ProgressFn = _noop, should_stop: Callable[[], bool] = lambda: False,
                   log: Callable[[str], None] = _noop,
@@ -634,6 +647,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
         if done_before:
             log(f"{done_before} of {total} molecule(s) already finished; {len(todo)} to do")
         lanes = list(lanes or [])[:max(1, len(todo))]   # no more lanes than molecules (GPU lanes come first)
+        if todo:
+            log_time_limit(cfg, len(lanes) > 1, log)
         if len(lanes) > 1:            # worker processes (dist.lanes); this process stays the only DB writer
             from ..dist import lanes as lanes_mod
 
@@ -656,14 +671,18 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
             cfg_run = cfg
             device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
             log(f"Resources: {threads} CPU threads, device {device}")
+        if todo:
+            from dataclasses import replace
+
+            cfg_run = replace(cfg_run, memory_budget_gb=pipeline.resolved_budget(cfg_run, 1, log))
         for k, (mol_id, inp) in enumerate(todo):
             if should_stop():
                 break
             i = done_before + k
             progress(i, total, "start", mol_id)
             store.mark_running(mol_id)
-            res = pipeline.run_molecule(inp, cfg_run, device, threads, should_stop, log,
-                                        stage=lambda s, i=i, mol_id=mol_id: progress(i, total, s, mol_id))
+            res = pipeline.run_molecule_limited(inp, cfg_run, device, threads, should_stop, log,
+                                                stage=lambda s, i=i, mol_id=mol_id: progress(i, total, s, mol_id))
             result_dir = ""
             if cfg.write_files and res.status == "ok":
                 try:

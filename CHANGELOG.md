@@ -22,6 +22,25 @@
 - Faster on large documents: stream lookups no longer scan the document's directory each time (olefile's
   lookup is linear in the molecules of a document).
 
+### Batches survive molecules that blow up memory or run forever (QSAR-2, 2026-11-05)
+- **Memory guard for dxtb** (`chem/memory_guard.py`). dxtb's full-mode autograd keeps every SCF iteration, so
+  memory grows as iterations x nao². The GFN1 polarizability took 1.5 GB for deca-alanine and for the C20 PFCA
+  anion, and more than 1.9 GB for a dication. Before each dxtb step the pipeline estimates its memory from the
+  basis size, charge and spin (a rule fitted to measurements, see docs/ENGINES.md) and compares it with the
+  budget of the lane: by default the available memory divided by the lanes, at least 1.5 GB, set with
+  `resources.memory_budget_gb` or `build --memory-budget GB`, < 0 = off. Over the budget:
+  - the xTB polarizability comes from **tblite**'s GFN1-xTB finite field, the same quantity (39.1012 vs
+    39.1009 Å³ for Ala10) at ~1/40 of the memory, with a note and `xtb_polarizability_method`;
+  - without tblite, the polarizability is skipped with a note (or the whole properties step, if even the
+    charges do not fit); the molecule stays ok;
+  - dxtb refinement: batched runs use smaller batches. A molecule where not even one conformer fits fails with
+    `MemoryGuardError: ... estimated X GB ...`, and `auto` tries its next engine instead.
+- **Per-molecule time limit:** `resources.molecule_timeout_s`, `build --molecule-timeout S`, default 1800 s,
+  0 = off. A lane still on one molecule after the limit is killed and restarted. In one process the molecule
+  stops at its next checkpoint (best effort). Either way the molecule is recorded failed with
+  `time limit (1800 s) in <stage>`. This is not a crash: it is not retried in the run, and `--retry-failed`
+  redoes it. The GUI batch gets both settings from settings.json.
+
 ### Fixed: the GUI reset the Pipeline settings at start-up (2026-11-05)
 - Opening the window copied the Pipeline widgets into the settings before they had been filled from them (the
   Machines dock asks for the current configuration while it is built), so pH, protonation, conformer count,

@@ -612,6 +612,16 @@ def refine_batched(result: MoleculeResult, conf_set: ConformerSet, cfg: BuildCon
 
     max_batch = estimate_max_batch(result.method, numbers, device,
                                    memory_fraction=getattr(cfg, "gpu_memory_fraction", 0.8) or 0.8)
+    if result.method in pipeline.DXTB_METHODS:     # host memory (chem.memory_guard): B conformers cost B x one
+        from . import memory_guard
+
+        pipeline.guard_refinement(result, numbers, cfg)          # raises when not even one fits
+        cap = memory_guard.max_batch(result.method, numbers, result.charge, result.multiplicity,
+                                     pipeline.memory_budget(cfg))
+        if cap is not None and cap < min(max_batch, len(ids)):
+            log(f"  memory guard: batches of at most {max(1, cap)} conformer(s) "
+                f"({pipeline.memory_budget(cfg):.1f} GB budget; the results do not depend on the batch size)")
+            max_batch = max(1, cap)
     rows_all = list(range(len(ids)))
     chunks = [rows_all[k:k + max_batch] for k in range(0, len(rows_all), max_batch)]
     done = []

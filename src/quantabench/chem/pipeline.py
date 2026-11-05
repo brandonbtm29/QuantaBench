@@ -83,6 +83,10 @@ class BuildConfig:
     output_dir: str = ""
     formats: tuple[str, ...] = export.DEFAULT_FORMATS
     write_files: bool = True
+    # memory budget (GB) of one process for the dxtb steps (chem.memory_guard): 0 = auto (available memory
+    # / lanes, resolved when a run starts), < 0 = no guard
+    memory_budget_gb: float = 0.0
+    molecule_timeout_s: float = 0.0       # wall-clock limit per molecule in a batch (0 = none); see time_limited()
 
     @classmethod
     def from_settings(cls, s: Settings, **overrides) -> BuildConfig:
@@ -92,6 +96,7 @@ class BuildConfig:
                   rmsd_threshold=b.rmsd_threshold, fmax=b.fmax, max_steps=b.max_steps, temperature_k=b.temperature_k,
                   seed=b.random_seed, batched=b.batched, frequencies=b.frequencies, threads=r.threads, gpu=r.gpu, gpu_index=r.gpu_index,
                   gpu_memory_fraction=r.gpu_memory_fraction, linalg=r.linalg, dxtb_gpu=r.dxtb_gpu,
+                  memory_budget_gb=r.memory_budget_gb, molecule_timeout_s=r.molecule_timeout_s,
                   output_dir=str(s.output_path()),
                   conformer_search=b.conformer_search, solvent=b.solvent, qm_method=b.qm_method)
         return replace(cfg, **overrides)
@@ -181,6 +186,111 @@ def _noop(*_args) -> None:
     pass
 
 
+DXTB_METHODS = ("gfn1-xtb", "gfn2-xtb")
+
+
+def memory_budget(cfg: BuildConfig) -> float:
+    """The memory budget (GB) of this process for the dxtb steps: ``cfg.memory_budget_gb`` as resolved for the
+    run (``memory_guard.resolve_budget_gb``; a run resolves 0 = auto before it starts), 0 = guard off."""
+    from . import memory_guard
+
+    return memory_guard.resolve_budget_gb(cfg.memory_budget_gb, 1)
+
+
+def resolved_budget(cfg: BuildConfig, n_lanes: int, log: Callable[[str], None] = _noop) -> float:
+    """``cfg.memory_budget_gb`` resolved for a run of ``n_lanes`` processes (auto: available memory / lanes,
+    at least ``memory_guard.FLOOR_GB``), to store in the config the molecules run with; -1 = guard off.
+    Logs the budget once when a dxtb step can run."""
+    from . import memory_guard
+
+    budget = memory_guard.resolve_budget_gb(cfg.memory_budget_gb, n_lanes)
+    if cfg.xtb_properties or cfg.method in (*DXTB_METHODS, "auto"):
+        if budget > 0:
+            how = "set" if cfg.memory_budget_gb > 0 else f"auto: available memory / {max(1, n_lanes)} lane(s)"
+            log(f"Memory guard: {budget:.1f} GB per process for the dxtb steps ({how}; --memory-budget changes it)")
+        else:
+            log("Memory guard: off (--memory-budget < 0)")
+    return budget if budget > 0 else -1.0
+
+
+def guard_refinement(result: MoleculeResult, numbers, cfg: BuildConfig) -> None:
+    """Raise ``MemoryGuardError`` when one dxtb energy + forces evaluation of this molecule would not fit the
+    budget. Method "auto" then tries its next engine (with a note); an explicit method fails the molecule with
+    the reason. There is no cheaper dxtb path to the same forces (``memory_guard`` module docstring)."""
+    if result.method not in DXTB_METHODS:
+        return
+    from . import memory_guard
+
+    ok, why = memory_guard.fits(result.method, numbers, result.charge, result.multiplicity, memory_budget(cfg))
+    if not ok:
+        raise memory_guard.MemoryGuardError(f"{engines.ENGINES[result.method].label} refinement not started by the "
+                                            f"memory guard: {why}")
+
+
+def time_limit_error(limit_s: float, stage: str = "") -> str:
+    """The error of a molecule that ran past the per-molecule time limit: 'time limit (1800 s) in refine'."""
+    return f"time limit ({float(limit_s):g} s)" + (f" in {stage}" if stage else "")
+
+
+class TimeLimit:
+    """``should_stop`` for one molecule with a wall-clock limit (``BuildConfig.molecule_timeout_s``), for the
+    single-process loops (``run``, ``jobs.run_resumable`` with one lane). Best effort: the molecule ends at the
+    pipeline's next ``should_stop`` checkpoint (every optimizer step, every conformer, between stages, the
+    poll of an external program), not inside a step without one (RDKit embedding, one dxtb SCF, the xTB
+    properties). Lanes enforce the limit from the parent instead, by killing the lane (``dist.lanes``)."""
+
+    def __init__(self, should_stop: Callable[[], bool], limit_s: float):
+        self.should_stop = should_stop
+        self.limit = max(0.0, float(limit_s or 0.0))
+        self.t0 = time.monotonic()
+        self.stage = ""
+        self.hit = False
+
+    def __call__(self) -> bool:
+        if self.should_stop():
+            return True
+        if self.limit and time.monotonic() - self.t0 > self.limit:
+            self.hit = True
+            return True
+        return False
+
+    def wrap_stage(self, stage: Callable[[str], None]) -> Callable[[str], None]:
+        def inner(s: str) -> None:
+            self.stage = s
+            stage(s)
+        return inner
+
+    def finish(self, res: MoleculeResult, log: Callable[[str], None] = _noop) -> MoleculeResult:
+        """A molecule stopped by the limit (not by a cancel) becomes failed with the time-limit error."""
+        if self.hit and res.status == "cancelled" and not self.should_stop():
+            res.status, res.error = "failed", time_limit_error(self.limit, self.stage)
+            log(f"  FAILED: {res.error} (stopped at the next checkpoint after {time.monotonic() - self.t0:.0f} s)")
+        return res
+
+
+def run_molecule_limited(inp: MoleculeInput, cfg: BuildConfig, device: str, threads: int,
+                         should_stop: Callable[[], bool], log: Callable[[str], None],
+                         stage: Callable[[str], None] = _noop) -> MoleculeResult:
+    """``run_molecule`` under ``cfg.molecule_timeout_s`` (``TimeLimit``; no limit when it is 0)."""
+    if not cfg.molecule_timeout_s or cfg.molecule_timeout_s <= 0:
+        return run_molecule(inp, cfg, device, threads, should_stop, log, stage=stage)
+    tl = TimeLimit(should_stop, cfg.molecule_timeout_s)
+    return tl.finish(run_molecule(inp, cfg, device, threads, tl, log, stage=tl.wrap_stage(stage)), log)
+
+
+class _Skipped(Exception):
+    """The memory guard skipped the xTB properties step (its note is already in the result)."""
+
+
+def _properties_plan(numbers, charge: int, multiplicity: int, cfg: BuildConfig) -> tuple[bool, str, str]:
+    """``memory_guard.properties_plan`` for the GFN1-xTB properties step of the best conformer."""
+    from ..resources import has_package
+    from . import memory_guard
+
+    return memory_guard.properties_plan(numbers, charge, multiplicity, memory_budget(cfg), polarizability=True,
+                                        dxtb_polarizability=engines.has_libcint(), tblite=has_package("tblite"))
+
+
 def calculator_options(result: MoleculeResult, cfg: BuildConfig) -> dict:
     """Options every engine factory receives (see ``engines`` module docstring)."""
     return {"solvent": result.solvent, "threads": resources.resolve_threads(cfg.threads)}
@@ -201,6 +311,8 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
 
     plug = engines.plugin(result.method)
     full_dipole = plug is not None and plug.extra.get("dipole_origin") == "com"
+
+    guard_refinement(result, numbers, cfg)
 
     def build(dev):
         extra = {"should_stop": should_stop} if plug is not None else {}
@@ -556,13 +668,22 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             best = kept[0]
             atoms = export.mol_to_atoms(cs.mol, best.conf_id)
             args = (atoms.numbers, atoms.positions, atoms.get_masses(), result.charge, result.multiplicity)
+            plan = _properties_plan(atoms.numbers, result.charge, result.multiplicity, cfg)
+            do_charges, pol_engine, guard_note = plan
+            if guard_note:
+                result.notes.append(guard_note)
+                log(f"  {guard_note}")
             try:
+                if not do_charges:
+                    raise _Skipped()
+                kw = {"polarizability": bool(pol_engine) or not engines.has_libcint(),
+                      "polarizability_engine": pol_engine or "dxtb"}
                 try:
-                    props = properties.xtb_properties(*args, device=result.device)
+                    props = properties.xtb_properties(*args, device=result.device, **kw)
                 except Exception:
                     if result.device == "cpu":
                         raise
-                    props = properties.xtb_properties(*args, device="cpu")
+                    props = properties.xtb_properties(*args, device="cpu", **kw)
                 charges = props.pop("xtb_charges")
                 for note in props.pop("_notes", []):
                     result.notes.append(note)
@@ -574,6 +695,10 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                 log(f"  GFN1-xTB properties: dipole {props['xtb_dipole_debye']:.2f} D"
                     + (f", polarizability {props['xtb_polarizability_iso_A3']:.2f} Å^3"
                        if "xtb_polarizability_iso_A3" in props else ""))
+                if pol_engine == "tblite" and "xtb_polarizability_iso_A3" in props:
+                    result.descriptors["xtb_polarizability_method"] = "tblite GFN1-xTB finite field"
+            except _Skipped:
+                pass
             except Exception as exc:
                 result.notes.append(f"xTB properties skipped ({type(exc).__name__}: {exc})")
         result.timings["descriptors"] = time.perf_counter() - t
@@ -611,6 +736,7 @@ def run(inputs: list[MoleculeInput], cfg: BuildConfig, progress: ProgressFn = _n
     threads = resources.apply_thread_limits(cfg.threads)
     device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
     log(f"Resources: {threads} CPU threads, device {device}")
+    cfg = replace(cfg, memory_budget_gb=resolved_budget(cfg, 1, log))
     if cfg.write_files and run_dir is None:
         label = inputs[0].id if len(inputs) == 1 else f"batch_{len(inputs)}"
         run_dir = new_run_dir(cfg.output_dir or Settings().output_path(), label)
@@ -620,8 +746,8 @@ def run(inputs: list[MoleculeInput], cfg: BuildConfig, progress: ProgressFn = _n
         if should_stop():
             break
         progress(i, total, "start", inp.id)
-        res = run_molecule(inp, cfg, device, threads, should_stop, log,
-                           stage=lambda s, i=i, inp=inp: progress(i, total, s, inp.id))
+        res = run_molecule_limited(inp, cfg, device, threads, should_stop, log,
+                                   stage=lambda s, i=i, inp=inp: progress(i, total, s, inp.id))
         if cfg.write_files and run_dir is not None and res.status == "ok":
             files = export.write_molecule(res, run_dir / inp.id, cfg.formats)
             res.files = [str(p) for p in files]

@@ -531,6 +531,37 @@ def test_speed_aware_off_is_todays_dispatch(tmp_path, monkeypatch):
     assert lane_processes() == []
 
 
+def test_lane_past_the_time_limit_is_killed_and_restarted(tmp_path, monkeypatch):
+    """Both lanes hold every molecule 60 s (TEST_DELAY_ENV) against a 2 s limit: the parent kills each lane at the
+    limit, records its molecule failed "time limit (2 s)" (no crash counted, not retried in the run), restarts a
+    lane for the third molecule, and the run completes. --retry-failed (no delay) then computes them."""
+    monkeypatch.setenv(L.TEST_DELAY_ENV, "cpu1=60,cpu2=60")
+    c = cfg(tmp_path, molecule_timeout_s=2.0)
+    three = inputs(MOLS[:3])
+    logs = []
+    t0 = time.monotonic()
+    results, out = jobs.run_resumable(three, c, tmp_path / "run", log=logs.append, lanes=L.parse_lanes("2", c))
+    assert time.monotonic() - t0 < 40
+    assert [r.status for r in results] == ["failed"] * 3
+    assert all(r.error.startswith("time limit (2 s)") for r in results), [r.error for r in results]
+    killed = [m for m in logs if "time limit (2 s)" in m and "lane killed" in m]
+    assert len(killed) == 3 and any("restarting it" in m for m in killed)
+    assert any(m.startswith("Per-molecule time limit: 2 s (a lane past it is killed") for m in logs)
+    assert not any("lane died" in m for m in logs)
+    with sqlite3.connect(out / jobs.DB_NAME) as con:
+        assert con.execute("SELECT MAX(crashes) FROM molecules").fetchone()[0] == 0
+    assert {r["status"] for r in summary_rows(out).values()} == {"failed"}
+    assert summary_rows(out)["ethanol"]["error"].startswith("time limit (2 s)")
+    assert lane_processes() == []
+    # a resume without --retry-failed leaves them failed; with it (and no slow lanes) they are computed
+    again, _ = jobs.run_resumable(None, c, out, lanes=L.parse_lanes("2", c))
+    assert again == []
+    monkeypatch.delenv(L.TEST_DELAY_ENV)
+    redone, _ = jobs.run_resumable(None, c, out, retry_failed=True, lanes=L.parse_lanes("2", c))
+    assert sorted(r.status for r in redone) == ["ok"] * 3
+    assert jobs.open_run(out).counts["ok"] == 3 and lane_processes() == []
+
+
 needs_display = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
                                    reason="needs a display (xvfb-run)")
 
