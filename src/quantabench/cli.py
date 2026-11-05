@@ -130,7 +130,8 @@ def _doctor_gpu_engines(dev: str) -> None:
     if engines.available("gfn1-xtb")[0]:
         try:
             run_on, why = torch_compat.dxtb_device(dev)
-            print(f"    {dev:8s} dxtb: " + (torch_compat.describe(dev) if run_on == dev else why))
+            print(f"    {dev:8s} dxtb: " + (torch_compat.describe(dev) if run_on == dev
+                                             else why.replace("dxtb ran on", "runs on", 1)))
         except Exception as exc:
             print(f"    {dev:8s} dxtb: cannot check ({type(exc).__name__}: {exc})")
 

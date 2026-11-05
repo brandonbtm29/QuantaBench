@@ -88,4 +88,11 @@ Newest entries at the bottom. One entry per working session or nightly run.
   `brandonbtm29/tblite` (Windows wheels, release `qb-v0.8.0-win1`). Upstream PR texts drafted, not posted.
 - Left for Brandon: first MacBook install and a NOVA + MacBook `grid build` over Tailscale; disable the
   upstream workflows that run in the tblite fork; approve the upstream PRs.
+- Integration on NOVA (2026-11-05, after two review-fix rounds): 587 passed, 41 skipped, 2 xfailed, 2 xpassed
+  in the `.venv` (ROCm torch, PyPI dxtb, no tad-libcint or tblite). Found there: AMD's Windows ROCm runtime
+  hangs at process exit after GPU use (pytest printed its summary, then spun a core); fixed with a hard exit
+  at QuantaBench's entry points (FORK-11). Also two host-dependent tests and a third Windows-flaky LAMMPS run.
+  End-to-end checks: `doctor` shows AIMNet2 on the Warp-free path and dxtb on the CPU for cuda:0; 8 PFAS with
+  MMFF 14.6 s (1 lane) vs 9.0 s (`--lanes auto`, 12 lanes, mostly start-up); PFBA + PFOA with AIMNet2 on the
+  GPU in 15.5 s including model load.
 

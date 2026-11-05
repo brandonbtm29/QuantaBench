@@ -239,6 +239,13 @@ Depends on: none (research only; can run any night).
 - 2026-11-05: minimal Machines dock (registry, worker status on demand, this computer's lane plan). Left:
   the "Run on" choice, which belongs in UI-5's job dialog.
 
+### DIST-5: Speed-aware lanes at the end of a batch · ready
+- `lanes auto` for AIMNet2 on NOVA gives 1 GPU lane + 4 CPU lanes, and the GPU is ~10x faster per molecule.
+  Lanes pull molecules first-come, so near the end of a batch a CPU lane can start a molecule the GPU lane
+  would have finished long before; for a small batch the run can end up slower than the GPU lane alone.
+  Use each lane's measured time per molecule: when the queue is shorter than (slow lane's time / fast lane's
+  time), leave the rest to the fast lanes. Measure on NOVA with 8, 50 and 500 PFAS.
+
 ### DIST-4: Per-stage routing · later
 - Different stages of one molecule on different machines (CREST + Psi4 on the Mac, GPU refinement +
   LAMMPS on NOVA), handed over through run-folder artifacts.
