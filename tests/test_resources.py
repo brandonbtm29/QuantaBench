@@ -51,3 +51,32 @@ def test_hard_exit_only_after_windows_rocm_use(monkeypatch):
     monkeypatch.setenv(resources.HARD_EXIT_ENV, "0")
     monkeypatch.setattr(sys, "platform", "linux")
     resources.hard_exit_if_needed(3)                       # returns: nothing to do
+
+
+def test_detect_isolated_runs_in_a_child_and_can_be_cancelled(monkeypatch):
+    """The GUI's hardware probe: the same report and libcint verdict as in this process, torch only in the child."""
+    import threading
+
+    from quantabench.chem import engines
+
+    monkeypatch.setattr(resources, "_ISOLATED", None)
+    stop = threading.Event()
+    stop.set()
+    assert resources.detect_isolated(cancel=stop) is None and resources._ISOLATED is None
+    rep, checks = resources.detect_isolated()
+    here = resources.detect()
+    assert (rep.logical_cores, rep.torch_version, rep.torch_backend) == \
+        (here.logical_cores, here.torch_version, here.torch_backend)
+    assert [g.name for g in rep.gpus] == [g.name for g in here.gpus]
+    assert tuple(checks["libcint"]) == engines.libcint_status()
+    assert resources.detect_isolated() is resources._ISOLATED                 # cached
+
+
+def test_detect_isolated_falls_back_without_torch(monkeypatch):
+    import sys
+
+    monkeypatch.setattr(resources, "_ISOLATED", None)
+    monkeypatch.setattr(sys, "executable", sys.executable + "-missing")
+    rep, checks = resources.detect_isolated()
+    assert checks == {} and rep.gpus == [] and "GPU" in rep.notes[-1] and resources._ISOLATED is None
+    assert rep.torch_backend in ("unknown", "none") and rep.logical_cores >= 1

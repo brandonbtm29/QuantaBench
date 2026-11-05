@@ -73,6 +73,34 @@ def test_installed_but_incompatible_points_to_the_fork(monkeypatch):
         assert not ok2 and why == f"GFN2 needs dxtb's libcint backend: {reason}"
 
 
+def test_version_check_imports_nothing_and_agrees(monkeypatch):
+    """``libcint_status(check_import=False)`` (GUI labels): installed versions and files only."""
+    monkeypatch.setattr(engines, "_LIBCINT_PROBED", None)
+    assert engines.libcint_status(check_import=False) == engines.libcint_status_from_versions()
+    assert engines.libcint_status_from_versions()[0] == engines.libcint_status()[0]
+    assert engines.libcint_status(check_import=False) is engines.libcint_status()   # the full one once known
+
+
+def test_version_check_reasons(monkeypatch):
+    monkeypatch.setattr(engines, "_LIBCINT_PROBED", None)
+    _versions(monkeypatch, **{"tad-libcint": "0.4.0", "tad-mctc": "0.7.0", "dxtb": "0.4.0"})
+    ok, why = engines.libcint_status(check_import=False)
+    assert not ok and why.startswith("tad-libcint 0.4.0 is installed but does not import with tad-mctc 0.7.0")
+    assert engines.LIBCINT_FORK_INSTALL in why
+    monkeypatch.setattr(engines, "_dxtb_fork_installed", lambda: False)
+    _versions(monkeypatch, **{"tad-libcint": "0.4.0", "tad-mctc": "0.11.3", "dxtb": "0.4.0"})
+    ok, why = engines.libcint_status_from_versions()
+    assert not ok and why.startswith("dxtb 0.4.0 cannot use tad-libcint 0.4.0 with tad-mctc 0.11.3")
+    monkeypatch.setattr(engines, "_dxtb_fork_installed", lambda: True)
+    assert engines.libcint_status_from_versions() == (True, "")
+    _versions(monkeypatch, **{"tad-libcint": "", "dxtb": "0.4.0.post1"})
+    assert engines.libcint_status_from_versions() == (False, 'tad-libcint is not installed: pip install "tad-libcint>=0.4"')
+    engines.set_probed_libcint_status([False, "from the probe"])
+    assert engines.libcint_status(check_import=False) == (False, "from the probe")
+    if engines.has_package("torch") and engines.has_package("dxtb"):
+        assert engines.available("gfn2-xtb", quick=True) == (False, "GFN2 needs dxtb's libcint backend: from the probe")
+
+
 def test_fork_install_line_is_documented():
     from pathlib import Path
 

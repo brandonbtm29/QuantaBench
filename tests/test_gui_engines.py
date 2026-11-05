@@ -113,3 +113,77 @@ def test_settings_engines_tab_round_trip_and_detection(tmp_path, monkeypatch):
     d.reject()
     d.deleteLater()
     app.processEvents()
+
+
+_STARTUP_CHECK = r"""
+import json, sys, time
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+from quantabench import settings as sm
+from quantabench.gui.main_window import MainWindow
+w = MainWindow(sm.Settings(output_dir=sys.argv[1]))
+w.show()
+t = time.time()
+while time.time() - t < 1.5:              # the hardware probe starts at 50 ms (in a child process)
+    app.processEvents()
+    time.sleep(0.02)
+labels = [w.w_method.itemText(i) for i in range(w.w_method.count())]
+heavy = [m for m in ("torch", "dxtb", "aimnet", "ovito", "tad_libcint", "tad_mctc") if m in sys.modules]
+w.close()                                 # kills the probe's child if it still runs
+while not w.closed and time.time() - t < 30:
+    app.processEvents()
+    time.sleep(0.02)
+print("RESULT " + json.dumps({"heavy": heavy, "labels": labels, "closed": w.closed}))
+"""
+
+
+def test_main_window_starts_without_torch(tmp_path):
+    """SCALE-1: the window imports no torch, dxtb, aimnet or ovito (~500 MB) just to label engines and GPUs.
+    Checked in a fresh process: this one may have imported torch already."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import quantabench
+    from quantabench.chem import engines
+    from quantabench.gui.settings_dialog import method_label
+
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(
+        [str(Path(quantabench.__file__).resolve().parents[1]), os.environ.get("PYTHONPATH", "")]))
+    cp = subprocess.run([sys.executable, "-c", _STARTUP_CHECK, str(tmp_path / "out")], capture_output=True,
+                        text=True, timeout=240, env=env)
+    lines = [ln for ln in cp.stdout.splitlines() if ln.startswith("RESULT ")]
+    assert cp.returncode == 0 and lines, cp.stderr[-3000:]
+    out = json.loads(lines[-1][len("RESULT "):])
+    assert out["heavy"] == [] and out["closed"]
+    # and the labels still say which engines are usable (here from the full check; this process may import torch)
+    engines.libcint_status()
+    assert out["labels"] == [method_label(k) for k in engines.method_keys()]
+
+
+def test_gfn2_label_follows_the_full_libcint_check(tmp_path, monkeypatch):
+    """The version-based guess labels GFN2 at start-up; the probe's full check replaces it, with the reason."""
+    from quantabench import resources
+    from quantabench import settings as sm
+    from quantabench.chem import engines
+    from quantabench.gui.main_window import MainWindow
+
+    if not (engines.has_package("torch") and engines.has_package("dxtb")):
+        pytest.skip("GFN2 (dxtb) not installed")
+    monkeypatch.setattr(engines, "_LIBCINT_STATUS", None)
+    monkeypatch.setattr(engines, "_LIBCINT_PROBED", None)
+    monkeypatch.setattr(engines, "libcint_status_from_versions", lambda: (True, ""))
+    probe = (resources.detect_light(), {"libcint": [False, "tad-libcint 9.9 does not load (synthetic)"]})
+    monkeypatch.setattr(resources, "detect_isolated", lambda **_k: probe)
+    app = _app()
+    w = MainWindow(sm.Settings(output_dir=str(tmp_path)))
+    try:
+        i = w.w_method.findData("gfn2-xtb")
+        assert w.w_method.itemText(i) == engines.ENGINES["gfn2-xtb"].label        # the guess: usable
+        assert _wait(app, lambda: w.report is not None)
+        assert w.w_method.itemText(i).endswith("(not installed)")
+        w.w_method.setCurrentIndex(i)
+        assert "Not available: GFN2 needs dxtb's libcint backend: tad-libcint 9.9 does not load" in w.engine_info.text()
+    finally:
+        _close(app, w)

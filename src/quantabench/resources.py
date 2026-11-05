@@ -49,7 +49,7 @@ class HardwareReport:
     ram_gb: float
     wsl: bool
     torch_version: str = ""
-    torch_backend: str = "none"   # "rocm" | "cuda" | "mps" | "cpu" | "none" (torch missing)
+    torch_backend: str = "none"   # "rocm" | "cuda" | "mps" | "cpu" | "none" (torch missing) | "unknown" (not probed)
     gpus: list[GPUInfo] = field(default_factory=list)
     optional_packages: dict[str, bool] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
@@ -246,6 +246,108 @@ def detect() -> HardwareReport:
     if rep.wsl and not gpus:
         rep.notes.append("Running under WSL2 without GPU pass-through; native Windows may be faster for GPU work.")
     return rep
+
+
+def detect_light(note: str = "") -> HardwareReport:
+    """``detect()`` without importing torch: CPU, RAM and the installed torch version, no GPU list."""
+    from importlib import metadata
+
+    try:
+        version = metadata.version("torch")
+    except metadata.PackageNotFoundError:
+        version = ""
+    rep = HardwareReport(
+        os=f"{platform.system()} {platform.release()}", python=platform.python_version(), cpu_name=cpu_name(),
+        physical_cores=physical_cores(), logical_cores=logical_cores(), ram_gb=psutil.virtual_memory().total / 1024**3,
+        wsl=is_wsl(), torch_version=version, torch_backend="unknown" if version else "none",
+        optional_packages={p: has_package(p) for p in OPTIONAL_PACKAGES})
+    if note:
+        rep.notes.append(note)
+    return rep
+
+
+_PROBE_MARK = "QB-PROBE-JSON "
+_ISOLATED: tuple[HardwareReport, dict] | None = None
+
+
+def _probe_child() -> None:
+    """Child side of ``detect_isolated``: one JSON line on stdout, then ``os._exit`` (no torch teardown, which
+    can hang with AMD's Windows ROCm runtime, FORK-11)."""
+    import json
+
+    out: dict = {"hardware": None, "checks": {}}
+    try:
+        out["hardware"] = detect().to_dict()
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        from .chem import engines
+
+        out["checks"]["libcint"] = list(engines.libcint_status())
+    except Exception as exc:
+        out["checks"]["libcint"] = [False, f"{type(exc).__name__}: {exc}"]
+    sys.stdout.write(_PROBE_MARK + json.dumps(out) + "\n")
+    sys.stdout.flush()
+    os._exit(0)
+
+
+def detect_isolated(timeout: float = 180.0, cancel=None) -> tuple[HardwareReport, dict] | None:
+    """``detect()`` and the checks that import torch (``{"libcint": (ok, reason)}``), run in a child process
+    with this interpreter, so this process never imports torch (the GUI: ~500 MB and seconds of start-up for
+    a status-bar label) and a broken GPU stack cannot crash it. Cached once it succeeds. ``cancel``: a
+    ``threading.Event``; once set, the child is killed and None returned. If the child fails, the report is
+    ``detect_light`` with a note saying why, and no checks."""
+    global _ISOLATED
+    if _ISOLATED is not None:
+        return _ISOLATED
+    import json
+    import subprocess
+    from pathlib import Path
+
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").is_file():
+        exe = exe.with_name("python.exe")        # pythonw has no stdout to read the result from
+    root = str(Path(__file__).resolve().parent.parent)
+    code = f"import sys; sys.path.insert(0, {root!r}); from quantabench.resources import _probe_child; _probe_child()"
+    kwargs: dict = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "stdin": subprocess.DEVNULL,
+                    "text": True, "errors": "replace"}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    why = ""
+    try:
+        proc = subprocess.Popen([str(exe), "-c", code], **kwargs)  # noqa: S603
+    except OSError as exc:
+        return detect_light(f"GPU detection could not start a Python process ({exc}); GPU list unknown."), {}
+    t0 = time.monotonic()
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=0.25)
+            break
+        except subprocess.TimeoutExpired:
+            if (cancel is not None and cancel.is_set()) or time.monotonic() - t0 > timeout:
+                proc.kill()
+                proc.communicate()
+                if cancel is not None and cancel.is_set():
+                    return None
+                return detect_light(f"GPU detection timed out after {timeout:.0f} s; GPU list unknown."), {}
+    for line in reversed((stdout or "").splitlines()):
+        if line.startswith(_PROBE_MARK):
+            try:
+                out = json.loads(line[len(_PROBE_MARK):])
+                d = out["hardware"]
+                if d is None:
+                    why = out.get("error", "no report")
+                    break
+                rep = HardwareReport(**{**d, "gpus": [GPUInfo(**g) for g in d.get("gpus", [])]})
+                _ISOLATED = (rep, dict(out.get("checks") or {}))
+                return _ISOLATED
+            except (ValueError, KeyError, TypeError) as exc:
+                why = f"unreadable result ({exc})"
+                break
+    else:
+        tail = (stderr or "").strip().splitlines()
+        why = f"exit code {proc.returncode}" + (f": {tail[-1]}" if tail else "")
+    return detect_light(f"GPU detection failed ({why}); GPU list unknown. Run `quantabench-cli doctor`."), {}
 
 
 def select_device(policy: str = "auto", index: int = 0, memory_fraction: float | None = None) -> str:

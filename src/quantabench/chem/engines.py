@@ -29,6 +29,7 @@ optional ``"charges"`` list and ``"_notes"`` list.
 from __future__ import annotations
 
 import importlib
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import ClassVar
@@ -179,20 +180,29 @@ def _dist_version(name: str) -> str:
         return ""
 
 
-def libcint_status() -> tuple[bool, str]:
+_LIBCINT_PROBED: tuple[bool, str] | None = None      # the full check, run in a child process (GUI start-up)
+
+
+def libcint_status(check_import: bool = True) -> tuple[bool, str]:
     """``(ok, reason)`` for dxtb's libcint integral backend; ``reason`` says what to install when not ok.
 
     Distinguishes tad-libcint missing from tad-libcint installed but incompatible: tad-libcint 0.4
     (the first release with Windows and macOS arm64 wheels) needs tad-mctc >= 0.11, which PyPI's
     dxtb 0.4 (pinned to tad-mctc 0.7) does not run with; the dxtb fork (``DXTB_FORK_REQ``) does.
     PyPI's dxtb 0.4 with ``tad-libcint<0.4`` (Linux only) stays valid. Cached after the first call.
+
+    The full check imports tad-libcint and dxtb, hence torch (~500 MB, seconds on a ROCm build).
+    ``check_import=False`` (menus and labels) imports none of them: it gives the full result if this
+    process already has it, else the one a child process computed (``set_probed_libcint_status``, the
+    GUI's start-up probe), else ``libcint_status_from_versions()``.
     """
     global _LIBCINT_STATUS
     if _LIBCINT_STATUS is not None:
         return _LIBCINT_STATUS
+    if not check_import:
+        return _LIBCINT_PROBED or libcint_status_from_versions()
 
     import importlib.util
-    import sys
 
     cint, mctc, dxtb_v = _dist_version("tad-libcint"), _dist_version("tad-mctc"), _dist_version("dxtb")
     linux = sys.platform.startswith("linux")
@@ -204,13 +214,7 @@ def libcint_status() -> tuple[bool, str]:
             fork = importlib.util.find_spec("dxtb._src.exlibs.mctc_compat") is not None
         except Exception:
             fork = False
-        if fork:
-            hint = 'pip install "tad-libcint>=0.4"'
-        elif linux:
-            hint = f"pip install 'tad-libcint<0.4' (PyPI dxtb), or the dxtb fork: {LIBCINT_FORK_INSTALL}"
-        else:
-            hint = LIBCINT_FORK_INSTALL
-        status = (False, f"tad-libcint is not installed: {hint}")
+        status = (False, f"tad-libcint is not installed: {_libcint_install_hint(fork)}")
     else:
         try:
             import tad_libcint  # noqa: F401
@@ -231,6 +235,72 @@ def libcint_status() -> tuple[bool, str]:
     return status
 
 
+def _libcint_install_hint(fork: bool) -> str:
+    if fork:
+        return 'pip install "tad-libcint>=0.4"'
+    if sys.platform.startswith("linux"):
+        return f"pip install 'tad-libcint<0.4' (PyPI dxtb), or the dxtb fork: {LIBCINT_FORK_INSTALL}"
+    return LIBCINT_FORK_INSTALL
+
+
+def _dxtb_fork_installed() -> bool:
+    """Whether the installed dxtb is the fork (it has ``_src/exlibs/mctc_compat``), found on disk: no import."""
+    import importlib.util
+    from pathlib import Path
+
+    try:
+        spec = importlib.util.find_spec("dxtb")
+    except (ImportError, ValueError):
+        return False
+    for loc in (spec.submodule_search_locations or []) if spec is not None else []:
+        base = Path(loc) / "_src" / "exlibs"
+        if (base / "mctc_compat").is_dir() or (base / "mctc_compat.py").is_file():
+            return True
+    return False
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    import re
+
+    return tuple(int(x) for x in re.findall(r"\d+", v.split("+")[0])[:3])
+
+
+def libcint_status_from_versions() -> tuple[bool, str]:
+    """``libcint_status()`` predicted from the installed distributions and files alone, importing nothing.
+    Right for a missing package and for the known tad-libcint 0.4 / tad-mctc / dxtb mismatches; blind to
+    a binary that does not load (that shows in the full check, which the pipeline makes before using GFN2,
+    and in the GUI's start-up probe)."""
+    import importlib.util
+
+    cint, mctc, dxtb_v = _dist_version("tad-libcint"), _dist_version("tad-mctc"), _dist_version("dxtb")
+    if not dxtb_v and importlib.util.find_spec("dxtb") is None:
+        return False, "dxtb is not installed"
+    fork = _dxtb_fork_installed()
+    if not cint:
+        return False, f"tad-libcint is not installed: {_libcint_install_hint(fork)}"
+    if _version_tuple(cint) >= (0, 4):
+        if mctc and _version_tuple(mctc) < (0, 11):
+            return False, (f"tad-libcint {cint} is installed but does not import with tad-mctc {mctc} (it needs "
+                           f"tad-mctc >= 0.11); tad-libcint 0.4 needs dxtb from brandonbtm29/dxtb@qb-v0.4.0.post1: "
+                           f"{LIBCINT_FORK_INSTALL}"
+                           + (" (or keep PyPI dxtb with 'tad-libcint<0.4')" if sys.platform.startswith("linux") else ""))
+        if not fork:
+            return False, (f"dxtb {dxtb_v or '?'} cannot use tad-libcint {cint} with tad-mctc {mctc or '?'}; "
+                           f"{LIBCINT_FORK_INSTALL}")
+    return True, ""
+
+
+def set_probed_libcint_status(status) -> None:
+    """Record the full ``libcint_status()`` computed by a child process with this interpreter (the GUI's
+    start-up probe, ``resources.detect_isolated``), for ``libcint_status(check_import=False)``."""
+    global _LIBCINT_PROBED
+    try:
+        ok, reason = status
+        _LIBCINT_PROBED = (bool(ok), str(reason))
+    except (TypeError, ValueError):
+        pass
+
+
 def has_libcint() -> bool:
     """True when dxtb's libcint integral backend is importable *and* compatible.
 
@@ -241,7 +311,10 @@ def has_libcint() -> bool:
     return libcint_status()[0]
 
 
-def available(key: str) -> tuple[bool, str]:
+def available(key: str, quick: bool = False) -> tuple[bool, str]:
+    """``(ok, reason)`` for engine ``key``. ``quick=True`` (GUI menus and labels) never imports torch or dxtb:
+    GFN2's libcint check is ``libcint_status(check_import=False)``. The default makes the full check, as the
+    pipeline does before it uses an engine."""
     if key == "mmff":
         return True, ""
     p = plugin(key)
@@ -255,8 +328,10 @@ def available(key: str) -> tuple[bool, str]:
     if key in ("gfn1-xtb", "gfn2-xtb"):
         if not has_package("dxtb"):
             return False, "install with: pip install dxtb"
-        if key == "gfn2-xtb" and not has_libcint():
-            return False, f"GFN2 needs dxtb's libcint backend: {libcint_status()[1]}"
+        if key == "gfn2-xtb":
+            ok, why = libcint_status(check_import=not quick)
+            if not ok:
+                return False, f"GFN2 needs dxtb's libcint backend: {why}"
         return True, ""
     if key == "aimnet2":
         if not has_package("aimnet"):
