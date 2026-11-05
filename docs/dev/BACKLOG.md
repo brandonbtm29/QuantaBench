@@ -210,6 +210,11 @@ Depends on: none (research only; can run any night).
   `pytest -m external`.
 - 2026-11-05: `.github/workflows/external-engines.yml` does the second part (weekly, manual, and on pushes
   touching engine code). Left: watch the first runs and make macos-14 required in `ci.yml`.
+- 2026-11-05: first green CI on all three OSes (also fixed: Qt xcb libraries on Ubuntu, `Get-FileHash` under
+  pwsh-launched Windows PowerShell, long runner hostnames, Psi4 needs `libxc-c<7`). External engines: Ubuntu
+  green; on macos-14 two MOPAC checks fail: the PM7 polarizability is 1.347 Å³ for water (1.259 on Linux,
+  from MOPAC's own .out) and 3.22 for methanol (3.0 ± 0.2), while heats of formation, dipoles and orbital
+  energies match. Compare the osx-arm64 MOPAC build/version and its POLAR output before relaxing the tests.
 
 ### DIST-1: Machine capability report and weighted chunks · done 2026-11-05
 - `doctor --json` gains engines, external programs (versions), and `--bench` throughput per engine
