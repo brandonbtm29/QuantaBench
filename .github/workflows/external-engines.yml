@@ -1,0 +1,97 @@
+name: External engines
+
+# xtb, CREST, MOPAC and Psi4 from conda-forge (envs/tools.yml, envs/psi4.yml) against QuantaBench in a pip
+# venv made by the install script (CPU PyTorch), then the tests marked `external` (PLAT-2, PLATFORMS.md 5).
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"            # Mondays 06:17 UTC
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "envs/**"
+      - "src/quantabench/chem/external.py"
+      - "src/quantabench/chem/eng_*.py"
+      - "src/quantabench/chem/crest.py"
+      - "src/quantabench/chem/qm.py"
+      - "src/quantabench/chem/surfaces.py"
+      - "tests/test_external.py"
+      - "tests/test_eng_*.py"
+      - "tests/test_crest.py"
+      - "tests/test_qm.py"
+      - "tests/test_surfaces.py"
+      - "scripts/install_linux.sh"
+      - "scripts/install_macos.sh"
+      - ".github/workflows/external-engines.yml"
+
+jobs:
+  external:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]   # macos-14 = Apple Silicon
+    runs-on: ${{ matrix.os }}
+    # macOS is being brought up (PLATFORMS.md): report, don't block, until it is green
+    continue-on-error: ${{ matrix.os == 'macos-14' }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Qt runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxcb-cursor0 libegl1 libgl1 xvfb
+
+      - name: xtb, CREST, MOPAC (envs/tools.yml)
+        id: tools
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-file: envs/tools.yml
+          cache-environment: true
+          init-shell: none
+          post-cleanup: none
+      - name: Psi4 (envs/psi4.yml)
+        id: psi4
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-file: envs/psi4.yml
+          cache-environment: true
+          init-shell: none
+          post-cleanup: none
+
+      - name: QuantaBench (install script, CPU PyTorch)
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            bash scripts/install_macos.sh --python "$pythonLocation/bin/python3"
+          else
+            bash scripts/install_linux.sh --gpu cpu --python "$pythonLocation/bin/python3"
+          fi
+      - name: Point QuantaBench at the micromamba programs
+        env:
+          TOOLS: ${{ steps.tools.outputs.environment-path }}
+          PSI4: ${{ steps.psi4.outputs.environment-path }}
+        run: |
+          {
+            echo "QUANTABENCH_XTB=$TOOLS/bin/xtb"
+            echo "QUANTABENCH_CREST=$TOOLS/bin/crest"
+            echo "QUANTABENCH_MOPAC=$TOOLS/bin/mopac"
+            echo "QUANTABENCH_PSI4_PYTHON=$PSI4/bin/python"
+          } >> "$GITHUB_ENV"
+      - name: Check the programs are there (a wrong path would only skip the tests)
+        run: |
+          for exe in "$QUANTABENCH_XTB" "$QUANTABENCH_CREST" "$QUANTABENCH_MOPAC" "$QUANTABENCH_PSI4_PYTHON"; do
+            test -x "$exe" || { echo "missing: $exe"; exit 1; }
+          done
+          "$QUANTABENCH_PSI4_PYTHON" -c "import psi4; print('psi4', psi4.__version__)"
+          .venv/bin/quantabench-cli doctor    # lists the versions it finds
+      - name: Tests marked external (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a .venv/bin/python -m pytest -m external -rs -q --timeout=1200
+      - name: Tests marked external (macOS)
+        if: runner.os == 'macOS'
+        run: .venv/bin/python -m pytest -m external -rs -q --timeout=1200

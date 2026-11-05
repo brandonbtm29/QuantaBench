@@ -1,5 +1,124 @@
 # Installing QuantaBench
 
+## Quick install
+
+One script per OS does the whole installation. It is safe to run again: every step that is already
+done is skipped, so rerunning it after `git pull` is also how you repair or finish an install. Add
+`--dry-run` (Windows: `-DryRun`) to see every step without changing anything.
+
+You need **git** and **Python 3.12**. The scripts look for Python 3.12 and say how to get it if it is
+missing; they never install system Python themselves:
+
+- macOS: `brew install python@3.12`, or the python.org installer. The first `git` command offers to install
+  Apple's command line tools.
+- Windows: `winget install Python.Python.3.12` and `winget install Git.Git`.
+- Linux: `sudo apt install python3.12 python3.12-venv git` (Ubuntu 24.04).
+
+### macOS (Apple Silicon)
+
+In Terminal:
+
+```bash
+mkdir -p ~/GitHub\ Projects && cd ~/GitHub\ Projects && git clone https://github.com/brandonbtm29/QuantaBench.git && cd QuantaBench && bash scripts/install_macos.sh --with-engines --settings-dir ~/SyncThing/QuantaBench/Settings
+```
+
+Run it again later (repair, or after an update):
+
+```bash
+cd ~/GitHub\ Projects/QuantaBench && git pull --ff-only && bash scripts/install_macos.sh --with-engines --settings-dir ~/SyncThing/QuantaBench/Settings
+```
+
+Start QuantaBench from **~/Applications/QuantaBench.app** (Launchpad, Spotlight; drag it to the Dock),
+or double-click `QuantaBench.command` in the repository folder.
+
+### Windows 11 (BTM NOVA)
+
+In PowerShell, for the existing checkout:
+
+```powershell
+cd "$HOME\GitHub Projects\QuantaBench"; git pull; powershell -ExecutionPolicy Bypass -File scripts\install_windows.ps1 -WithEngines -SettingsDir "$HOME\SyncThing\QuantaBench\Settings"
+```
+
+On a PC without a checkout yet:
+
+```powershell
+mkdir "$HOME\GitHub Projects" -Force | Out-Null; cd "$HOME\GitHub Projects"; git clone https://github.com/brandonbtm29/QuantaBench.git; cd QuantaBench; powershell -ExecutionPolicy Bypass -File scripts\install_windows.ps1 -WithEngines -SettingsDir "$HOME\SyncThing\QuantaBench\Settings"
+```
+
+Start QuantaBench from the **Start Menu** ("QuantaBench"), or double-click `QuantaBench.bat`. Neither
+opens a console window.
+
+On BTM NOVA, `.venv` currently holds AMD's ROCm PyTorch. The script asks before it replaces it. Answering
+`y` installs PyPI's CPU build, which is the faster one for everything QuantaBench runs today (PERF-1).
+Add `-Gpu rocm` to keep a separate GPU environment, `.venv-rocm`, with AMD's wheels and its own Start Menu
+entry, "QuantaBench (AMD GPU)".
+
+### Linux and WSL2
+
+```bash
+mkdir -p ~/GitHub\ Projects && cd ~/GitHub\ Projects && git clone https://github.com/brandonbtm29/QuantaBench.git && cd QuantaBench && bash scripts/install_linux.sh --with-engines --settings-dir ~/SyncThing/QuantaBench/Settings
+```
+
+Start QuantaBench from the application menu (in WSL, WSLg also adds it to the Windows Start Menu). In
+WSL, clone into the Linux home as above, not into `/mnt/c/...`. The script refuses to put a Linux venv on
+top of the Windows checkout's `.venv`.
+
+### What the scripts do
+
+1. **Python 3.12.** The scripts find it (`py -3.12` on Windows) or explain how to get it.
+2. **`.venv`.** They create it in the repository folder, or reuse it.
+3. **PyTorch first**, so pip cannot pull a build that does not match your GPU:
+
+   | | default | other choices (`--gpu` / `-Gpu`) |
+   |---|---|---|
+   | Windows | `cpu`: PyPI's build, the CPU build on Windows | `rocm`: also `.venv-rocm` with AMD's ROCm 7.2.1 wheels; `cuda`: NVIDIA |
+   | Linux, WSL2 | `cpu`: download.pytorch.org's CPU wheels | `cuda`: PyPI's build; `rocm`: download.pytorch.org's ROCm wheels; `auto`; `--torch-index URL` |
+   | macOS | PyPI's build, which runs on the CPU and on the Apple GPU (`mps`) | |
+
+   An installed PyTorch of another build is never replaced without asking. Pass `--replace-torch`
+   (`-ReplaceTorch`) to replace it without the question.
+4. **`pip install -e ".[all,dev]"`**, with PyTorch pinned to the installed build (Linux adds
+   `tad-libcint<0.4` for GFN2-xTB in dxtb; macOS never builds tblite from source). The scripts skip this
+   step when `pyproject.toml` has not changed since the last run (`--reinstall` forces it).
+5. **`--settings-dir DIR`** runs `quantabench-cli settings --set-dir DIR`
+   ([Settings in a synced folder](#settings-in-a-synced-folder)).
+6. **`--with-engines`** installs Miniforge into `~/miniforge3` (Windows: `%USERPROFILE%\miniforge3`, just for
+   you, not on PATH) when no conda, mamba or micromamba is found. Then it creates or updates the conda
+   environments: `envs/tools.yml` (xtb, CREST, MOPAC), or `envs/tools-windows.yml` (xtb, MOPAC) on Windows,
+   plus `envs/psi4.yml`. Each environment is updated only when its file changed. `--conda PATH` picks the
+   tool.
+7. **A launcher that hides the terminal window**:
+   - Windows: Start Menu shortcut to `.venv\Scripts\quantabench.exe`, pip's GUI launcher, which runs
+     `pythonw`. `-DesktopShortcut` adds one on the Desktop.
+   - macOS: `~/Applications/QuantaBench.app` (`--no-app` skips it), plus `QuantaBench.command`.
+   - Linux: `~/.local/share/applications/quantabench.desktop`.
+8. **`quantabench-cli doctor`** at the end, which shows what QuantaBench can use.
+
+Windows also checks for **Smart App Control**, which blocks new DLLs ([below](#smart-app-control)), and
+warns about **spaces in paths**. Spaces are fine for QuantaBench. They only produce harmless noise from
+AMD's ROCm PyTorch, and Miniforge must not be installed in a folder with spaces.
+
+## Updating
+
+- **In the app:** Help > Check for updates... It shows the new commits and offers **Update and restart**.
+- **On the command line:** `quantabench-cli update --check` reports how far the checkout is behind
+  `origin/main`, and `quantabench-cli update` updates it.
+
+Both run `git pull --ff-only`. If `pyproject.toml`'s dependencies or entry points changed, they then
+reinstall with `pip install -e`, using the extras that are already installed and keeping the installed
+PyTorch. They refuse, and say why, in three cases:
+
+- tracked files have local changes (commit or `git stash` them first)
+- the checkout is on another branch
+- it has commits of its own that `origin/main` does not have
+
+An install that is not a git checkout gets instructions instead. Running the install script again also
+updates, except for the `git pull`.
+
+## Manual installation
+
+The sections below are the steps the scripts automate, with the details per platform.
+
 QuantaBench needs Python 3.11 or newer. **Use Python 3.12** if you want AMD GPU support on Windows,
 because AMD's Windows PyTorch wheels are built for 3.12 only.
 
@@ -9,7 +128,9 @@ Otherwise pip may pull a generic PyTorch that cannot see your card.
 ## Windows 11, AMD Radeon (native, recommended for RX 7000/9000)
 
 Native Windows is the fastest and most reliable route for Radeon cards. Earlier testing on this project
-found WSL2 GPU pass-through fragile on consumer Radeons.
+found WSL2 GPU pass-through fragile on consumer Radeons. `scripts\install_windows.ps1 -Gpu rocm` does
+steps 2 to 4 in a second environment, `.venv-rocm`, and keeps the CPU build in `.venv`
+([below](#what-the-amd-gpu-can-do-today-windows-rocm-721)).
 
 1. Install AMD Software: Adrenalin Edition 26.2.2 or newer, and Python 3.12 from python.org.
 2. Create an environment:
@@ -146,7 +267,8 @@ What to expect on a Mac today:
 ## External programs: xtb, CREST, MOPAC, Psi4 (optional)
 
 These are separate programs, not pip packages. Install them with conda (Miniforge) into their own
-environments; QuantaBench finds them there by itself (`quantabench-cli doctor` lists them):
+environments; QuantaBench finds them there by itself (`quantabench-cli doctor` lists them). The install
+scripts' `--with-engines` (`-WithEngines`) does this, Miniforge included. By hand:
 
 ```bash
 conda env create -f envs/tools.yml          # Linux/WSL: xtb, CREST, MOPAC
@@ -188,4 +310,4 @@ quantabench-cli settings --set-dir "~/SyncThing/QuantaBench/Settings"
 
 This writes a git-ignored `settings_location.json` pointer in the repo, so every computer that clones
 the repo and has the SyncThing folder shares the same settings. The GUI offers the same choice under
-Settings > Folders.
+Settings > Folders, and the install scripts under `--settings-dir` (`-SettingsDir`).
