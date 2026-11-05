@@ -34,13 +34,21 @@ def mol_to_atoms(mol: Chem.Mol, conf_id: int = -1) -> Atoms:
     return Atoms([a.GetSymbol() for a in mol.GetAtoms()], positions=np.array(conf.GetPositions()))
 
 
+def _write_text_format(path: Path, images, **kwargs) -> None:
+    """ase.io.write into a file opened as UTF-8. Given a path, ASE opens it in the locale's encoding (cp1252 on
+    Windows), and a name such as "β-Tocopherol" in an XYZ comment then fails the export."""
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        ase_write(fh, images, **kwargs)
+
+
 def write_lammps_data(atoms: Atoms, path: Path, charges=None, padding: float = 10.0) -> None:
     a = atoms.copy()
     a.center(vacuum=padding)
     a.pbc = True
     if charges is not None:
         a.set_initial_charges(np.asarray(charges, dtype=float))
-    ase_write(path, a, format="lammps-data", atom_style="charge", units="real", masses=True, specorder=None)
+    _write_text_format(path, a, format="lammps-data", atom_style="charge", units="real", masses=True,
+                       specorder=None)
 
 
 def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMATS) -> list[Path]:
@@ -57,7 +65,7 @@ def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMAT
     for fmt in formats:
         if fmt == "xyz":
             p = out_dir / f"{stem}.xyz"
-            ase_write(p, best_atoms, format="xyz", comment=comment)
+            _write_text_format(p, best_atoms, format="xyz", comment=comment)
         elif fmt == "xyz-all":
             p = out_dir / f"{stem}_conformers.xyz"
             frames = []
@@ -65,7 +73,7 @@ def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMAT
                 at = mol_to_atoms(mol, c.conf_id)
                 at.info.update(rank=c.rank, energy_eV=c.energy_ev, rel_kcal=c.rel_kcal, weight=c.weight)
                 frames.append(at)
-            ase_write(p, frames, format="extxyz")
+            _write_text_format(p, frames, format="extxyz")
         elif fmt == "extxyz":
             p = out_dir / f"{stem}.extxyz"
             at = best_atoms.copy()
@@ -73,7 +81,7 @@ def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMAT
                 at.set_initial_charges(np.asarray(best.charges))
             at.info.update(energy_eV=best.energy_ev, method=result.method, total_charge=result.charge,
                            smiles=result.smiles)
-            ase_write(p, at, format="extxyz")
+            _write_text_format(p, at, format="extxyz")
         elif fmt == "sdf":
             p = out_dir / f"{stem}_conformers.sdf"
             w = Chem.SDWriter(str(p))

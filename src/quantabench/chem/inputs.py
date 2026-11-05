@@ -6,6 +6,7 @@ import csv
 import json
 import logging
 import re
+import unicodedata
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -65,9 +66,21 @@ class MoleculeInput:
         return mol
 
 
+def _ascii_char(ch: str) -> str:
+    """One character in ASCII: Greek letters spelled out (beta-Tocopherol), accents dropped (e from é)."""
+    if ord(ch) < 128:
+        return ch
+    m = re.match(r"GREEK (?:SMALL|CAPITAL) LETTER (\w+)$", unicodedata.name(ch, ""))
+    if m:
+        return m.group(1).lower()
+    return unicodedata.normalize("NFKD", ch).encode("ascii", "ignore").decode("ascii") or "_"
+
+
 def safe_id(text: str, fallback: str = "mol") -> str:
-    """Folder- and file-safe identifier."""
-    s = re.sub(r"[^A-Za-z0-9._+-]+", "_", text.strip()).strip("._")
+    """Folder- and file-safe ASCII identifier. Never starts with "-" (a folder named "-x" reads as an option to
+    command-line tools) or "."."""
+    text = "".join(_ascii_char(ch) for ch in unicodedata.normalize("NFKC", text.strip()))
+    s = re.sub(r"[^A-Za-z0-9._+-]+", "_", text).strip("._-")
     return (s or fallback)[:80]
 
 

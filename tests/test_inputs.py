@@ -40,6 +40,13 @@ def test_xyz_and_sdf(tmp_path):
 
 def test_safe_id():
     assert inputs.safe_id("8:2 FTOH / test") == "8_2_FTOH_test"
+    # names from compound lists: Greek letters spelled out, accents dropped, never a leading "-" (an option)
+    assert inputs.safe_id("\u0392-Tocopherol (5,8-Dimethyltocol)") == "beta-Tocopherol_5_8-Dimethyltocol"
+    assert inputs.safe_id("\u03b1-Pinene") == "alpha-Pinene"
+    assert inputs.safe_id("\u00b5-oxo") == "mu-oxo"                      # micro sign -> Greek mu
+    assert inputs.safe_id("Ph\u00e9nol") == "Phenol"
+    assert inputs.safe_id("(-)-Menthol") == "Menthol"
+    assert inputs.safe_id("-x") == "x" and inputs.safe_id("\u2014") == "mol"
 
 
 def _sdf(path, records):

@@ -9,6 +9,12 @@
   CLI runs were not affected. If you closed the GUI since the Machines dock arrived, check Settings and the
   Pipeline values once.
 
+### Windows: non-ASCII names (stress sample on NOVA, 2026-11-05)
+- XYZ, extXYZ and LAMMPS files are written as UTF-8 on every OS: on Windows a molecule named "β-..." failed its
+  export (ASE opened the file in cp1252).
+- Molecule ids (folder and file names) spell Greek letters out (β-Tocopherol -> `beta-Tocopherol`), drop accents
+  and never start with "-".
+
 ### Research inputs: salts, metals, charges, spin (stress sample, 2026-11-05)
 From a 325-molecule stratified sample of the PFAS QSAR set (PFAS and baseline cohorts: salts,
 organometallics, ions from -5 to +2, up to 157 heavy atoms), run through MMFF, GFN2-xTB (tblite), GFN1-xTB

@@ -463,3 +463,34 @@ def test_psi4_bad_level_is_a_clear_error(psi4_python, tmp_path):
         _driver({**WATER, "basis": "no-such-basis"}, tmp_path / "b", psi4_python)
     with pytest.raises(external.ExternalProgramError, match="not a Psi4 method"):
         _driver({**WATER, "method": "b3lpy"}, tmp_path / "m", psi4_python)
+
+
+def test_export_writes_utf8_names_whatever_the_locale(tmp_path):
+    """On Windows ASE opens a path in cp1252 and a molecule named "β-..." failed the export; the files are
+    written as UTF-8 now. A child Python with an ASCII locale stands in for Windows here."""
+    import os
+    import subprocess
+    import sys
+
+    code = """
+import sys
+from pathlib import Path
+from quantabench.chem import export, pipeline
+from quantabench.chem.inputs import from_smiles
+cfg = pipeline.BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False, threads=1,
+                           write_files=False)
+res = pipeline.run_molecule(from_smiles("OCC(F)(F)F", id="beta-T", name="\\u0392-Tocopherol test"), cfg)
+assert res.status == "ok", res.error
+files = export.write_molecule(res, Path(sys.argv[1]), ("xyz", "xyz-all", "extxyz", "sdf"))
+print(sys.getfilesystemencoding(), open(files[0], "rb").read().decode("utf-8").splitlines()[1][:20])
+"""
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0",
+           "PYTHONIOENCODING": "utf-8"}
+    probe = subprocess.run([sys.executable, "-c", "import locale; print(locale.getpreferredencoding(False))"],
+                           env=env, capture_output=True, text=True)
+    if probe.stdout.strip().lower().replace("-", "") in ("utf8",):
+        pytest.skip("cannot get a non-UTF-8 locale here")
+    out = subprocess.run([sys.executable, "-c", code, str(tmp_path / "out")], env=env, capture_output=True,
+                         text=True, timeout=300)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "Β-Tocopherol test" in out.stdout
