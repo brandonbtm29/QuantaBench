@@ -10,9 +10,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-14]   # macos-14 = Apple Silicon (PLAT-2)
         python: ["3.12"]
     runs-on: ${{ matrix.os }}
+    # macOS is being brought up (docs/PLATFORMS.md): report, don't block, until it is green
+    continue-on-error: ${{ matrix.os == 'macos-14' }}
     # A modal dialog or a hung render would otherwise hold the runner for the 6 h default
     timeout-minutes: 30
     steps:
@@ -43,4 +45,7 @@ jobs:
         run: xvfb-run -a pytest -q --timeout=300
       - name: Test (Windows)
         if: runner.os == 'Windows'
+        run: pytest -q --timeout=300
+      - name: Test (macOS)
+        if: runner.os == 'macOS'
         run: pytest -q --timeout=300

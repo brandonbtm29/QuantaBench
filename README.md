@@ -163,8 +163,10 @@ You can do the same from Settings > Folders in the app.
 
 ## Platforms
 
-Windows 11 (native), WSL2, and Linux are the targets. macOS is planned: the device layer already knows
-Apple's `mps` backend.
+Windows 11 (native), WSL2, Linux and macOS (Apple Silicon) are all targets. macOS is being brought up
+now, and several machines (for example a MacBook and a GPU workstation over Tailscale) will be able to
+share one project's work. See [docs/PLATFORMS.md](docs/PLATFORMS.md) for what runs where, the
+multi-machine plan, and the packages that need upstream fixes or forks.
 
 ## Built on
 

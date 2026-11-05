@@ -54,7 +54,8 @@ molecule/system navigator, the playback bar and the job monitor.
   temperature/pressure, force field.
 - **Recipes:** saved multi-level protocols such as "Screen: MMFF conformers → GFN2 → AIMNet2 → DFT
   single point". A recipe is a generalization of today's pipeline.
-- **Resources per job:** CPU threads, GPU on/off/device, memory cap. Jobs run in a queue shown in the
+- **Resources per job:** CPU threads, GPU on/off/device, memory cap, and the machine: this one, a
+  worker such as BTM NOVA or the MacBook, or auto (DIST-3 in the backlog, PLATFORMS.md). Jobs run in a queue shown in the
   job monitor and can be resumed.
 
 ## Priorities

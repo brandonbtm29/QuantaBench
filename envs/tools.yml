@@ -1,4 +1,5 @@
-# External programs for QuantaBench on Linux and WSL2 (conda-forge): xtb, CREST, MOPAC.
+# External programs for QuantaBench on Linux, WSL2 and macOS (conda-forge): xtb, CREST, MOPAC.
+# All three have linux-64 and osx-arm64 builds (checked 2026-11-04).
 #
 #   conda env create -f envs/tools.yml        # or: mamba / micromamba
 #

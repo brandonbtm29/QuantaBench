@@ -1,0 +1,144 @@
+# Platforms and multi-machine plan
+
+Goal: **one QuantaBench on Windows 11, WSL2, Linux and macOS (Apple Silicon)**, where every machine can
+be both a workstation (the GUI) and a worker. That lets Brandon's MacBook CPU and BTM NOVA's GPU and
+12-core CPU work on the same project. When a package does not run on an OS, the plan says which route
+fixes it: an upstream pull request, a fork or our own build, or sending that job to a machine where it
+runs.
+
+This file is the plan. The phases are in [ROADMAP.md](ROADMAP.md) ("Platform and multi-machine track")
+and the work items are in [dev/BACKLOG.md](dev/BACKLOG.md) (`PLAT-*`, `DIST-*`, `FORK-*`). Status as of
+2026-11-04.
+
+## 1. Where each piece runs today
+
+✅ tested · 🟡 available, not yet tested here · 🔴 blocked (reason) · ↗ route the job to another machine
+
+| Component | Windows 11 native | WSL2 / Linux | macOS (Apple Silicon) |
+|---|---|---|---|
+| GUI: PySide6, PyVista + pyvistaqt 0.12, pyqtgraph | ✅ (pyvistaqt 0.13 crashes on AMD: pinned) | ✅ | 🟡 |
+| RDKit, ASE, pipeline, batches | ✅ | ✅ | 🟡 |
+| PyTorch CPU | ✅ (PyPI CPU build is fast) | ✅ | 🟡 |
+| PyTorch GPU | 🟡 ROCm 7.2.1 sees the RX 9060 XT; no GPU linear algebra (no MAGMA) | 🟡 ROCm on WSL2 fragile for this card | 🟡 MPS: float32 only, no float64 ([1](#sources)) |
+| dxtb GFN1 | ✅ CPU | ✅ CPU | 🟡 CPU; MPS needs FORK-4 |
+| dxtb GFN2, multipoles, IR (libcint) | 🔴 tad-libcint 0.4 has a Windows wheel but needs newer tad-mctc than dxtb 0.4 pins → FORK-1 | ✅ (`tad-libcint<0.4`) | 🔴 same as Windows → FORK-1 |
+| AIMNet2 | ✅ CPU; 🔴 GPU: Warp D3 is CUDA-only → FORK-3 | ✅ CPU · 🟡 CUDA | 🔴 GPU: Warp is CPU-only on macOS ([2](#sources)) → FORK-3 |
+| tblite (in-process GFN2) | 🔴 no PyPI wheel (conda only) → FORK-2 | ✅ | 🟡 PyPI wheel (macOS 15+) |
+| xtb program 6.7.1 | 🟡 conda-forge / release zip | ✅ | 🟡 conda-forge osx-arm64 ([3](#sources)) |
+| CREST 3.0.2 | 🔴 no build: WSL (`wsl:`) or ↗ | ✅ | 🟡 conda-forge osx-arm64 ([4](#sources)) |
+| MOPAC 23.2.5 | 🟡 conda-forge / installer | ✅ | 🟡 conda-forge osx-arm64 |
+| Psi4 1.9.1 (+ PCMSolver, dftd3/4) | 🟡 conda-forge win-64 | ✅ | 🟡 conda-forge osx-arm64 |
+| PySCF (future: NMR, GPU DFT) | 🔴 no native support ([5](#sources)): WSL or ↗ | 🟡 | 🟡 |
+| LAMMPS Python wheel (CPU) | ✅ but intermittently non-deterministic (MD-1) | ✅ | 🟡 |
+| LAMMPS GPU | 🟡 OpenCL `lmp.exe` (~9x over 12 cores in earlier tests) | 🟡 | 🟡 OpenCL build, mixed precision → FORK-8 |
+| OpenMM (0.4 MD) | 🟡 OpenCL | 🟡 CUDA/OpenCL | 🟡 OpenCL; Metal plugin is beta ([6](#sources)) |
+
+The conda environments in `envs/` solve for linux-64, win-64 and osx-arm64; CREST is the only program
+with no Windows build. (An earlier note said xtb 6.7.1 and CREST were missing for osx-arm64. That was
+wrong: the cross-platform dry run had no macOS version set. With one, all of `envs/tools.yml` and
+`envs/psi4.yml` solve.)
+
+## 2. Machine roles
+
+| | BTM NOVA (Windows 11, Ryzen 9 7900X 12C/24T, RX 9060 XT 16 GB) | MacBook (Apple Silicon) |
+|---|---|---|
+| Best at | GPU work: batched ML potentials and dxtb (after FORK-3/FORK-4), LAMMPS GPU (OpenCL); long unattended batches (always on) | CPU-heavy QM: CREST natively, Psi4/PySCF DFT; portable GUI |
+| Can't do natively | CREST, PySCF (WSL works) | float64 on the GPU; CUDA/ROCm-only codes |
+| As a worker | always on | only while awake and on power (`caffeinate` during jobs) |
+
+The scheduler should not hard-code these roles. Each machine reports what it can run and how fast
+(DIST-1), and the work is split from that report.
+
+## 3. Using both machines together
+
+All traffic goes over **Tailscale** (Brandon already uses it; both machines need to be on the tailnet). Results go through the
+existing **SyncThing** `QuantaBench/Runs` folder, under the rule already in ARCHITECTURE.md: one
+machine writes a given run folder, the others only read it.
+
+| Phase | What | How |
+|---|---|---|
+| **M0: works today** | Split a batch by hand | `build --chunk 1/2` on NOVA and `--chunk 2/2` on the Mac, each writing its own run folder in SyncThing, then `merge` |
+| **M1: capability report** (DIST-1) | Each machine publishes `machines/<name>.json` in the synced settings folder: OS, CPU/GPU, engines and programs available, `doctor --bench` throughput per engine | `build --chunk-weights auto` splits a list in proportion to throughput instead of 50/50 |
+| **M2: workers** (DIST-2) | `quantabench-cli worker` on each machine. The GUI or CLI submits jobs to it: inputs + `BuildConfig` + stage | Small HTTP/JSON service bound to the Tailscale address only, with a shared token from settings. The worker runs `jobs.run_resumable` into its own run folder and reports progress. It refuses jobs from a different QuantaBench version, and records its environment in `summary.json` |
+| **M3: GUI and routing** (DIST-3) | "Machines" dock and "Run on: this machine / NOVA / Mac / auto" in the job dialog (UI-5) | An auto scheduler picks the machine per job from M1's report |
+| **M4: stage routing** (DIST-4) | Different stages of one molecule on different machines, e.g. CREST + Psi4 on the Mac, GPU refinement + LAMMPS on NOVA | The handoff is the run folder's artifacts (conformer SDF, cubes); the job table records where each stage ran |
+
+**Frameworks considered:**
+- **Ray:** no. Its multi-node clusters on Windows are "experimental and untested" ([7](#sources)).
+- **Dask distributed:** a possible later backend for M2/M3. Its worker resources can tag GPU machines.
+  But it needs identical package versions everywhere and pickles Python objects between machines.
+  A small QuantaBench worker keeps per-machine environments and settings independent, which is the
+  whole point here.
+
+**Platform chores:**
+- Windows: allow the worker port only on the Tailscale interface.
+- macOS: `caffeinate -i` while a worker has jobs.
+- Both: a "pause worker" switch so the GUI machine stays responsive.
+
+## 4. Forks, builds and upstream fixes
+
+Policy:
+- Try an upstream pull request first.
+- Fork only to unblock, from a tagged release, with QuantaBench's CI testing the fork on all three OSes.
+- Every fork is listed here with its upstream link, so it can be dropped once upstream catches up.
+- Forks live under `brandonbtm29/` and install with `pip install "pkg @ git+https://github.com/...@tag"`.
+  Wheels are attached to GitHub releases, because PyPI packages cannot depend on direct URLs.
+
+| ID | Problem | Route | Unblocks | Acceptance |
+|---|---|---|---|---|
+| **FORK-1** | dxtb 0.4 pins tad-mctc 0.7. tad-libcint 0.4 (Oct 20, 2026), the first with Windows and macOS-arm64 wheels ([8](#sources)), needs tad-mctc ≥ 0.11 | PR to dxtb supporting tad-mctc ≥ 0.11. Interim fork `brandonbtm29/dxtb` (branch `qb/tad-mctc-0.11`) with the API updates. Fallback: backport tad-libcint's Windows/macOS build onto 0.3 | GFN2-xTB, xTB polarizability and IR intensities in dxtb on Windows and macOS; replaces WIN-1 | dxtb test suite + QuantaBench xTB tests pass on all three OSes in CI |
+| **FORK-2** | tblite has no Windows wheel on PyPI | PR to tblite adding Windows wheels (cibuildwheel, MinGW-w64 gfortran). Interim: build them in a `brandonbtm29/quantabench-wheels` repo and attach to releases | In-process GFN2 + ALPB on Windows in the pip venv | `pip install tblite --find-links <release>` works on Windows; tblite tests pass |
+| **FORK-3** | AIMNet2's D3 dispersion and neighbor lists use NVIDIA Warp: CUDA only, CPU only on macOS | Adapter inside QuantaBench: load the model without dispersion, add D3(BJ) from `tad-dftd3` (pure PyTorch); then a PR to `aimnet` making Warp optional. Same work as GPU-1 | AIMNet2 on ROCm (NOVA) and MPS (Mac) | Energies and forces match the stock calculator to 1e-5 eV on CPU; runs on both GPUs |
+| **FORK-4** | dxtb's dense linear algebra fails on these GPUs: Windows ROCm has no MAGMA (cholesky/eigh fail), and MPS has no float64 (its linear-algebra coverage is to be checked op by op) | Device-split wrapper in QuantaBench (tensors on GPU, eigh/cholesky on CPU, small for PFAS-size molecules); then a PR to dxtb for a configurable linalg device. Same work as GPU-2 | dxtb (and batched refinement) on NOVA's GPU and the Mac's GPU | GPU result matches CPU to float32 tolerance; measured speedup reported |
+| **FORK-5** | CREST has no Windows build | Investigate a win-64 build in the conda-forge `crest` feedstock (MinGW-w64). Until then: WSL (`wsl:`) or route to the Mac (M2). Low priority | Native CREST on Windows | `crest --version` and a test conformer search on win-64 |
+| **FORK-6** | PySCF has no native Windows support | No fork: route PySCF jobs (NMR, later GPU DFT) to the Mac or WSL (M2/M3) | NMR on any GUI machine | — |
+| **FORK-7** | pyvistaqt 0.13's framebuffer widget crashes in `initializeGL` with the AMD driver | Upstream issue with a minimal repro; keep the `<0.13` pin; test 0.13 on macOS | Newer pyvistaqt | Repro filed; pin re-checked each release |
+| **FORK-8** | LAMMPS: the Windows PyPI wheel is non-deterministic (MD-1), and macOS has no GPU build | Compare with `lmp.exe` from the Windows installer. `scripts/build_lammps_macos.sh` for an OpenCL GPU-package build in mixed precision (Apple GPUs have no fp64; mixed mode keeps double accumulation) | Reliable SMD on Windows; LAMMPS GPU on the Mac | Same SMD input gives identical results 20/20; Mac GPU vs CPU speedup measured |
+| **FORK-9** | OpenMM on the Mac's GPU | Evaluate the `openmm-metal` plugin (beta, built from source) against OpenCL for the 0.4 MD bridge | MD on the Mac GPU | Benchmark and a go/no-go note |
+
+## 5. Bringing macOS up (PLAT-1, PLAT-2)
+
+1. **CI.** Add `macos-14` (Apple Silicon) to `.github/workflows/ci.yml`. It is non-blocking at first, then
+   required once green. Add a second job that installs `envs/tools.yml` + `envs/psi4.yml` with micromamba
+   on Ubuntu and macOS and runs `pytest -m external`.
+2. **First run on the MacBook** (needs Brandon), the same steps as INSTALL.md's macOS section:
+   - `doctor --bench`, the full suite and `-m external`
+   - GUI checks: HiDPI picking, trackpad gestures (pinch zoom, two-finger rotate), dark mode
+3. **Mac specifics to handle:**
+   - `mps` device selection with float32 only; `PYTORCH_ENABLE_MPS_FALLBACK=1` for missing ops
+   - the BLAS used by conda's Psi4 (OpenBLAS vs Apple Accelerate, benchmark both)
+   - Gatekeeper/quarantine on conda binaries, if any
+   - sleep while running
+4. **Packaging** (with the 0.5 installers):
+   - a `.app` bundle, notarization later
+   - on every OS, the standing requirements for Brandon's apps: an **Update button** (git pull or pip upgrade, then restart) and a **launcher that hides the terminal window**: `pythonw`/GUI-script `.exe` on Windows, `.app`/`.command` on macOS, `.desktop` on Linux
+
+## 6. Order of work
+
+1. **P1 (0.3):**
+   - PLAT-2 CI on macOS; PLAT-1 first Mac run
+   - M0 documented
+   - FORK-3 and FORK-4 (GPU engines on NOVA and the Mac)
+   - FORK-1 PR/fork (GFN2 everywhere)
+2. **P2 (0.4):**
+   - DIST-1 capability report + weighted chunks; DIST-2 workers
+   - FORK-2 tblite wheels
+   - ENG-1/ENG-2 Windows external-engine checks
+3. **P3 (0.5):**
+   - DIST-3 GUI routing (with UI-5) and DIST-4 stage routing
+   - installers and launchers on all three OSes
+   - FORK-5, FORK-8, FORK-9
+
+## Sources
+
+1. PyTorch forum, "Float64 tensors on MPS" (June 2026: no native float64 on MPS): https://discuss.pytorch.org/t/float64-tensors-on-mps/224325
+2. NVIDIA Warp compatibility table (macOS Apple Silicon: CPU only; GPU = CUDA): https://nvidia.github.io/warp/latest/user_guide/compatibility.html
+3. conda-forge xtb files (6.7.1 for linux-64, win-64, osx-64, osx-arm64): https://anaconda.org/conda-forge/xtb/files
+4. conda-forge crest files (3.0.2 for linux-64, osx-64, osx-arm64): https://anaconda.org/conda-forge/crest/files
+5. PySCF install guide ("not supported natively on Windows"): https://pyscf.org/user/install.html
+6. openmm-metal (beta Metal platform for OpenMM): https://github.com/bdenhollander/openmm-metal
+7. Ray installation ("multi-node Ray clusters [on Windows] experimental and untested"): https://docs.ray.io/en/latest/ray-overview/installation.html
+8. tad-libcint on PyPI (0.4.0, Oct 20, 2026; Windows, Linux, macOS arm64 wheels): https://pypi.org/project/tad-libcint/
+9. dxtb on PyPI (0.4.0; libcint interface Linux-only): https://pypi.org/project/dxtb
+10. Dask distributed worker resources: https://distributed.dask.org/en/stable/resources.html
+11. LAMMPS GPU package (OpenCL, mixed precision): https://docs.lammps.org/Speed_gpu.html

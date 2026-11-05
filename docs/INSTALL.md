@@ -123,10 +123,25 @@ quantabench-cli doctor --bench
 
 The GUI needs `libxcb-cursor0` on Debian/Ubuntu (`sudo apt install libxcb-cursor0`).
 
-## macOS (planned)
+## macOS, Apple Silicon (being brought up: PLAT-1)
 
-The device layer already recognizes Apple's `mps` backend, and the GUI stack (PySide6, PyVista) runs
-on macOS. Engine testing and packaging are scheduled for 0.5.
+Not tested on a Mac yet. The steps below are expected to work; report what doesn't. See
+[PLATFORMS.md](PLATFORMS.md) for the platform matrix.
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install torch                 # PyPI's macOS build includes the Apple GPU backend (mps)
+pip install -e ".[all,dev]"       # tblite's wheel needs macOS 15 or newer
+quantabench-cli doctor --bench
+conda env create -f envs/tools.yml    # xtb, CREST and MOPAC have native osx-arm64 builds
+conda env create -f envs/psi4.yml
+```
+
+What to expect on a Mac today:
+- The Apple GPU (`mps`) has no float64. GPU engines run in float32.
+- AIMNet2 and dxtb need FORK-3 and FORK-4 before they run on the Mac GPU. Until then they use the CPU.
+- dxtb's GFN2 (libcint) is not available yet (FORK-1). Use `tblite-gfn2` or `xtb-gfn2` for GFN2.
+- CREST runs natively, unlike on Windows.
 
 ## External programs: xtb, CREST, MOPAC, Psi4 (optional)
 

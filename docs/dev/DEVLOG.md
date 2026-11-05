@@ -51,10 +51,21 @@ Newest entries at the bottom. One entry per working session or nightly run.
   cclib/JCAMP import. 366 tests pass on Linux with the real programs.
 - Environment findings: Psi4 1.9.1 segfaults with libint 2.13 (pin 2.9); pint 0.26 breaks qcelemental
   0.30 (pin <0.25); conda's xtb 6.7.1 and tblite-python 0.8 cannot share an env (solver drops xtb to
-  6.4.1); tblite's PyPI wheel works; no CREST or xtb 6.7.1 on osx-arm64 conda-forge.
+  6.4.1); tblite's PyPI wheel works. (Correction 2026-11-04: xtb 6.7.1, CREST 3.0.2, MOPAC 23.2.5 and
+  Psi4 1.9.1 with the pins all solve for osx-arm64; the first dry run lacked CONDA_OVERRIDE_OSX.)
 - Science notes: xtb reports ion dipoles about its own origin (fixed: centre of mass, and a fresh single
   point after `--opt`); xtb's "Mol. α(0)" is the D4 model value (now `gfn2_d4_polarizability_A3`), not
   the electronic response that tblite/dxtb/Psi4 give; MOPAC energies are ΔHf.
 - Follow-ups: ENG-1 (Windows), ENG-2 (CREST via WSL), ENG-3 (refactors), VAL-2 (Spartan comparison).
   Suggested `vibrations.from_hessian(hessian_ev_A2, numbers, positions, energy_ev, *, method, charge,
   multiplicity, dipole_derivative, ir_source, hessian_method, temperature, ...)` for ENG-3.
+
+## 2026-11-04: cross-platform and two-machine plan
+- New `docs/PLATFORMS.md`: platform matrix for Windows 11 / WSL2-Linux / macOS (Apple Silicon), roles for
+  BTM NOVA (GPU, always on) and the MacBook (CPU QM, native CREST), a phased worker design over Tailscale +
+  SyncThing (M0 to M4), and the fork/upstream plan (FORK-1 to FORK-9). ROADMAP gained a platform track
+  (P1 to P3); BACKLOG gained PLAT-1/2, DIST-1 to DIST-4, FORK-1, FORK-2, FORK-5, FORK-7 to FORK-9
+  (FORK-3 = GPU-1, FORK-4 = GPU-2, FORK-6 needs no work). CI runs on macos-14 (non-blocking for now).
+- Facts checked: MPS has no float64; Warp is CUDA-only, CPU-only on macOS; tad-libcint 0.4.0 (2026-10-20)
+  ships Windows and macOS-arm64 wheels but dxtb 0.4 pins tad-mctc 0.7; PySCF has no native Windows
+  support; Ray multi-node on Windows is experimental.

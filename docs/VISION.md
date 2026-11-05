@@ -125,8 +125,9 @@ Type a name, see the molecule, its conformers, and their populations, and compar
   need RESP or AM1-BCC, which is Phase 2.
 - **Model licenses.** Weights are downloaded on demand, never bundled. Some models (UMA) carry
   restrictive terms.
-- **macOS.** The device layer already understands Apple's `mps` backend. A packaged app and Metal
-  testing come later.
+- **macOS and two machines.** macOS (Apple Silicon) is a first-class target next to Windows, WSL2 and
+  Linux, and a MacBook and a GPU workstation should share one project's work. The Apple GPU has no
+  float64, and some engines need fixes or forks first; the plan is [PLATFORMS.md](PLATFORMS.md).
 
 ## Measures of success
 

@@ -2,6 +2,28 @@
 
 Status key: done, next, later. Version numbers are targets, not promises.
 
+## Platform and multi-machine track (runs alongside the releases)
+
+QuantaBench targets Windows 11, WSL2, Linux and macOS (Apple Silicon) equally, and should let
+Brandon's MacBook and BTM NOVA work on one project together. The details, the platform matrix and
+the fork/upstream plan are in [PLATFORMS.md](PLATFORMS.md).
+
+- **P1 (with 0.3):**
+  - macOS in CI (PLAT-2) and the first run on the MacBook (PLAT-1)
+  - two machines by hand: `--chunk` + SyncThing + `merge` (M0, works today)
+  - GPU engines on both NOVA (ROCm) and the Mac (MPS): AIMNet2 without Warp (FORK-3), device-split
+    dxtb linear algebra (FORK-4)
+  - GFN2 through dxtb on Windows and macOS (FORK-1)
+- **P2 (with 0.4):**
+  - machine capability reports and throughput-weighted chunks (DIST-1)
+  - `quantabench-cli worker` over Tailscale (DIST-2)
+  - tblite Windows wheels (FORK-2)
+  - Windows checks of the external engines (ENG-1, ENG-2)
+- **P3 (with 0.5):**
+  - "Run on" machine routing in the GUI (DIST-3) and per-stage routing (DIST-4)
+  - installers and terminal-free launchers with an Update button on all three OSes
+  - native CREST on Windows (FORK-5), LAMMPS fixes and a Mac GPU build (FORK-8), OpenMM on Metal (FORK-9)
+
 ## 0.1: Geometry builder (done)
 
 - Inputs: SMILES, names/CAS through PubChem, SDF/MOL/XYZ/PDB/SMI files, and CSV lists with DTXSID
@@ -131,11 +153,15 @@ external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENG
 
 - [ ] Windows installer (conda constructor or PyInstaller) with a first-run GPU wizard.
 - [ ] Linux packages (conda, AppImage).
-- [ ] macOS (Apple Silicon, PyTorch `mps`, Metal rendering).
+- [ ] macOS `.app` bundle (Apple Silicon; notarization later). macOS itself is no longer deferred to
+      0.5: it is brought up in P1 of the platform track.
+- [ ] On every OS: an Update button (pull/upgrade, then restart) and a launcher that hides the
+      terminal window.
 
 ## Ideas parking lot
 
 - Active-learning fine-tune of an ML potential on PFAS DFT data (closes the domain-of-applicability gap).
 - Results database with substructure search (like Spartan's SSPD, built from your own runs).
 - Plugin entry points for third-party engines and builders.
-- Remote execution on a lab server through Tailscale, with the GUI on a laptop.
+- Remote execution on a lab server through Tailscale, with the GUI on a laptop (now planned as
+  DIST-2/DIST-3 for BTM NOVA + MacBook; a lab server would be one more worker).

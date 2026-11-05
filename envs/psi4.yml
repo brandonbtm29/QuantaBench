@@ -8,7 +8,7 @@
 #   libint 2.9   libint 2.13 makes Psi4 1.9.1 segfault on the first SCF
 #   pint < 0.25  pint 0.26 breaks qcelemental 0.30's unit registry, so every optimization fails
 # pcmsolver gives PCM solvation; dftd3-python/dftd4-python enable -d3bj/-d4 functionals (b3lyp-d3bj).
-# macOS arm64: drop pcmsolver and the dftd packages if the solver complains.
+# Solves for linux-64, win-64 and osx-arm64 (checked 2026-11-04).
 name: qb-psi4
 channels:
   - conda-forge
