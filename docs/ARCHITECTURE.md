@@ -48,14 +48,15 @@
 | `chem.vibrations` | Hessian (dxtb autograd or finite differences), Eckart normal modes, IR intensities (km/mol), RRHO/qRRHO thermochemistry (Grimme, *Chem. Eur. J.* 2012, 18, 9955), IR spectra, mode trajectories. |
 | `chem.properties` | GFN1-xTB charges, dipole and polarizability at a fixed geometry. |
 | `chem.descriptors` | Graph descriptors and 3D ensemble descriptors (best and Boltzmann-weighted). |
-| `chem.export` | Per-molecule writers and batch CSV tables. |
+| `chem.export` | Per-molecule writers and batch CSV tables; `read_molecule` reads a molecule's folder back into a `MoleculeResult` (every conformer from the SDF). |
 | `chem.pipeline` | `BuildConfig`, `MoleculeResult`, `run_molecule`, `run`, `use_batched` (when to batch). |
-| `chem.jobs` | Resumable batch runs: `JobStore` (SQLite, WAL), run lock, config guard, hash-based chunks, `run_resumable`, `open_run`, `rebuild_tables`, `merge_tables`. |
+| `chem.jobs` | Resumable batch runs: `JobStore` (SQLite, WAL), run lock, config guard, hash-based chunks, `run_resumable`, `open_run`, `rebuild_tables`, `merge_tables`; read helpers for the GUI: `molecule_rows` (light rows via SQLite `json_extract`), `load_result`, `load_inputs`, `stored_config`. |
 | `build.surfaces` | Graphite and metal slabs, orientation, placement, overlap report. |
 | `md.params` | UFF Lennard-Jones table (Rappé 1992) and graphite presets (AMBER parm94, Steele 1973). |
 | `md.lammps` | `write_smd_setup`: `system.data`, `in.smd` (rigid adsorbate, frozen slab, Langevin, `fix smd`), README, JSON; `run_lammps` via the Python module. |
 | `md.lammps_log` | `log.lammps` thermo blocks, `pull_force.txt`, detachment work and peak force. |
-| `gui.main_window` | Window, docks, toolbars, the 2D/3D splitter and the shared selection. |
+| `gui.main_window` | Window, docks, toolbars, the 2D/3D splitter and the shared selection; File > Open run folder, Build > Resume run folder. |
+| `gui.molecule_list` | The Molecules dock for any number of molecules: `MoleculeTableModel` (light rows), `MoleculeFilter` (search, status), `MoleculeListView`, and `ResultStore` (`win.results`: full results read back from run folders on selection, LRU of 12; imports pinned). |
 | `gui.viewer3d` | `MoleculeViewer3D`: PyVista, instanced glyphs, NumPy ray picking, Rotate/Select/Move modes. `gui.viewer` is a compatibility shim (`MoleculeViewer`). |
 | `gui.viewer2d` | `MoleculeViewer2D`: RDKit SVG depiction in a `QGraphicsView`, full-index atom map, in-plane rotation, export. |
 | `gui.selection` | `SelectionModel` (ordered atom indices, `changed` signal), measurements, the shared accent color. |
@@ -130,7 +131,9 @@ and `MoleculeViewer3D`. The main window creates one `SelectionModel` and passes 
 ## Threading model (GUI)
 
 `BuildWorker` runs `pipeline.run` (one molecule) or `jobs.run_resumable` (a batch, so an interrupted
-GUI batch can be finished with `quantabench-cli build --resume`) on a `QThread`. Callbacks become Qt
+GUI batch can be finished with Build > Resume run folder or `quantabench-cli build --resume`) on a `QThread`.
+A finished molecule becomes a row of the molecule list (`gui.molecule_list`); selecting one reads its result
+from its folder with a `FunctionWorker`, one read at a time. Callbacks become Qt
 signals (`progress`, `log`,
 `molecule_done`, `finished`). Cancel sets a `threading.Event` that is checked between conformers and
 at every optimizer step. PubChem lookups, file and Excel reading, hardware detection and the LAMMPS export also run in

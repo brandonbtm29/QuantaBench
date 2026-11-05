@@ -808,3 +808,98 @@ def merge_tables(run_dirs: Iterable[str | Path], out_dir: str | Path,
             w.writerows(merged.values())
         written.append(path)
     return written
+
+
+# ------------------------------------------------------------------------------- reading results back
+#: What ``molecule_rows`` returns per molecule: enough for a list of thousands without loading any of them.
+ROW_FIELDS = ("id", "seq", "status", "error", "result_dir", "name", "smiles", "source", "method",
+              "n_conformers", "best_energy_eV", "formula")
+
+
+def _read_store(run_dir: Path) -> JobStore:
+    """The job table opened read-only, as ``open_run`` opens it (immutable when another machine holds the lock)."""
+    info = _read_lock(run_dir)
+    return JobStore(run_dir, read_only=True, immutable=info is not None and _lock_alive(info) is None)
+
+
+def molecule_rows(run_dir: str | Path) -> list[dict]:
+    """One light dict per molecule of a run folder (``ROW_FIELDS``), in input order. The columns come out of the
+    stored JSON inside SQLite (``json_extract``), so a 14,000-molecule table reads in a fraction of a second and
+    nothing heavy (structure blocks, descriptors) is parsed in Python. ``best_energy_eV`` is None when the
+    molecule has no conformers; ``result_dir`` is relative to ``run_dir`` ("" = no folder, e.g. failed)."""
+    run_dir = Path(run_dir).expanduser()
+    with _read_store(run_dir) as store:
+        try:
+            cur = store.conn.execute(
+                "SELECT id, seq, status, error, result_dir, json_extract(input, '$.name'), "
+                "json_extract(input, '$.smiles'), json_extract(input, '$.source'), "
+                "json_extract(summary, '$.row.method'), json_extract(summary, '$.row.n_conformers'), "
+                "json_extract(summary, '$.row.best_energy_eV'), json_extract(summary, '$.descriptors.formula') "
+                "FROM molecules ORDER BY seq")
+            rows = [dict(zip(ROW_FIELDS, tuple(r), strict=True)) for r in cur]
+        except sqlite3.OperationalError:          # an SQLite built without its JSON functions
+            rows = []
+            for r in store.conn.execute("SELECT id, seq, status, error, result_dir, input, summary "
+                                        "FROM molecules ORDER BY seq"):
+                inp = json.loads(r["input"])
+                s = json.loads(r["summary"]) if r["summary"] else {}
+                row = s.get("row") or {}
+                rows.append({"id": r["id"], "seq": r["seq"], "status": r["status"], "error": r["error"],
+                             "result_dir": r["result_dir"], "name": inp.get("name"), "smiles": inp.get("smiles"),
+                             "source": inp.get("source"), "method": row.get("method"),
+                             "n_conformers": row.get("n_conformers"), "best_energy_eV": row.get("best_energy_eV"),
+                             "formula": (s.get("descriptors") or {}).get("formula")})
+    for row in rows:
+        if row["best_energy_eV"] == "":
+            row["best_energy_eV"] = None
+    return rows
+
+
+def load_inputs(run_dir: str | Path, ids: Sequence[str] | None = None) -> list[MoleculeInput]:
+    """The stored inputs of ``ids`` (in that order; unknown ids are skipped), or of every molecule in input
+    order. Structure-file inputs come back with their molecule (coordinates, explicit H, charges)."""
+    run_dir = Path(run_dir).expanduser()
+    with _read_store(run_dir) as store:
+        if ids is None:
+            return [input_from_json(r["input"]) for r in store.conn.execute("SELECT input FROM molecules ORDER BY seq")]
+        texts: dict[str, str] = {}
+        ids = list(ids)
+        for k in range(0, len(ids), 500):            # SQLite's limit on bound parameters
+            part = ids[k:k + 500]
+            marks = ",".join("?" * len(part))
+            for r in store.conn.execute(f"SELECT id, input FROM molecules WHERE id IN ({marks})", part):  # noqa: S608
+                texts[r["id"]] = r["input"]
+    return [input_from_json(texts[i]) for i in ids if i in texts]
+
+
+def load_result(run_dir: str | Path, mol_id: str) -> MoleculeResult:
+    """The full result of one molecule of a run folder: read back from its folder (``export.read_molecule``:
+    every conformer, descriptors, vibrations, QM files) with its input from the job table. A molecule without
+    a folder (failed, pending, or written with ``write_files=False``) comes back from the job table alone:
+    status, error, method, SMILES and descriptors, no conformers."""
+    run_dir = Path(run_dir).expanduser()
+    with _read_store(run_dir) as store:
+        r = store.conn.execute("SELECT input, status, error, result_dir, summary FROM molecules WHERE id = ?",
+                               (mol_id,)).fetchone()
+    if r is None:
+        raise KeyError(f"{mol_id} is not in {run_dir / DB_NAME}")
+    inp = input_from_json(r["input"])
+    folder = run_dir / r["result_dir"] if r["result_dir"] else None
+    if folder is not None and (folder / f"{mol_id}_summary.json").is_file():
+        return export.read_molecule(folder, mol_id, inp)
+    s = json.loads(r["summary"]) if r["summary"] else {}
+    row = s.get("row") or {}
+    return MoleculeResult(input=inp, status=r["status"], error=r["error"], smiles=row.get("smiles") or "",
+                          method=row.get("method") or "", descriptors=s.get("descriptors") or {})
+
+
+def stored_config(config: dict, base: BuildConfig | None = None) -> BuildConfig:
+    """The settings to resume a run folder with: its stored science settings (``SCIENCE_FIELDS``) and output
+    formats on top of ``base`` (this machine's threads, GPU and output folder; default ``BuildConfig()``)."""
+    from dataclasses import replace
+
+    base = base or BuildConfig()
+    cfg = replace(base, **{k: config[k] for k in SCIENCE_FIELDS if k in config})
+    if config.get("formats"):
+        cfg = replace(cfg, formats=tuple(config["formats"]))
+    return cfg
