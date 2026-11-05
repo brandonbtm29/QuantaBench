@@ -79,6 +79,15 @@ after about one slow-lane molecule. The log says when lanes start holding back a
 each kind of lane. Switch it off with `build --no-speed-aware-lanes` or Settings > Compute
 (`resources.speed_aware_lanes`).
 
+Two limits per lane keep one molecule from stopping a batch (see [ENGINES.md](ENGINES.md#memory-guard-for-dxtb-and-the-per-molecule-time-limit)):
+- **Memory:** each lane's dxtb steps get a share of the memory available at the start (available / lanes, at least
+  1.5 GB; `--memory-budget GB`). A step estimated above it takes a cheaper path (tblite for the polarizability)
+  or is skipped with a note. A refinement that does not fit fails the molecule with the reason, or makes `auto`
+  try its next engine. A lane that is OOM-killed anyway is restarted and its molecule's crash counted, as before.
+- **Time:** a lane still on one molecule after `--molecule-timeout` (default 1800 s) is killed and restarted.
+  The molecule is recorded failed with `time limit (1800 s) in <stage>`. It is not counted as a crash and not
+  retried in the run; `--retry-failed` redoes it.
+
 **Frameworks considered:**
 - **Ray:** no. Its multi-node clusters on Windows are "experimental and untested" ([7](#sources)).
 - **Dask distributed:** a possible later backend for M2/M3. Its worker resources can tag GPU machines.

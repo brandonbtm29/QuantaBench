@@ -68,6 +68,63 @@ pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "t
 unavailable) tells a missing tad-libcint from an incompatible one, e.g. tad-libcint 0.4 next to PyPI's
 dxtb 0.4 and tad-mctc 0.7. See [INSTALL.md](INSTALL.md#dxtbs-libcint-backend-gfn2-polarizability-ir-intensities).
 
+## Memory guard for dxtb, and the per-molecule time limit
+
+dxtb differentiates through its SCF with its default `scf_mode="full"`: autograd keeps the matrices of every
+SCF iteration, so a step's memory grows as (SCF iterations) x nao², where nao is the number of basis functions.
+The polarizability (autograd of the dipole with respect to the field) costs about 7x the energy + forces.
+In the 325-molecule stress sample this killed four lane processes at 2-3.9 GB. Measured on 2026-11-05 (dxtb 0.4.0,
+CPU float64, peak above the ~0.58 GB of a process with torch and dxtb loaded):
+
+| molecule | atoms | nao | charge | GFN1 E+F | GFN1 polarizability | GFN2 E+F | tblite GFN1 polarizability |
+|---|---|---|---|---|---|---|---|
+| PFOA anion (C8) | 26 | 102 | -1 | 45 MB | 287 MB | | |
+| C20 PFCA | 62 | 246 | 0 | 108 MB | 644 MB | | |
+| C20 PFCA anion | 62 | 246 | -1 | 237 MB | 1508 MB | | 25 MB |
+| Ala10 | 103 | 308 | 0 | 212 MB | 1480 MB | 567 MB | 35 MB |
+| Ala10, NH3+ N-terminus | 105 | 312 | +1 | 217 MB | 1551 MB | | |
+| Ala15 | 153 | 458 | 0 | 372 MB | | 1522 MB | |
+| Ala25 | 253 | 758 | 0 | 920 MB | | | 153 MB |
+
+The full table is in `chem/memory_guard.py`. Charges and the charge dipole without a gradient take 27-122 MB.
+Batched refinement (`--batched on`, GPUs) holds B conformers: B x one. Before each dxtb step the pipeline estimates
+
+    MB = k[step] x scf_factor x nao² x conformers + 30
+
+The coefficients are k = 0.0025 for GFN1 energy + forces, 0.0075 for GFN2, 0.016 for the GFN1 polarizability
+and 0.0003 for the charges and for tblite's polarizability. They are the upper envelope of the neutral
+measurements. `scf_factor` is 1 for a neutral closed-shell molecule, 1.5 for a cation, 2.5 for an anion
+(1.7-2.3x was measured), and 6 for an open-shell molecule or one with a transition metal (the SCF can run to
+dxtb's 100 iterations). The estimate is compared with the **budget** of the process, minus what the process
+already uses. The budget is `resources.memory_budget_gb` (`build --memory-budget GB`). The default 0 means the
+memory available when the run starts divided by the number of lanes, and never less than 1.5 GB. A value
+below 0 turns the guard off. The run log states the budget.
+
+| step | estimate within the budget | over the budget |
+|---|---|---|
+| GFN1 charges + dipole (properties step) | dxtb | the whole xTB properties step is skipped, with a note; the molecule stays ok |
+| GFN1 polarizability (properties step) | dxtb autograd | **tblite** GFN1-xTB finite field if tblite is installed: the same quantity (Ala10 39.1012 vs 39.1009 Å³). A note says so and `xtb_polarizability_method` = `tblite GFN1-xTB finite field`. Without tblite (or if tblite's estimate does not fit either) the polarizability is skipped, with a note. Charges and dipole stay dxtb's |
+| dxtb refinement (GFN1/GFN2), sequential | runs | `MemoryGuardError: ... refinement not started by the memory guard: estimated X GB ...`. Method `auto` tries its next engine and notes why. An explicit method fails the molecule with that reason, and the batch goes on |
+| dxtb refinement, batched | B conformers at once | batches small enough to fit (the results do not depend on the batch size), and the error above if not even one fits |
+
+Every note is in `summary.csv`. dxtb's `scf_mode="implicit"` is not used as a cheaper path. It needs 4-5x less
+memory for energy + forces, but its forces differed by 0.83 eV/Å from the full mode on the C20 PFCA anion, and
+its polarizability came out 0. The frequencies stage (a dxtb Hessian) is not guarded yet.
+
+**Time limit per molecule.** `resources.molecule_timeout_s` (`build --molecule-timeout S`) defaults to 1800 s;
+0 turns it off. The slowest molecule of the stress sample that finished took 429 s (a Cr complex in `auto`), so
+30 min only ends molecules that are stuck, and a stuck molecule costs at most 30 lane-minutes of a
+14,000-molecule batch. QM stages and CREST can take longer per molecule: raise the limit for those runs. A
+molecule past the limit is recorded failed with `time limit (1800 s) in <stage>`. This is not a crash, so it is
+not tried again in the run; `--retry-failed` (with a higher limit, or 0) redoes it.
+- **Lanes:** the parent knows when each lane got its molecule. Past the limit it kills the lane with the
+  programs the lane started, records the molecule, and restarts the lane if work is left.
+- **One process** (`--lanes 1`, the single-molecule GUI run): best effort. The molecule stops at the pipeline's
+  next `should_stop` checkpoint: every optimizer step and conformer, between stages, and the polls of external
+  programs. A step without a checkpoint (RDKit embedding, a single dxtb SCF, the xTB properties step) runs to
+  its end first. Use lanes when a hard limit matters.
+- The external-program limit `engines.timeout_s` (one xtb/CREST/MOPAC/Psi4 run) is separate and still applies.
+
 ## AIMNet2 and dxtb on GPUs
 
 - **AIMNet2.** aimnet 0.2 computes neighbor lists and D3 dispersion with NVIDIA Warp kernels, which

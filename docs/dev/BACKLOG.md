@@ -382,9 +382,11 @@ Still open:
   fails; xTB methods refine unoptimized ETKDG geometries). Cobalamins, carbonyls and Rh/PPh3 complexes
   drawn as ions fail by design. A route: GFN-FF pre-optimization (xtb `--gfnff`) instead of UFF, or a
   coordination-geometry builder.
-- **Per-molecule time limit**: no wall-clock limit for embedding + refinement (ETKDG has
-  `EmbedParameters.timeout` since RDKit 2024.03). Large records (90-157 heavy atoms) took minutes on 1 CPU
-  thread with MMFF; with xTB on the CPU much longer. A `max_seconds` per stage with a clear failure.
+- **Per-molecule time limit**: done on `fix/memory-time-guards` (2026-11-05). `resources.molecule_timeout_s` /
+  `build --molecule-timeout`, default 1800 s. Lanes are killed and restarted past it. One process stops the
+  molecule at its next checkpoint (best effort). The molecule is failed `time limit (N s) in <stage>`, and
+  `--retry-failed` redoes it. Still open: RDKit embedding has no checkpoint (ETKDG `EmbedParameters.timeout`
+  since RDKit 2024.03 would bound it in one process too).
 - **Ids of the baseline cohorts** (needs-Brandon): cohorts 1-3 are titled by CAS number, cohorts 4-6 by a
   name that is sometimes cut off after a word, with the CAS in `CAS_RN`. `--id-col CAS_RN`
   now gives CAS ids for those; decide which the merged QSAR table uses.
@@ -402,6 +404,14 @@ Still open:
   the gfn1-xtb run on a Cr(III) azo complex, and the tblite run in that properties step. The job table recovered (crash counted, molecule
   moved last), but on NOVA with many lanes this can kill lanes repeatedly. Measure memory vs atom count and
   skip (with a note) or chunk the polarizability above a size; or use tblite's finite-field polarizability.
+  Done on `fix/memory-time-guards` (2026-11-05): `chem/memory_guard.py`. The cause is dxtb's `scf_mode="full"`
+  (memory goes as SCF iterations x nao²). An estimate per step is checked against a per-lane budget
+  (`--memory-budget`, default available / lanes, at least 1.5 GB). Over budget, the polarizability comes from
+  tblite (the same value), or is skipped with a note; a refinement that does not fit fails with the reason, or
+  `auto` moves on to its next engine. Measurements are in docs/ENGINES.md. Still open: the frequencies stage
+  (dxtb Hessian) is not guarded; the rule under-estimates hard SCF cases it cannot see (closed shell with
+  near-degenerate levels: 5.8x the neutral run for a peptide with two electrons removed); calibrate on NOVA's
+  ROCm torch and on the MacBook, whose allocators may differ.
 - **The xTB properties step on dications** (a piperazine, +2 at pH 7) took minutes of GFN1-xTB SCF in the
   MMFF run; measure and cap its SCF iterations.
 - Settings isolation: during this work `~/.config/QuantaBench/settings.json` (and `QuantaBench.conf`) were
