@@ -256,19 +256,45 @@ batches), so a project split into many documents needs no manual recombination:
 
 ```bash
 quantabench-cli import batches/*.spartan --table all.csv --sdf all.sdf     # --conformers all: one row each
+quantabench-cli import cohorts/*/*.spartan --table all.csv --wide qsar.csv # + one row per label, all levels
 ```
 
+- Documents from Spartan for Windows (gzipped `Input.gz`, `PropertyArchive.gz`) and for macOS (the same
+  streams uncompressed) both read. A molecule that cannot be read is counted under a named reason (no Input
+  stream, Input not readable, no geometry in Input) and listed; nothing is skipped silently.
 - Every row has `source_file`, `molecule_index` (position in its document), `storage` (`M0001`), `label` and
-  `duplicate_label` (1 when the label occurs in more than one row; nothing is overwritten), then `formula`,
-  `smiles`, `n_atoms`, `charge`, `multiplicity`, `n_conformers`, and every scalar Spartan property as
-  `spartan_<name>`. A Spartan value takes a QuantaBench column only when it is the same quantity in the same
-  units; the mapping and the units are documented in `chem/io_spartan.py`.
+  `duplicate_label` (1 when the molecule's own label occurs in more than one molecule; nothing is overwritten),
+  then `label_resolved`, `label_source`, `label_note`, `structure_key`, the level of theory (`spartan_version`,
+  `spartan_task`, `spartan_method`, `spartan_basis`, `spartan_solvent`, `spartan_status`), `formula`, `smiles`,
+  `n_atoms`, `charge`, `multiplicity`, `n_conformers`, and every scalar Spartan property as `spartan_<name>`.
+- QuantaBench columns, from quantum-chemical calculations only (units checked against Spartan's output, its
+  manual and identities between the archive's values): `homo_ev`, `lumo_ev`, `gap_ev` (Spartan: hartree),
+  `dipole_debye`, `zpe_kcal`, `h_corr_kcal` (H - E), `g_corr_kcal` (G - E), `entropy_cal_molK`. CPK area and
+  volume, ovality, the ESP areas, Spartan's estimated polarizability, hardness, electronegativity, logP and
+  the energies (a heat of formation for PM6, a total energy for DFT) stay `spartan_*`; their units are in
+  `chem/io_spartan.py`. In this long table a PM6 and a DFT HOMO are both `homo_ev`, told apart by
+  `spartan_method` next to them.
+- **Labels.** Spartan keeps a molecule's label (the CAS number in the PFAS QSAR batches) only in the document
+  it was built in; extracted conformers and the PM6/DFT documents made from them say `M0003` or `M0001[2]`.
+  Those rows are joined to their base document (`C1B_P5_SemiEmp_PM6.spartan` -> `C1B_P5.spartan`, which must
+  be among the inputs) by structure: elements, connectivity and charge must match exactly one label there.
+  `label_source` is `input`, `structure`, `ambiguous` (several base labels share the structure, e.g. an anion
+  under the CAS numbers of its salts; `label_note` lists them) or `unresolved` (no base document, or the
+  structure is not in it). Nothing is guessed.
+- **`--wide`** writes one row per resolved label with each level of theory's best result (completed first,
+  then lowest energy) as prefixed columns: `conf_*` (conformer search), `mm_*`, `pm6_*`, `dft_*`, ... plus
+  `<prefix>_level`, `<prefix>_n_rows` (e.g. conformers at that level) and `<prefix>_n_failed`. The prefix
+  comes from the method and task, not the document name; when a run has two levels with one prefix, each
+  gets its level appended (`conf_dlff03`, `conf_mmff`), so a column never mixes levels. The command prints
+  the prefixes it used.
 - Conformer libraries (conformer searches): `n_conformers` and the lowest-energy saved conformer's values
   (`spartan_conf_energy_kcal`, `spartan_conf_boltzmann_weight`, ...; Spartan's kcal/mol).
+- Geometry: the `Input` coordinates. After a Spartan optimization (PM6 `OPT`) these are still the starting
+  geometry (the optimized one is not read yet); such rows say so in `spartan_notes`.
 - `--sdf` writes the reported geometries (bonds from Spartan) with the label and source columns, ready for a
   QuantaBench run; per-atom Spartan values (e.g. MMFF charges) are SDF atom properties.
-- Documents are read molecule by molecule (olefile, pure Python), so memory stays flat: a 100-molecule
-  conformer-search batch takes ~0.7 s and the process stays under 100 MB.
+- Documents are read molecule by molecule (olefile, pure Python), so memory stays flat (the staged sample of
+  7 documents, 2,750 molecules, 102 MB: 10 s on 2 cores, under 200 MB).
 - In the GUI, every molecule of a document becomes one result with its saved conformers ranked.
 
 ## Not available yet

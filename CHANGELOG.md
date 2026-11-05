@@ -2,6 +2,26 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Spartan QSAR documents: macOS streams, levels of theory, CAS join, wide table (IMPORT-2, 2026-11-05)
+- **Documents saved by Spartan for macOS are read.** They hold `Input`, `PropertyArchive`, ... uncompressed
+  where Spartan for Windows writes `Input.gz`, ...; all of those molecules (the PM6 and conformer documents
+  of the PFAS QSAR project among them) were skipped as "no Input.gz". A molecule that still cannot be read is
+  counted under a named reason, which the CLI prints.
+- Every row carries its **level of theory** (`spartan_version`, `spartan_task`, `spartan_method`,
+  `spartan_basis`, `spartan_solvent`) and `spartan_status` (completed, or failed with Spartan's message).
+- **QSAR properties of PM6/DFT jobs** take QuantaBench columns where quantity and unit match: `homo_ev`,
+  `lumo_ev`, `gap_ev` (from hartree), `dipole_debye`, `zpe_kcal`, `h_corr_kcal`, `g_corr_kcal`,
+  `entropy_cal_molK`. The rest (CPK area/volume, ESP areas, Spartan's estimated polarizability, ...) stays
+  `spartan_*` with its unit documented.
+- **Labels are resolved**: rows labelled `M0003`/`M0001[2]` by Spartan are joined by structure to the CAS
+  label of their base document (`C1B_P5_*.spartan` -> `C1B_P5.spartan`): `label_resolved`, `label_source`
+  (input, structure, ambiguous, unresolved), `label_note`, `structure_key`. Ambiguous structures are never
+  guessed.
+- **`import --wide qsar.csv`**: one row per label, each level's best result as prefixed columns (`conf_*`,
+  `pm6_*`, `dft_*`, ...), prefixes from the method and task.
+- Faster on large documents: stream lookups no longer scan the document's directory each time (olefile's
+  lookup is linear in the molecules of a document).
+
 ### Fixed: the GUI reset the Pipeline settings at start-up (2026-11-05)
 - Opening the window copied the Pipeline widgets into the settings before they had been filled from them (the
   Machines dock asks for the current configuration while it is built), so pH, protonation, conformer count,

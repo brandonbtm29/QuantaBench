@@ -339,7 +339,7 @@ Depends on: none (research only; can run any night).
     method needs torch: +~500 MB for the rest of the session). Select the device lazily, or only for
     torch engines (chem/jobs.py, chem/pipeline.py).
 
-### IMPORT-2: Read Spartan '24 `.spartan` documents · in review 2026-11-05 (branch `feat/spartan-import`; acceptance pending)
+### IMPORT-2: Read Spartan '24 `.spartan` documents · in review 2026-11-05 (branches `feat/spartan-import`, `feat/spartan-qsar`; acceptance pending)
 - A `.spartan` file is an OLE compound document with one storage per molecule (`Molecules/M0001/...`):
   `Input.gz` holds the keywords, the label (CAS number in Brandon's files), charge and multiplicity and the
   Cartesian coordinates; `PropertyArchive.gz` holds about 50 scalar properties (`PROP VALUE NAME = value`:
@@ -356,6 +356,18 @@ Depends on: none (research only; can run any night).
   (quantum-chemical) properties, to confirm their Spartan names/units and fill `io_spartan.COLUMN_MAP`
   (HOMO/LUMO, dipole); (4) Spartan's own rule for the atoms its conformer libraries leave out (placed here
   by a rigid fit, typically ~0.5 Å from Spartan's placement).
+- 2026-11-05 (`feat/spartan-qsar`): the 129,164 molecules a full run logged as "no Input.gz" (All_Conformers,
+  SemiEmp_PM6 and base documents) come from Spartan for macOS, which writes the same streams uncompressed
+  (`Input`, `PropertyArchive`); both are read now and anything still unreadable is counted by reason. Rows
+  carry the level of theory (`Commands`/`Calculations`) and the job status (`JobLog`); PM6/DFT HOMO/LUMO
+  (hartree -> eV), dipole, ZPE, H/G corrections and entropy fill `COLUMN_MAP` (units checked against the
+  output, the manual and the archive's own identities). Labels Spartan made up (`M0003`, `M0018[1]`) are
+  joined to the base document by structure (`label_source` input/structure/ambiguous/unresolved); `--wide`
+  writes one row per label with each level's best result under a level prefix. Staged sets: 2,750 of 2,750
+  molecules read; derived rows 2,480 resolved, 120 ambiguous (6 anions of C3A_P4 under two CAS numbers each),
+  0 unresolved. Still open: (5) the optimized geometry of Spartan OPT jobs (Input keeps the starting one;
+  probably in `Archive.carc`); (6) ambiguous structures (an anion under the CAS numbers of its salts): share
+  the result with all its labels in the wide table, or leave it out (now); (7) a full-run timing on NOVA.
 
 ### QSAR-1: First real test: the PFAS QSAR cohorts · after SCALE-1 and IMPORT-2
 - Input: the 14,223 molecules of cohorts 1-6 (`data_engineering/Cohort */*.sdf`, CAS-labelled), one run per
