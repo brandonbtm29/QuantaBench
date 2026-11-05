@@ -245,8 +245,8 @@ function Set-Torch([string]$Exe, [string]$Want, [string]$Label) {
     $replace = [bool]$ReplaceTorch
     if (-not $replace) {
         if ($have -eq "rocm" -and $Want -eq "cpu") {
-            Info "$Label has AMD's ROCm PyTorch ($tv). PERF-1: no engine uses the GPU on Windows yet, and the CPU build"
-            Info "is much faster on the CPU. Recommended: the CPU build here, ROCm in .venv-rocm (-Gpu rocm)."
+            Info "$Label has AMD's ROCm PyTorch ($tv). Its CPU math is much slower than the CPU build's (MMFF, dxtb,"
+            Info "xtb); AIMNet2 on the GPU needs it. Suggested: the CPU build here, ROCm in .venv-rocm (-Gpu rocm; PERF-1)."
         }
         if (-not $DryRun -and (Test-Interactive)) {
             $answer = Read-Host "    Replace torch $tv ($have build) in $Label with the $Want build? [y/N]"
