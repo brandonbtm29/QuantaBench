@@ -8,6 +8,7 @@
     quantabench-cli build "...PFBA" --conformers crest --method xtb-gfn2 --solvent water --qm wb97x-d/def2-svp --cubes
     quantabench-cli freq "OC(=O)C(F)(F)F TFA" --method gfn1-xtb                # frequencies + thermo + IR
     quantabench-cli import psi4_output.dat ORCA.out [--out DIR]                 # other programs' outputs (cclib)
+    quantabench-cli import batches/*.spartan --table all.csv [--sdf all.sdf]   # Spartan documents -> one table
     quantabench-cli slab --nx 16 --ny 9 --layers 3 --molecule "OC(=O)C(F)(F)..." -o pfoa_on_graphite.data
                          [--lammps-dir DIR]
     quantabench-cli md smd --system pfoa_graphite.extxyz -o DIR [--gpu] [--run]
@@ -409,19 +410,55 @@ def _freq_as_is(args) -> int:
     return status
 
 
-def _import(args) -> int:
-    """Read other programs' output files with cclib: summary, then the usual exports per file."""
-    from .chem import export, io_cclib
+def _import_spartan(args, files: list[str]) -> int:
+    """Spartan documents: one table (one row per molecule and file) and optionally one SDF."""
+    from .chem import io_spartan
     from .chem.pipeline import new_run_dir
 
+    ok, why = io_spartan.available()
+    if not ok:
+        print(f"olefile is not installed ({why})", file=sys.stderr)
+        return 2
+    if args.table:
+        table = Path(args.table).expanduser()
+    else:
+        out = Path(args.out).expanduser() if args.out else new_run_dir(settings_mod.load().output_path(), "import")
+        table = out / "spartan.csv"
+    s = io_spartan.write_table(files, table, sdf=Path(args.sdf).expanduser() if args.sdf else None,
+                               conformers=args.conformers, log=print if len(files) <= 20 or args.verbose else None)
+    for e in s.errors:
+        print(f"  {e}", file=sys.stderr)
+    print(f"{s.files} Spartan document(s), {s.molecules} molecules, {s.rows} rows -> {table}"
+          + (f" (+ {args.sdf})" if args.sdf else ""))
+    if s.duplicate_labels:
+        print(f"  {s.duplicate_labels} label(s) occur in more than one row: all rows kept, duplicate_label = 1")
+    if s.files_failed:
+        print(f"  {s.files_failed} document(s) could not be read", file=sys.stderr)
+    return 1 if s.files_failed or s.errors else 0
+
+
+def _import(args) -> int:
+    """Read other programs' output files with cclib: summary, then the usual exports per file. Spartan
+    documents (``.spartan``) go to ``chem.io_spartan`` instead: one table for all of them."""
+    from .chem import export, io_cclib, io_spartan
+    from .chem.pipeline import new_run_dir
+
+    spartan = [f for f in args.files if io_spartan.is_spartan(f)]
+    others = [f for f in args.files if not io_spartan.is_spartan(f)]
+    status = _import_spartan(args, spartan) if spartan else 0
+    if not others:
+        return status
+    if args.table or args.sdf:
+        print("note: --table and --sdf apply to Spartan documents; the other files get the usual per-file exports",
+              file=sys.stderr)
     ok, why = io_cclib.available()
     if not ok:
         print(f"cclib is not installed ({why}); pip install quantabench[interop]", file=sys.stderr)
         return 2
     out = Path(args.out).expanduser() if args.out else new_run_dir(settings_mod.load().output_path(), "import")
     formats = tuple(args.formats) if args.formats else (*export.DEFAULT_FORMATS, "spectrum")
-    results, status = [], 0
-    for f in args.files:
+    results = []
+    for f in others:
         try:
             calc = io_cclib.read_output(f)
             res = io_cclib.to_result(calc, f)
@@ -727,14 +764,23 @@ def build_parser() -> argparse.ArgumentParser:
     fq.add_argument("-v", "--verbose", action="store_true")
     fq.set_defaults(func=_freq)
 
-    im = sub.add_parser("import", help="read Gaussian/ORCA/Psi4/xtb/MOPAC/... output files (cclib) and export them",
+    im = sub.add_parser("import", help="read Gaussian/ORCA/Psi4/xtb/MOPAC/... output files (cclib) and Spartan "
+                                       "documents, and export them",
                         description="Parses each output file with cclib (last geometry, energies, charges, "
                                     "frequencies, IR intensities, normal modes), prints a summary and writes "
-                                    "the usual files (XYZ, SDF, extXYZ, IR spectrum and mode table) per file.")
-    im.add_argument("files", nargs="+", metavar="FILE", help="program output files")
+                                    "the usual files (XYZ, SDF, extXYZ, IR spectrum and mode table) per file. "
+                                    "Spartan documents (.spartan) are read into ONE table instead: one row per "
+                                    "molecule and document, keyed by the label (--table, --sdf).")
+    im.add_argument("files", nargs="+", metavar="FILE", help="program output files and/or .spartan documents")
     im.add_argument("--out", help="output folder (default: a new run folder in the settings' output folder)")
     im.add_argument("--formats", nargs="+", choices=export_formats(),
                     help="export formats (default: xyz sdf extxyz spectrum)")
+    im.add_argument("--table", help="Spartan documents: the CSV to write (default: OUT/spartan.csv)")
+    im.add_argument("--sdf", help="Spartan documents: also write all geometries to this SDF")
+    im.add_argument("--conformers", choices=["best", "all"], default="best",
+                    help="Spartan conformer libraries: the lowest-energy conformer per molecule (default) or one "
+                         "row per saved conformer")
+    im.add_argument("-v", "--verbose", action="store_true", help="one line per Spartan document")
     im.set_defaults(func=_import)
 
     s = sub.add_parser("slab", help="graphite slab, optionally with a molecule placed above it")

@@ -37,6 +37,7 @@ dependencies = [
     "pyvista>=0.44",
     "pyvistaqt>=0.11,<0.13",  # 0.13 (FBO QOpenGLWidget) crashes in initializeGL on AMD/Windows; 0.12 uses a native window
     "pyqtgraph>=0.13.7",      # spectra and plots (pure Python)
+    "olefile>=0.47",          # Spartan .spartan documents (OLE compound files; pure Python, BSD)
 ]
 
 [project.optional-dependencies]

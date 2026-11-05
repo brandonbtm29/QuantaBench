@@ -9,6 +9,9 @@ CONTRACT (implemented by the spectra/interop builder):
 
 Several files can be chosen at once; each is parsed on the same worker and added in order. Files that cannot be
 read are listed in one message box; the others are still added.
+
+Spartan documents (``.spartan``) are read with ``chem.io_spartan`` instead of cclib: every molecule of the
+document becomes one result, with its saved conformers ranked by Spartan's energies.
 """
 
 from __future__ import annotations
@@ -18,16 +21,29 @@ from pathlib import Path
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-FILE_FILTER = ("Calculation outputs (*.out *.log *.dat *.txt *.output *.lis);;"
-               "Gaussian (*.log *.out);;ORCA / Psi4 / xtb / MOPAC (*.out *.dat);;All files (*)")
+FILE_FILTER = ("Calculation outputs (*.out *.log *.dat *.txt *.output *.lis *.spartan);;"
+               "Gaussian (*.log *.out);;ORCA / Psi4 / xtb / MOPAC (*.out *.dat);;Spartan documents (*.spartan);;"
+               "All files (*)")
 
 
 def read_files(paths: list[str]) -> tuple[list, list[str]]:
     """Parse ``paths`` (worker thread): (MoleculeResults, error messages)."""
-    from ..chem import io_cclib
+    from ..chem import io_cclib, io_spartan
 
     results, errors = [], []
     for p in paths:
+        if io_spartan.is_spartan(p):
+            problems: list[str] = []
+            try:
+                for mol in io_spartan.iter_molecules(p, errors=problems):
+                    try:
+                        results.append(io_spartan.to_result(mol))
+                    except Exception as exc:
+                        problems.append(f"{Path(p).name}:{mol.storage}: {exc}")
+            except Exception as exc:
+                problems.append(f"{Path(p).name}: {exc}")
+            errors += problems
+            continue
         try:
             calc = io_cclib.read_output(p)
             results.append(io_cclib.to_result(calc, p))
@@ -38,18 +54,21 @@ def read_files(paths: list[str]) -> tuple[list, list[str]]:
 
 def import_files(win, paths: list[str] | None = None) -> None:
     """Ask for output files (unless given) and add them to the molecule list when parsed."""
-    from ..chem import io_cclib
+    from ..chem import io_cclib, io_spartan
     from . import workers
 
-    ok, why = io_cclib.available()
-    if not ok:
-        QMessageBox.warning(win, "Import calculation output", f"cclib is not installed: {why}\n"
-                            "(pip install quantabench[interop])")
-        return
     if not paths:
         paths, _ = QFileDialog.getOpenFileNames(win, "Import calculation output", "", FILE_FILTER)
     if not paths:
         return
+    for needed, check, hint in ((any(not io_spartan.is_spartan(p) for p in paths), io_cclib.available,
+                                 "cclib is not installed: {}\n(pip install quantabench[interop])"),
+                                (any(io_spartan.is_spartan(p) for p in paths), io_spartan.available,
+                                 "olefile is not installed: {}")):
+        ok, why = check() if needed else (True, "")
+        if not ok:
+            QMessageBox.warning(win, "Import calculation output", hint.format(why))
+            return
     win.statusBar().showMessage(f"Reading {len(paths)} output file(s)...")
 
     def done(value):
@@ -79,7 +98,7 @@ def import_files(win, paths: list[str] | None = None) -> None:
 def install(win) -> None:
     action = QAction("Import calculation output...", win)
     action.setToolTip("Read a Gaussian, ORCA, Psi4, Q-Chem, xtb, MOPAC, ... output file with cclib "
-                      "(geometry, energies, charges, frequencies and IR intensities)")
+                      "(geometry, energies, charges, frequencies and IR intensities), or a Spartan document")
     action.triggered.connect(lambda _checked=False: import_files(win))
     menu = None
     for a in win.menuBar().actions():
