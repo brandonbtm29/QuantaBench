@@ -512,7 +512,16 @@ def lane_device(lane: Lane, cfg, memory_fraction: float) -> str:
     return lane.device
 
 
-def _lane_main(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memory_fraction: float,
+def _lane_main(*args, **kwargs) -> None:
+    """Entry of one lane process (``_lane_loop``), with a hard exit where the GPU runtime would hang at
+    shutdown (``resources.hard_exit_if_needed``: Windows ROCm). Module level, for the spawn start method."""
+    _lane_loop(*args, **kwargs)
+    from .. import resources
+
+    resources.hard_exit_if_needed(0)
+
+
+def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memory_fraction: float,
                programs_dir: str = "") -> None:
     """Body of one lane process. Module level, so the spawn start method can import it on every OS.
     ``programs_dir``: where ``external.run_program`` records the programs this lane starts, so the parent

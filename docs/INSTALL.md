@@ -214,6 +214,10 @@ allow the Python environment, or use WSL2/Linux.
   MAGMA); QuantaBench can run those steps on the CPU inside a GPU calculation, and the results match,
   but dxtb 0.4 measured 5-8x slower on this GPU than on the CPU. Settings > Compute > "dxtb on the
   GPU" (or `QUANTABENCH_DXTB_GPU=on`) uses the GPU anyway.
+- A process that used the GPU can hang at exit in AMD's runtime (it spins one core after finishing).
+  QuantaBench's own entry points (`quantabench`, `quantabench-cli`, lane processes, the test suite) exit
+  at once with `os._exit` when they touched a ROCm GPU on Windows; after `git pull`, run
+  `pip install -e .` once so the launchers pick this up. `QUANTABENCH_HARD_EXIT=0` turns it off.
 - AMD's wheel has a much slower CPU math library than PyPI's CPU build (52 vs 881 GFLOP/s matmul on
   NOVA). So keep the CPU build in `.venv` for CPU work (MMFF, dxtb, xtb) and the ROCm build in
   `.venv-rocm` for AIMNet2 on the GPU: `scripts\install_windows.ps1 -Gpu rocm` sets up both (backlog

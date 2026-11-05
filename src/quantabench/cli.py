@@ -801,5 +801,13 @@ def main(argv: list[str] | None = None) -> int:
     return args.func(args)
 
 
+def entry() -> None:
+    """Console-script entry point (``quantabench-cli``): ``main`` plus a hard exit where the GPU runtime
+    would hang at shutdown (``resources.hard_exit_if_needed``). Tests call ``main`` directly."""
+    code = main()
+    resources.hard_exit_if_needed(code)
+    raise SystemExit(code)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    entry()

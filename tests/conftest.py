@@ -1,5 +1,19 @@
 import pytest
 
+_EXIT_STATUS = [0]
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _EXIT_STATUS[0] = int(exitstatus)
+
+
+def pytest_unconfigure(config):
+    """AMD's Windows ROCm runtime can hang at interpreter shutdown after GPU tests (BTM NOVA): leave at once
+    once pytest has reported, keeping its exit status (``resources.hard_exit_if_needed``)."""
+    from quantabench import resources
+
+    resources.hard_exit_if_needed(_EXIT_STATUS[0])
+
 
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path, monkeypatch):

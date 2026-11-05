@@ -48,5 +48,15 @@ def main() -> int:
     return app.exec()
 
 
+def entry() -> None:
+    """GUI-script entry point (``quantabench``): ``main`` plus a hard exit where the GPU runtime would hang
+    after the window closes (``resources.hard_exit_if_needed``)."""
+    code = main()
+    from .. import resources
+
+    resources.hard_exit_if_needed(code)
+    raise SystemExit(code)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    entry()

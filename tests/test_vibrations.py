@@ -39,7 +39,9 @@ def _atoms(mol: Chem.Mol) -> Atoms:
 @pytest.fixture(scope="module")
 def water_gfn1():
     _dxtb()
-    return vib.analyze(molecule("H2O"), "gfn1-xtb", symmetry_number=2, preoptimize_fmax=1e-4)
+    # a fixed budget: the default (half the free RAM) picks finite differences on a busy machine (1.5 GB free)
+    return vib.analyze(molecule("H2O"), "gfn1-xtb", symmetry_number=2, preoptimize_fmax=1e-4,
+                       max_analytic_memory_gb=4.0)
 
 
 # --------------------------------------------------------------------------- dxtb

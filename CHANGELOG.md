@@ -49,6 +49,7 @@
 - CI: `external-engines.yml` (xtb, CREST, MOPAC, Psi4 on Ubuntu and macOS).
 - `doctor` shows which AIMNet2 and dxtb path each GPU gets; the `ml` extra adds `tad-dftd3`.
 - Resuming a run now also compares solvent, CREST and QM settings (they change the science).
+- Windows + ROCm: QuantaBench's entry points exit with `os._exit` after using the GPU, because AMD's runtime can hang at process exit (`QUANTABENCH_HARD_EXIT`). The console/GUI scripts now point at `cli:entry` / `gui.app:entry` (`pip install -e .` once after updating).
 
 ### External engines, QM stage, surfaces and spectra (2026-11-01)
 - **External-engine layer** (`chem/external.py`): finds xtb, CREST, MOPAC and Psi4 (settings,

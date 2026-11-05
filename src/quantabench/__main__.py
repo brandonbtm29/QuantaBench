@@ -14,4 +14,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    code = main()
+    from .resources import hard_exit_if_needed
+
+    hard_exit_if_needed(code)          # AMD's Windows ROCm runtime can hang at shutdown
+    raise SystemExit(code)

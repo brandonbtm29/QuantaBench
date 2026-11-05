@@ -259,6 +259,14 @@ Depends on: none (research only; can run any night).
   `qb-v0.8.0-win1`, CPython 3.11-3.13 win_amd64, MSYS2 gfortran). NOVA reproduces the Linux energies to
   1e-14 Eh. The fork also runs tblite's own CI/docs/wheel workflows: disable those in its Actions settings.
 
+### FORK-11: ROCm runtime hangs at process exit on Windows · ready (workaround in place)
+- On NOVA (torch 2.9.1+rocm7.2.1), a Python process that used the GPU often never exits: `main()` returns
+  and pytest prints its summary, then the process spins one core in the HIP runtime's teardown until it is
+  killed (5 such processes on 2026-11-04/05). Workaround: `resources.hard_exit_if_needed` (`os._exit` after
+  flushing) in `quantabench-cli`, the GUI, lane processes and pytest's `conftest.py`
+  (`QUANTABENCH_HARD_EXIT=0|1` overrides). To do: a minimal repro (`import torch; torch.ones(1,
+  device="cuda")`, then exit) and a report to ROCm/PyTorch; drop the workaround once fixed.
+
 ### FORK-10: ROCm SDK warning about paths with spaces · later
 - On NOVA, AMD's Windows ROCm SDK prints "Unknown command line argument ...offload-arch.exe" when the venv
   path has a space ("GitHub Projects"): an unquoted path in its device-detection call. Harmless so far;

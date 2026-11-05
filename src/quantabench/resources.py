@@ -147,6 +147,46 @@ def apply_thread_limits(threads: int) -> int:
     return n
 
 
+HARD_EXIT_ENV = "QUANTABENCH_HARD_EXIT"     # "1" always, "0" never, unset: only where needed (below)
+
+
+def needs_hard_exit() -> bool:
+    """Whether this process should leave with ``os._exit`` instead of a normal interpreter shutdown.
+
+    AMD's Windows ROCm runtime (torch 2.9.1+rocm7.2.1 on BTM NOVA) can hang forever in its exit-time
+    teardown once a process has used the GPU: ``main()`` returns, output is complete, and the process
+    then spins one core until it is killed. So when this process initialized a ROCm device on Windows,
+    entry points flush and exit at once. Torch is never imported here."""
+    env = os.environ.get(HARD_EXIT_ENV, "").strip()
+    if env in ("0", "1"):
+        return env == "1"
+    if sys.platform != "win32":
+        return False
+    torch = sys.modules.get("torch")
+    if torch is None or not getattr(getattr(torch, "version", None), "hip", None):
+        return False
+    try:
+        return bool(torch.cuda.is_initialized())
+    except Exception:
+        return False
+
+
+def hard_exit_if_needed(code: int) -> None:
+    """``os._exit(code)`` after flushing output and logging, when ``needs_hard_exit()``; else return.
+    Call it only at the very end of a process's entry point, after every file and database is closed."""
+    if not needs_hard_exit():
+        return
+    import logging
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:  # noqa: S110 - a closed console must not stop the exit
+            pass
+    logging.shutdown()
+    os._exit(int(code or 0))
+
+
 def current_threads() -> int:
     return _applied_threads or resolve_threads(0)
 

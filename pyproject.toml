@@ -70,10 +70,10 @@ Issues = "https://github.com/brandonbtm29/QuantaBench/issues"
 Changelog = "https://github.com/brandonbtm29/QuantaBench/blob/main/CHANGELOG.md"
 
 [project.scripts]
-quantabench-cli = "quantabench.cli:main"
+quantabench-cli = "quantabench.cli:entry"
 
 [project.gui-scripts]
-quantabench = "quantabench.gui.app:main"
+quantabench = "quantabench.gui.app:entry"
 
 [tool.hatch.version]
 path = "src/quantabench/__init__.py"
