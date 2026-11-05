@@ -365,7 +365,7 @@ Depends on: none (research only; can run any night).
   `brandonbtm29/quantabench-wheels` attached to GitHub releases (`pip install tblite --find-links ...`).
 - 2026-11-05: built in the fork itself instead (`brandonbtm29/tblite`, branch `qb/windows-wheels`, release
   `qb-v0.8.0-win1`, CPython 3.11-3.13 win_amd64, MSYS2 gfortran). NOVA reproduces the Linux energies to
-  1e-14 Eh. The fork also runs tblite's own CI/docs/wheel workflows: disable those in its Actions settings.
+  1e-14 Eh. tblite's own CI, docs and wheel workflows are disabled in the fork (2026-11-05); only `qb-windows-wheels` runs.
 
 ### FORK-11: ROCm runtime hangs at process exit on Windows · ready (workaround in place)
 - On NOVA (torch 2.9.1+rocm7.2.1), a Python process that used the GPU often never exits: `main()` returns
