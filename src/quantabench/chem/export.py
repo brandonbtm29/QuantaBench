@@ -110,6 +110,92 @@ def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMAT
     return written
 
 
+def read_molecule(folder: str | Path, stem: str, inp=None) -> MoleculeResult:
+    """Read back what ``write_molecule`` wrote into ``folder``: the result's fields from ``<stem>_summary.json``
+    and the molecule with every kept conformer from ``<stem>_conformers.sdf`` (without the SDF, only the best
+    conformer, from ``<stem>.mol`` or ``<stem>.xyz``). ``inp`` (``MoleculeInput``) replaces the input record of
+    the summary, which has no structure-file molecule. Files that moved with the folder (another machine, a
+    synced copy) are pointed at their copies here."""
+    from dataclasses import fields
+
+    from .inputs import MoleculeInput
+    from .pipeline import ConformerResult, MoleculeResult
+
+    folder = Path(folder)
+    d = json.loads((folder / f"{stem}_summary.json").read_text(encoding="utf-8"))
+    if inp is None:
+        known = {f.name for f in fields(MoleculeInput)} - {"mol"}
+        inp = MoleculeInput(**{k: v for k, v in (d.get("input") or {}).items() if k in known})
+    known = {f.name for f in fields(MoleculeResult)} - {"input", "mol", "conformers"}
+    res = MoleculeResult(input=inp, **{k: v for k, v in d.items() if k in known})
+    conf_known = {f.name for f in fields(ConformerResult)}
+    conformers = [ConformerResult(**{k: v for k, v in c.items() if k in conf_known}) for c in d.get("conformers") or []]
+    res.mol, res.conformers = _read_conformers(folder, stem, conformers, res.charge)
+    # the summary is written before the file list is known: the folder's own listing is the list
+    res.files = [_moved(p, folder) for p in res.files] or sorted(
+        str(p) for p in folder.iterdir() if p.is_file() and p.name.startswith(stem))
+    if res.qm and isinstance(res.qm.get("files"), dict):
+        res.qm["files"] = {k: _moved(p, folder) for k, p in res.qm["files"].items()}
+    return res
+
+
+def _moved(path: str, folder: Path) -> str:
+    """``path`` if it exists, else the file of that name in ``folder`` (a run folder that moved), else ``path``."""
+    from pathlib import PureWindowsPath
+
+    if not path or Path(path).exists():
+        return path
+    here = folder / (PureWindowsPath(path).name if "\\" in path else Path(path).name)
+    return str(here) if here.exists() else path
+
+
+def _read_conformers(folder: Path, stem: str, conformers: list, charge: int) -> tuple[Chem.Mol | None, list]:
+    """(molecule with one RDKit conformer per kept ``ConformerResult``, the conformers that have coordinates)."""
+    sdf = folder / f"{stem}_conformers.sdf"
+    if sdf.is_file() and conformers:
+        by_rank = {}
+        for m in Chem.SDMolSupplier(str(sdf), removeHs=False, sanitize=False):
+            if m is not None and m.HasProp("QB_Rank"):
+                by_rank.setdefault(int(m.GetProp("QB_Rank")), m)
+        kept = [c for c in conformers if c.rank in by_rank]
+        if kept:
+            mol = Chem.Mol(by_rank[kept[0].rank])
+            mol.RemoveAllConformers()
+            for c in kept:
+                conf = Chem.Conformer(by_rank[c.rank].GetConformer())
+                conf.SetId(c.conf_id)
+                mol.AddConformer(conf, assignId=False)
+            return _sanitized(mol), kept
+    if not conformers:
+        return None, []
+    best = conformers[0]
+    mol = None
+    if (folder / f"{stem}.mol").is_file():
+        mol = Chem.MolFromMolFile(str(folder / f"{stem}.mol"), removeHs=False, sanitize=False)
+    elif (folder / f"{stem}.xyz").is_file():
+        from rdkit.Chem import rdDetermineBonds
+
+        mol = Chem.MolFromXYZFile(str(folder / f"{stem}.xyz"))
+        if mol is not None:
+            try:
+                rdDetermineBonds.DetermineBonds(mol, charge=charge)
+            except ValueError:
+                rdDetermineBonds.DetermineConnectivity(mol)
+    if mol is None or mol.GetNumConformers() == 0:
+        return None, []
+    mol.GetConformer().SetId(best.conf_id)
+    return _sanitized(mol), [best]
+
+
+def _sanitized(mol: Chem.Mol) -> Chem.Mol:
+    try:
+        Chem.SanitizeMol(mol)
+    except Exception:  # noqa: BLE001 - keep what was written; ring info is enough for the views
+        mol.UpdatePropertyCache(strict=False)
+        Chem.FastFindRings(mol)
+    return mol
+
+
 def write_vibrations(vib: dict, out_dir: Path, stem: str, fwhm: float = 20.0) -> list[Path]:
     """``<stem>_ir.csv`` (Lorentzian-broadened spectrum, unscaled frequencies) and ``<stem>_modes.csv``
     from a ``VibrationalResult.to_dict()``."""
