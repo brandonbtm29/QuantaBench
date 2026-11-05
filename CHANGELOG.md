@@ -2,6 +2,33 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Splitting work across cores, GPUs and machines; forks for Windows and macOS (2026-11-05)
+- **Lanes** (`dist.lanes`, `build --lanes auto | N | gpu:1x4,cpu:5x2`, Settings > Compute > Parallel
+  lanes): a batch runs in parallel worker processes that share this machine's threads and GPU; the parent
+  stays the only `jobs.sqlite` writer, a crashed lane is restarted. NOVA: MMFF 3.7x, GFN1-xTB 3.45x.
+- **Machine registry and weighted chunks** (`dist.profile`, `dist.plan`): `quantabench-cli machines
+  [--refresh] [--bench]` writes each machine's hardware, engines and measured molecules/hour to
+  `<settings>/machines/`; `build --chunk 1/2 --chunk-weights auto` (or `3,1`, `btm-nova=3,...`) splits a
+  list in proportion. The weights are stored with the run.
+- **Workers over Tailscale** (`dist.worker`, `dist.client`): `quantabench-cli worker` (token, Tailscale
+  address only) and `grid build|status|cancel|merge`, which splits a list across machines, follows them and
+  merges the tables (synced run folders are read in place, others downloaded). docs/WORKERS.md.
+- **Machines dock** in the GUI: the registry, worker status and this computer's lane plan.
+- **AIMNet2 on AMD and Apple GPUs** without NVIDIA Warp (`chem/aimnet_torch.py`): ~10x the CPU on an
+  RX 9060 XT. **Fixes a stock aimnet neighbor-list bug** that gave wrong energies for larger molecules
+  evaluated after smaller ones in the same process (CPU): re-run earlier multi-molecule AIMNet2 CPU batches.
+- **dxtb on ROCm/MPS** through CPU routing of the missing linear algebra (`chem/torch_compat.py`); off by
+  default because dxtb 0.4 is slower on those GPUs than on the CPU (Settings > Compute > dxtb on the GPU).
+- **GFN2-xTB, polarizability and IR intensities in dxtb on Windows and macOS** with the dxtb fork
+  (`brandonbtm29/dxtb@qb-v0.4.0.post1` + `tad-libcint>=0.4`); `doctor` says what is missing.
+- **tblite on Windows** from the fork's wheels (`brandonbtm29/tblite` release `qb-v0.8.0-win1`).
+- **One-command installers** `scripts/install_macos.sh`, `install_linux.sh`, `install_windows.ps1`
+  (`--with-engines`, `-Gpu rocm` for a second `.venv-rocm`), launchers without a terminal window,
+  **Help > Check for updates** / `quantabench-cli update`.
+- CI: `external-engines.yml` (xtb, CREST, MOPAC, Psi4 on Ubuntu and macOS).
+- `doctor` shows which AIMNet2 and dxtb path each GPU gets; the `ml` extra adds `tad-dftd3`.
+- Resuming a run now also compares solvent, CREST and QM settings (they change the science).
+
 ### External engines, QM stage, surfaces and spectra (2026-11-01)
 - **External-engine layer** (`chem/external.py`): finds xtb, CREST, MOPAC and Psi4 (settings,
   `QUANTABENCH_<NAME>`, PATH, conda/mamba envs, `wsl:` on Windows), runs them with thread caps,

@@ -45,10 +45,12 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
 - **`--method` must be explicit.** `auto` picks the engine per machine (AIMNet2 on NOVA's GPU, something
   else on the Mac), which would mix levels of theory in one table; `grid build` refuses it unless
   `--allow-auto-method`.
-- **Weights:** `auto` uses each machine's measured throughput for the method (`throughput` in its profile,
-  from the machine benchmark) and falls back to equal weights; `3,1` gives one weight per machine in the
-  order of `--machines`. The split is deterministic (SHA-256 of the molecule id), so re-running a list puts
-  every molecule on the same machine again.
+- **Weights** follow `build --chunk-weights` (`dist.plan`): `auto` uses each machine's measured throughput
+  for the method (`throughput` in the profile its worker reports, else the registry copy), an estimate from
+  its core count when it has no benchmark for that method, and 0 where the method is unavailable; a machine
+  with no profile at all gets the mean of the others. `3,1` gives one weight per machine in the order of
+  `--machines`; `btm-nova=3,local=1` names them. The split is deterministic (SHA-256 of the molecule id), so
+  re-running a list puts every molecule on the same machine again.
 - **Threads and GPU** come from each machine's own settings. `--threads`/`--gpu` on `grid build` override
   them everywhere.
 - `local` runs its share inside the `grid build` process, so that command stays open until the local share

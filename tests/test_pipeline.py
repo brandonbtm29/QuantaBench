@@ -56,7 +56,15 @@ class Harmonic(Calculator):
                         "charges": np.zeros(len(atoms))}
 
 
+def _gpu_dxtb(monkeypatch):
+    """Let gfn1-xtb (the stand-in GPU engine of these tests) keep the GPU it is given."""
+    from quantabench.chem import torch_compat
+
+    monkeypatch.setattr(torch_compat, "dxtb_device", lambda device: (str(device), ""))
+
+
 def test_engine_gpu_fallback(tmp_path, monkeypatch):
+    _gpu_dxtb(monkeypatch)
     monkeypatch.setattr(engines, "available", lambda key: (True, ""))
     monkeypatch.setattr(engines, "supports", lambda key, numbers: (True, ""))
     monkeypatch.setattr(engines, "make_calculator", lambda key, numbers, q, m, dev, **_: Harmonic(dev))
@@ -66,6 +74,23 @@ def test_engine_gpu_fallback(tmp_path, monkeypatch):
     assert r.status == "ok", r.error
     assert r.device == "cpu" and any("fell back to CPU" in n for n in r.notes)
     assert r.conformers[0].charges is not None and r.conformers[0].dipole_debye is not None
+
+
+def test_dxtb_kept_on_cpu_is_recorded(tmp_path, monkeypatch):
+    # a GPU where dxtb is slower than the CPU (torch_compat.dxtb_device): the result says where it ran, and why
+    from quantabench.chem import torch_compat
+
+    seen = []
+    why = "dxtb ran on the CPU instead of cuda:0: test"
+    monkeypatch.setattr(torch_compat, "dxtb_device", lambda device: ("cpu", why))
+    monkeypatch.setattr(engines, "available", lambda key: (True, ""))
+    monkeypatch.setattr(engines, "supports", lambda key, numbers: (True, ""))
+    monkeypatch.setattr(engines, "make_calculator",
+                        lambda key, numbers, q, m, dev, **_: seen.append(dev) or Harmonic(dev))
+    r = pipeline.run_molecule(from_smiles(PFOA, id="PFOA"), cfg(tmp_path, method="gfn1-xtb", batched="off"),
+                              device="cuda:0", threads=1)
+    assert r.status == "ok", r.error
+    assert r.device == "cpu" and set(seen) == {"cpu"} and r.notes.count(why) == 1
 
 
 def test_use_batched_policy(tmp_path, monkeypatch):
@@ -96,6 +121,7 @@ def test_batched_refine_on_gpu_with_cpu_fallback(tmp_path, monkeypatch):
             return super()._compute(positions, index)
 
     calls = []
+    _gpu_dxtb(monkeypatch)
     monkeypatch.setattr(engines, "available", lambda key: (True, ""))
     monkeypatch.setattr(engines, "supports", lambda key, numbers: (True, ""))
     monkeypatch.setattr(engines, "make_calculator", lambda *a, **k: pytest.fail("sequential path used"))

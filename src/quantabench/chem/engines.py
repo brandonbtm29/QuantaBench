@@ -9,7 +9,7 @@ Engine        Package        Device        Charged molecules   Notes
 -----------   -------------  ------------  ------------------  -----------------------------------
 mmff          rdkit          CPU threads   yes                 already applied during conformer search
 gfn1-xtb      dxtb           CPU or GPU    yes                 pure PyTorch: ROCm, CUDA, MPS (see torch_compat)
-gfn2-xtb      dxtb+libcint   CPU (ints)    yes                 libcint backend: Linux/WSL for now
+gfn2-xtb      dxtb+libcint   CPU (ints)    yes                 libcint backend (any OS with the dxtb fork)
 aimnet2       aimnet         CPU or GPU    yes                 wB97M-D3 quality for H,B,C,N,O,F,Si,P,S,Cl,As,Se,Br,I;
                                                                ROCm/Apple GPUs through ``aimnet_torch`` (no Warp)
 
@@ -73,7 +73,7 @@ ENGINES: dict[str, EngineInfo] = {
                        False, family="force field"),
     "gfn1-xtb": EngineInfo("gfn1-xtb", "GFN1-xTB (dxtb)", "Semi-empirical tight binding in PyTorch. GPU-capable.", True,
                            frozenset(range(1, 87)), batched=True),
-    "gfn2-xtb": EngineInfo("gfn2-xtb", "GFN2-xTB (dxtb + libcint)", "GFN2 tight binding; needs tad-libcint (Linux/WSL).",
+    "gfn2-xtb": EngineInfo("gfn2-xtb", "GFN2-xTB (dxtb + libcint)", "GFN2 tight binding; needs dxtb's libcint backend (the dxtb fork on Windows/macOS).",
                            True, frozenset(range(1, 87)), batched=True),
     "aimnet2": EngineInfo("aimnet2", "AIMNet2 (ML, wB97M-D3)", "Neural network potential trained on wB97M-D3/def2-TZVPP; "
                           "neutral and charged molecules. GPU-capable: NVIDIA (stock aimnet), AMD ROCm and "

@@ -21,6 +21,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Chemistry",
     "Topic :: Scientific/Engineering :: Visualization",
@@ -41,7 +42,9 @@ dependencies = [
 [project.optional-dependencies]
 # PyTorch is NOT listed here on purpose: install the build that matches your GPU first
 # (AMD ROCm on Windows/Linux, NVIDIA CUDA, or CPU). See docs/INSTALL.md.
-ml = ["aimnet>=0.2"]                       # AIMNet2 neutral + charged organics (needs torch)
+# AIMNet2 neutral + charged organics (needs torch). tad-dftd3: its D3 dispersion on ROCm/Apple GPUs, where
+# aimnet's NVIDIA Warp kernels cannot run (chem/aimnet_torch.py, FORK-3)
+ml = ["aimnet>=0.2", "tad-dftd3>=0.6"]
 # dxtb>=0.4: GFN1-xTB in PyTorch. GFN2, polarizability and IR intensities also need tad-libcint: PyPI's
 # dxtb with "tad-libcint<0.4" (Linux), or on any OS the fork (a direct URL, so not listed here; FORK-1):
 #   pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"

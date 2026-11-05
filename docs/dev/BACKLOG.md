@@ -89,7 +89,7 @@ Depends on: none (research only; can run any night).
 
 ---
 
-## WIN-1 (see FORK-1): xTB dipole integrals on native Windows · ready
+## WIN-1 (see FORK-1): xTB dipole integrals on native Windows · done 2026-11-05 (FORK-1)
 - Native Windows has no compatible dxtb `libcint` backend (tad-libcint 0.4 needs tad-mctc ≥ 0.11, dxtb 0.4
   pins 0.7), so GFN2-xTB, xTB polarizability and xTB IR intensities are unavailable there (they degrade
   with a note). Investigate: a newer dxtb release, building tad-libcint 0.3 for Windows (CI wheel), or
@@ -97,6 +97,8 @@ Depends on: none (research only; can run any night).
   documented decision why not.
 - 2026-11-01: GFN2-xTB is now available on Windows through the xtb program (`xtb-gfn2`, finite-difference
   IR intensities from its dipoles). What remains is dxtb's GPU/batched GFN2 path; lower priority.
+- 2026-11-05: done through FORK-1: the dxtb fork with tad-libcint 0.4 gives GFN2, polarizability and IR
+  intensities natively on Windows (NOVA: matches Linux to ~1e-15 to 4e-9).
 
 ## MD-1: Counter-ions in vacuum SMD (Windows LAMMPS non-determinism + ion-pair heating) · ready
 - On BTM NOVA, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a
@@ -113,7 +115,7 @@ Depends on: none (research only; can run any night).
   failed 2 of 6 identical runs on BTM NOVA with the same error; now also marked flaky on Windows.
   Compare with `lmp.exe` from the LAMMPS Windows installer to tell a wheel problem from an input problem.
 
-## GPU-1 (= FORK-3): AIMNet2 on AMD and Apple GPUs (replace NVIDIA Warp D3) · ready
+## GPU-1 (= FORK-3): AIMNet2 on AMD and Apple GPUs (replace NVIDIA Warp D3) · done on ROCm 2026-11-05; MPS needs-Brandon
 - 2026-11-04: Warp is CPU-only on macOS too, so the same adapter enables AIMNet2 on the MacBook's GPU (MPS,
   float32). Test the adapter on `mps` as well (needs-Brandon), and offer the change upstream to `aimnet`.
 - `aimnet` 0.2 computes DFT-D3 (and neighbor lists) through `nvalchemi-toolkit-ops` / NVIDIA Warp, which
@@ -122,8 +124,14 @@ Depends on: none (research only; can run any night).
   `tad-dftd3` (pure PyTorch, already installed with dxtb) with AIMNet2's D3 parameters; keep the dense
   neighbor path (< `nb_threshold` atoms). Verify on CPU against the stock calculator to ~1e-5 eV and
   forces, then on GPU (needs-Brandon to run). Acceptance: AIMNet2 single + batched on a ROCm device.
+- 2026-11-05: `chem/aimnet_torch.py` (Warp-free calculator: dense neighbor path, tad-dftd3 D3(BJ) with
+  aimnet's parameters and reference tables). NOVA, real weights: CPU < 3.3e-6 eV and RX 9060 XT < 7.5e-6 eV
+  from the stock calculator over 6 PFAS x 4 conformers; batched refinement of 8 PFOA conformers 5.7 s on
+  the GPU vs 59.8 s on the CPU. Picked automatically on ROCm and MPS (`QUANTABENCH_AIMNET_BACKEND`).
+  Found and fixed a stock aimnet bug on the way (`guard_neighbor_lists`, see DEVLOG). Left: a run on the
+  Mac's MPS, and the upstream PR making Warp optional (text drafted; post only with Brandon's OK).
 
-## GPU-2 (= FORK-4): dxtb on AMD and Apple GPUs · ready
+## GPU-2 (= FORK-4): dxtb on AMD and Apple GPUs · done 2026-11-05 (runs, but slower than the CPU)
 - 2026-11-04: MPS has no float64 and unverified linalg coverage: the device-split wrapper (dense
   eigh/cholesky on the CPU) must cover `mps` too; then propose a configurable linalg device upstream.
 - AMD's Windows ROCm PyTorch has no MAGMA/hipSOLVER linear algebra on the GPU
@@ -131,8 +139,16 @@ Depends on: none (research only; can run any night).
   inside an otherwise-GPU calculation (tensors are ~100x100 for PFAS-size molecules), or document
   WSL2/Linux ROCm wheels (which include MAGMA). Measure whether GPU dxtb beats CPU at all for these sizes;
   batched conformers are where it should.
+- 2026-11-05: `chem/torch_compat.py` routes Cholesky/solve (and everything on MPS) to the CPU inside dxtb
+  calls; GFN1 on the RX 9060 XT matches CPU float64 to 8.6e-6 Eh. Measured 5-8x *slower* than NOVA's CPU at
+  every size and batch size (host synchronizations in dxtb 0.4's overlap integrals, not the routed ops), so
+  `dxtb_device()` keeps dxtb on the CPU there by default (Settings > Compute > dxtb on the GPU,
+  `QUANTABENCH_DXTB_GPU`). Follow-up (later): profile/upstream the overlap-integral syncs in dxtb.
 
 ## PERF-1: Separate CPU and GPU environments on Windows · ready
+- 2026-11-05: `install_windows.ps1 -Gpu rocm` creates `.venv-rocm` next to the CPU `.venv`. With GPU-1 done,
+  AIMNet2 is ~10x faster on the GPU, while dxtb and MMFF want the fast CPU BLAS: measure a full PFAS batch in
+  both environments (lanes `gpu:1x4,cpu:...` in `.venv-rocm` vs `auto` in `.venv`) and pick the default.
 - Until GPU-1/GPU-2 land, the PyPI CPU torch (fast MKL/OpenBLAS kernels) is the better default on Windows.
   Document a two-venv setup (`.venv` CPU, `.venv-rocm` GPU) in INSTALL.md and make `doctor --bench`
   report CPU GFLOP/s with a warning when it is far below expectations. Also find why `doctor --bench`
@@ -187,19 +203,25 @@ Depends on: none (research only; can run any night).
   `envs/tools.yml` + `envs/psi4.yml`, GUI by hand (HiDPI picking, trackpad pinch/rotate, dark mode).
   Record chip, cores and RAM in PLATFORMS.md section 2, and anything that breaks as new items.
 
-### PLAT-2: macOS in CI · ready
+### PLAT-2: macOS in CI · in progress
 - `macos-14` is in the CI matrix as non-blocking (2026-11-04). Make it green, then required. Add a second
   workflow job: micromamba `envs/tools.yml` + `envs/psi4.yml` on ubuntu-latest and macos-14, then
   `pytest -m external`.
+- 2026-11-05: `.github/workflows/external-engines.yml` does the second part (weekly, manual, and on pushes
+  touching engine code). Left: watch the first runs and make macos-14 required in `ci.yml`.
 
-### DIST-1: Machine capability report and weighted chunks · ready
+### DIST-1: Machine capability report and weighted chunks · done 2026-11-05
 - `doctor --json` gains engines, external programs (versions), and `--bench` throughput per engine
   (molecules/hour for a fixed PFAS set). Write it to `machines/<hostname>.json` in the settings folder
   (synced, so every machine sees the others).
 - `build --chunk-weights auto` (and the GUI) splits a list in proportion to those throughputs.
 - Acceptance: tests for the report schema and the weighted split (deterministic, stable when the list grows).
+- 2026-11-05: `dist.profile` (registry in `<settings>/machines/`, `quantabench-cli machines [--refresh]
+  [--bench METHODS]`), `dist.plan` (`--chunk-weights 3,1 | name=3,... | auto`), weights stored with the run.
+  Same-machine parallelism too: `dist.lanes` (`build --lanes auto | N | gpu:1x4,cpu:5x2`); NOVA: MMFF 3.7x,
+  GFN1-xTB 3.45x with lanes.
 
-### DIST-2: `quantabench-cli worker` over Tailscale · ready (after DIST-1)
+### DIST-2: `quantabench-cli worker` over Tailscale · done 2026-11-05 (NOVA + MacBook run needs-Brandon)
 - Small HTTP/JSON service (stdlib or one light dependency) bound to the Tailscale interface only, with a
   token from settings: submit, status, cancel, list. Each job runs through `jobs.run_resumable` into the
   worker's own run folder under the synced Runs folder (one writer per run folder). Version/commit check;
@@ -207,24 +229,39 @@ Depends on: none (research only; can run any night).
 - Windows firewall rule for the Tailscale interface; `caffeinate -i` on macOS while busy; pause switch.
 - Acceptance: two workers on one Linux box in tests (localhost), submit/cancel/resume; a manual
   NOVA + MacBook run (needs-Brandon).
+- 2026-11-05: `dist.worker` + `dist.client` (`grid machines|build|status|cancel|merge`), docs/WORKERS.md
+  (firewall rule, Task Scheduler and LaunchAgent autostart). Left: the two-machine run over Tailscale.
 
-### DIST-3: Machines dock and "Run on" routing · ready (after DIST-2 and UI-5)
+### DIST-3: Machines dock and "Run on" routing · in progress (dock done; Run on needs UI-5)
 - Machines dock (status, load, engines). The job dialog's resources get "Run on: this machine / <worker> /
   auto"; auto picks by engine availability and throughput.
+- 2026-11-05: minimal Machines dock (registry, worker status on demand, this computer's lane plan). Left:
+  the "Run on" choice, which belongs in UI-5's job dialog.
 
 ### DIST-4: Per-stage routing · later
 - Different stages of one molecule on different machines (CREST + Psi4 on the Mac, GPU refinement +
   LAMMPS on NOVA), handed over through run-folder artifacts.
 
-### FORK-1: dxtb with tad-libcint 0.4 (GFN2 on Windows and macOS) · ready
+### FORK-1: dxtb with tad-libcint 0.4 (GFN2 on Windows and macOS) · done 2026-11-05 (upstream PR pending Brandon's OK)
 - tad-libcint 0.4.0 (2026-10-20) has Windows and macOS-arm64 wheels but needs tad-mctc ≥ 0.11; dxtb 0.4
   pins 0.7. First: open an issue/PR at dxtb. If it stalls: fork `brandonbtm29/dxtb` from v0.4.0 (branch
   `qb/tad-mctc-0.11`), adapt to the tad-mctc API changes, run dxtb's tests on all three OSes, and document
   `pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@<tag>"`. Supersedes WIN-1 when done.
+- 2026-11-05: fork `brandonbtm29/dxtb`, branch `qb/tad-mctc-0.11`, tag `qb-v0.4.0.post1`; its CI is green on
+  Ubuntu, Windows and macOS. Matches PyPI's stack to ~1e-8 relative. Install line in INSTALL.md;
+  `engines.libcint_status()` names it when tad-libcint is missing or incompatible.
 
-### FORK-2: tblite Windows wheels · ready
+### FORK-2: tblite Windows wheels · done 2026-11-05 (upstream PR pending Brandon's OK)
 - Upstream PR adding Windows wheels (cibuildwheel, MinGW-w64 gfortran); interim builds in
   `brandonbtm29/quantabench-wheels` attached to GitHub releases (`pip install tblite --find-links ...`).
+- 2026-11-05: built in the fork itself instead (`brandonbtm29/tblite`, branch `qb/windows-wheels`, release
+  `qb-v0.8.0-win1`, CPython 3.11-3.13 win_amd64, MSYS2 gfortran). NOVA reproduces the Linux energies to
+  1e-14 Eh. The fork also runs tblite's own CI/docs/wheel workflows: disable those in its Actions settings.
+
+### FORK-10: ROCm SDK warning about paths with spaces · later
+- On NOVA, AMD's Windows ROCm SDK prints "Unknown command line argument ...offload-arch.exe" when the venv
+  path has a space ("GitHub Projects"): an unquoted path in its device-detection call. Harmless so far;
+  reproduce outside QuantaBench and report to ROCm.
 
 ### FORK-5: CREST on native Windows · later
 - Look into a win-64 build in the conda-forge crest feedstock (MinGW-w64). Low priority: WSL and the Mac
@@ -247,8 +284,8 @@ Depends on: none (research only; can run any night).
 - **HW-1 · done 2026-10-28:** ROCm 7.2.1 PyTorch 2.9.1 on BTM NOVA sees the RX 9060 XT (matmul
   6.1 TFLOP/s fp32). But: no QuantaBench engine runs on it yet (see GPU-1, GPU-2), and AMD's Windows
   wheel ships a slow CPU BLAS (52 vs 881 GFLOP/s for PyPI's CPU torch), so CPU work got ~17x slower.
-- **HW-2 · needs-Brandon:** dxtb and AIMNet2 on the RX 9060 XT (single + batched); AIMNet2 weights
-  download; compare energies CPU vs GPU.
+- **HW-2 · done 2026-11-05:** dxtb and AIMNet2 on the RX 9060 XT (single + batched), energies CPU vs GPU:
+  see GPU-1 (AIMNet2 ~10x faster on the GPU) and GPU-2 (dxtb works but is 5-8x slower there).
 - **HW-3 · needs-Brandon:** GUI on Windows 11. Done 2026-10-27: the full suite including all GUI tests
   passes natively on BTM NOVA (Radeon RX 9060 XT, OpenGL 4.6) with pyvistaqt 0.12; pyvistaqt 0.13
   crashed (now pinned `<0.13`). Still to check by hand: HiDPI picking feel, 20k-atom slab frame rate.

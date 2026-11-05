@@ -590,8 +590,11 @@ def refine_batched(result: MoleculeResult, conf_set: ConformerSet, cfg: BuildCon
                     x0 = torch.as_tensor(start[part], dtype=dtype, device=tdev)
                     res = optimize_batched(model, x0, cfg.fmax, cfg.max_steps, cfg.optimizer, should_stop)
                     q = model.charges
+                    # float64 energies when the model keeps them (AIMNet2 on MPS, where x0 is float32)
+                    e64 = getattr(model, "energies_ev", None)
+                    energies = res.energies if e64 is None else e64
                     for j, row in enumerate(part):
-                        out.append((row, res.positions[j].cpu().double().numpy(), float(res.energies[j]),
+                        out.append((row, res.positions[j].cpu().double().numpy(), float(energies[j]),
                                     bool(res.converged[j]), int(res.steps[j]), bool(res.failed[j]),
                                     None if q is None else q[j].cpu().double().numpy()))
                     log(f"  batched {cfg.optimizer.upper()} on {dev}: {len(part)} conformer(s), "

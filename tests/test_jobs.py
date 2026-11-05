@@ -289,3 +289,25 @@ def test_merge_reports_missing_and_unfinished_folders(tmp_path):
     assert summary_ids(tmp_path / "merged") == ["ethanol", "TFE"]
     assert any("no summary.csv" in m and "killed" in m for m in logs)
     assert any("no such folder" in m for m in logs)
+
+
+def test_record_crash_counts_like_resume(tmp_path):
+    with jobs.JobStore(tmp_path) as store:
+        store.add_inputs([from_smiles("CCO", id="ethanol")])
+        store.mark_running("ethanol")
+        assert store.record_crash("ethanol") == 1          # a lane died while running it
+        assert store.counts()["pending"] == 1
+        store.mark_running("ethanol")
+        n, failed = store.reset_interrupted(max_crashes=2)  # the next crash, found on resume
+        assert (n, failed) == (0, ["ethanol"]) and store.counts()["failed"] == 1
+
+
+def test_solvent_and_qm_changes_are_config_mismatches(tmp_path, counting):
+    cfg = pipeline.BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False,
+                               formats=("xyz",))
+    jobs.run_resumable([from_smiles("CCO", id="ethanol")], cfg, tmp_path)
+    for change in ({"solvent": "water"}, {"qm_method": "hf/sto-3g"}, {"conformer_search": "crest"}):
+        from dataclasses import replace
+
+        with pytest.raises(jobs.ConfigMismatchError):
+            jobs.run_resumable(None, replace(cfg, **change), tmp_path)

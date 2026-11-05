@@ -8,7 +8,7 @@ runs.
 
 This file is the plan. The phases are in [ROADMAP.md](ROADMAP.md) ("Platform and multi-machine track")
 and the work items are in [dev/BACKLOG.md](dev/BACKLOG.md) (`PLAT-*`, `DIST-*`, `FORK-*`). Status as of
-2026-11-04.
+2026-11-05. How to run workers: [WORKERS.md](WORKERS.md).
 
 ## 1. Where each piece runs today
 
@@ -19,11 +19,11 @@ and the work items are in [dev/BACKLOG.md](dev/BACKLOG.md) (`PLAT-*`, `DIST-*`, 
 | GUI: PySide6, PyVista + pyvistaqt 0.12, pyqtgraph | ✅ (pyvistaqt 0.13 crashes on AMD: pinned) | ✅ | 🟡 |
 | RDKit, ASE, pipeline, batches | ✅ | ✅ | 🟡 |
 | PyTorch CPU | ✅ (PyPI CPU build is fast) | ✅ | 🟡 |
-| PyTorch GPU | 🟡 ROCm 7.2.1 sees the RX 9060 XT; no GPU linear algebra (no MAGMA) | 🟡 ROCm on WSL2 fragile for this card | 🟡 MPS: float32 only, no float64 ([1](#sources)) |
-| dxtb GFN1 | ✅ CPU | ✅ CPU | 🟡 CPU; MPS needs FORK-4 |
-| dxtb GFN2, multipoles, IR (libcint) | 🔴 tad-libcint 0.4 has a Windows wheel but needs newer tad-mctc than dxtb 0.4 pins → FORK-1 | ✅ (`tad-libcint<0.4`) | 🔴 same as Windows → FORK-1 |
-| AIMNet2 | ✅ CPU; 🔴 GPU: Warp D3 is CUDA-only → FORK-3 | ✅ CPU · 🟡 CUDA | 🔴 GPU: Warp is CPU-only on macOS ([2](#sources)) → FORK-3 |
-| tblite (in-process GFN2) | 🔴 no PyPI wheel (conda only) → FORK-2 | ✅ | 🟡 PyPI wheel (macOS 15+) |
+| PyTorch GPU | ✅ ROCm 7.2.1 on the RX 9060 XT; no Cholesky/lstsq on the GPU (no MAGMA): `torch_compat` routes them | 🟡 ROCm on WSL2 fragile for this card | 🟡 MPS: float32 only, no float64 ([1](#sources)) |
+| dxtb GFN1 | ✅ CPU; ✅ GPU with routing (FORK-4), but 5-8x slower than the CPU, so off by default | ✅ CPU | 🟡 CPU; MPS routed like ROCm (untested) |
+| dxtb GFN2, multipoles, IR (libcint) | ✅ with the dxtb fork + tad-libcint 0.4 (FORK-1) | ✅ (`tad-libcint<0.4`, or the fork) | 🟡 the fork's CI passes on macOS 14 |
+| AIMNet2 | ✅ CPU; ✅ GPU through the Warp-free `aimnet_torch` (FORK-3), ~10x the CPU | ✅ CPU · 🟡 CUDA | 🟡 GPU through `aimnet_torch` (Warp is CPU-only on macOS, [2](#sources)); untested |
+| tblite (in-process GFN2) | ✅ wheels from the tblite fork's release (FORK-2) | ✅ | 🟡 PyPI wheel (macOS 15+) |
 | xtb program 6.7.1 | 🟡 conda-forge / release zip | ✅ | 🟡 conda-forge osx-arm64 ([3](#sources)) |
 | CREST 3.0.2 | 🔴 no build: WSL (`wsl:`) or ↗ | ✅ | 🟡 conda-forge osx-arm64 ([4](#sources)) |
 | MOPAC 23.2.5 | 🟡 conda-forge / installer | ✅ | 🟡 conda-forge osx-arm64 |
@@ -58,10 +58,15 @@ machine writes a given run folder, the others only read it.
 | Phase | What | How |
 |---|---|---|
 | **M0: works today** | Split a batch by hand | `build --chunk 1/2` on NOVA and `--chunk 2/2` on the Mac, each writing its own run folder in SyncThing, then `merge` |
-| **M1: capability report** (DIST-1) | Each machine publishes `machines/<name>.json` in the synced settings folder: OS, CPU/GPU, engines and programs available, `doctor --bench` throughput per engine | `build --chunk-weights auto` splits a list in proportion to throughput instead of 50/50 |
-| **M2: workers** (DIST-2) | `quantabench-cli worker` on each machine. The GUI or CLI submits jobs to it: inputs + `BuildConfig` + stage | Small HTTP/JSON service bound to the Tailscale address only, with a shared token from settings. The worker runs `jobs.run_resumable` into its own run folder and reports progress. It refuses jobs from a different QuantaBench version, and records its environment in `summary.json` |
-| **M3: GUI and routing** (DIST-3) | "Machines" dock and "Run on: this machine / NOVA / Mac / auto" in the job dialog (UI-5) | An auto scheduler picks the machine per job from M1's report |
+| **M1: capability report** (DIST-1, done) | Each machine publishes `machines/<name>.json` in the synced settings folder: OS, CPU/GPU, engines and programs available, `doctor --bench` throughput per engine | `build --chunk-weights auto` splits a list in proportion to throughput instead of 50/50 |
+| **M2: workers** (DIST-2, done) | `quantabench-cli worker` on each machine. The GUI or CLI submits jobs to it: inputs + `BuildConfig` + stage | Small HTTP/JSON service bound to the Tailscale address only, with a shared token from settings. The worker runs `jobs.run_resumable` into its own run folder and reports progress. It refuses jobs from a different QuantaBench version, and records its environment in `summary.json` |
+| **M3: GUI and routing** (DIST-3, Machines dock done) | "Machines" dock and "Run on: this machine / NOVA / Mac / auto" in the job dialog (UI-5) | An auto scheduler picks the machine per job from M1's report |
 | **M4: stage routing** (DIST-4) | Different stages of one molecule on different machines, e.g. CREST + Psi4 on the Mac, GPU refinement + LAMMPS on NOVA | The handoff is the run folder's artifacts (conformer SDF, cubes); the job table records where each stage ran |
+
+**On one machine** (`dist.lanes`, with any of the phases): `build --lanes auto` runs molecules in parallel
+worker processes that share the CPU threads and the GPU (for example `gpu:1x4,cpu:5x2`: one GPU lane with 4
+threads and five 2-thread CPU lanes). The parent process stays the only writer of `jobs.sqlite`. On NOVA,
+MMFF ran 3.7x and GFN1-xTB 3.45x faster than one process with all 12 threads.
 
 **Frameworks considered:**
 - **Ray:** no. Its multi-node clusters on Windows are "experimental and untested" ([7](#sources)).
@@ -86,22 +91,37 @@ Policy:
 
 | ID | Problem | Route | Unblocks | Acceptance |
 |---|---|---|---|---|
-| **FORK-1** | dxtb 0.4 pins tad-mctc 0.7. tad-libcint 0.4 (Oct 20, 2026), the first with Windows and macOS-arm64 wheels ([8](#sources)), needs tad-mctc ≥ 0.11 | PR to dxtb supporting tad-mctc ≥ 0.11. Interim fork `brandonbtm29/dxtb` (branch `qb/tad-mctc-0.11`) with the API updates. Fallback: backport tad-libcint's Windows/macOS build onto 0.3 | GFN2-xTB, xTB polarizability and IR intensities in dxtb on Windows and macOS; replaces WIN-1 | dxtb test suite + QuantaBench xTB tests pass on all three OSes in CI |
-| **FORK-2** | tblite has no Windows wheel on PyPI | PR to tblite adding Windows wheels (cibuildwheel, MinGW-w64 gfortran). Interim: build them in a `brandonbtm29/quantabench-wheels` repo and attach to releases | In-process GFN2 + ALPB on Windows in the pip venv | `pip install tblite --find-links <release>` works on Windows; tblite tests pass |
-| **FORK-3** | AIMNet2's D3 dispersion and neighbor lists use NVIDIA Warp: CUDA only, CPU only on macOS | Adapter inside QuantaBench: load the model without dispersion, add D3(BJ) from `tad-dftd3` (pure PyTorch); then a PR to `aimnet` making Warp optional. Same work as GPU-1 | AIMNet2 on ROCm (NOVA) and MPS (Mac) | Energies and forces match the stock calculator to 1e-5 eV on CPU; runs on both GPUs |
-| **FORK-4** | dxtb's dense linear algebra fails on these GPUs: Windows ROCm has no MAGMA (cholesky/eigh fail), and MPS has no float64 (its linear-algebra coverage is to be checked op by op) | Device-split wrapper in QuantaBench (tensors on GPU, eigh/cholesky on CPU, small for PFAS-size molecules); then a PR to dxtb for a configurable linalg device. Same work as GPU-2 | dxtb (and batched refinement) on NOVA's GPU and the Mac's GPU | GPU result matches CPU to float32 tolerance; measured speedup reported |
+| **FORK-1** ✅ | dxtb 0.4 pins tad-mctc 0.7. tad-libcint 0.4 (Oct 20, 2026), the first with Windows and macOS-arm64 wheels ([8](#sources)), needs tad-mctc ≥ 0.11 | PR to dxtb supporting tad-mctc ≥ 0.11. Interim fork `brandonbtm29/dxtb` (branch `qb/tad-mctc-0.11`) with the API updates. Fallback: backport tad-libcint's Windows/macOS build onto 0.3 | GFN2-xTB, xTB polarizability and IR intensities in dxtb on Windows and macOS; replaces WIN-1 | dxtb test suite + QuantaBench xTB tests pass on all three OSes in CI |
+| **FORK-2** ✅ | tblite has no Windows wheel on PyPI | PR to tblite adding Windows wheels (cibuildwheel, MinGW-w64 gfortran). Interim: build them in a `brandonbtm29/quantabench-wheels` repo and attach to releases | In-process GFN2 + ALPB on Windows in the pip venv | `pip install tblite --find-links <release>` works on Windows; tblite tests pass |
+| **FORK-3** ✅ (ROCm) | AIMNet2's D3 dispersion and neighbor lists use NVIDIA Warp: CUDA only, CPU only on macOS | Adapter inside QuantaBench: load the model without dispersion, add D3(BJ) from `tad-dftd3` (pure PyTorch); then a PR to `aimnet` making Warp optional. Same work as GPU-1 | AIMNet2 on ROCm (NOVA) and MPS (Mac) | Energies and forces match the stock calculator to 1e-5 eV on CPU; runs on both GPUs |
+| **FORK-4** ✅ | dxtb's dense linear algebra fails on these GPUs: Windows ROCm has no MAGMA (cholesky/eigh fail), and MPS has no float64 (its linear-algebra coverage is to be checked op by op) | Device-split wrapper in QuantaBench (tensors on GPU, eigh/cholesky on CPU, small for PFAS-size molecules); then a PR to dxtb for a configurable linalg device. Same work as GPU-2 | dxtb (and batched refinement) on NOVA's GPU and the Mac's GPU | GPU result matches CPU to float32 tolerance; measured speedup reported |
 | **FORK-5** | CREST has no Windows build | Investigate a win-64 build in the conda-forge `crest` feedstock (MinGW-w64). Until then: WSL (`wsl:`) or route to the Mac (M2). Low priority | Native CREST on Windows | `crest --version` and a test conformer search on win-64 |
 | **FORK-6** | PySCF has no native Windows support | No fork: route PySCF jobs (NMR, later GPU DFT) to the Mac or WSL (M2/M3) | NMR on any GUI machine | — |
 | **FORK-7** | pyvistaqt 0.13's framebuffer widget crashes in `initializeGL` with the AMD driver | Upstream issue with a minimal repro; keep the `<0.13` pin; test 0.13 on macOS | Newer pyvistaqt | Repro filed; pin re-checked each release |
 | **FORK-8** | LAMMPS: the Windows PyPI wheel is non-deterministic (MD-1), and macOS has no GPU build | Compare with `lmp.exe` from the Windows installer. `scripts/build_lammps_macos.sh` for an OpenCL GPU-package build in mixed precision (Apple GPUs have no fp64; mixed mode keeps double accumulation) | Reliable SMD on Windows; LAMMPS GPU on the Mac | Same SMD input gives identical results 20/20; Mac GPU vs CPU speedup measured |
 | **FORK-9** | OpenMM on the Mac's GPU | Evaluate the `openmm-metal` plugin (beta, built from source) against OpenCL for the 0.4 MD bridge | MD on the Mac GPU | Benchmark and a go/no-go note |
 
+Results so far (2026-11-05):
+- **FORK-1:** [brandonbtm29/dxtb](https://github.com/brandonbtm29/dxtb), branch `qb/tad-mctc-0.11`, tag
+  `qb-v0.4.0.post1`. CI green on Ubuntu, Windows and macOS. GFN2 energies, polarizabilities and IR intensities
+  match PyPI's stack to ~1e-8 relative; NOVA matches Linux to 1e-15 to 4e-9.
+  Install: `pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"`.
+- **FORK-2:** [brandonbtm29/tblite](https://github.com/brandonbtm29/tblite), branch `qb/windows-wheels`,
+  release `qb-v0.8.0-win1` (built in the fork, not a separate wheels repo). NOVA reproduces the Linux energies
+  to 1e-14 Eh. Install: `pip install tblite --only-binary tblite --find-links
+  https://github.com/brandonbtm29/tblite/releases/expanded_assets/qb-v0.8.0-win1`.
+- **FORK-3:** in QuantaBench (`chem/aimnet_torch.py`), no fork needed. RX 9060 XT within 7.5e-6 eV of the
+  stock CPU calculator; 8 PFOA conformers refine in 5.7 s on the GPU vs 59.8 s on the CPU.
+- **FORK-4:** in QuantaBench (`chem/torch_compat.py`). Correct on the GPU, but dxtb 0.4 is 5-8x slower there
+  than on NOVA's CPU, so the default keeps dxtb on the CPU.
+- Upstream pull requests for dxtb, tblite and aimnet are drafted; they go out once Brandon approves them.
+
 ## 5. Bringing macOS up (PLAT-1, PLAT-2)
 
-1. **CI.** Add `macos-14` (Apple Silicon) to `.github/workflows/ci.yml`. It is non-blocking at first, then
-   required once green. Add a second job that installs `envs/tools.yml` + `envs/psi4.yml` with micromamba
-   on Ubuntu and macOS and runs `pytest -m external`.
-2. **First run on the MacBook** (needs Brandon), the same steps as INSTALL.md's macOS section:
+1. **CI.** `macos-14` (Apple Silicon) is in `.github/workflows/ci.yml`, non-blocking until green.
+   `.github/workflows/external-engines.yml` installs `envs/tools.yml` + `envs/psi4.yml` with micromamba on
+   Ubuntu and macOS and runs `pytest -m external` (done 2026-11-05).
+2. **First run on the MacBook** (needs Brandon): `scripts/install_macos.sh --with-engines`, then:
    - `doctor --bench`, the full suite and `-m external`
    - GUI checks: HiDPI picking, trackpad gestures (pinch zoom, two-finger rotate), dark mode
 3. **Mac specifics to handle:**
@@ -111,19 +131,19 @@ Policy:
    - sleep while running
 4. **Packaging** (with the 0.5 installers):
    - a `.app` bundle, notarization later
-   - on every OS, the standing requirements for Brandon's apps: an **Update button** (git pull or pip upgrade, then restart) and a **launcher that hides the terminal window**: `pythonw`/GUI-script `.exe` on Windows, `.app`/`.command` on macOS, `.desktop` on Linux
+   - on every OS, the standing requirements for Brandon's apps: an **Update button** (git pull or pip upgrade, then restart) and a **launcher that hides the terminal window**: `pythonw`/GUI-script `.exe` on Windows, `.app`/`.command` on macOS, `.desktop` on Linux. Done 2026-11-05: Help > Check for updates (`quantabench-cli update`) and the launchers the install scripts create
 
 ## 6. Order of work
 
 1. **P1 (0.3):**
-   - PLAT-2 CI on macOS; PLAT-1 first Mac run
+   - PLAT-2 CI on macOS (workflows done; make macOS required once green); PLAT-1 first Mac run
    - M0 documented
-   - FORK-3 and FORK-4 (GPU engines on NOVA and the Mac)
-   - FORK-1 PR/fork (GFN2 everywhere)
+   - ✅ FORK-3 and FORK-4 (GPU engines on NOVA; the Mac's GPU is untested)
+   - ✅ FORK-1 fork (GFN2 everywhere); upstream PR pending
 2. **P2 (0.4):**
-   - DIST-1 capability report + weighted chunks; DIST-2 workers
-   - FORK-2 tblite wheels
-   - ENG-1/ENG-2 Windows external-engine checks
+   - ✅ DIST-1 capability report + weighted chunks; ✅ DIST-2 workers; ✅ lanes on one machine
+   - ✅ FORK-2 tblite wheels
+   - ENG-1/ENG-2 Windows external-engine checks; the first NOVA + MacBook grid run
 3. **P3 (0.5):**
    - DIST-3 GUI routing (with UI-5) and DIST-4 stage routing
    - installers and launchers on all three OSes

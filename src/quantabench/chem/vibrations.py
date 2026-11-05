@@ -950,8 +950,10 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
     timings["hessian"] = time.perf_counter() - t
 
     if ir and use_dxtb and not _has_libcint():
-        warnings.append("IR intensities skipped: dxtb dipole derivatives need the libcint backend "
-                        "(tad-libcint<0.4, Linux/WSL only for now). Frequencies and thermochemistry are unaffected.")
+        from .engines import libcint_status
+
+        warnings.append(f"IR intensities skipped: dxtb dipole derivatives need the libcint backend "
+                        f"({libcint_status()[1]}). Frequencies and thermochemistry are unaffected.")
     elif ir and use_dxtb:
         t = time.perf_counter()
         try:

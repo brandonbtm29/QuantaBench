@@ -71,7 +71,7 @@ STATES = ("queued", "running", "done", "failed", "cancelled", "interrupted")
 FINAL_STATES = ("done", "failed", "cancelled")
 #: BuildConfig fields that only say how fast this machine runs a job. A client normally leaves them out and
 #: the worker uses its own settings; the science fields must be the same on every machine.
-RESOURCE_FIELDS = ("threads", "gpu", "gpu_index", "gpu_memory_fraction")
+RESOURCE_FIELDS = ("threads", "gpu", "gpu_index", "gpu_memory_fraction", "linalg", "dxtb_gpu")
 TAILSCALE_NET4 = ipaddress.ip_network("100.64.0.0/10")
 TAILSCALE_NET6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
 TAILSCALE_PATHS = {
@@ -98,6 +98,8 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "qm_task": ("energy", "optimize"),
     "qm_program": ("psi4",),
     "gpu": ("auto", "on", "off"),
+    "linalg": ("auto", "cpu", "device"),
+    "dxtb_gpu": ("auto", "on", "off"),
 }
 # Inclusive ranges of numeric BuildConfig fields; other numbers only need to be finite.
 RANGES: dict[str, tuple[float, float]] = {
@@ -315,7 +317,8 @@ def build_config(config: dict, output_dir: Path, resources=None):
 
     r = resources or settings_mod.load().resources
     values = {"threads": r.threads, "gpu": r.gpu, "gpu_index": r.gpu_index,
-              "gpu_memory_fraction": r.gpu_memory_fraction}
+              "gpu_memory_fraction": r.gpu_memory_fraction, "linalg": getattr(r, "linalg", "auto"),
+              "dxtb_gpu": getattr(r, "dxtb_gpu", "auto")}
     values.update(config)
     if "formats" in values:
         values["formats"] = tuple(values["formats"])

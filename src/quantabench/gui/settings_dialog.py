@@ -121,6 +121,20 @@ class SettingsDialog(QDialog):
         self.mem.setValue(r.gpu_memory_fraction)
         self.mem.setToolTip("Upper limit on the share of GPU memory PyTorch may allocate")
         form.addRow("GPU memory cap", self.mem)
+        self.dxtb_gpu = QComboBox()
+        self.dxtb_gpu.addItems(["auto", "on", "off"])
+        self.dxtb_gpu.setCurrentText(getattr(r, "dxtb_gpu", "auto") or "auto")
+        self.dxtb_gpu.setToolTip("auto: dxtb (GFN1/GFN2-xTB) uses the GPU only where it has the linear algebra dxtb\n"
+                                 "needs (CUDA); on AMD's Windows ROCm build and Apple GPUs it measured 5-8x slower\n"
+                                 "than the CPU, so it stays on the CPU. on: use the GPU anyway; off: always the CPU.")
+        form.addRow("dxtb on the GPU", self.dxtb_gpu)
+        self.linalg = QComboBox()
+        self.linalg.addItems(["auto", "cpu", "device"])
+        self.linalg.setCurrentText(getattr(r, "linalg", "auto") or "auto")
+        self.linalg.setToolTip("Dense linear algebra a GPU build lacks (Cholesky on Windows ROCm, most of it on MPS):\n"
+                               "auto: run just those operations on the CPU; cpu: all of them on the CPU;\n"
+                               "device: never route (errors where the GPU lacks them).")
+        form.addRow("GPU linear algebra", self.linalg)
         self._report = report
         self.lanes = QComboBox()
         self.lanes.setEditable(True)
@@ -371,6 +385,8 @@ class SettingsDialog(QDialog):
         s.resources.gpu = self.gpu.currentText()
         s.resources.gpu_index = int(self.gpu_index.currentData() or 0)
         s.resources.gpu_memory_fraction = self.mem.value()
+        s.resources.dxtb_gpu = self.dxtb_gpu.currentText()
+        s.resources.linalg = self.linalg.currentText()
         from ..dist import lanes as lanes_mod
 
         lanes = self.lanes.currentText().strip().lower() or "1"

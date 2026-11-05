@@ -13,6 +13,17 @@
     quantabench-cli md smd --system pfoa_graphite.extxyz -o DIR [--gpu] [--run]
     quantabench-cli md parse DIR
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
+    quantabench-cli update [--check]                                            # git pull + reinstall if needed
+
+Splitting work (``quantabench.dist``):
+
+    quantabench-cli build --file cohort.xlsx --method gfn1-xtb --lanes auto     # parallel processes here
+    quantabench-cli lanes auto                                                  # what a lane spec means here
+    quantabench-cli machines [--refresh] [--bench mmff,gfn1-xtb]                # machine registry + throughput
+    quantabench-cli build --file cohort.xlsx --method mmff --chunk-weights auto # this machine's weighted share
+    quantabench-cli worker                                                      # serve jobs over Tailscale
+    quantabench-cli grid build --file cohort.xlsx --method gfn2-xtb --machines btm-nova,local --wait
+    quantabench-cli grid status|cancel|merge GRID_ID
 
 Batch runs: ``build`` uses the resumable job table (``chem.jobs``: ``jobs.sqlite`` in the run folder)
 whenever more than one molecule is built or ``--run-dir``/``--resume``/``--chunk`` is given, so an
@@ -72,6 +83,11 @@ def _doctor(args) -> int:
         print(f"    {'OK ' if ok else '-- '} {info.label:30s} {why}")
     for name, err in engines.PLUGIN_ERRORS.items():
         print(f"    !!  plugin {name}: {err}")
+    gpu_devs = [f"cuda:{g.index}" if g.backend in ("cuda", "rocm") else g.backend for g in rep.gpus]
+    if gpu_devs:
+        print("  GPU engines")
+        for dev in gpu_devs:
+            _doctor_gpu_engines(dev)
     from .chem import external
 
     print("  External programs")
@@ -95,6 +111,27 @@ def _doctor(args) -> int:
         else:
             _bench(rep)
     return 1 if broken else 0
+
+
+def _doctor_gpu_engines(dev: str) -> None:
+    """Where AIMNet2 and dxtb run when given ``dev`` (no model weights loaded, no dxtb run)."""
+    from .chem import engines, torch_compat
+
+    if engines.available("aimnet2")[0]:
+        try:
+            from .chem import aimnet_torch
+
+            backend, why = aimnet_torch.choose_backend(dev)
+            label = "stock aimnet (NVIDIA Warp)" if backend == "stock" else "Warp-free aimnet_torch"
+            print(f"    {dev:8s} AIMNet2: {label}" + (f" ({why})" if why else ""))
+        except Exception as exc:
+            print(f"    {dev:8s} AIMNet2: cannot check ({type(exc).__name__}: {exc})")
+    if engines.available("gfn1-xtb")[0]:
+        try:
+            run_on, why = torch_compat.dxtb_device(dev)
+            print(f"    {dev:8s} dxtb: " + (torch_compat.describe(dev) if run_on == dev else why))
+        except Exception as exc:
+            print(f"    {dev:8s} dxtb: cannot check ({type(exc).__name__}: {exc})")
 
 
 def _bench(rep) -> None:
@@ -169,6 +206,10 @@ def _config(args, base=None, **extra):
     return cfg
 
 
+read_inputs = _read_inputs      # public names for quantabench.dist (grid build)
+config_from_args = _config
+
+
 def _progress(i, n, stage, ident):
     if stage == "start":
         print(f"[{i + 1}/{n}] {ident}")
@@ -219,13 +260,18 @@ def _build(args) -> int:
             if chunk:
                 label += f"_{jobs.chunk_label(chunk)}_{socket.gethostname()}"
             run_dir = new_run_dir(cfg.output_dir or settings_mod.load().output_path(), label)
-        try:
-            from .dist import lanes as lanes_mod
+        from .dist import lanes as lanes_mod
 
-            spec = args.lanes or settings_mod.load().dist.lanes
+        spec = args.lanes or settings_mod.load().dist.lanes
+        try:
+            lanes = lanes_mod.parse_lanes(spec, cfg)
+        except ValueError as exc:
+            print(f"--lanes {spec}: {exc}", file=sys.stderr)
+            return 2
+        try:
             results, out = jobs.run_resumable(items or None, cfg, run_dir, progress=_progress, log=print,
                                               retry_failed=args.retry_failed, chunk=chunk, force=args.force,
-                                              lanes=lanes_mod.parse_lanes(spec, cfg))
+                                              lanes=lanes)
         except (jobs.ConfigMismatchError, jobs.RunInUseError) as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -561,6 +607,71 @@ def export_formats() -> list[str]:
     return ["xyz", "xyz-all", "extxyz", "sdf", "pdb", "mol", "lammps", "spectrum"]
 
 
+def add_input_args(q: argparse.ArgumentParser) -> None:
+    """Molecule inputs (positional SMILES/names, --file and its column options); read by ``read_inputs``."""
+    q.add_argument("molecules", nargs="*", help="SMILES (optionally 'SMILES id') or names to look up in PubChem")
+    q.add_argument("--file", action="append",
+                   help="SDF, MOL, XYZ, PDB, SMI, CSV or Excel (.xlsx/.xlsm) file (repeatable)")
+    q.add_argument("--smiles-col"), q.add_argument("--id-col")
+    q.add_argument("--sheet", help="Excel sheet name or 0-based index (default: the first sheet)")
+    q.add_argument("--smiles-pref", choices=["smiles", "qsar", "ms"],
+                   help="which SMILES column of a CompTox export to prefer (falls back row by row)")
+
+
+def add_engine_args(q: argparse.ArgumentParser, *, method_help: str | None = None, threads_help: str | None = None,
+                    gpu_help: str | None = None, out_help: str | None = None) -> None:
+    """Engine, solvent, optimizer and resources; the help texts can be adapted (``grid build``)."""
+    q.add_argument("--method", choices=method_choices(), help=method_help)
+    q.add_argument("--solvent", help="implicit solvent for engines that have one (water, octanol, ...; "
+                                     "'none' = gas phase)")
+    q.add_argument("--optimizer", choices=["lbfgs", "fire", "native"],
+                   help="native = the engine's own optimizer (xtb, MOPAC) when it has one")
+    q.add_argument("--fmax", type=float, help="force convergence, eV/Å")
+    q.add_argument("--threads", type=int, help=threads_help or "CPU threads (0 = all but one)")
+    q.add_argument("--gpu", choices=["auto", "on", "off"], help=gpu_help)
+    q.add_argument("--out", help=out_help or "output folder (default from settings)")
+
+
+def add_freq_args(q: argparse.ArgumentParser) -> None:
+    q.add_argument("--freq-hessian", choices=["auto", "analytic", "finite"],
+                   help="auto = analytic (dxtb) when it fits in memory, else finite differences")
+    q.add_argument("--symmetry-number", type=int,
+                   help="rotational symmetry number σ for every molecule (default 0: detected per molecule "
+                        "from its point group)")
+    q.add_argument("--temperature", type=float, help="K, for Boltzmann weights and thermochemistry")
+
+
+def add_build_science_args(q: argparse.ArgumentParser) -> None:
+    """The science options of ``build`` beyond the engine ones (``config_from_args`` reads them); shared with
+    ``grid build`` so both accept the same settings."""
+    q.add_argument("--ph", type=float)
+    q.add_argument("--conformers", choices=["rdkit", "crest"],
+                   help="conformer search: RDKit ETKDGv3 + MMFF94s (default) or CREST iMTD-GC (external)")
+    q.add_argument("--crest-method", choices=["gfn2", "gfnff", "gfn2//gfnff", "gfn1"])
+    q.add_argument("--crest-full", action="store_true", help="full CREST run instead of --quick (much slower)")
+    q.add_argument("--qm", metavar="FUNCTIONAL/BASIS",
+                   help="QM stage with Psi4 on the lowest conformers, e.g. wb97x-d/def2-svp")
+    q.add_argument("--qm-task", choices=["energy", "optimize"], help="QM single point (default) or optimization")
+    q.add_argument("--qm-top", type=int, help="number of lowest conformers for the QM stage (default 1)")
+    q.add_argument("--qm-freq", action=argparse.BooleanOptionalAction, default=None,
+                   help="QM frequencies + IR + thermochemistry of the best QM conformer")
+    q.add_argument("--cubes", action=argparse.BooleanOptionalAction, default=None,
+                   help="QM density + ESP cubes and molecular-surface (GIPF) descriptors")
+    q.add_argument("--protonate", action=argparse.BooleanOptionalAction, default=None,
+                   help="assign the charge state at --ph (--no-protonate keeps the input's; default from settings)")
+    q.add_argument("--protonation", choices=["rules", "dimorphite"])
+    q.add_argument("--max-confs", type=int)
+    q.add_argument("--refine-top", type=int)
+    q.add_argument("--window", type=float, help="energy window, kcal/mol")
+    q.add_argument("--formats", help="comma list: " + ",".join(export_formats()))
+    q.add_argument("--batched", choices=["auto", "on", "off"],
+                   help="refine all conformers in one torch batch (auto: only on a GPU)")
+    q.add_argument("--freq", action=argparse.BooleanOptionalAction, default=None,
+                   help="frequencies, IR and thermochemistry of the best conformer (adds the 'spectrum' format); "
+                        "default from settings")
+    add_freq_args(q)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="quantabench-cli", description="QuantaBench command line tools")
     p.add_argument("--version", action="version", version=f"QuantaBench {__version__}")
@@ -571,70 +682,17 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--json", action="store_true")
     d.set_defaults(func=_doctor)
 
-    def inputs_args(q):
-        q.add_argument("molecules", nargs="*", help="SMILES (optionally 'SMILES id') or names to look up in PubChem")
-        q.add_argument("--file", action="append",
-                       help="SDF, MOL, XYZ, PDB, SMI, CSV or Excel (.xlsx/.xlsm) file (repeatable)")
-        q.add_argument("--smiles-col"), q.add_argument("--id-col")
-        q.add_argument("--sheet", help="Excel sheet name or 0-based index (default: the first sheet)")
-        q.add_argument("--smiles-pref", choices=["smiles", "qsar", "ms"],
-                       help="which SMILES column of a CompTox export to prefer (falls back row by row)")
-
-    def engine_args(q):
-        q.add_argument("--method", choices=method_choices())
-        q.add_argument("--solvent", help="implicit solvent for engines that have one (water, octanol, ...; "
-                                         "'none' = gas phase)")
-        q.add_argument("--optimizer", choices=["lbfgs", "fire", "native"],
-                       help="native = the engine's own optimizer (xtb, MOPAC) when it has one")
-        q.add_argument("--fmax", type=float, help="force convergence, eV/Å")
-        q.add_argument("--threads", type=int, help="CPU threads (0 = all but one)")
-        q.add_argument("--gpu", choices=["auto", "on", "off"])
-        q.add_argument("--out", help="output folder (default from settings)")
-
-    def freq_args(q):
-        q.add_argument("--freq-hessian", choices=["auto", "analytic", "finite"],
-                       help="auto = analytic (dxtb) when it fits in memory, else finite differences")
-        q.add_argument("--symmetry-number", type=int,
-                       help="rotational symmetry number σ for every molecule (default 0: detected per molecule "
-                            "from its point group)")
-        q.add_argument("--temperature", type=float, help="K, for Boltzmann weights and thermochemistry")
-
     b = sub.add_parser("build", help="SMILES/name/file -> conformers -> optimized geometries + descriptors",
                        description="Batches (more than one molecule, or --run-dir/--resume/--chunk) run through "
                                    "the resumable job table in the run folder.")
-    inputs_args(b)
-    engine_args(b)
-    b.add_argument("--ph", type=float)
+    add_input_args(b)
+    add_engine_args(b)
+    add_build_science_args(b)
     b.add_argument("--lanes", help="parallel worker processes on this machine: 1 (default), auto, N, or a list "
                                    "like gpu:1x4,cpu:5x2 (lanes x threads each); see docs/PLATFORMS.md")
     b.add_argument("--chunk-weights", metavar="SPEC",
                    help="with --chunk: weighted split, e.g. 3,1 or auto (from the machine registry's "
                         "throughput); see `quantabench-cli machines`")
-    b.add_argument("--conformers", choices=["rdkit", "crest"],
-                   help="conformer search: RDKit ETKDGv3 + MMFF94s (default) or CREST iMTD-GC (external)")
-    b.add_argument("--crest-method", choices=["gfn2", "gfnff", "gfn2//gfnff", "gfn1"])
-    b.add_argument("--crest-full", action="store_true", help="full CREST run instead of --quick (much slower)")
-    b.add_argument("--qm", metavar="FUNCTIONAL/BASIS",
-                   help="QM stage with Psi4 on the lowest conformers, e.g. wb97x-d/def2-svp")
-    b.add_argument("--qm-task", choices=["energy", "optimize"], help="QM single point (default) or optimization")
-    b.add_argument("--qm-top", type=int, help="number of lowest conformers for the QM stage (default 1)")
-    b.add_argument("--qm-freq", action=argparse.BooleanOptionalAction, default=None,
-                   help="QM frequencies + IR + thermochemistry of the best QM conformer")
-    b.add_argument("--cubes", action=argparse.BooleanOptionalAction, default=None,
-                   help="QM density + ESP cubes and molecular-surface (GIPF) descriptors")
-    b.add_argument("--protonate", action=argparse.BooleanOptionalAction, default=None,
-                   help="assign the charge state at --ph (--no-protonate keeps the input's; default from settings)")
-    b.add_argument("--protonation", choices=["rules", "dimorphite"])
-    b.add_argument("--max-confs", type=int)
-    b.add_argument("--refine-top", type=int)
-    b.add_argument("--window", type=float, help="energy window, kcal/mol")
-    b.add_argument("--formats", help="comma list: " + ",".join(export_formats()))
-    b.add_argument("--batched", choices=["auto", "on", "off"],
-                   help="refine all conformers in one torch batch (auto: only on a GPU)")
-    b.add_argument("--freq", action=argparse.BooleanOptionalAction, default=None,
-                   help="frequencies, IR and thermochemistry of the best conformer (adds the 'spectrum' format); "
-                        "default from settings")
-    freq_args(b)
     b.add_argument("--run-dir", help="run folder for the job table (created if missing; continues if present)")
     b.add_argument("--resume", metavar="RUN_DIR", help="continue an interrupted run with its stored settings")
     b.add_argument("--chunk", metavar="K/N", help="build only chunk K of N (1-based) of the list, e.g. 2/3")
@@ -654,9 +712,9 @@ def build_parser() -> argparse.ArgumentParser:
                         description="Builds each molecule (conformer search + refinement with --method), then "
                                     "analyzes its best conformer. With --as-is, structure files are analyzed "
                                     "as given (after a tight re-optimization unless --no-opt).")
-    inputs_args(fq)
-    engine_args(fq)
-    freq_args(fq)
+    add_input_args(fq)
+    add_engine_args(fq)
+    add_freq_args(fq)
     fq.add_argument("--max-confs", type=int)
     fq.add_argument("--refine-top", type=int)
     fq.add_argument("--as-is", action="store_true", help="use the geometry in --file directly (no conformer search)")

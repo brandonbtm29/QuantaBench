@@ -69,3 +69,23 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - Facts checked: MPS has no float64; Warp is CUDA-only, CPU-only on macOS; tad-libcint 0.4.0 (2026-10-20)
   ships Windows and macOS-arm64 wheels but dxtb 0.4 pins tad-mctc 0.7; PySCF has no native Windows
   support; Ray multi-node on Windows is experimental.
+
+## 2026-11-05: work splitting (lanes, machine registry, workers) and the platform forks
+- Eight parallel builders (all on branches from the `quantabench.dist` contract commit), merged with
+  integration fixes: `JobStore.record_crash`, science fields for solvent/CREST/QM, thread caps that no
+  longer import torch, one `--weights` rule set for `build --chunk-weights` and `grid build`
+  (`plan.parse_weights`), shared CLI argument groups, float64 AIMNet2 energies in batched refinement,
+  `resources.linalg`/`dxtb_gpu` settings (also carried to lanes and workers), Machines dock.
+- Measured on BTM NOVA: lanes MMFF 43.4 -> 11.7 s (24 PFAS), GFN1-xTB 172 -> 49.9 s (12 PFAS, 6 x 2);
+  AIMNet2 on the RX 9060 XT through the Warp-free path, 8 PFOA conformers 5.7 s vs 59.8 s on the CPU;
+  dxtb on the GPU with routed Cholesky matches the CPU but is 5-8x slower (host syncs in dxtb's overlap
+  integrals), so it stays on the CPU by default.
+- Found a stock aimnet 0.2 bug: `AdaptiveNeighborList` shrinks after small molecules and waits for an
+  overflow error nvalchemiops 0.5 never raises, so larger molecules later in the same process lost
+  neighbors (PFOA 3.2 eV, PFOS 7.6 eV off on NOVA's CPU). Fixed by `aimnet_torch.guard_neighbor_lists`.
+  Earlier multi-molecule AIMNet2 CPU runs should be redone. Upstream issue/PR drafted, not posted.
+- Forks: `brandonbtm29/dxtb` (tad-mctc 0.11 + tad-libcint 0.4; CI green on Linux, Windows, macOS) and
+  `brandonbtm29/tblite` (Windows wheels, release `qb-v0.8.0-win1`). Upstream PR texts drafted, not posted.
+- Left for Brandon: first MacBook install and a NOVA + MacBook `grid build` over Tailscale; disable the
+  upstream workflows that run in the tblite fork; approve the upstream PRs.
+

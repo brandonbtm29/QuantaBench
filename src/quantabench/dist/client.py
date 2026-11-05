@@ -21,7 +21,6 @@ import csv
 import dataclasses
 import ipaddress
 import json
-import math
 import os
 import secrets
 import shutil
@@ -430,53 +429,94 @@ class GridRun:
         return f"{total}/{len(self.ids)} done: " + " | ".join(parts)
 
 
+def _target_profiles(names: Sequence[str], refs: dict[str, WorkerRef]) -> dict[str, object]:
+    """{grid target: MachineProfile or None}: what a worker reports beats the registry copy (it is fresher)."""
+    from . import plan, profile
+
+    registry = {plan.norm_name(p.name): p for p in profile.load_profiles()}
+    out: dict[str, object] = {}
+    for n in names:
+        ref = refs.get(n)
+        p = None
+        if ref is not None and ref.info and isinstance(ref.info.get("profile"), dict):
+            with contextlib.suppress(Exception):
+                p = profile.MachineProfile.from_dict(ref.info["profile"])
+        if p is None:
+            p = registry.get(plan.norm_name(profile.machine_name() if n == LOCAL else n))
+        if p is None and n == LOCAL:
+            with contextlib.suppress(Exception):
+                p = profile.local_profile()
+        out[n] = p
+    return out
+
+
 def resolve_weights(spec: str | None, names: Sequence[str], method: str, refs: dict[str, WorkerRef],
                     log: Callable[[str], None] = _noop) -> dict[str, float]:
-    """``"3,1"`` (one weight per machine, in order) or ``"auto"``: ``plan.parse_weights`` when it exists,
-    else each machine's measured throughput for ``method`` (profile ``throughput``), else equal weights."""
+    """``{target: weight}`` for ``grid build --weights``, with ``plan.parse_weights`` rules:
+
+    - ``"3,1"``: one weight per machine, in ``--machines`` order;
+    - ``"btm-nova=3,local=1"``: named (every machine once; "local" or this machine's name for this one);
+    - ``"auto"`` (default): each machine's measured throughput for ``method`` from the profile its worker
+      reports (else the registry copy), an estimate from its core count without a benchmark, 0 where the
+      method is unavailable (``plan.auto_weight``). A target without any profile gets the mean of the others.
+    """
     from . import plan, profile
 
     spec = (spec or "auto").strip()
-    fn = getattr(plan, "parse_weights", None)
-    if fn is not None:
-        try:
-            got = fn(spec, list(names), method=method)
-            w = dict(got) if isinstance(got, dict) else dict(zip(names, got))
-            if (set(w) == set(names) and all(isinstance(v, (int, float)) and v >= 0 for v in w.values())
-                    and sum(w.values()) > 0):
-                return {n: float(w[n]) for n in names}
-        except Exception as exc:  # an unexpected signature or a bad spec: fall back to the rules below
-            log(f"plan.parse_weights({spec!r}) failed ({exc}); using the built-in rules")
-    if spec != "auto":
-        try:
-            values = [float(x) for x in spec.split(",")]
-        except ValueError:
-            raise GridError(f"--weights must be auto or one number per machine like 3,1, not {spec!r}") from None
-        if (len(values) != len(names) or any(not math.isfinite(v) or v < 0 for v in values)
-                or sum(values) <= 0):
-            raise GridError(f"--weights {spec!r}: need {len(names)} non-negative numbers (one per machine: "
-                            f"{', '.join(names)}) with a positive sum")
-        return dict(zip(names, values))
-    registry = {p.name: p for p in profile.load_profiles()}
-    found: dict[str, float | None] = {}
-    for n in names:
-        t = None
-        ref = refs.get(n)
-        if ref is not None and ref.info and isinstance(ref.info.get("profile"), dict):
-            t = profile.throughput_for(profile.MachineProfile.from_dict(ref.info["profile"]), method)
-        key = profile.machine_name() if n == LOCAL else n
-        if t is None and key in registry:
-            t = profile.throughput_for(registry[key], method)
-        found[n] = t if t and t > 0 else None
-    known = [v for v in found.values() if v]
-    if not known:
-        log(f"No measured throughput for {method} on these machines (`machines --bench`): equal weights")
-        return dict.fromkeys(names, 1.0)
-    mean = sum(known) / len(known)
-    missing = [n for n, v in found.items() if not v]
-    if missing:
-        log(f"No measured throughput for {method} on {', '.join(missing)}: using the mean of the others")
-    return {n: float(found[n] or mean) for n in names}
+    profiles = _target_profiles(names, refs)
+    if spec.lower() == "auto":
+        if not method or method == "auto":
+            raise GridError("--weights auto needs an explicit --method (throughputs are per engine)")
+        found: dict[str, float | None] = {}
+        for n in names:
+            p = profiles.get(n)
+            if p is None:
+                found[n] = None
+                continue
+            w, source = plan.auto_weight(p, method)
+            found[n] = w
+            if not source.startswith("benchmark"):
+                log(f"{n}: weight {w:g} ({source})")
+        known = [v for v in found.values() if v is not None]
+        if not known or sum(known) <= 0:
+            if known:
+                raise GridError(f"none of {', '.join(names)} can run {method}")
+            log(f"No profile for {', '.join(names)} (`machines --refresh --bench {method}`): equal weights")
+            return dict.fromkeys(names, 1.0)
+        missing = [n for n, v in found.items() if v is None]
+        if missing:
+            mean = sum(known) / len(known)
+            log(f"No profile for {', '.join(missing)}: using the mean of the others ({mean:g})")
+            found = {n: (mean if v is None else v) for n, v in found.items()}
+        return {n: float(found[n]) for n in names}
+    try:
+        parsed = plan.parse_weights(spec, method, [p for p in profiles.values() if p is not None])
+    except ValueError as exc:
+        raise GridError(str(exc).replace("--chunk-weights", "--weights")) from None
+    if not parsed.named:
+        if len(parsed) != len(names):
+            raise GridError(f"--weights {spec!r}: need {len(names)} weights (one per machine: {', '.join(names)})")
+        out = dict(zip(names, parsed.values_list))
+    else:
+        key: dict[str, str] = {}
+        for n in names:
+            key[plan.norm_name(n)] = n
+            if n == LOCAL:
+                key.setdefault(plan.norm_name(profile.machine_name()), n)
+        unknown = [k for k in parsed if k not in key]
+        if unknown:
+            raise GridError(f"--weights names {', '.join(unknown)}, which are not in --machines ({', '.join(names)})")
+        out = dict.fromkeys(names, None)
+        for k, v in parsed.items():
+            out[key[k]] = float(v)
+        missing = [n for n, v in out.items() if v is None]
+        if missing:
+            raise GridError(f"--weights {spec!r}: no weight for {', '.join(missing)} (give every machine one)")
+    for note in getattr(parsed, "notes", []):
+        log(f"note: {note}")
+    if sum(out.values()) <= 0:
+        raise GridError(f"--weights {spec!r}: at least one weight must be positive")
+    return {n: float(out[n]) for n in names}
 
 
 class _LocalTarget:
@@ -817,45 +857,17 @@ def refresh(grid: GridRun, token: str, allow_any_host: bool = False) -> dict[str
 
 # =========================================================================================== CLI
 def _build_args(b: argparse.ArgumentParser) -> None:
-    """The input and science options of ``build`` (kept in step with cli.build_parser)."""
+    """The input and science options of ``build`` (the same argument groups as ``cli.build_parser``)."""
     from .. import cli as cli_mod
 
-    b.add_argument("molecules", nargs="*", help="SMILES (optionally 'SMILES id') or names to look up in PubChem")
-    b.add_argument("--file", action="append",
-                   help="SDF, MOL, XYZ, PDB, SMI, CSV or Excel (.xlsx/.xlsm) file (repeatable)")
-    b.add_argument("--smiles-col"), b.add_argument("--id-col")
-    b.add_argument("--sheet", help="Excel sheet name or 0-based index (default: the first sheet)")
-    b.add_argument("--smiles-pref", choices=["smiles", "qsar", "ms"])
-    b.add_argument("--method", choices=cli_mod.method_choices(),
-                   help="refinement engine; required in practice: 'auto' may differ between machines")
-    b.add_argument("--solvent")
-    b.add_argument("--optimizer", choices=["lbfgs", "fire", "native"])
-    b.add_argument("--fmax", type=float, help="force convergence, eV/Å")
-    b.add_argument("--threads", type=int, help="CPU threads on every machine (default: each machine's settings)")
-    b.add_argument("--gpu", choices=["auto", "on", "off"], help="GPU policy on every machine (default: each "
-                                                                "machine's settings)")
-    b.add_argument("--out", help="this machine's output folder for the grid record, the merged tables and the "
-                                 "local share (default from settings)")
-    b.add_argument("--ph", type=float)
-    b.add_argument("--conformers", choices=["rdkit", "crest"])
-    b.add_argument("--crest-method", choices=["gfn2", "gfnff", "gfn2//gfnff", "gfn1"])
-    b.add_argument("--crest-full", action="store_true")
-    b.add_argument("--qm", metavar="FUNCTIONAL/BASIS")
-    b.add_argument("--qm-task", choices=["energy", "optimize"])
-    b.add_argument("--qm-top", type=int)
-    b.add_argument("--qm-freq", action=argparse.BooleanOptionalAction, default=None)
-    b.add_argument("--cubes", action=argparse.BooleanOptionalAction, default=None)
-    b.add_argument("--protonate", action=argparse.BooleanOptionalAction, default=None)
-    b.add_argument("--protonation", choices=["rules", "dimorphite"])
-    b.add_argument("--max-confs", type=int)
-    b.add_argument("--refine-top", type=int)
-    b.add_argument("--window", type=float, help="energy window, kcal/mol")
-    b.add_argument("--formats", help="comma list: " + ",".join(cli_mod.export_formats()))
-    b.add_argument("--batched", choices=["auto", "on", "off"])
-    b.add_argument("--freq", action=argparse.BooleanOptionalAction, default=None)
-    b.add_argument("--freq-hessian", choices=["auto", "analytic", "finite"])
-    b.add_argument("--symmetry-number", type=int)
-    b.add_argument("--temperature", type=float, help="K")
+    cli_mod.add_input_args(b)
+    cli_mod.add_engine_args(
+        b, method_help="refinement engine; required in practice: 'auto' may differ between machines",
+        threads_help="CPU threads on every machine (default: each machine's settings)",
+        gpu_help="GPU policy on every machine (default: each machine's settings)",
+        out_help="this machine's output folder for the grid record, the merged tables and the local share "
+                 "(default from settings)")
+    cli_mod.add_build_science_args(b)
 
 
 def _worker_opts(p: argparse.ArgumentParser) -> None:
@@ -902,11 +914,11 @@ def _cli_build(args) -> int:
     from .. import cli as cli_mod
 
     try:
-        items = cli_mod._read_inputs(args)
+        items = cli_mod.read_inputs(args)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
-    cfg = cli_mod._config(args)
+    cfg = cli_mod.config_from_args(args)
     keep = tuple(name for name, value in (("threads", args.threads), ("gpu", args.gpu)) if value is not None)
     machines = [m for m in (args.machines or "").split(",") if m.strip()]
     try:

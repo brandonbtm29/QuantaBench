@@ -205,11 +205,19 @@ allow the Python environment, or use WSL2/Linux.
 
 ### What the AMD GPU can do today (Windows, ROCm 7.2.1)
 
-PyTorch sees the card, but no QuantaBench engine uses it yet: AMD's Windows PyTorch lacks GPU linear
-algebra (MAGMA), which dxtb needs, and AIMNet2's dispersion runs through NVIDIA-only Warp kernels
-(backlog GPU-1/GPU-2). AMD's wheel also has a much slower CPU math library than PyPI's CPU build. Until
-that changes, keep the CPU build in `.venv` for everyday work and install ROCm into a second
-environment (`py -3.12 -m venv .venv-rocm`) for GPU experiments.
+- **AIMNet2 runs on the GPU** (measured on an RX 9060 XT: about 10x faster than the 12-core CPU for a
+  batch of PFOA conformers). aimnet's own calculator needs NVIDIA Warp, which only supports CUDA, so
+  QuantaBench switches to its Warp-free path (`chem/aimnet_torch.py`, dispersion from `tad-dftd3`) on
+  ROCm and Apple GPUs. `quantabench-cli doctor` shows which path each device gets;
+  `QUANTABENCH_AIMNET_BACKEND=stock|torch` forces one.
+- **dxtb (GFN1/GFN2-xTB) stays on the CPU by default.** AMD's Windows PyTorch has no GPU Cholesky (no
+  MAGMA); QuantaBench can run those steps on the CPU inside a GPU calculation, and the results match,
+  but dxtb 0.4 measured 5-8x slower on this GPU than on the CPU. Settings > Compute > "dxtb on the
+  GPU" (or `QUANTABENCH_DXTB_GPU=on`) uses the GPU anyway.
+- AMD's wheel has a much slower CPU math library than PyPI's CPU build (52 vs 881 GFLOP/s matmul on
+  NOVA). So keep the CPU build in `.venv` for CPU work (MMFF, dxtb, xtb) and the ROCm build in
+  `.venv-rocm` for AIMNet2 on the GPU: `scripts\install_windows.ps1 -Gpu rocm` sets up both (backlog
+  PERF-1 tracks which should be the default).
 
 ### What native Windows can't do yet
 
@@ -325,7 +333,7 @@ program are in [ENGINES.md](ENGINES.md).
 
 | Extra | Installs | Enables |
 |---|---|---|
-| `ml` | `aimnet` | AIMNet2 ML potential (downloads model weights on first use) |
+| `ml` | `aimnet`, `tad-dftd3` | AIMNet2 ML potential (downloads model weights on first use); `tad-dftd3` for its GPU path on AMD and Apple GPUs |
 | `xtb` | `dxtb`, `tblite` (Windows: separate line, step 4 above) | GFN1-xTB (dxtb), GFN2-xTB in process (tblite; dxtb with `tad-libcint`, see [above](#dxtbs-libcint-backend-gfn2-polarizability-ir-intensities)) |
 | `interop` | `cclib` | Import Gaussian/ORCA/Psi4/xtb/MOPAC output files |
 | `protonate` | `dimorphite-dl` | Alternative pH protonation |

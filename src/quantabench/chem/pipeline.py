@@ -78,6 +78,8 @@ class BuildConfig:
     gpu: str = "auto"
     gpu_index: int = 0
     gpu_memory_fraction: float = 0.9
+    linalg: str = "auto"                  # torch_compat linear-algebra policy: "auto" | "cpu" | "device"
+    dxtb_gpu: str = "auto"                # dxtb on a GPU: "auto" (where it is faster) | "on" | "off"
     output_dir: str = ""
     formats: tuple[str, ...] = export.DEFAULT_FORMATS
     write_files: bool = True
@@ -89,7 +91,8 @@ class BuildConfig:
                   max_conformers=b.max_conformers, energy_window_kcal=b.energy_window_kcal,
                   rmsd_threshold=b.rmsd_threshold, fmax=b.fmax, max_steps=b.max_steps, temperature_k=b.temperature_k,
                   seed=b.random_seed, batched=b.batched, frequencies=b.frequencies, threads=r.threads, gpu=r.gpu, gpu_index=r.gpu_index,
-                  gpu_memory_fraction=r.gpu_memory_fraction, output_dir=str(s.output_path()),
+                  gpu_memory_fraction=r.gpu_memory_fraction, linalg=r.linalg, dxtb_gpu=r.dxtb_gpu,
+                  output_dir=str(s.output_path()),
                   conformer_search=b.conformer_search, solvent=b.solvent, qm_method=b.qm_method)
         return replace(cfg, **overrides)
 
@@ -389,6 +392,11 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
     result = MoleculeResult(input=inp, multiplicity=inp.multiplicity, device=device)
     t = time.perf_counter()
     try:
+        if device != "cpu":   # GPU policies for dxtb (also set in lane processes, which get cfg, not settings)
+            from . import torch_compat
+
+            torch_compat.set_policy(cfg.linalg)
+            torch_compat.set_dxtb_gpu(cfg.dxtb_gpu)
         stage("prepare")
         prepared, notes = prepare(inp.to_mol(), cfg.ph if cfg.protonate else None, cfg.keep_largest_fragment,
                                   cfg.protonation_method)
@@ -439,6 +447,15 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             result.method = candidate
             result.solvent = _solvent_for(candidate, solvent, result.notes if n_try else [])
             result.device = device if engines.ENGINES[candidate].gpu_capable else "cpu"
+            if candidate in ("gfn1-xtb", "gfn2-xtb") and result.device != "cpu":
+                from . import torch_compat
+
+                run_on, why = torch_compat.dxtb_device(result.device)   # CPU where dxtb is slower on the GPU
+                if why:
+                    result.device = run_on
+                    if why not in result.notes:
+                        result.notes.append(why)
+                        log(f"  {why}")
             refine = batch_opt.refine_batched if use_batched(cfg, candidate, result.device) else _refine
             if refine is not _refine:
                 log(f"  batched refinement of {min(len(cs.conf_ids), max(1, cfg.refine_top))} conformers "
