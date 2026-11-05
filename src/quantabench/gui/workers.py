@@ -15,13 +15,18 @@ class BuildWorker(QObject):
     finished = Signal(list, object)            # results, run_dir (Path | None)
     failed = Signal(str)
 
-    def __init__(self, inputs, cfg, lanes=None):
+    def __init__(self, inputs, cfg, lanes=None, run_dir=None):
         """``lanes``: a lane spec ("1", "auto", "4", "gpu:1x4,cpu:5x2"), a list of ``dist.lanes.Lane``, or
-        None for this machine's "Parallel lanes" setting (``Settings.lanes_for``)."""
+        None for this machine's "Parallel lanes" setting (``Settings.lanes_for``).
+
+        ``inputs``: the molecules, a callable returning them (called on the worker thread, e.g. to read
+        thousands of stored inputs from a job table), or None with ``run_dir`` to resume that run folder.
+        ``run_dir``: run (or continue) the batch in this folder through the job table."""
         super().__init__()
         self.inputs = inputs
         self.cfg = cfg
         self.lanes = lanes
+        self.run_dir = run_dir
         self._stop = threading.Event()
 
     def cancel(self) -> None:
@@ -52,16 +57,18 @@ class BuildWorker(QObject):
         from ..settings import Settings
 
         try:
-            if len(self.inputs) > 1 and self.cfg.write_files:
-                run_dir = pipeline.new_run_dir(self.cfg.output_dir or Settings().output_path(),
-                                               f"batch_{len(self.inputs)}")
+            inputs = self.inputs() if callable(self.inputs) else self.inputs
+            run_dir = self.run_dir
+            if run_dir is None and inputs is not None and len(inputs) > 1 and self.cfg.write_files:
+                run_dir = pipeline.new_run_dir(self.cfg.output_dir or Settings().output_path(), f"batch_{len(inputs)}")
+            if run_dir is not None:
                 results, run_dir = jobs.run_resumable(
-                    self.inputs, self.cfg, run_dir,
+                    inputs or None, self.cfg, run_dir,
                     progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
                     on_result=self.molecule_done.emit, lanes=self._lanes(), keep_results=False)
             else:
                 results, run_dir = pipeline.run(
-                    self.inputs, self.cfg,
+                    inputs, self.cfg,
                     progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
                     on_result=self.molecule_done.emit)
             self.finished.emit(results, run_dir)

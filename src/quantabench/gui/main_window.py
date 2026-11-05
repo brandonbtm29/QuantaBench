@@ -30,8 +30,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -53,10 +51,18 @@ from PySide6.QtWidgets import (
 
 from .. import __version__, resources
 from .. import settings as settings_mod
-from ..chem import engines, export, solvents
+from ..chem import engines, export, jobs, solvents
 from ..chem import inputs as inputs_mod
 from ..chem.pipeline import BuildConfig, MoleculeResult
-from . import workers
+from . import molecule_list, workers
+from .molecule_list import (
+    STATUS_FILTERS,
+    STATUS_ICON,
+    MoleculeListView,
+    MoleculeRow,
+    MoleculeTableModel,
+    ResultStore,
+)
 from .selection import SelectionModel
 from .settings_dialog import SettingsDialog, method_keys, method_label
 from .viewer2d import MoleculeViewer2D
@@ -95,7 +101,9 @@ def _window_settings() -> QSettings:
     return QSettings("QuantaBench", "QuantaBench")
 
 
-STATUS_ICON = {"ok": "✔", "failed": "✖", "cancelled": "○", "pending": "…", "running": "▶"}
+def _built(res) -> bool:
+    """A result the views can show: built, with its molecule and at least one conformer."""
+    return res is not None and res.status == "ok" and res.mol is not None and bool(res.conformers)
 
 
 class MainWindow(QMainWindow):
@@ -107,11 +115,19 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.s = s
         self.report: resources.HardwareReport | None = None
-        self.inputs: list[inputs_mod.MoleculeInput] = []
-        self.results: dict[str, MoleculeResult] = {}
+        # The list holds light rows (molecule_list.MoleculeRow); full results are read from their folders on
+        # selection and only the last few stay in memory (ResultStore), so 14,000 molecules fit (SCALE-1).
+        self.model = MoleculeTableModel(self)
+        self.results = ResultStore(self.model)
         self.running: dict[str, str] = {}
         self.worker = None
         self.last_run_dir: Path | None = None
+        self.run_folder: Path | None = None    # the run folder the list was opened from (File > Open run folder)
+        self._batch_dir: Path | None = None    # run folder of the batch now running (job table), if any
+        self._batch_ids: list[str] = []
+        self._loading: str | None = None       # molecule whose result is being read (one read at a time)
+        self._wanted: str | None = None        # molecule to read next
+        self._shown_res: MoleculeResult | None = None   # built result in the views
         self._closing = False
         self._quit_pending = False         # close() asked while workers run: closes when they finish
         self.closed = False
@@ -155,10 +171,17 @@ class MainWindow(QMainWindow):
                 self.log(f"{panel.__name__.rsplit('.', 1)[-1]} unavailable: {type(exc).__name__}: {exc}")
 
     def current_result(self) -> MoleculeResult | None:
-        """Result of the selected molecule (None if nothing is selected or it is not built)."""
-        inp = self.selected_input()
-        res = self.results.get(inp.id) if inp is not None else None
-        return res if res is not None and res.status == "ok" else None
+        """Result of the selected molecule (None if nothing is selected, it is not built, or it is still being
+        read from its folder: ``resultChanged`` follows when it is)."""
+        row = self._current_row()
+        res = self.results.cached(row.id) if row is not None else None
+        return res if _built(res) else None
+
+    def _full_current(self) -> MoleculeResult | None:
+        """The selected molecule's built result, read from its folder now if it is not loaded yet."""
+        row = self._current_row()
+        res = self.results.get(row.id) if row is not None else None
+        return res if _built(res) else None
 
     def _build_molecule_dock(self) -> None:
         w = QWidget()
@@ -172,10 +195,36 @@ class MainWindow(QMainWindow):
         row.addWidget(self.entry)
         row.addWidget(add)
         lay.addLayout(row)
-        self.mol_list = QListWidget()
-        self.mol_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.mol_list.currentRowChanged.connect(self._on_molecule_selected)
+        find = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search ID, name, SMILES, formula")
+        self.search.setClearButtonEnabled(True)
+        self.status_filter = QComboBox()
+        for key, label in STATUS_FILTERS:
+            self.status_filter.addItem(label, key)
+        find.addWidget(self.search, 1)
+        find.addWidget(self.status_filter)
+        lay.addLayout(find)
+        self.mol_list = MoleculeListView(self.model)
+        self.mol_list.currentIdChanged.connect(self._on_molecule_selected)
         lay.addWidget(self.mol_list)
+        self._search_timer = QTimer(self)          # filter once typing pauses, not per keystroke
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(150)
+        self._search_timer.timeout.connect(self._apply_search)
+        self.search.textChanged.connect(self._search_timer.start)
+        self.search.returnPressed.connect(self._apply_search)
+        self.status_filter.currentIndexChanged.connect(self._apply_search)
+        self.count_label = QLabel()
+        self.count_label.setStyleSheet("color: gray;")
+        lay.addWidget(self.count_label)
+        self._count_timer = QTimer(self)           # at most a few count updates a second during a batch
+        self._count_timer.setSingleShot(True)
+        self._count_timer.setInterval(300)
+        self._count_timer.timeout.connect(self._update_counts)
+        for sig in (self.model.rowsInserted, self.model.rowsRemoved, self.model.modelReset, self.model.dataChanged,
+                    self.mol_list.proxy.layoutChanged):
+            sig.connect(self._counts_later)
         btns = QHBoxLayout()
         for text, fn in (("Open file...", self.open_files), ("Remove", self.remove_selected), ("Clear", self.clear_all)):
             b = QPushButton(text)
@@ -191,6 +240,30 @@ class MainWindow(QMainWindow):
         dock.setWidget(w)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
         self.mol_dock = dock
+        self._update_counts()
+
+    def _apply_search(self, *_args) -> None:
+        self._search_timer.stop()
+        self.mol_list.proxy.set_text(self.search.text())
+        self.mol_list.proxy.set_status(self.status_filter.currentData() or "")
+        self._update_counts()
+
+    def _counts_later(self, *_args) -> None:
+        if not self._count_timer.isActive():
+            self._count_timer.start()
+
+    def _update_counts(self) -> None:
+        n = self.model.rowCount()
+        if not n:
+            self.count_label.setText("No molecules. Add SMILES or names, open a file or a run folder.")
+            return
+        c = self.model.counts()
+        todo = c["pending"] + c["cancelled"] + c["running"]
+        text = f"{n:,} molecule{'s' if n != 1 else ''}: {c['ok']:,} built, {c['failed']:,} failed, {todo:,} not built"
+        shown = self.mol_list.count()
+        if shown != n:
+            text += f" ({shown:,} shown)"
+        self.count_label.setText(text)
 
     def _build_pipeline_dock(self) -> None:
         w = QWidget()
@@ -474,6 +547,11 @@ class MainWindow(QMainWindow):
             return a
 
         self.a_open = act("Open...", self.open_files, "Ctrl+O", "Open SDF, MOL, XYZ, PDB, SMI or CSV files")
+        self.a_open_run = act("Open run folder...", self.open_run_folder, "Ctrl+Shift+O",
+                              "List the molecules of a run folder (finished or partial); results load when selected")
+        self.a_resume = act("Resume run folder", self.resume_run, None,
+                            "Continue the unfinished molecules of the opened (or last) run folder with its stored "
+                            "settings")
         self.a_run = act("Run", lambda: self.run_build(False), "F5", "Build every molecule in the list")
         # Not Esc: the views use Esc to clear the selection, and a window-wide Esc would cancel the batch
         self.a_cancel = act("Cancel", self.cancel_build, "Shift+Esc", "Stop the build after the current step "
@@ -534,13 +612,13 @@ class MainWindow(QMainWindow):
 
         m = self.menuBar()
         f = m.addMenu("&File")
-        for a in (self.a_open, self.a_export):
+        for a in (self.a_open, self.a_open_run, self.a_export):
             f.addAction(a)
         f.addAction(act("Open output folder", self.open_output_folder))
         f.addSeparator()
         f.addAction(act("Quit", self.close, "Ctrl+Q"))
         b = m.addMenu("&Build")
-        for a in (self.a_run, self.a_cancel):
+        for a in (self.a_run, self.a_cancel, self.a_resume):
             b.addAction(a)
         b.addAction(self.a_surface)
         v = m.addMenu("&View")
@@ -736,39 +814,49 @@ class MainWindow(QMainWindow):
     def log(self, msg: str) -> None:
         self.log_view.appendPlainText(msg)
 
-    def add_inputs(self, items: list[inputs_mod.MoleculeInput]) -> None:
-        existing = {m.id for m in self.inputs}
+    def add_inputs(self, items: list[inputs_mod.MoleculeInput], built: list[MoleculeResult] = ()) -> None:
+        """Append molecules (one batched insert, however many) and select the last. Ids are made unique.
+        ``built``: results of some of ``items`` (imports), kept in memory since they exist nowhere else."""
+        existing = set(self.model.ids())
+        rows = []
         for it in items:
             base, n = it.id, 2
             while it.id in existing:
                 it.id = f"{base}_{n}"
                 n += 1
             existing.add(it.id)
-            self.inputs.append(it)
-            self.mol_list.addItem(QListWidgetItem(self._item_text(it.id)))
-        if items:
-            self.mol_list.setCurrentRow(self.mol_list.count() - 1)
-            self.log(f"Added {len(items)} molecule(s).")
+            rows.append(MoleculeRow(id=it.id, name=it.name or "", smiles=it.smiles or "", source=it.source or "",
+                                    input=it))
+        by_id = {r.id: r for r in rows}
+        for res in built:                     # res.input is one of items: already renamed
+            self.results.pin(res)
+            for k, v in molecule_list.row_updates(res).items():
+                setattr(by_id[res.input.id], k, v)
+        self.model.add_rows(rows)
+        if rows:
+            self.mol_list.select_id(rows[-1].id)
+            self.log(f"Added {len(rows)} molecule(s).")
 
     def add_result(self, res: MoleculeResult) -> None:
         """Add an already-built molecule (e.g. imported from another program's output) and select it."""
-        self.add_inputs([res.input])          # may rename the id to keep ids unique
-        self.results[res.input.id] = res
-        self._refresh_item(res.input.id)
-        self._on_molecule_selected(self.mol_list.currentRow())
+        self.add_inputs([res.input], built=[res])   # may rename the id to keep ids unique
 
-    def _item_text(self, ident: str) -> str:
-        if ident in self.running:
-            return f"{STATUS_ICON['running']} {ident}  ({self.running[ident]})"
-        res = self.results.get(ident)
-        icon = STATUS_ICON[res.status] if res else STATUS_ICON["pending"]
-        extra = f"  {res.method}, {len(res.conformers)} conf." if res and res.status == "ok" else ""
-        return f"{icon} {ident}{extra}"
+    def _current_row(self) -> MoleculeRow | None:
+        ident = self.mol_list.current_id()
+        return self.model.row(ident) if ident else None
 
-    def _refresh_item(self, ident: str) -> None:
-        for i, m in enumerate(self.inputs):
-            if m.id == ident:
-                self.mol_list.item(i).setText(self._item_text(ident))
+    def _input_of(self, row: MoleculeRow) -> inputs_mod.MoleculeInput:
+        """The row's input: in memory, else from its run folder's job table (rows of an opened folder)."""
+        if row.input is not None:
+            return row.input
+        if row.run_dir:
+            try:
+                found = jobs.load_inputs(row.run_dir, [row.id])
+                if found:
+                    return found[0]
+            except Exception as exc:  # noqa: BLE001 - a moved or locked folder: fall back to the SMILES
+                self.log(f"{row.id}: could not read its input from {row.run_dir} ({exc})")
+        return inputs_mod.MoleculeInput(id=row.id, smiles=row.smiles, name=row.name, source=row.source)
 
     def add_from_entry(self) -> None:
         text = self.entry.text().strip()
@@ -827,39 +915,90 @@ class MainWindow(QMainWindow):
         workers.start(w, self, on_done=done, on_failed=lambda msg: QMessageBox.warning(self, "Open", msg))
 
     def remove_selected(self) -> None:
-        rows = sorted({i.row() for i in self.mol_list.selectedIndexes()}, reverse=True)
-        for r in rows:
-            ident = self.inputs[r].id
-            if ident in self.running:
-                continue
-            self.inputs.pop(r)
-            self.results.pop(ident, None)
-            self.mol_list.takeItem(r)
+        ids = [i for i in self.mol_list.selected_ids() if i not in self.running]
+        self.model.remove_ids(ids)
+        for ident in ids:
+            self.results.discard(ident)
 
     def clear_all(self) -> None:
         if self.worker is not None:
             return
-        self.inputs.clear()
+        self.model.clear()
         self.results.clear()
-        self.mol_list.clear()
+        self.run_folder = None
         self.conf_table.setRowCount(0)
         self.viewer.clear()
         self.viewer2d.clear()
         self._shown_key = None
+        self._shown_res = None
+        self.mol_info.setText("")
+        self.props_view.setText("")
+        self.setWindowTitle(f"QuantaBench {__version__}")
 
     def selected_input(self) -> inputs_mod.MoleculeInput | None:
-        row = self.mol_list.currentRow()
-        return self.inputs[row] if 0 <= row < len(self.inputs) else None
+        row = self._current_row()
+        return self._input_of(row) if row is not None else None
 
-    def _on_molecule_selected(self, row: int) -> None:
-        inp = self.inputs[row] if 0 <= row < len(self.inputs) else None
-        if inp is None:
+    # -- results are read from their folders on selection, one at a time, off the GUI thread
+    def _request_load(self, ident: str) -> None:
+        self._wanted = ident
+        if self._loading is None:
+            self._start_load(ident)
+
+    def _start_load(self, ident: str) -> None:
+        row = self.model.row(ident)
+        if row is None or self._closing:
+            self._wanted = None
             return
-        res = self.results.get(inp.id)
+        self._loading = ident
+        w = workers.FunctionWorker(molecule_list.load_result, row.id, row.folder, row.run_dir, row.input)
+        workers.start(w, self, on_done=self._on_loaded, on_failed=self._on_load_failed)
+
+    def _on_loaded(self, res: MoleculeResult) -> None:
+        ident, self._loading = self._loading, None
+        if self.model.row(ident) is not None and res is not None:
+            self.results.put(res)
+        self._after_load(ident)
+
+    def _on_load_failed(self, msg: str) -> None:
+        ident, self._loading = self._loading, None
+        row = self.model.row(ident)
+        if row is not None:
+            self.log(f"{ident}: could not read its result from {row.folder or row.run_dir}: {msg}")
+            stand_in = self.results.stand_in(row)
+            stand_in.status, stand_in.error = "ok", f"Built, but its files could not be read: {msg}"
+            self.results.put(stand_in)       # not retried on every selection; reopening the folder does
+        self._after_load(ident)
+
+    def _after_load(self, ident: str) -> None:
+        wanted, self._wanted = self._wanted, None
+        if self._closing:
+            return
+        if self.mol_list.current_id() == ident:
+            self._on_molecule_selected()
+        if wanted and wanted != ident and self.results.cached(wanted) is None and self.results.loadable(wanted):
+            self._request_load(wanted)
+
+    def _on_molecule_selected(self, *_args) -> None:
+        row = self._current_row()
+        if row is None:
+            return
+        res = self.results.cached(row.id)
+        if res is None and row.status == "ok" and not row.stage and self.results.loadable(row.id):
+            self._request_load(row.id)       # shown when read (a few ms); the views keep the last one meanwhile
+            self.input_detail.setText(f"<b>{row.id}</b> {row.name}<br>SMILES: {row.smiles}")
+            self.mol_info.setText(f"<b>{row.id}</b>: reading the results...")
+            self._fill_conformers(None)
+            self._shown_res = None
+            return
+        if res is None and row.status in ("failed", "cancelled"):
+            res = self.results.stand_in(row)
+        inp = res.input if res is not None else self._input_of(row)
         self.input_detail.setText(f"<b>{inp.id}</b> {inp.name}<br>SMILES: {inp.smiles}<br>Source: {inp.source}")
         self._update_stage_status(res)
         self._fill_conformers(res)
-        built = res is not None and res.status == "ok"
+        built = _built(res)
+        self._shown_res = res if built else None
         if built:
             self._show_info(res)
         else:
@@ -981,8 +1120,7 @@ class MainWindow(QMainWindow):
         self.conf_table.blockSignals(False)
 
     def _on_conformer_selected(self, row, _col, _prow, _pcol) -> None:
-        inp = self.selected_input()
-        res = self.results.get(inp.id) if inp else None
+        res = self._shown_res
         if res and 0 <= row < len(res.conformers) and not self._surface_preview:
             self._show_conformer(res, row, reset_camera=False)
 
@@ -994,28 +1132,42 @@ class MainWindow(QMainWindow):
     def run_build(self, selected_only: bool = False) -> None:
         if self.worker is not None:
             return
-        if selected_only:
-            rows = sorted({i.row() for i in self.mol_list.selectedIndexes()})
-            todo = [self.inputs[r] for r in rows]
-        else:
-            todo = list(self.inputs)
-        if not todo:
+        ids = self.mol_list.selected_ids() if selected_only else self.model.ids()
+        if not ids:
             QMessageBox.information(self, "Run", "Add a molecule first (SMILES, name, or a file).")
             return
+        rows = [self.model.row(i) for i in ids]
         cfg = self.current_config()
         settings_mod.save(self.s)
-        self.worker = workers.BuildWorker(todo, cfg)
+        if all(r.input is not None for r in rows):
+            todo = [r.input for r in rows]
+        else:       # rows of an opened run folder: their inputs are read from its job table on the worker thread
+            from functools import partial
+
+            todo = partial(molecule_list.gather_inputs,
+                           [(r.id, r.run_dir, r.input, r.smiles, r.name, r.source) for r in rows])
+        run_dir = None
+        if len(rows) > 1 and cfg.write_files:  # a batch goes through a job table: resumable, results stay on disk
+            from ..chem.pipeline import new_run_dir
+
+            run_dir = new_run_dir(cfg.output_dir or self.s.output_path(), f"batch_{len(rows)}")
+        self._start_worker(todo, cfg, run_dir, ids, total=len(ids), done=0)
+
+    def _start_worker(self, todo, cfg: BuildConfig, run_dir: Path | None, ids: list[str], total: int,
+                      done: int) -> None:
+        self.worker = workers.BuildWorker(todo, cfg, run_dir=run_dir)
         self.worker.progress.connect(self._on_progress)
         self.worker.log.connect(self.log)
         self.worker.molecule_done.connect(self._on_molecule_done)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
-        self.running = {m.id: "queued" for m in todo}
-        for m in todo:
-            self._refresh_item(m.id)
+        self._batch_dir = Path(run_dir) if run_dir is not None else None
+        self._batch_ids = list(ids)
+        self.running = dict.fromkeys(ids, "queued")
+        self.model.update_many(ids, stage="queued")
         self._set_running(True)
-        self.progress.setRange(0, len(todo))
-        self.progress.setValue(0)
+        self.progress.setRange(0, max(1, total))
+        self.progress.setValue(done)
         self.bottom_tabs.setCurrentWidget(self.log_view)
         workers.start(self.worker, self)
 
@@ -1025,11 +1177,87 @@ class MainWindow(QMainWindow):
         remaining = len(self.running)
         if confirm and remaining > 1 and QMessageBox.question(
                 self, "Cancel build", f"Stop the build? {remaining} molecule(s) have not finished.\n"
-                "Finished molecules are kept; a batch can be resumed with "
-                "quantabench-cli build --resume.") != QMessageBox.StandardButton.Yes:
+                "Finished molecules are kept; Build > Resume run folder (or quantabench-cli build --resume) "
+                "continues the batch.") != QMessageBox.StandardButton.Yes:
             return
         self.worker.cancel()
         self.log("Cancelling after the current step...")
+
+    # ================================================================== run folders
+    def open_run_folder(self, _checked=False, folder: str | Path | None = None) -> None:
+        """List the molecules of a run folder (finished or partial) from its job table, or the summary.csv of a
+        non-resumable batch. Only light rows are read (a 14,000-molecule folder in well under a second); each
+        molecule's full result is read from its folder when it is selected."""
+        if self.worker is not None:
+            QMessageBox.information(self, "Open run folder", "Wait for the build to finish (or cancel it) first.")
+            return
+        if not folder:
+            folder = QFileDialog.getExistingDirectory(self, "Open run folder", str(self.s.output_path()))
+        if not folder:
+            return
+        folder = Path(folder)
+        if not (folder / jobs.DB_NAME).is_file() and not (folder / "summary.csv").is_file():
+            QMessageBox.warning(self, "Open run folder", f"{folder} is not a QuantaBench run folder "
+                                f"(no {jobs.DB_NAME} or summary.csv).")
+            return
+        n = self.model.rowCount()
+        if n and QMessageBox.question(self, "Open run folder", f"Replace the {n:,} molecule(s) in the list with "
+                                      f"those of {folder.name}?") != QMessageBox.StandardButton.Yes:
+            return
+        self.statusBar().showMessage(f"Reading {folder}...")
+
+        def failed(msg):
+            self.statusBar().clearMessage()
+            QMessageBox.warning(self, "Open run folder", msg)
+
+        workers.start(workers.FunctionWorker(molecule_list.read_run_folder, folder), self,
+                      on_done=lambda value: self._on_run_folder_read(folder, value), on_failed=failed)
+
+    def _on_run_folder_read(self, folder: Path, value) -> None:
+        rows, status = value
+        self.statusBar().clearMessage()
+        if self.worker is not None or self._closing:
+            return
+        self.clear_all()
+        self.model.set_rows(rows)
+        self.run_folder = self.last_run_dir = folder
+        self.out_label.setText(f"Run folder: {folder}")
+        self.setWindowTitle(f"QuantaBench {__version__} - {folder.name}")
+        self.log(f"Opened {folder}: " + (status.summary() if status is not None else
+                                          f"{len(rows)} molecule(s) from summary.csv (no job table: not resumable)"))
+        if status is not None and status.remaining and not status.active:
+            self.log("  Build > Resume run folder continues the unfinished ones with the folder's settings.")
+        if rows:
+            self.mol_list.setCurrentRow(0)
+        self._update_counts()
+
+    def resume_run(self, _checked=False, folder: str | Path | None = None) -> None:
+        """Continue the unfinished molecules of the opened run folder (or of the last batch) with the science
+        settings stored in it (method, conformers, solvent, ...); threads, GPU and lanes are this machine's."""
+        if self.worker is not None:
+            return
+        folder = Path(folder) if folder else (self.run_folder or self.last_run_dir)
+        if folder is None or not (folder / jobs.DB_NAME).is_file():
+            QMessageBox.information(self, "Resume run folder", "Open a run folder first (File > Open run folder...): "
+                                    "the folder of a batch, with its jobs.sqlite.")
+            return
+        try:
+            st = jobs.open_run(folder)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Resume run folder", str(exc))
+            return
+        if st.active:
+            QMessageBox.warning(self, "Resume run folder", f"{folder} is being run by another process right now.")
+            return
+        if not st.remaining:
+            QMessageBox.information(self, "Resume run folder", f"Every molecule of {folder.name} is finished "
+                                    f"({st.summary()}).")
+            return
+        cfg = jobs.stored_config(st.config, BuildConfig.from_settings(self.s))
+        ids = [r.id for r in self.model.rows()
+               if r.status not in ("ok", "failed") and Path(r.run_dir or "") == folder]
+        self.log(f"Resuming {folder}: {st.remaining} molecule(s) to do, method {cfg.method}")
+        self._start_worker(None, cfg, folder, ids, total=st.total, done=st.finished)
 
     def _set_running(self, on: bool) -> None:
         self.progress.setVisible(on)
@@ -1039,26 +1267,44 @@ class MainWindow(QMainWindow):
         self.a_cancel.setEnabled(on)
 
     def _on_progress(self, i, n, stage, ident) -> None:
+        if self.progress.maximum() != n:
+            self.progress.setMaximum(max(1, n))
         if stage in ("ok", "failed", "cancelled"):
             self.progress.setValue(i)
             return
         self.running[ident] = stage
-        self._refresh_item(ident)
+        self.model.update(ident, stage=stage)
         self.statusBar().showMessage(f"[{i + 1}/{n}] {ident}: {stage}")
 
     def _on_molecule_done(self, res: MoleculeResult) -> None:
-        self.running.pop(res.input.id, None)
-        self.results[res.input.id] = res
-        self._refresh_item(res.input.id)
-        inp = self.selected_input()
-        if inp is not None and inp.id == res.input.id:
-            self._on_molecule_selected(self.mol_list.currentRow())
+        """A finished molecule becomes a summary row; its full result is kept only if it is selected (or exists
+        nowhere else), so a batch of any size runs with flat memory."""
+        ident = res.input.id
+        self.running.pop(ident, None)
+        fields = molecule_list.row_updates(res)
+        if self._batch_dir is not None:
+            fields["run_dir"] = str(self._batch_dir)
+        self.model.update(ident, **fields)
+        selected = self.mol_list.current_id() == ident
+        self.results.discard(ident)                  # an older result of it must not come back from the cache
+        if res.status == "ok" and not fields["folder"]:
+            self.results.pin(res)                    # nothing on disk (file writing off): memory is all there is
+        elif selected:
+            self.results.put(res)
+        if selected:
+            self._on_molecule_selected()
+
+    def _end_batch(self) -> None:
+        ids = list(self.running)
+        self.running.clear()
+        self.model.update_many(ids, stage="")        # queued but not started (cancel, failure)
+        if self._batch_dir is not None and (self._batch_dir / jobs.DB_NAME).is_file():
+            self.model.update_many(self._batch_ids, run_dir=str(self._batch_dir))   # Resume finds them
+        self._batch_dir, self._batch_ids = None, []
+        self.worker = None
 
     def _on_finished(self, results, run_dir) -> None:
-        for ident in list(self.running):
-            self.running.pop(ident)
-            self._refresh_item(ident)
-        self.worker = None
+        self._end_batch()
         self._set_running(False)
         self.last_run_dir = run_dir
         ok = sum(r.status == "ok" for r in results)
@@ -1071,8 +1317,7 @@ class MainWindow(QMainWindow):
         self.bottom_tabs.setCurrentWidget(self.conf_table)
 
     def _on_failed(self, msg) -> None:
-        self.worker = None
-        self.running.clear()
+        self._end_batch()
         self._set_running(False)
         self.log(msg)
         if not self._quit_pending:
@@ -1080,9 +1325,8 @@ class MainWindow(QMainWindow):
 
     # ================================================================== export & tools
     def export_selected(self) -> None:
-        inp = self.selected_input()
-        res = self.results.get(inp.id) if inp else None
-        if not res or res.status != "ok":
+        res = self._full_current()
+        if res is None:
             QMessageBox.information(self, "Export", "Select a molecule that has been built.")
             return
         folder = QFileDialog.getExistingDirectory(self, "Export to folder", str(self.s.output_path()))
@@ -1108,9 +1352,8 @@ class MainWindow(QMainWindow):
             self.viewer.screenshot(path)
 
     def _selected_atoms(self):
-        inp = self.selected_input()
-        res = self.results.get(inp.id) if inp else None
-        if not res or res.status != "ok":
+        res = self._full_current()
+        if res is None:
             return None, "", None
         best = res.conformers[0]
         atoms = export.mol_to_atoms(res.mol, best.conf_id)
@@ -1160,10 +1403,9 @@ class MainWindow(QMainWindow):
         self.viewer2d.setVisible(self.a_show2d.isChecked())
         if self.color_box.currentData() == "tag":
             self.color_box.setCurrentIndex(COLOR_MODES.index("element"))
-        row = self.mol_list.currentRow()
-        if 0 <= row < len(self.inputs):
+        if self._current_row() is not None:
             self._shown_key = None
-            self._on_molecule_selected(row)
+            self._on_molecule_selected()
 
     # ================================================================== views
     def set_view_mode(self, mode: str) -> None:
@@ -1179,10 +1421,9 @@ class MainWindow(QMainWindow):
 
     def _on_label_mode(self, _index=0) -> None:
         self.viewer.set_label_mode(self.label_box.currentData())
-        inp = self.selected_input()
-        res = self.results.get(inp.id) if inp else None
+        res = self._shown_res
         row = max(0, self.conf_table.currentRow())
-        charges = res.conformers[row].charges if res and res.status == "ok" and row < len(res.conformers) else None
+        charges = res.conformers[row].charges if res is not None and row < len(res.conformers) else None
         self._apply_2d_options(charges)
 
     def _apply_2d_options(self, charges) -> None:

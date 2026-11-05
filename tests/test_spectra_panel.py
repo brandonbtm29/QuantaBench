@@ -318,7 +318,7 @@ def test_import_action(tmp_path, monkeypatch, gui):
     res = w.current_result()
     assert res.input.id == "xtb" and res.method == "xtb: GFN2-xTB"
     assert w.spectra_panel.active_set.disp is not None           # normal modes from xtb's g98.out
-    assert w.mol_list.count() == 2 and "xtb: GFN2-xTB" in w.mol_list.item(1).text()
+    assert w.mol_list.count() == 2 and "xtb: GFN2-xTB" in w.mol_list.row_text(1)
     log = w.log_view.toPlainText()
     assert "Imported psi4_water_opt_freq.out" in log
 
