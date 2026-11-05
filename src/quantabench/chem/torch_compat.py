@@ -639,9 +639,20 @@ _TARGETS: tuple[tuple[str, str, Callable[[Any], Any]], ...] = (
     ("tad_multicharge.model.eeq", "get_charges", _make_eeq),
     ("tad_dftd3.model", "weight_references", _make_d3_weights),     # dxtb calls d3.model.weight_references
     ("tad_dftd3.model.weights", "weight_references", _make_d3_weights),
+    # the dxtb fork (tad-mctc 0.11) carries its own tad-dftd3, binds storch.eighb in its compat layer and
+    # wraps tad-multicharge 0.8 (which takes a Structure, so its own get_eeq_charges sees no tensor)
+    ("dxtb._src.exlibs.tad_dftd3.model", "weight_references", _make_d3_weights),
+    ("dxtb._src.exlibs.tad_dftd3.model.weights", "weight_references", _make_d3_weights),
+    ("dxtb._src.exlibs.mctc_compat.storch", "eighb", _make_eighb),
+    ("dxtb._src.exlibs.mctc_compat", "get_eeq_charges", _make_eeq),   # imported at call time by the guess
     ("tad_mctc.data.radii", "VDW_PAIRWISE", _make_cpu_loader),      # dxtb's D3 cache: radii.VDW_PAIRWISE(**dd)
     ("dxtb._src.scf.mixer.anderson", "torch", _make_torch_shim),   # private: guarded, see _install
 )
+
+# Modules only one dxtb build has: PyPI's dxtb uses PyPI tad-dftd3, the fork its vendored copy (exlibs).
+# A missing one is expected, not a failed patch.
+_BUILD_SPECIFIC = ("tad_dftd3", "dxtb._src.exlibs")
+ABSENT = "absent (not used by this dxtb build)"
 
 
 def _install() -> None:
@@ -657,6 +668,10 @@ def _install() -> None:
         name = f"{mod_name}.{attr}"
         try:
             mod = importlib.import_module(mod_name)
+        except ModuleNotFoundError as exc:
+            build_specific = mod_name.startswith(_BUILD_SPECIFIC) and (exc.name or "").startswith(_BUILD_SPECIFIC)
+            _status[name] = ABSENT if build_specific else f"not importable ({type(exc).__name__})"
+            continue
         except Exception as exc:
             _status[name] = f"not importable ({type(exc).__name__})"
             continue

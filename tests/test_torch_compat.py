@@ -6,6 +6,9 @@ the dense ops raise (like AMD's MAGMA-less Windows wheel) unless they run inside
 Molecules are water and CF3COOH so the whole file takes seconds.
 """
 
+import importlib.util
+import re
+
 import numpy as np
 import pytest
 from ase import Atoms
@@ -46,10 +49,20 @@ class BrokenLinalg(TorchFunctionMode):
         return func(*args, **(kwargs or {}))
 
 
-# float64 made from CPU constant tables and cast to the working dtype before moving to the device:
-# STO-nG expansion coefficients, and tad-dftd3's reference C6/CN tables loaded onto the default (CPU) device
+# float64 made on the CPU, never on the device: STO-nG expansion coefficients and tad-dftd3's reference
+# C6/CN tables (loaded onto the default device, cast before moving), and tad-libcint 0.4's inputs for the C
+# library (x.to(device="cpu", dtype=float64) -> numpy; the dxtb fork's integral driver)
 CPU_CONSTANT_SITES = {("dxtb/_src/basis/slater.py", "slater_to_gauss"), ("tad_dftd3/reference.py", "_load_c6"),
-                      ("tad_dftd3/reference.py", "_load_cn")}
+                      ("tad_dftd3/reference.py", "_load_cn"), ("tad_libcint/basis.py", "_to_numpy")}
+
+
+def _package_path(path: str) -> str:
+    """'dxtb/...' or 'tad_dftd3/...' from a full path, wherever the package is installed; the dxtb fork's
+    vendored copy (dxtb/_src/exlibs/tad_dftd3/...) maps to the same name as PyPI's tad_dftd3."""
+    path = path.split("site-packages/")[-1]
+    m = re.search(r"(?:^|/)((?:dxtb|tad_\w+)/.*)$", path)
+    path = m.group(1) if m else path
+    return path.split("dxtb/_src/exlibs/")[-1]
 
 
 class Float64Watch(TorchFunctionMode):
@@ -70,7 +83,7 @@ class Float64Watch(TorchFunctionMode):
                 for frame in reversed(traceback.extract_stack()[:-1]):
                     path = frame.filename.replace("\\", "/")
                     if "/torch/" not in path:
-                        self.sites.add((path.split("site-packages/")[-1], frame.name))
+                        self.sites.add((_package_path(path), frame.name))
                         break
         return out
 
@@ -320,7 +333,14 @@ def test_dxtb_forced_routing_identical_to_stock(monkeypatch):
     assert abs(e1 - e0) < 1e-10 and np.abs(f1 - f0).max() < 1e-10
     stats = tc.routing_stats()
     assert stats["eighb"] >= 5 and stats["eeq"] == 1 and stats.get("solve", 0) >= 1   # SCF steps, guess, mixer
-    assert set(tc.patch_status().values()) == {"patched"}
+    status = tc.patch_status()
+    assert set(status.values()) <= {"patched", tc.ABSENT}
+    try:                                                       # the dxtb fork (tad-mctc 0.11) vendors tad-dftd3
+        fork = importlib.util.find_spec("dxtb._src.exlibs.tad_dftd3") is not None
+    except ModuleNotFoundError:
+        fork = False
+    d3 = "dxtb._src.exlibs.tad_dftd3.model" if fork else "tad_dftd3.model"
+    assert status[f"{d3}.weight_references"] == "patched"
 
 
 def test_broken_device_stock_fails_routing_works(monkeypatch):

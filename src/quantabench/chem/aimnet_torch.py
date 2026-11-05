@@ -26,7 +26,7 @@ What this module does instead
   calculator itself uses on CUDA for batched molecules up to ``nb_threshold`` atoms. Memory grows as
   N² per molecule, which is fine for the molecules QuantaBench refines (< ~200 atoms).
 - Coulomb: the stock "simple" all-pairs ``LRCoulomb`` (pure torch), as the stock calculator adds it.
-- D3(BJ): ``tad-dftd3`` (pure PyTorch) with aimnet's ``d3_params`` (ωB97M: s6 1.0, s8 0.3908,
+- D3(BJ): ``tad-dftd3`` (pure PyTorch; the dxtb fork's vendored copy or PyPI's, ``d3_module``) with aimnet's ``d3_params`` (ωB97M: s6 1.0, s8 0.3908,
   a1 0.5660, a2 3.1280, from the model metadata, the same values as
   ``aimnet/models/aimnet2_dftd3_wb97m.yaml``), aimnet's own reference tables (``aimnet/dftd3_data.pt``:
   C6 references, reference CNs, covalent radii, r4/r2), and the stock calculator's cutoff treatment
@@ -206,6 +206,28 @@ def load_calculator(model: str = "aimnet2", device: str = "cpu"):
 
 
 # ============================================================================ D3(BJ)
+_D3_MODULE: list = []
+
+
+def d3_module():
+    """The tad-dftd3 to compute D3 with, matching the installed dxtb: the copy inside the dxtb fork (ported
+    to tad-mctc 0.11; FORK-1) when that dxtb is installed, else the tad-dftd3 package (PyPI's dxtb 0.4
+    depends on 0.6.0; it can also be installed alone). The fork's copy goes first: a tad-dftd3 0.6 left over
+    from PyPI's dxtb would import but not run with tad-mctc 0.11."""
+    if not _D3_MODULE:
+        try:
+            from dxtb._src.exlibs import tad_dftd3 as d3
+        except Exception:
+            try:
+                import tad_dftd3 as d3
+            except ImportError as exc:
+                raise ImportError(
+                    "AIMNet2 without NVIDIA Warp needs DFT-D3 from tad-dftd3: install dxtb (the xtb extra; on "
+                    "Windows and macOS the fork, docs/INSTALL.md), or pip install tad-dftd3") from exc
+        _D3_MODULE.append(d3)
+    return _D3_MODULE[0]
+
+
 def _aimnet_d3_tables():
     """aimnet's DFT-D3 tables (``aimnet/dftd3_data.pt``) as (cn_ref[Z, ref], c6[Zi, Zj, ref_i, ref_j],
     rcov[Z] Bohr, r4r2[Z]) float64 CPU tensors, or None when aimnet is not installed. The file stores
@@ -236,7 +258,7 @@ def _s5_switch(d, r_on: float, r_off: float):
 
 
 class TorchD3:
-    """Two-body DFT-D3(BJ) through ``tad-dftd3``, computed the way aimnet's ``DFTD3`` module computes it.
+    """Two-body DFT-D3(BJ) through ``tad-dftd3`` (``d3_module``), computed the way aimnet's ``DFTD3`` module computes it.
 
     Same damping parameters, aimnet's reference tables (``tad-dftd3``'s own tables when aimnet is not
     installed; they agree to float32 precision for every AIMNet2 element), coordination numbers and
@@ -255,11 +277,7 @@ class TorchD3:
                  allow_float64: bool | None = None):
         import torch
 
-        try:
-            import tad_dftd3 as d3
-        except ImportError as exc:
-            raise ImportError("AIMNet2 without NVIDIA Warp needs tad-dftd3 for its dispersion: "
-                              "pip install tad-dftd3 (it also comes with dxtb)") from exc
+        d3 = d3_module()
 
         self.device = torch.device(device)
         self.allow_float64 = supports_float64(self.device) if allow_float64 is None else bool(allow_float64)
@@ -293,8 +311,7 @@ class TorchD3:
         import torch
 
         if self._use_tad_model:
-            import tad_dftd3 as d3
-
+            d3 = d3_module()
             weights = d3.model.weight_references(numbers, cn, self.ref)
             return d3.model.atomic_c6(numbers, weights, self.ref)
         refcn = self.ref.cn[numbers]                                   # [..., N, R]
@@ -310,10 +327,10 @@ class TorchD3:
     def energy(self, numbers, positions):
         """D3 energy in eV, shape [B], for ``numbers`` [B, N] and ``positions`` [B, N, 3] in Å
         (differentiable in ``positions``; padding atoms have number 0)."""
-        import tad_dftd3 as d3
         import torch
-        from tad_mctc.ncoord import coordination_number, exp_count
 
+        d3 = d3_module()
+        coordination_number, exp_count = d3.ncoord.coordination_number, d3.ncoord.exp_count
         numbers = numbers.to(self.device)
         x = positions.to(self.device, self.dtype) / BOHR_ANG
         x = x - x.mean(dim=-2, keepdim=True).detach()   # smaller |x| -> less cancellation in float32 distances
@@ -528,7 +545,10 @@ class AIMNet2TorchCalculator:
                                       "the Warp-free AIMNet2 path supports molecules only")
 
     def __repr__(self) -> str:
-        d3 = "none" if self.d3 is None else f"tad-dftd3 {self.d3.dtype}".replace("torch.", "")
+        d3 = "none"
+        if self.d3 is not None:
+            src = "dxtb fork copy" if d3_module().__name__.startswith("dxtb.") else "PyPI"
+            d3 = f"tad-dftd3 ({src}) {self.d3.dtype}".replace("torch.", "")
         return f"AIMNet2TorchCalculator(device={self.device!r}, d3={d3}, float64={self.allow_float64})"
 
     # ---------------------------------------------------------------- evaluation

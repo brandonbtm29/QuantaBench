@@ -42,9 +42,11 @@ dependencies = [
 [project.optional-dependencies]
 # PyTorch is NOT listed here on purpose: install the build that matches your GPU first
 # (AMD ROCm on Windows/Linux, NVIDIA CUDA, or CPU). See docs/INSTALL.md.
-# AIMNet2 neutral + charged organics (needs torch). tad-dftd3: its D3 dispersion on ROCm/Apple GPUs, where
-# aimnet's NVIDIA Warp kernels cannot run (chem/aimnet_torch.py, FORK-3)
-ml = ["aimnet>=0.2", "tad-dftd3>=0.6"]
+# AIMNet2 neutral + charged organics (needs torch). Its Warp-free GPU path (ROCm, Apple; chem/aimnet_torch.py)
+# takes DFT-D3 from the tad-dftd3 that comes with dxtb (the xtb extra): PyPI's dxtb depends on tad-dftd3 0.6,
+# the dxtb fork carries its own copy ported to tad-mctc 0.11. Listing tad-dftd3 here would pin tad-mctc 0.7/0.8
+# and make the fork uninstallable (every tad-dftd3 release pins tad-mctc exactly).
+ml = ["aimnet>=0.2"]
 # dxtb>=0.4: GFN1-xTB in PyTorch. GFN2, polarizability and IR intensities also need tad-libcint: PyPI's
 # dxtb with "tad-libcint<0.4" (Linux), or on any OS the fork (a direct URL, so not listed here; FORK-1):
 #   pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"

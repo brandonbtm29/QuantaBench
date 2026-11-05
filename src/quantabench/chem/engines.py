@@ -77,7 +77,7 @@ ENGINES: dict[str, EngineInfo] = {
                            True, frozenset(range(1, 87)), batched=True),
     "aimnet2": EngineInfo("aimnet2", "AIMNet2 (ML, wB97M-D3)", "Neural network potential trained on wB97M-D3/def2-TZVPP; "
                           "neutral and charged molecules. GPU-capable: NVIDIA (stock aimnet), AMD ROCm and "
-                          "Apple GPUs (Warp-free path with tad-dftd3 dispersion).", True, frozenset(AIMNET2_ELEMENTS),
+                          "Apple GPUs (Warp-free path, D3 from dxtb's tad-dftd3).", True, frozenset(AIMNET2_ELEMENTS),
                           family="ML potential", batched=True),
 }
 

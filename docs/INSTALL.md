@@ -212,7 +212,7 @@ allow the Python environment, or use WSL2/Linux.
 
 - **AIMNet2 runs on the GPU** (measured on an RX 9060 XT: about 10x faster than the 12-core CPU for a
   batch of PFOA conformers). aimnet's own calculator needs NVIDIA Warp, which only supports CUDA, so
-  QuantaBench switches to its Warp-free path (`chem/aimnet_torch.py`, dispersion from `tad-dftd3`) on
+  QuantaBench switches to its Warp-free path (`chem/aimnet_torch.py`, dispersion from dxtb's `tad-dftd3`) on
   ROCm and Apple GPUs. `quantabench-cli doctor` shows which path each device gets;
   `QUANTABENCH_AIMNET_BACKEND=stock|torch` forces one.
 - **dxtb (GFN1/GFN2-xTB) stays on the CPU by default.** AMD's Windows PyTorch has no GPU Cholesky (no
@@ -323,6 +323,12 @@ combine `tad-libcint>=0.4` with PyPI's dxtb (conflicting tad-mctc pins). If both
 (e.g. with `--no-deps`), `quantabench-cli doctor` reports why GFN2 is unavailable and prints the
 install line above.
 
+AIMNet2's Warp-free GPU path uses the same `tad-dftd3` as the installed dxtb: the fork's vendored copy
+with the fork, PyPI's `tad-dftd3` 0.6 with PyPI's dxtb. Don't add `tad-dftd3` to a fork install: every
+tad-dftd3 release pins tad-mctc exactly (0.6 → 0.7, 0.7 → 0.8), so pip reports `ResolutionImpossible`
+against the fork's tad-mctc 0.11. A `tad-dftd3`/`tad-dftd4` left over from an earlier PyPI install is
+harmless (QuantaBench uses the fork's copy first; `pip uninstall tad-dftd3 tad-dftd4` tidies it up).
+
 ## External programs: xtb, CREST, MOPAC, Psi4 (optional)
 
 These are separate programs, not pip packages. Install them with conda (Miniforge) into their own
@@ -342,7 +348,7 @@ program are in [ENGINES.md](ENGINES.md).
 
 | Extra | Installs | Enables |
 |---|---|---|
-| `ml` | `aimnet`, `tad-dftd3` | AIMNet2 ML potential (downloads model weights on first use); `tad-dftd3` for its GPU path on AMD and Apple GPUs |
+| `ml` | `aimnet` | AIMNet2 ML potential (downloads model weights on first use). Its GPU path on AMD and Apple GPUs takes D3 dispersion from the `tad-dftd3` that comes with dxtb (`xtb` extra or the fork), or `pip install tad-dftd3` alone with PyPI's dxtb stack |
 | `xtb` | `dxtb`, `tblite` (Windows: separate line, step 4 above) | GFN1-xTB (dxtb), GFN2-xTB in process (tblite; dxtb with `tad-libcint`, see [above](#dxtbs-libcint-backend-gfn2-polarizability-ir-intensities)) |
 | `interop` | `cclib` | Import Gaussian/ORCA/Psi4/xtb/MOPAC output files |
 | `protonate` | `dimorphite-dl` | Alternative pH protonation |

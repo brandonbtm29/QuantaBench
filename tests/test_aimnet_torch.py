@@ -16,12 +16,16 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
-pytest.importorskip("tad_dftd3")
 
 from rdkit import Chem  # noqa: E402
 from rdkit.Chem import AllChem  # noqa: E402
 
 from quantabench.chem import aimnet_torch as at  # noqa: E402
+
+try:                       # the dxtb fork's vendored tad-dftd3, or PyPI's
+    at.d3_module()
+except ImportError:
+    pytest.skip("no tad-dftd3 (install dxtb or tad-dftd3)", allow_module_level=True)
 
 HAS_AIMNET = importlib.util.find_spec("aimnet") is not None
 if HAS_AIMNET:
@@ -125,7 +129,7 @@ def test_backend_choice_by_device_and_env(monkeypatch):
 # ---------------------------------------------------------------------------- D3
 def test_torch_d3_is_standard_d3_for_small_molecules():
     """Below the 12 Å switch TorchD3 is plain tad-dftd3 D3(BJ) (2-body) with the ωB97M parameters."""
-    import tad_dftd3 as d3
+    d3 = at.d3_module()
 
     z, x, _ = _geoms(MOLS["acetate-"])
     numbers = torch.tensor(z)

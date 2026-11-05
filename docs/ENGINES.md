@@ -36,7 +36,8 @@ dxtb 0.4 and tad-mctc 0.7. See [INSTALL.md](INSTALL.md#dxtbs-libcint-backend-gfn
 
 - **AIMNet2.** aimnet 0.2 computes neighbor lists and D3 dispersion with NVIDIA Warp kernels, which
   run on CUDA and the CPU only. On ROCm (AMD) and MPS (Apple) QuantaBench uses `chem/aimnet_torch.py`
-  instead: the same model with the dense neighbor path and D3(BJ) from `tad-dftd3` with aimnet's
+  instead: the same model with the dense neighbor path and D3(BJ) from `tad-dftd3` (the dxtb fork's vendored
+  copy, else PyPI's) with aimnet's
   parameters and reference tables. It matches the stock calculator to < 1e-5 eV (CPU and an RX 9060 XT).
   `QUANTABENCH_AIMNET_BACKEND=stock|torch` overrides the choice.
 - **aimnet neighbor-list bug (fixed in QuantaBench, 2026-11-05).** aimnet 0.2's adaptive neighbor list

@@ -2,6 +2,12 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Installing with the dxtb fork (2026-11-05)
+- Fixed `pip` `ResolutionImpossible` when installing `.[all]` together with the dxtb fork (Windows and macOS
+  installers): the `ml` extra no longer lists `tad-dftd3`, whose every release pins an old tad-mctc. AIMNet2's
+  Warp-free path takes D3 from the fork's vendored tad-dftd3 (else PyPI's), and the ROCm/MPS linear-algebra
+  routing also patches the fork's vendored D3 weights, `storch.eighb` and EEQ guess.
+
 ### Large batches and joining machines (2026-11-05)
 - A worker measures its machine's throughput on its first start (a machine joining the pool), holding jobs
   meanwhile; `worker --bench auto|always|never`. Machines dock: "Benchmark this computer"; this computer is
@@ -56,7 +62,7 @@
   (`--with-engines`, `-Gpu rocm` for a second `.venv-rocm`), launchers without a terminal window,
   **Help > Check for updates** / `quantabench-cli update`.
 - CI: `external-engines.yml` (xtb, CREST, MOPAC, Psi4 on Ubuntu and macOS).
-- `doctor` shows which AIMNet2 and dxtb path each GPU gets; the `ml` extra adds `tad-dftd3`.
+- `doctor` shows which AIMNet2 and dxtb path each GPU gets.
 - Resuming a run now also compares solvent, CREST and QM settings (they change the science).
 - Windows + ROCm: QuantaBench's entry points exit with `os._exit` after using the GPU, because AMD's runtime can hang at process exit (`QUANTABENCH_HARD_EXIT`). The console/GUI scripts now point at `cli:entry` / `gui.app:entry` (`pip install -e .` once after updating).
 
