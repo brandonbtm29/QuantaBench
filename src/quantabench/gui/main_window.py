@@ -1301,6 +1301,8 @@ class MainWindow(QMainWindow):
         if self._batch_dir is not None and (self._batch_dir / jobs.DB_NAME).is_file():
             self.model.update_many(self._batch_ids, run_dir=str(self._batch_dir))   # Resume finds them
         self._batch_dir, self._batch_ids = None, []
+        self._count_timer.stop()
+        self._update_counts()                        # the final counts now, not after the debounce
         self.worker = None
 
     def _on_finished(self, results, run_dir) -> None:

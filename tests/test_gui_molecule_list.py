@@ -229,7 +229,8 @@ def test_open_run_folder_select_search_and_resume(tmp_path, template, monkeypatc
         st = jobs.open_run(run)
         assert st.remaining == 0 and st.counts["ok"] == 29
         assert w.model.row("M005").status == "ok" and w.model.row("M017").n_conformers
-        assert not w.model.row("M005").stage and "29 built" in w.count_label.text()
+        assert not w.model.row("M005").stage
+        assert _wait(app, lambda: "29 built" in w.count_label.text(), 5)
         w.mol_list.select_id("M017")
         assert _wait(app, lambda: w.current_result() is not None and w.current_result().input.id == "M017")
         assert w.current_result().method == "mmff"
