@@ -8,7 +8,7 @@
     quantabench-cli build "...PFBA" --conformers crest --method xtb-gfn2 --solvent water --qm wb97x-d/def2-svp --cubes
     quantabench-cli freq "OC(=O)C(F)(F)F TFA" --method gfn1-xtb                # frequencies + thermo + IR
     quantabench-cli import psi4_output.dat ORCA.out [--out DIR]                 # other programs' outputs (cclib)
-    quantabench-cli import batches/*.spartan --table all.csv [--sdf all.sdf]   # Spartan documents -> one table
+    quantabench-cli import batches/*.spartan --table all.csv [--sdf all.sdf] [--wide qsar.csv]   # Spartan -> one table
     quantabench-cli slab --nx 16 --ny 9 --layers 3 --molecule "OC(=O)C(F)(F)..." -o pfoa_on_graphite.data
                          [--lammps-dir DIR]
     quantabench-cli md smd --system pfoa_graphite.extxyz -o DIR [--gpu] [--run]
@@ -425,14 +425,27 @@ def _import_spartan(args, files: list[str]) -> int:
     else:
         out = Path(args.out).expanduser() if args.out else new_run_dir(settings_mod.load().output_path(), "import")
         table = out / "spartan.csv"
+    wide = Path(args.wide).expanduser() if args.wide else None
     s = io_spartan.write_table(files, table, sdf=Path(args.sdf).expanduser() if args.sdf else None,
-                               conformers=args.conformers, log=print if len(files) <= 20 or args.verbose else None)
-    for e in s.errors:
+                               conformers=args.conformers, log=print if len(files) <= 20 or args.verbose else None,
+                               wide=wide)
+    for e in s.errors[:50] if not args.verbose else s.errors:
         print(f"  {e}", file=sys.stderr)
+    if len(s.errors) > 50 and not args.verbose:
+        print(f"  ... {len(s.errors) - 50} more (-v lists all)", file=sys.stderr)
     print(f"{s.files} Spartan document(s), {s.molecules} molecules, {s.rows} rows -> {table}"
           + (f" (+ {args.sdf})" if args.sdf else ""))
+    for reason, n in sorted(s.skipped.items(), key=lambda kv: -kv[1]):
+        print(f"  {n} molecule(s) not read: {reason}", file=sys.stderr)
+    if s.label_sources:
+        print("  labels: " + ", ".join(f"{n} {src}" for src, n in sorted(s.label_sources.items(),
+                                                                        key=lambda kv: -kv[1])))
+    if wide:
+        print(f"  wide table: {s.wide_rows} labels -> {wide}")
+        for p, level in s.prefixes.items():
+            print(f"    {p}_*: {level or '(level unknown)'}")
     if s.duplicate_labels:
-        print(f"  {s.duplicate_labels} label(s) occur in more than one row: all rows kept, duplicate_label = 1")
+        print(f"  {s.duplicate_labels} label(s) occur in more than one molecule: all rows kept, duplicate_label = 1")
     if s.files_failed:
         print(f"  {s.files_failed} document(s) could not be read", file=sys.stderr)
     return 1 if s.files_failed or s.errors else 0
@@ -449,9 +462,9 @@ def _import(args) -> int:
     status = _import_spartan(args, spartan) if spartan else 0
     if not others:
         return status
-    if args.table or args.sdf:
-        print("note: --table and --sdf apply to Spartan documents; the other files get the usual per-file exports",
-              file=sys.stderr)
+    if args.table or args.sdf or args.wide:
+        print("note: --table, --sdf and --wide apply to Spartan documents; the other files get the usual "
+              "per-file exports", file=sys.stderr)
     ok, why = io_cclib.available()
     if not ok:
         print(f"cclib is not installed ({why}); pip install quantabench[interop]", file=sys.stderr)
@@ -783,6 +796,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="export formats (default: xyz sdf extxyz spectrum)")
     im.add_argument("--table", help="Spartan documents: the CSV to write (default: OUT/spartan.csv)")
     im.add_argument("--sdf", help="Spartan documents: also write all geometries to this SDF")
+    im.add_argument("--wide", help="Spartan documents: also write a QSAR table with one row per resolved label "
+                                   "and each level of theory's best result as prefixed columns (pm6_homo_ev, "
+                                   "dft_homo_ev, conf_n_conformers, ...)")
     im.add_argument("--conformers", choices=["best", "all"], default="best",
                     help="Spartan conformer libraries: the lowest-energy conformer per molecule (default) or one "
                          "row per saved conformer")
