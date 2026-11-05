@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from rdkit import Chem
+from rdkit import Chem, rdBase
 from rdkit.Chem import AllChem, rdMolAlign, rdMolDescriptors
 
 KCAL_PER_EV = 23.060548
@@ -34,10 +34,14 @@ def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1) -> list[int]:
     params.numThreads = int(threads)
     params.pruneRmsThresh = 0.1
     params.useSmallRingTorsions = True
-    ids = list(AllChem.EmbedMultipleConfs(mol, numConfs=n, params=params))
-    if not ids:  # hard cases (cages, crowded stereo): random starting coordinates
-        params.useRandomCoords = True
-        ids = list(AllChem.EmbedMultipleConfs(mol, numConfs=max(1, n // 2), params=params))
+    try:
+        ids = list(AllChem.EmbedMultipleConfs(mol, numConfs=n, params=params))
+        if not ids:  # hard cases (cages, crowded stereo): random starting coordinates
+            params.useRandomCoords = True
+            ids = list(AllChem.EmbedMultipleConfs(mol, numConfs=max(1, n // 2), params=params))
+    except RuntimeError as exc:   # an RDKit invariant violation: its message is a C++ stack trace
+        first = next((ln.strip() for ln in str(exc).splitlines() if ln.strip() and "*" not in ln), "")
+        raise RuntimeError(f"RDKit could not embed 3D coordinates for this structure ({first or 'internal error'})") from None
     if not ids:
         raise RuntimeError("RDKit could not embed 3D coordinates for this structure")
     return ids
@@ -45,10 +49,12 @@ def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1) -> list[int]:
 
 def forcefield_optimize(mol: Chem.Mol, threads: int = 1, max_iters: int = 2000) -> tuple[list[float], str]:
     """Optimize every conformer in place. Returns (energies in kcal/mol by conformer order, force field)."""
-    if AllChem.MMFFHasAllMoleculeParams(mol):
+    with rdBase.BlockLogs():   # "UFFTYPER: Unrecognized atom type" per atom and call; the result says it
+        has_mmff, has_uff = AllChem.MMFFHasAllMoleculeParams(mol), AllChem.UFFHasAllMoleculeParams(mol)
+    if has_mmff:
         res = AllChem.MMFFOptimizeMoleculeConfs(mol, numThreads=threads, maxIters=max_iters, mmffVariant="MMFF94s")
         return [e for _, e in res], "MMFF94s"
-    if AllChem.UFFHasAllMoleculeParams(mol):
+    if has_uff:
         res = AllChem.UFFOptimizeMoleculeConfs(mol, numThreads=threads, maxIters=max_iters)
         return [e for _, e in res], "UFF"
     return [0.0] * mol.GetNumConformers(), "none"

@@ -215,3 +215,52 @@ def test_auto_falls_through_when_engine_cannot_start(tmp_path, monkeypatch):
     r = pipeline.run_molecule(from_smiles("CCO", id="eth"), cfg(tmp_path, method="auto"), device="cpu", threads=1)
     assert r.status == "ok", r.error
     assert r.method == "mmff" and any("model download failed" in n for n in r.notes)
+
+
+# ---------------------------------------------------------------- research inputs: salts, metals, spin
+def _summary(run_dir):
+    import csv
+
+    with open(run_dir / "summary.csv", newline="", encoding="utf-8") as f:
+        return {r["id"]: r for r in csv.DictReader(f)}
+
+
+def test_salt_metal_and_tin_in_one_batch(tmp_path):
+    """A counter-ion is removed by name, a complex drawn as ions fails with a reason (and the batch goes
+    on), and a tin compound that MMFF94s cannot do says UFF did it. summary.csv carries the charge as
+    drawn and as computed, the multiplicity, the removed fragments and the force field."""
+    mols = [from_smiles("[Na+].[O-]C(=O)C(F)(F)F", id="NaTFA"),
+            from_smiles("[Fe+2].c1cc[cH-]c1.c1cc[cH-]c1", id="ferrocene"),
+            from_smiles("CCCC[Sn](Cl)(CCCC)CCCC", id="TBTCl")]
+    results, run_dir = pipeline.run(mols, cfg(tmp_path))
+    by_id = {r.input.id: r for r in results}
+    na = by_id["NaTFA"]
+    assert na.status == "ok" and na.charge == -1 and na.input_charge == 0 and na.removed_fragments == ["[Na+]"]
+    fe = by_id["ferrocene"]
+    assert fe.status == "failed" and "metal complex" in fe.error and "Fe" in fe.error
+    sn = by_id["TBTCl"]
+    assert sn.status == "ok", sn.error
+    assert sn.forcefield == "UFF" and sn.descriptors["method"] == "UFF"
+    assert any("MMFF94s has no parameters" in n and "UFF energies" in n for n in sn.notes)
+    assert "Sn" in sn.descriptors["formula"]
+    rows = _summary(run_dir)
+    assert rows["NaTFA"]["input_charge"] == "0" and rows["NaTFA"]["charge"] == "-1"
+    assert rows["NaTFA"]["removed_fragments"] == "[Na+]" and rows["NaTFA"]["multiplicity"] == "1"
+    assert rows["ferrocene"]["status"] == "failed" and "metal complex" in rows["ferrocene"]["error"]
+    assert rows["TBTCl"]["forcefield"] == "UFF"
+
+
+def test_radical_gets_its_multiplicity(tmp_path):
+    r = pipeline.run_molecule(from_smiles("FC(F)(F)C(F)(F)[CH2]", id="rad"), cfg(tmp_path), device="cpu", threads=1)
+    assert r.status == "ok", r.error
+    assert r.multiplicity == 2 and r.summary_row()["multiplicity"] == 2
+    assert any("unpaired electron" in n for n in r.notes)
+
+
+def test_auto_says_why_it_passed_an_engine_over(monkeypatch):
+    real_available = engines.available
+    monkeypatch.setattr(engines, "available", lambda key: (True, "") if key in ("aimnet2", "gfn1-xtb") else
+                        (False, "x") if key in engines.AUTO_ORDER else real_available(key))
+    key, why = engines.auto_choice([50, 17, 6, 1])
+    assert key == "gfn1-xtb" and "AIMNet2" in why and "Sn" in why
+    assert engines.auto_choice([6, 8, 1]) == ("aimnet2", "")

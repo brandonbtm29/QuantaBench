@@ -107,6 +107,9 @@ def warp_problem(device) -> str:
         return "ROCm GPU: Warp supports NVIDIA CUDA only"
     if dev.type not in ("cpu", "cuda"):
         return f"Warp does not support {dev.type!r} devices"
+    from ..resources import init_warp_quietly
+
+    init_warp_quietly()
     try:
         import warp
     except Exception as exc:
@@ -180,6 +183,9 @@ def load_calculator(model: str = "aimnet2", device: str = "cpu"):
     """AIMNet2 calculator for ``device``: the stock ``AIMNet2Calculator`` where Warp serves the device,
     else ``AIMNet2TorchCalculator``. Both have the same ``eval``/``__call__`` interface. The returned
     object carries ``qb_backend`` ("stock" or "torch") and ``qb_backend_reason``."""
+    from ..resources import init_warp_quietly
+
+    init_warp_quietly()       # before aimnet imports Warp: no CUDA-driver warning on AMD/Apple/CPU machines
     backend, why = choose_backend(device)
     if backend == "stock":
         from aimnet.calculators import AIMNet2Calculator

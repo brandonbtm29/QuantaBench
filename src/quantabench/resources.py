@@ -71,6 +71,66 @@ def has_package(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+#: What NVIDIA Warp's native library prints (from C, on every process start) when no NVIDIA driver loads.
+WARP_NO_DRIVER_MESSAGE = "Warp CUDA warning: Could not find or load the NVIDIA CUDA driver"
+_WARP_INIT: list[bool] = []
+
+
+def init_warp_quietly() -> bool:
+    """Initialize NVIDIA Warp (which aimnet imports) without its "Could not find or load the NVIDIA CUDA
+    driver" line on machines with no NVIDIA driver (AMD, Apple, CPU-only): every lane process printed it.
+
+    Warp writes that line from its C library during ``warp.init()``, before ``warp.config`` is consulted, so
+    no Warp setting silences it. This captures file descriptor 2 for the duration of ``warp.init()`` and
+    passes every other line through, so a real Warp error (e.g. a too-old NVIDIA driver) still shows; the
+    line only appears when the driver is missing, so NVIDIA machines see no difference. Later
+    ``import aimnet`` finds Warp initialized and prints nothing. Call before importing aimnet or
+    nvalchemiops; returns True once Warp is initialized (False without Warp)."""
+    if _WARP_INIT:
+        return _WARP_INIT[0]
+    if not has_package("warp"):
+        _WARP_INIT.append(False)
+        return False
+    import tempfile
+
+    try:
+        import warp
+    except Exception:  # noqa: BLE001 - reported where aimnet is imported
+        _WARP_INIT.append(False)
+        return False
+    if hasattr(warp, "LOG_WARNING"):           # Warp >= 1.10: no "Warp x.y initialized" banner (as nvalchemiops)
+        warp.config.log_level = warp.LOG_WARNING
+    warp.config.quiet = True                   # older Warp
+    captured = b""
+    ok = False
+    try:
+        sys.stderr.flush()
+        saved = os.dup(2)
+    except (OSError, ValueError, AttributeError):   # no usable fd 2 (pythonw, some embedders): plain init
+        saved = None
+    with tempfile.TemporaryFile() as tmp:
+        if saved is not None:
+            os.dup2(tmp.fileno(), 2)
+        try:
+            warp.init()
+            ok = True
+        except Exception:  # noqa: BLE001 - aimnet's own import reports a broken Warp
+            ok = False
+        finally:
+            if saved is not None:
+                os.dup2(saved, 2)
+                os.close(saved)
+                tmp.seek(0)
+                captured = tmp.read()
+    rest = [ln for ln in captured.decode("utf-8", "replace").splitlines(keepends=True)
+            if not ln.startswith(WARP_NO_DRIVER_MESSAGE)]
+    if rest:
+        sys.stderr.write("".join(rest))
+        sys.stderr.flush()
+    _WARP_INIT.append(ok)
+    return ok
+
+
 def is_wsl() -> bool:
     if platform.system() != "Linux":
         return False
@@ -336,6 +396,8 @@ def import_checks() -> list[tuple[str, str, bool, str]]:
         if (label, mod) in OPTIONAL_MODULES and not has_package(top):
             continue
         try:
+            if top == "aimnet":
+                init_warp_quietly()     # no "Could not find or load the NVIDIA CUDA driver" without NVIDIA
             importlib.import_module(mod)
             out.append((label, mod, True, ""))
         except Exception as exc:  # ImportError, OSError from blocked DLLs, ...

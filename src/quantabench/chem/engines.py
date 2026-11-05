@@ -294,6 +294,24 @@ def resolve_auto(numbers, solvent: str = "") -> str:
     return auto_candidates(numbers, solvent)[0]
 
 
+def auto_choice(numbers, solvent: str = "") -> tuple[str, str]:
+    """(engine, reason) for ``method="auto"``. ``reason`` is "" when the first installed engine of
+    ``AUTO_ORDER`` was taken; otherwise it says which installed engines were passed over because they
+    lack parameters for these elements (e.g. AIMNet2 for Sn), so a batch log shows why molecules differ."""
+    key = resolve_auto(numbers, solvent)
+    skipped = []
+    for k in AUTO_ORDER:
+        if k == key:
+            break
+        if k in ENGINES and available(k)[0]:
+            ok, why = supports(k, numbers)
+            if not ok:
+                skipped.append(why)
+    if not skipped:
+        return key, ""
+    return key, f"auto: {'; '.join(skipped)}; using {ENGINES[key].label}"
+
+
 # ---------------------------------------------------------------------------- dxtb
 class DxtbCalculator(Calculator):
     """ASE calculator around dxtb (energies and autograd forces).
@@ -385,6 +403,9 @@ def make_calculator(key: str, numbers, charge: int = 0, multiplicity: int = 1, d
     if key in ("gfn1-xtb", "gfn2-xtb"):
         return DxtbCalculator(numbers, key, charge, multiplicity, device)
     if key == "aimnet2":
+        from ..resources import init_warp_quietly
+
+        init_warp_quietly()
         from aimnet.calculators import AIMNet2ASE
 
         return AIMNet2ASE(_aimnet_base(model, device), charge=charge, mult=multiplicity)

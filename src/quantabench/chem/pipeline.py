@@ -36,7 +36,7 @@ from . import conformers as confs
 from . import descriptors as desc
 from .inputs import MoleculeInput
 from .optimize import Cancelled, optimize
-from .standardize import formal_charge, prepare
+from .standardize import UnsupportedStructure, formal_charge, prepare, spin_multiplicity
 
 KCAL_PER_EV = confs.KCAL_PER_EV
 
@@ -133,6 +133,8 @@ class MoleculeResult:
     solvent: str = ""                  # implicit solvent actually used by the refinement ("" = gas phase)
     conformer_search: str = ""         # "rdkit" | "crest" (what actually produced the conformers)
     qm: dict | None = None             # chem.qm stage results (see qm.QM_RESULT_KEYS)
+    input_charge: int | None = None    # total formal charge of the record as drawn (all fragments)
+    removed_fragments: list[str] = field(default_factory=list)   # SMILES of fragments standardization removed
 
     def to_dict(self) -> dict:
         d = {k: v for k, v in asdict(self).items() if k not in ("mol", "input")}
@@ -143,7 +145,10 @@ class MoleculeResult:
         best = self.conformers[0] if self.conformers else None
         return {
             "id": self.input.id, "name": self.input.name, "status": self.status, "error": self.error,
-            "input_smiles": self.input.smiles, "smiles": self.smiles, "charge": self.charge, "method": self.method,
+            "input_smiles": self.input.smiles, "smiles": self.smiles,
+            "input_charge": "" if self.input_charge is None else self.input_charge, "charge": self.charge,
+            "multiplicity": self.multiplicity, "removed_fragments": ".".join(self.removed_fragments),
+            "method": self.method, "forcefield": self.forcefield,
             "device": self.device, "solvent": self.solvent, "conformer_search": self.conformer_search,
             "n_embedded": self.n_embedded, "n_conformers": len(self.conformers),
             "best_energy_eV": best.energy_ev if best else "", "best_converged": best.converged if best else "",
@@ -316,6 +321,22 @@ def _solvent_for(method: str, solvent: str, notes: list[str]) -> str:
     return ""
 
 
+def _forcefield_fallback(result: MoleculeResult, forcefield: str, method: str, log: Callable[[str], None]) -> None:
+    """MMFF94s had no parameters for the structure (metals, hypervalent atoms, radicals): say what was used."""
+    if forcefield == "UFF":
+        msg = "MMFF94s has no parameters for this structure: conformers pre-optimized with UFF"
+        if method == "mmff":
+            msg += " (the energies are UFF energies)"
+    elif method == "mmff":
+        raise UnsupportedStructure("neither MMFF94s nor UFF has parameters for this structure, so method 'mmff' "
+                                   "has no energies; use an xTB method")
+    else:
+        msg = ("neither MMFF94s nor UFF has parameters for this structure: the conformers are unoptimized ETKDG "
+               "geometries until the refinement")
+    result.notes.append(msg)
+    log(f"  {msg}")
+
+
 def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConfig, threads: int,
                       should_stop: Callable[[], bool], log: Callable[[str], None]) -> confs.ConformerSet:
     """RDKit ETKDGv3 + MMFF94s, or CREST (falls back to RDKit with a note if CREST is missing or fails)."""
@@ -397,18 +418,32 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
 
             torch_compat.apply_settings(cfg)
         stage("prepare")
+        info: dict = {}
         prepared, notes = prepare(inp.to_mol(), cfg.ph if cfg.protonate else None, cfg.keep_largest_fragment,
-                                  cfg.protonation_method)
-        result.notes += notes
+                                  cfg.protonation_method, info=info)
+        result.input_charge = info.get("input_charge")
+        result.removed_fragments = list(info.get("removed_fragments") or [])
         result.smiles = Chem.MolToSmiles(Chem.RemoveHs(prepared))
         result.charge = inp.charge if inp.charge is not None else formal_charge(prepared)
+        if inp.charge is not None and inp.charge != formal_charge(prepared):
+            notes.append(f"charge {inp.charge:+d} given with the input (the structure's formal charge is "
+                         f"{formal_charge(prepared):+d})")
+        # an explicit multiplicity other than the default singlet wins; otherwise drawn radicals decide
+        result.multiplicity, spin_note = spin_multiplicity(prepared, result.charge,
+                                                           inp.multiplicity if inp.multiplicity != 1 else None)
+        if spin_note:
+            notes.append(spin_note)
+        result.notes += notes
         numbers = [a.GetAtomicNum() for a in prepared.GetAtoms()]
         from . import solvents
 
         solvent = solvents.canonical(cfg.solvent)
         method = cfg.method
         if method == "auto":
-            method = engines.resolve_auto(numbers, solvent)
+            method, why = engines.auto_choice(numbers, solvent)
+            if why:
+                result.notes.append(why)
+                notes.append(why)
         else:
             ok, why = engines.available(method)
             if ok:
@@ -422,7 +457,9 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         if method == "mmff" or not engines.ENGINES[method].gpu_capable:
             result.device = "cpu"
         result.timings["prepare"] = time.perf_counter() - t
-        log(f"{inp.id}: {result.smiles} (charge {result.charge:+d}) -> {engines.ENGINES[method].label} on {result.device}"
+        log(f"{inp.id}: {result.smiles} (charge {result.charge:+d}"
+            + (f", multiplicity {result.multiplicity}" if result.multiplicity != 1 else "")
+            + f") -> {engines.ENGINES[method].label} on {result.device}"
             + (f" in {result.solvent}" if result.solvent else ""))
         for n in notes:
             log(f"  {n}")
@@ -433,6 +470,8 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         result.forcefield, result.n_embedded = cs.forcefield, cs.n_embedded
         result.timings["conformers"] = time.perf_counter() - t
         log(f"  {cs.n_embedded} embedded, {len(cs.conf_ids)} unique after {cs.forcefield} + pruning")
+        if result.conformer_search == "rdkit" and cs.forcefield != "MMFF94s":
+            _forcefield_fallback(result, cs.forcefield, method, log)
         if should_stop():
             raise Cancelled()
 
@@ -496,6 +535,8 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             if all(d is not None for d in dips):
                 result.descriptors["dipole_debye_boltz"] = float(np.dot(weights, dips))
         result.descriptors["method"] = method
+        if method == "mmff" and result.forcefield == "UFF":
+            result.descriptors["method"] = "UFF"      # MMFF94s had no parameters: the energies are UFF's
         if method == "mmff" and result.forcefield.startswith("CREST"):
             # MMFF refinement keeps CREST's geometries and energies (they are not MMFF energies)
             result.descriptors["method"] = result.forcefield

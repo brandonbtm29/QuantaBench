@@ -19,10 +19,24 @@ from .descriptors import dipole_debye
 from .engines import BOHR_ANG, has_libcint, libcint_status
 
 AU_POLARIZABILITY_A3 = 0.1481847
+#: Above this static polarizability per heavy atom the xTB response is not physical (iodine is ~5 A^3).
+MAX_ALPHA_PER_HEAVY_ATOM_A3 = 10.0
 
 
 def available() -> bool:
     return has_package("dxtb") and has_package("torch")
+
+
+def unphysical_polarizability(eigenvalues_A3, numbers, charge: int = 0) -> str:
+    """Why a polarizability tensor (eigenvalues, Å^3) cannot be physical, "" if it can. A gas-phase
+    multiply charged anion (a phosphate or a disulfonate at pH 7) can have an unbound HOMO in GFN1-xTB:
+    the field response then diverges (4e5 Å^3 for a C10 perfluoroalkyl phosphate dianion)."""
+    eig = np.asarray(eigenvalues_A3, dtype=float)
+    heavy = max(1, int(np.count_nonzero(np.asarray(numbers) > 1)))
+    if np.all(np.isfinite(eig)) and eig.min() >= 0 and eig.mean() <= MAX_ALPHA_PER_HEAVY_ATOM_A3 * heavy:
+        return ""
+    return (f"{eig.mean():.4g} Å^3 (eigenvalues {eig.min():.3g} to {eig.max():.3g}) is unphysical for {heavy} heavy "
+            f"atoms at charge {charge:+d}" + (" (gas-phase anion: unbound electrons)" if charge < 0 else ""))
 
 
 def xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity: int = 1,
@@ -58,6 +72,10 @@ def xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity
         with torch_compat.linalg_routing(dev):
             alpha = fcalc.get_polarizability(pos, **kwargs).detach().cpu().double().numpy() * AU_POLARIZABILITY_A3
         eig = np.linalg.eigvalsh(0.5 * (alpha + alpha.T))
-        out["xtb_polarizability_iso_A3"] = float(eig.mean())
-        out["xtb_polarizability_aniso_A3"] = float(eig.max() - eig.min())
+        why = unphysical_polarizability(eig, numbers, charge)
+        if why:
+            out["_notes"] = [f"xTB polarizability discarded: {why}"]
+        else:
+            out["xtb_polarizability_iso_A3"] = float(eig.mean())
+            out["xtb_polarizability_aniso_A3"] = float(eig.max() - eig.min())
     return out
