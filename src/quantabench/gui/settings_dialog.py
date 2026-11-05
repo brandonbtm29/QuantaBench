@@ -148,6 +148,12 @@ class SettingsDialog(QDialog):
         self.lane_plan = QLabel()
         self.lane_plan.setWordWrap(True)
         form.addRow("", self.lane_plan)
+        self.speed_aware = QCheckBox("Speed-aware lanes: leave the last molecules to faster lanes")
+        self.speed_aware.setChecked(bool(getattr(r, "speed_aware_lanes", True)))
+        self.speed_aware.setToolTip("With lanes of different speed (a GPU lane next to CPU lanes), a slower lane does\n"
+                                    "not start one of the last molecules when the faster lanes would finish all of\n"
+                                    "them sooner. Off: every free lane takes the next molecule.")
+        form.addRow("", self.speed_aware)
         if report:
             info = QLabel(report.summary() + ("\n" + "\n".join(report.notes) if report.notes else ""))
             info.setWordWrap(True)
@@ -387,6 +393,7 @@ class SettingsDialog(QDialog):
         s.resources.gpu_memory_fraction = self.mem.value()
         s.resources.dxtb_gpu = self.dxtb_gpu.currentText()
         s.resources.linalg = self.linalg.currentText()
+        s.resources.speed_aware_lanes = self.speed_aware.isChecked()
         from ..dist import lanes as lanes_mod
 
         lanes = self.lanes.currentText().strip().lower() or "1"

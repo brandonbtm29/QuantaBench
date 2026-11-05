@@ -36,6 +36,7 @@ class ResourceSettings:
     parallel_molecules: int = 0      # batch jobs: molecules in flight at once (0 = auto)
     linalg: str = "auto"             # dxtb dense linear algebra a GPU lacks: "auto" | "cpu" | "device" (torch_compat)
     dxtb_gpu: str = "auto"           # dxtb on a GPU: "auto" (only where faster) | "on" | "off" (torch_compat)
+    speed_aware_lanes: bool = True   # lanes: slower lanes leave the last molecules to faster ones (dist.speed)
 
 
 @dataclass

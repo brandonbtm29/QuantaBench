@@ -244,12 +244,43 @@ Depends on: none (research only; can run any night).
 - 2026-11-05: minimal Machines dock (registry, worker status on demand, this computer's lane plan). Left:
   the "Run on" choice, which belongs in UI-5's job dialog.
 
-### DIST-5: Speed-aware lanes at the end of a batch · ready
+### DIST-5: Speed-aware lanes at the end of a batch · done 2026-11-05 (NOVA measurement needs-Brandon)
 - `lanes auto` for AIMNet2 on NOVA gives 1 GPU lane + 4 CPU lanes, and the GPU is ~10x faster per molecule.
   Lanes pull molecules first-come, so near the end of a batch a CPU lane can start a molecule the GPU lane
   would have finished long before; for a small batch the run can end up slower than the GPU lane alone.
   Use each lane's measured time per molecule: when the queue is shorter than (slow lane's time / fast lane's
   time), leave the rest to the fast lanes. Measure on NOVA with 8, 50 and 500 PFAS.
+- 2026-11-05: `dist.speed` + `run_parallel`. A free lane leaves the next molecule when the lanes >= 1.5x
+  faster, simulated taking the queue in order (each molecule to the one that finishes it first, from when
+  each is free), would finish all of it before this lane finished that one. Speeds are seconds per atom per
+  (device, threads), measured, else the registry benchmark scaled to the run, else unknown (no holding).
+  Only ready lanes (or first starts, <= 60 s) are counted on. On by default (`resources.speed_aware_lanes`,
+  `build --[no-]speed-aware-lanes`, Settings > Compute). Simulated (tests/test_speed.py, GPU 5 s and CPU 50 s
+  per 20-atom molecule, lanes ready after 4-6 s, benchmark-seeded), makespan with / without / GPU lane alone:
+  8 PFAS 46 / 54 / 46 s, 50 PFAS 196 / 204 / 256 s, 500 PFAS 1804 / 1804 / 2506 s. With 10-40-atom molecules
+  and 10 % scatter it never ended later than either; with the benchmark ratio 10 % off and 20 % scatter it
+  lost up to ~25 % against the GPU lane alone on single 8-molecule runs, never on average.
+- Left (needs-Brandon): the real measurement on NOVA. In PowerShell, from the repo with this branch, with a
+  PFAS CSV (`pfas.csv`, a SMILES column; add `--smiles-col` if needed) and an empty folder for the runs:
+  ```
+  quantabench-cli machines --refresh --bench aimnet2          # seeds: aimnet2@cpu and aimnet2@cuda:0
+  quantabench-cli lanes auto --method aimnet2                 # expect gpu0 + 4 CPU lanes, speed-aware on
+  foreach ($n in 8, 50, 500) {
+    Get-Content pfas.csv -TotalCount ($n + 1) | Set-Content "pfas_$n.csv"
+    foreach ($run in @(@("on", "--lanes", "auto", "--speed-aware-lanes"),
+                       @("off", "--lanes", "auto", "--no-speed-aware-lanes"),
+                       @("gpu", "--lanes", "gpu:1x4"))) {
+      $t = Measure-Command { quantabench-cli build --file "pfas_$n.csv" --method aimnet2 --out dist5 $run[1..($run.Count - 1)] |
+                             Tee-Object -FilePath "dist5_${n}_$($run[0]).log" | Out-Host }
+      "$n $($run[0]) $([math]::Round($t.TotalSeconds, 1)) s" | Add-Content dist5_times.txt
+    }
+  }
+  Get-Content dist5_times.txt
+  Select-String -Path dist5_*.log -Pattern "Speed-aware lanes|Lane speeds|Molecules per lane"
+  ```
+  Record the 9 wall times here. If `on` is slower than `gpu` at 8 PFAS, compare the `Lane speeds` line
+  (measured) with the benchmark ratio `aimnet2@cuda:0` / `aimnet2@cpu` in `quantabench-cli machines`: the
+  8-molecule case relies on that ratio, since the CPU lanes never run a molecule there.
 
 ### SCALE-1: The GUI at 14,000 molecules · ready
 - From the PFAS QSAR project (2026-11-05): Spartan could not take 14,000 molecules in one document, so the

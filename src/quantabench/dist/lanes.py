@@ -31,6 +31,14 @@ How a parallel run works (``run_parallel``):
   (RDKit Mol with its conformers and properties) over its pipe, with its log lines (prefixed "[lane]") and
   stage updates. The parent is the only process that writes jobs.sqlite (mark_running, record) and the
   only one that calls ``progress``/``log``/``on_result``, all in the calling thread.
+* speed-aware end of a batch (``dist.speed``, on unless ``settings.resources.speed_aware_lanes`` or
+  ``build --no-speed-aware-lanes`` turns it off; only for pools with lanes of more than one kind): a free
+  lane leaves the next molecule in the queue when the lanes clearly faster than it (a GPU lane next to CPU
+  lanes) would finish every queued molecule before it finished that one. Speeds per lane kind come from the
+  molecules it finished (seconds per atom), else from this machine's benchmark in the registry, else are
+  unknown (no holding back). Only ready lanes (or lanes still starting for the first time) are counted on,
+  so a fast lane that dies releases the held molecules at once; one that stalls, after about one slow-lane
+  molecule. The first time lanes hold back, one log line says which and why.
 * ``should_stop`` is polled by the parent and copied into a shared stop flag (``StopEvent``: Event semantics,
   no lock) that every lane's ``should_stop`` reads, so a cancel reaches the molecule running in each lane.
 * a lane that dies (segfault, OOM kill, ``os._exit``) is restarted. Its molecule's crash count goes up,
@@ -103,6 +111,9 @@ from pathlib import Path
 #: standing in for a segfault or OOM kill. Only tests set it.
 TEST_CRASH_ENV = "QUANTABENCH_TEST_LANE_CRASH"
 TEST_CRASH_EXIT = 86
+#: Test hook: "cpu2=1.5,gpu0=0" makes the named lanes wait that many seconds after each molecule (a slow
+#: lane next to a fast one, for the speed-aware tests). Only tests set it.
+TEST_DELAY_ENV = "QUANTABENCH_TEST_LANE_DELAY"
 #: Elements method "auto" is resolved for when a lane plan is made (H C N O F S: PFAS and most organics)
 TYPICAL_ELEMENTS = (1, 6, 7, 8, 9, 16)
 #: Working set of one lane process in GB, by workload, for the memory cap of the auto plan
@@ -512,6 +523,15 @@ def lane_device(lane: Lane, cfg, memory_fraction: float) -> str:
     return lane.device
 
 
+def _test_delay(name: str) -> float:
+    for item in os.environ.get(TEST_DELAY_ENV, "").split(","):
+        lane, _, seconds = item.partition("=")
+        if lane.strip() == name:
+            with contextlib.suppress(ValueError):
+                return max(0.0, float(seconds))
+    return 0.0
+
+
 def _lane_main(*args, **kwargs) -> None:
     """Entry of one lane process (``_lane_loop``), with a hard exit where the GPU runtime would hang at
     shutdown (``resources.hard_exit_if_needed``: Windows ROCm). Module level, for the spawn start method."""
@@ -550,6 +570,7 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
         cfg = pipeline.BuildConfig(**{**cfg_dict, "threads": threads})
         device = lane_device(lane, cfg, memory_fraction)
         crash_ids = {x for x in os.environ.get(TEST_CRASH_ENV, "").split(",") if x}
+        delay = _test_delay(lane.name)
     except BaseException:
         with contextlib.suppress(Exception):
             send("fatal", traceback.format_exc())
@@ -570,6 +591,9 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
             res = pipeline.run_molecule(inp, cfg, device, threads, stop_event.is_set,
                                         log=lambda m: send("log", m),
                                         stage=lambda s, k=k, mol_id=mol_id: send("stage", k, mol_id, s))
+            t_end = time.monotonic() + delay
+            while time.monotonic() < t_end and not stop_event.is_set():
+                time.sleep(min(0.05, max(0.0, t_end - time.monotonic())))
             result_dir = ""
             if cfg.write_files and res.status == "ok":
                 try:
@@ -608,6 +632,8 @@ class _LaneProcess:
         self.startup_failures = 0
         self.retired = False
         self.done = 0
+        self.started_at = 0.0       # time.monotonic() of the last start
+        self.ever_ready = False     # has been ready once (a restart is not a first start)
 
     @property
     def alive(self) -> bool:
@@ -680,6 +706,7 @@ class LanePool:
             proc.start()
         child_conn.close()
         w.proc, w.conn, w.ready, w.busy, w.pid = proc, parent_conn, False, None, proc.pid
+        w.started_at = time.monotonic()
 
     def start_all(self) -> None:
         for w in self.workers:
@@ -758,19 +785,59 @@ class LanePool:
             w.conn = None
 
 
+def speed_aware_setting() -> bool:
+    """``settings.resources.speed_aware_lanes`` (on unless switched off)."""
+    from .. import settings as settings_mod
+
+    try:
+        return bool(settings_mod.load().resources.speed_aware_lanes)
+    except Exception:  # noqa: BLE001 - unreadable settings: the default
+        return True
+
+
+def speed_policy(lanes: list[Lane], cfg):
+    """The ``speed.SpeedPolicy`` for a pool, seeded from this machine's benchmark; None when every lane is of
+    one kind (same device and threads): such lanes never hold back for each other."""
+    from . import speed
+
+    if len({(x.device, x.threads) for x in lanes}) < 2:
+        return None
+    method = cfg.method
+    if method == "auto":
+        try:
+            method = workload(cfg)[0]
+        except Exception:  # noqa: BLE001 - no seed then
+            method = ""
+    return speed.SpeedPolicy(lanes, speed.registry_seeds(lanes, method))
+
+
 def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, done_before: int,
-                 progress, should_stop, log, on_result, keep_results: bool = True) -> list:
+                 progress, should_stop, log, on_result, keep_results: bool = True,
+                 speed_aware: bool | None = None) -> list:
     """Run ``todo`` ([(id, MoleculeInput)], from ``JobStore.todo``) in ``lanes`` worker processes. The
     calling thread is the only one that writes ``store`` and calls the callbacks. Returns the results in
-    ``todo`` order (molecules not started because of a cancel are absent)."""
+    ``todo`` order (molecules not started because of a cancel are absent).
+
+    ``speed_aware`` (None: ``settings.resources.speed_aware_lanes``): near the end of the batch, a lane
+    leaves the last molecules to clearly faster lanes when they would finish them first (``dist.speed``).
+    Off, every free lane takes the next molecule."""
     from ..chem import jobs
     from ..chem.pipeline import MoleculeResult
+    from . import speed
 
     cap = max_lanes()
     if cap is not None and len(lanes) > cap:
         log(f"Lanes: {len(lanes)} requested, {cap} is the most one process can run on Windows; using the first {cap}")
         lanes = lanes[:cap]
-    log(f"Lanes: {describe(lanes)}; molecules go to whichever lane is free")
+    if speed_aware is None:
+        speed_aware = speed_aware_setting()
+    policy = speed_policy(lanes, cfg) if speed_aware else None
+    if policy is None:
+        log(f"Lanes: {describe(lanes)}; molecules go to whichever lane is free")
+    else:
+        seeded = "benchmark speeds until measured" if policy.seed else "speeds measured as molecules finish"
+        log(f"Lanes: {describe(lanes)}; molecules go to whichever lane is free, the last ones to the lanes that "
+            f"finish them first (speed-aware, {seeded})")
     if cfg.method in GPU_LINALG_ENGINES and len({x.device == "cpu" for x in lanes}) == 2:
         log(f"Note: {cfg.method} on GPU and CPU lanes: where dxtb stays on the GPU (torch_compat.dxtb_device) it "
             "computes in float32, on the CPU lanes in float64, so one table mixes both precisions. CPU lanes "
@@ -784,6 +851,26 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     stopping = False
     t0 = time.perf_counter()
     announced = False
+    held_logged = False
+    sizes: dict[str, float] = {}
+
+    def size_of(mol_id: str) -> float:
+        if mol_id not in sizes:
+            sizes[mol_id] = speed.molecule_size(inputs[mol_id])
+        return sizes[mol_id]
+
+    def typical_size() -> float:
+        return sum(sizes.values()) / len(sizes) if sizes else speed.DEFAULT_SIZE
+
+    def lane_state(w: _LaneProcess) -> str:
+        if w.conn is None or not w.alive:
+            return speed.DOWN
+        if w.ready:
+            return speed.READY
+        if (not w.ever_ready and w.startup_failures == 0
+                and time.monotonic() - w.started_at < speed.STARTUP_GRACE_S):
+            return speed.STARTING           # first start: counted on (a restart is not: it may never come back)
+        return speed.DOWN
 
     def finish(w: _LaneProcess | None, k: int, mol_id: str, res, result_dir: str = "") -> None:
         nonlocal n_done
@@ -813,6 +900,8 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         if w.busy is not None:
             k, mol_id, inp = w.busy
             w.busy = None
+            if policy is not None:
+                policy.lost(w.lane.name)
             crashes = store.record_crash(mol_id)
             if crashes >= jobs.MAX_CRASHES:
                 msg = f"crashed the process {crashes} times"
@@ -861,11 +950,15 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         elif kind == "result":
             _, _, k, mol_id, res, result_dir = msg
             w.busy = None
+            if policy is not None:
+                policy.finished(w.lane.name, ok=res.status == "ok")
             finish(w, k, mol_id, res, result_dir)
         elif kind == "error":
             _, _, k, mol_id, tb = msg
             inp = inputs[mol_id]
             w.busy = None
+            if policy is not None:
+                policy.finished(w.lane.name, ok=False)
             err = tb.strip().splitlines()[-1]
             log(f"[{w.lane.name}] {mol_id}: lane error: {err}")
             finish(w, k, mol_id, MoleculeResult(input=inp, status="failed", error=f"lane error: {err}",
@@ -873,6 +966,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         elif kind == "ready":
             _, _, pid, device, _threads = msg
             w.ready, w.pid, w.device, w.startup_failures = True, pid, device, 0
+            w.ever_ready = True
             if not announced and all(x.ready or x.retired for x in pool.workers):
                 announced = True
                 log(f"{sum(x.ready for x in pool.workers)} lanes ready in {time.perf_counter() - t0:.1f} s")
@@ -889,8 +983,15 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                 busy = sum(w.busy is not None for w in pool.workers)
                 log(f"Cancelling: {busy} running molecule(s) stop after their current step")
             if not stopping:
+                states, held = None, []
                 for w in pool.workers:
                     if queue and w.ready and w.busy is None and w.conn is not None and w.alive:
+                        if policy is not None:
+                            if states is None:
+                                states = {x.lane.name: lane_state(x) for x in pool.workers}
+                            if not policy.allow(w.lane.name, (size_of(m) for _, m, _ in queue), states):
+                                held.append(w.lane.name)   # faster lanes finish the rest first: ask again later
+                                continue
                         k, mol_id, inp = queue.popleft()
                         try:
                             w.conn.send((k, mol_id, texts[mol_id]))
@@ -900,8 +1001,13 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                             queue.appendleft((k, mol_id, inp))
                             continue
                         w.busy = (k, mol_id, inp)
+                        if policy is not None:
+                            policy.started(w.lane.name, size_of(mol_id))
                         store.mark_running(mol_id)
                         progress(done_before + k, total, "start", mol_id)
+                if held and not held_logged:
+                    held_logged = True
+                    log(policy.hold_message(held, len(queue), typical_size(), states))
             busy = any(w.busy is not None for w in pool.workers)
             if not busy and (stopping or not queue):
                 break
@@ -931,6 +1037,8 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     done = {w.lane.name: w.done for w in pool.workers if w.done}
     if done:
         log("Molecules per lane: " + ", ".join(f"{name} {n}" for name, n in done.items()))
+    if policy is not None and policy.done:
+        log(policy.summary(typical_size()))
     return [results[k] for k in sorted(results)]
 
 
@@ -966,10 +1074,15 @@ def _cli(args) -> int:
 
         print(exc, file=sys.stderr)
         return 2
+    aware = bool(getattr(s.resources, "speed_aware_lanes", True))
     if args.json:
-        print(json.dumps({"spec": spec, "lanes": [x.to_dict() for x in lanes]}, indent=2))
+        print(json.dumps({"spec": spec, "lanes": [x.to_dict() for x in lanes], "speed_aware": aware}, indent=2))
     else:
         print(f"{spec}: {plan_text(spec, cfg, report, s.resources.parallel_molecules)}")
         for x in lanes:
             print(f"  {x.name:8s} {x.device:8s} {x.threads} thread(s)")
+        if len({(x.device, x.threads) for x in lanes}) > 1:
+            print("  end of a batch: " + ("slower lanes leave the last molecules to faster ones (speed-aware; "
+                                          "build --no-speed-aware-lanes turns it off)" if aware else
+                                          "every free lane takes the next molecule (speed-aware lanes off)"))
     return 0

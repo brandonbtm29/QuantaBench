@@ -68,6 +68,17 @@ worker processes that share the CPU threads and the GPU (for example `gpu:1x4,cp
 threads and five 2-thread CPU lanes). The parent process stays the only writer of `jobs.sqlite`. On NOVA,
 MMFF ran 3.7x and GFN1-xTB 3.45x faster than one process with all 12 threads.
 
+Lanes of different speed are **speed-aware** at the end of a batch (`dist.speed`, DIST-5): a free lane does
+not start the next molecule when the lanes clearly faster than it (1.5x or more) would finish every molecule
+still queued before it finished that one. With one GPU lane 10x faster than each CPU lane, the CPU lanes leave
+the last ~10 molecules to the GPU lane; with two such GPU lanes, the last ~20. Speeds are seconds per atom per
+kind of lane, measured as molecules finish; before that, this machine's benchmark (`quantabench-cli machines
+--refresh --bench aimnet2` measures `aimnet2@cpu` and `aimnet2@cuda:0`) gives the ratio, and without one the
+first molecules go out as before. A lane that dies releases what was held for it at once; one that stalls,
+after about one slow-lane molecule. The log says when lanes start holding back and, at the end, the speed of
+each kind of lane. Switch it off with `build --no-speed-aware-lanes` or Settings > Compute
+(`resources.speed_aware_lanes`).
+
 **Frameworks considered:**
 - **Ray:** no. Its multi-node clusters on Windows are "experimental and untested" ([7](#sources)).
 - **Dask distributed:** a possible later backend for M2/M3. Its worker resources can tag GPU machines.

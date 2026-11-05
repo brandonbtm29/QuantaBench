@@ -89,6 +89,28 @@ def test_compute_tab_gpu_policies_round_trip():
     d.deleteLater()
 
 
+def test_compute_tab_speed_aware_lanes_round_trip():
+    from quantabench import settings as sm
+    from quantabench.gui.settings_dialog import SettingsDialog
+
+    _app()
+    s = sm.Settings()
+    assert s.resources.speed_aware_lanes is True
+    d = SettingsDialog(s, None)
+    assert d.speed_aware.isChecked()
+    d.speed_aware.setChecked(False)
+    out = d.result_settings()
+    assert out.resources.speed_aware_lanes is False
+    sm.save(out)
+    assert sm.load().resources.speed_aware_lanes is False
+    d.reject()
+    d.deleteLater()
+    d = SettingsDialog(sm.load(), None)
+    assert not d.speed_aware.isChecked()
+    d.reject()
+    d.deleteLater()
+
+
 def test_benchmark_this_computer_button(tmp_path, monkeypatch):
     from quantabench import settings as sm
     from quantabench.dist import profile
