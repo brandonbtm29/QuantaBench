@@ -62,6 +62,8 @@ SCIENCE_FIELDS = (
     "method", "ph", "protonate", "protonation_method", "keep_largest_fragment", "max_conformers",
     "refine_top", "energy_window_kcal", "rmsd_threshold", "fmax", "max_steps", "optimizer",
     "temperature_k", "xtb_properties", "seed", "frequencies", "freq_hessian", "symmetry_number", "freq_qrrho",
+    "solvent", "conformer_search", "crest_method", "crest_quick", "qm_method", "qm_task", "qm_top",
+    "qm_properties", "qm_frequencies", "qm_cubes", "qm_program",
 )
 
 # (i, n): 0-based chunk i of n, by ``chunk_index`` (modulo). (i, n, weights): weighted chunk, by
@@ -333,6 +335,15 @@ class JobStore:
                               "WHERE status = 'running' AND crashes >= ?", (_now(), max_crashes))
             n = self.conn.execute("UPDATE molecules SET status = 'pending' WHERE status = 'running'").rowcount
         return n, failed
+
+    def record_crash(self, mol_id: str) -> int:
+        """One more crash for ``mol_id`` (a lane worker process died while running it), counted the same
+        way ``reset_interrupted`` counts on resume. Leaves the row 'pending'; returns the crash count, so
+        the caller can record a failure at ``MAX_CRASHES``."""
+        with self.conn:
+            self.conn.execute("UPDATE molecules SET crashes = crashes + 1, status = 'pending' WHERE id = ?", (mol_id,))
+        row = self.conn.execute("SELECT crashes FROM molecules WHERE id = ?", (mol_id,)).fetchone()
+        return int(row[0]) if row else MAX_CRASHES
 
     def todo(self, retry_failed: bool = False) -> list[tuple[str, MoleculeInput]]:
         """Molecules still to do, in input order, except that molecules which crashed the process go last."""

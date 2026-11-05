@@ -675,15 +675,6 @@ class LanePool:
             w.conn = None
 
 
-def _record_crash(store, mol_id: str, max_crashes: int) -> int:
-    """One more crash for ``mol_id``; the same counting as ``JobStore.reset_interrupted`` uses on resume.
-    Leaves the row 'pending' below ``max_crashes``; the caller records the failure at the limit."""
-    with store.conn:
-        store.conn.execute("UPDATE molecules SET crashes = crashes + 1, status = 'pending' WHERE id = ?", (mol_id,))
-    row = store.conn.execute("SELECT crashes FROM molecules WHERE id = ?", (mol_id,)).fetchone()
-    return int(row[0]) if row else max_crashes
-
-
 def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, done_before: int,
                  progress, should_stop, log, on_result) -> list:
     """Run ``todo`` ([(id, MoleculeInput)], from ``JobStore.todo``) in ``lanes`` worker processes. The
@@ -728,7 +719,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         if w.busy is not None:
             k, mol_id, inp = w.busy
             w.busy = None
-            crashes = _record_crash(store, mol_id, jobs.MAX_CRASHES)
+            crashes = store.record_crash(mol_id)
             if crashes >= jobs.MAX_CRASHES:
                 msg = f"crashed the process {crashes} times"
                 log(f"[{w.lane.name}] lane died (exit code {code}) running {mol_id}; {mol_id} {msg}: marked "

@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import platform
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 
@@ -122,7 +123,9 @@ _applied_threads: int | None = None
 
 def apply_thread_limits(threads: int) -> int:
     """Set thread caps for BLAS/OpenMP (env vars, effective for libraries loaded afterwards) and
-    for PyTorch if it is already importable. Returns the thread count in force."""
+    for PyTorch if it is already imported. Torch is not imported here (a ROCm/CUDA torch takes seconds
+    to load, and a lane running MMFF or xtb never needs it); one imported later reads OMP_NUM_THREADS.
+    Returns the thread count in force."""
     global _applied_threads
     n = resolve_threads(threads)
     for var in THREAD_ENV_VARS:
@@ -133,7 +136,7 @@ def apply_thread_limits(threads: int) -> int:
         threadpool_limits(n)
     except Exception:  # noqa: S110 - optional
         pass
-    if has_package("torch"):
+    if "torch" in sys.modules:
         try:
             import torch
 
