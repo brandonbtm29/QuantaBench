@@ -69,11 +69,22 @@ class EngineSettings:
 
 
 @dataclass
+class DistSettings:
+    """Splitting work across lanes and machines (``quantabench.dist``, docs/PLATFORMS.md)."""
+    lanes: str = "1"                  # default lane spec: "1" (one process), "auto", "N", "gpu:1x4,cpu:5x2"
+    worker_port: int = 8765
+    worker_bind: str = "tailscale"    # "tailscale" (this machine's 100.x address) | "localhost" | an address
+    worker_token: str = ""            # shared secret for workers; generated on first `worker` start
+    workers: dict[str, str] = field(default_factory=dict)   # machine name -> URL override
+
+
+@dataclass
 class Settings:
     output_dir: str = ""              # "" = Documents/QuantaBench/Runs
     resources: ResourceSettings = field(default_factory=ResourceSettings)
     build: BuildDefaults = field(default_factory=BuildDefaults)
     engines: EngineSettings = field(default_factory=EngineSettings)
+    dist: DistSettings = field(default_factory=DistSettings)
     recent_files: list[str] = field(default_factory=list)
 
     # ---------------------------------------------------------------- paths

@@ -190,6 +190,8 @@ def _build(args) -> int:
     try:
         items = _read_inputs(args)
         chunk = jobs.parse_chunk(args.chunk) if args.chunk else None
+        if args.chunk_weights:
+            raise ValueError("--chunk-weights is not implemented yet")
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -215,8 +217,12 @@ def _build(args) -> int:
                 label += f"_{jobs.chunk_label(chunk)}_{socket.gethostname()}"
             run_dir = new_run_dir(cfg.output_dir or settings_mod.load().output_path(), label)
         try:
+            from .dist import lanes as lanes_mod
+
+            spec = args.lanes or settings_mod.load().dist.lanes
             results, out = jobs.run_resumable(items or None, cfg, run_dir, progress=_progress, log=print,
-                                              retry_failed=args.retry_failed, chunk=chunk, force=args.force)
+                                              retry_failed=args.retry_failed, chunk=chunk, force=args.force,
+                                              lanes=lanes_mod.parse_lanes(spec, cfg))
         except (jobs.ConfigMismatchError, jobs.RunInUseError) as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -575,6 +581,11 @@ def build_parser() -> argparse.ArgumentParser:
     inputs_args(b)
     engine_args(b)
     b.add_argument("--ph", type=float)
+    b.add_argument("--lanes", help="parallel worker processes on this machine: 1 (default), auto, N, or a list "
+                                   "like gpu:1x4,cpu:5x2 (lanes x threads each); see docs/PLATFORMS.md")
+    b.add_argument("--chunk-weights", metavar="SPEC",
+                   help="with --chunk: weighted split, e.g. 3,1 or auto (from the machine registry's "
+                        "throughput); see `quantabench-cli machines`")
     b.add_argument("--conformers", choices=["rdkit", "crest"],
                    help="conformer search: RDKit ETKDGv3 + MMFF94s (default) or CREST iMTD-GC (external)")
     b.add_argument("--crest-method", choices=["gfn2", "gfnff", "gfn2//gfnff", "gfn1"])
@@ -671,6 +682,10 @@ def build_parser() -> argparse.ArgumentParser:
     mp = msub.add_parser("parse", help="summarize log.lammps and pull_force.txt (detachment work, peak force)")
     mp.add_argument("dir")
     mp.set_defaults(func=_md_parse)
+
+    from .dist import cli as dist_cli
+
+    dist_cli.register(sub)      # machines, worker, grid (quantabench.dist)
 
     se = sub.add_parser("settings", help="show settings, or move them (e.g. into a synced folder)")
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")

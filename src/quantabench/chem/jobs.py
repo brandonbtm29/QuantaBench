@@ -454,7 +454,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
                   progress: ProgressFn = _noop, should_stop: Callable[[], bool] = lambda: False,
                   log: Callable[[str], None] = _noop,
                   on_result: Callable[[MoleculeResult], None] = _noop, retry_failed: bool = False,
-                  chunk: Chunk | None = None, force: bool = False) -> tuple[list[MoleculeResult], Path]:
+                  chunk: Chunk | None = None, force: bool = False,
+                  lanes: list | None = None) -> tuple[list[MoleculeResult], Path]:
     """Run (or continue) a batch in ``run_dir``; returns the results computed by this call.
 
     ``inputs`` are added to the job table (``None`` resumes with what is stored). Finished molecules
@@ -464,6 +465,9 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
 
     Raises ``ConfigMismatchError`` if the folder was started with different science settings (or
     another chunk) unless ``force``, and ``RunInUseError`` if another process is working on it.
+
+    ``lanes`` (``dist.lanes.Lane`` list): more than one runs molecules in parallel worker processes
+    (see ``dist.lanes``); ``None`` or one lane keeps the single-process loop.
     """
     run_dir = Path(run_dir).expanduser()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -490,6 +494,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
         for mol_id in crashed:
             log(f"{mol_id}: crashed the process {MAX_CRASHES} times; marked failed (--retry-failed redoes it)")
 
+        if lanes and len(lanes) > 1:
+            log(f"Note: {len(lanes)} lanes requested; parallel lanes are not implemented yet, using one")
         threads = resources.apply_thread_limits(cfg.threads)
         device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
         log(f"Resources: {threads} CPU threads, device {device}")
