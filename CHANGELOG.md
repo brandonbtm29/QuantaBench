@@ -27,6 +27,8 @@ organometallics, ions from -5 to +2, up to 157 heavy atoms), run through MMFF, G
 - **SD files**: unreadable records are reported (record number, title, RDKit's reason) instead of vanishing;
   `--id-col` works for SD properties (e.g. `--id-col CAS_RN`); repeated titles get `_2`; RDKit's
   per-record hydrogen warnings and UFFTYPER messages no longer flood the log.
+- An AIMNet2 model that cannot be loaded (weights not downloadable offline) fails the next molecules at once
+  with the reason and "--retry-failed", instead of retrying the download for every molecule of a batch.
 - The "Warp CUDA warning: Could not find or load the NVIDIA CUDA driver" line every aimnet lane printed on
   AMD/CPU machines is filtered (other Warp output passes through).
 

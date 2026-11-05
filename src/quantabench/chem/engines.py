@@ -369,6 +369,7 @@ class DxtbCalculator(Calculator):
 
 # ---------------------------------------------------------------------------- AIMNet2
 _AIMNET_CACHE: dict[tuple[str, str, str], object] = {}
+_AIMNET_FAILED: dict[tuple[str, str, str], str] = {}     # model load failures, by the same key
 
 
 def _aimnet_base(model: str, device: str):
@@ -379,8 +380,17 @@ def _aimnet_base(model: str, device: str):
     from . import aimnet_torch
 
     key = (model, device, aimnet_torch.requested_backend())
+    if key in _AIMNET_FAILED:      # e.g. the weights cannot be downloaded: do not retry for every molecule
+        raise RuntimeError(_AIMNET_FAILED[key])
     if key not in _AIMNET_CACHE:
-        _AIMNET_CACHE[key] = aimnet_torch.load_calculator(model, device)
+        try:
+            _AIMNET_CACHE[key] = aimnet_torch.load_calculator(model, device)
+        except Exception as exc:
+            first = str(exc).splitlines()[0][:300] if str(exc) else ""
+            _AIMNET_FAILED[key] = (f"AIMNet2 model {model!r} could not be loaded on {device} ({type(exc).__name__}: "
+                                   f"{first}); not retried in this process: fix the cause (network, or put the "
+                                   "model file in aimnet's cache) and run again with --retry-failed")
+            raise RuntimeError(_AIMNET_FAILED[key]) from exc
     return _AIMNET_CACHE[key]
 
 
@@ -414,3 +424,4 @@ def make_calculator(key: str, numbers, charge: int = 0, multiplicity: int = 1, d
 
 def clear_caches() -> None:
     _AIMNET_CACHE.clear()
+    _AIMNET_FAILED.clear()

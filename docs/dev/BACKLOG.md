@@ -373,6 +373,11 @@ Still open:
 - **Broken records with radicals**: trimethylamine borane is stored with a bare B (2 unpaired electrons,
   +1); it is now computed as a triplet cation with a "check the record" note. A heuristic for
   hydrogen-deficient B/N/C could fail such records instead.
+- **Memory of the GFN1-xTB properties step on large molecules**: the MMFF run of the sample was killed by
+  the memory cgroup (3.2 GB resident) at Dactinomycin (90 heavy atoms) after its conformers were done, in the
+  dxtb charges/polarizability step (autograd field response). The job table recovered (crash counted, molecule
+  moved last), but on NOVA with many lanes this can kill lanes repeatedly. Measure memory vs atom count and
+  skip (with a note) or chunk the polarizability above a size; or use tblite's finite-field polarizability.
 - **The xTB properties step on dications** (Esaprazole, +2 at pH 7) took minutes of GFN1-xTB SCF in the
   MMFF run; measure and cap its SCF iterations.
 - Settings isolation: during this work `~/.config/QuantaBench/settings.json` (and `QuantaBench.conf`) were

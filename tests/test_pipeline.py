@@ -264,3 +264,25 @@ def test_auto_says_why_it_passed_an_engine_over(monkeypatch):
     key, why = engines.auto_choice([50, 17, 6, 1])
     assert key == "gfn1-xtb" and "AIMNet2" in why and "Sn" in why
     assert engines.auto_choice([6, 8, 1]) == ("aimnet2", "")
+
+
+def test_aimnet2_model_failure_is_not_retried_per_molecule(monkeypatch):
+    """Offline, every molecule of a batch retried the AIMNet2 weight download; the first failure now
+    fails the rest at once with the reason and how to redo them."""
+    from quantabench.chem import aimnet_torch
+
+    calls = []
+
+    def load(model, device):
+        calls.append(model)
+        raise OSError("Max retries exceeded with url: aimnet2_wb97m_d3_0.pt")
+
+    monkeypatch.setattr(aimnet_torch, "load_calculator", load)
+    engines.clear_caches()
+    try:
+        for _ in range(3):
+            with pytest.raises(RuntimeError, match="could not be loaded.*--retry-failed"):
+                engines._aimnet_base("aimnet2", "cpu")
+        assert calls == ["aimnet2"]
+    finally:
+        engines.clear_caches()
