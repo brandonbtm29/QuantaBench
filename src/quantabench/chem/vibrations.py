@@ -353,14 +353,23 @@ def _has_libcint() -> bool:
     return has_libcint()
 
 
+def dxtb_run_device(device: str) -> str:
+    """Where dxtb's float64 Hessian/dipole derivatives run when ``device`` is offered: the CPU where
+    dxtb is slower on the GPU (``torch_compat.dxtb_device``) and on MPS (no float64)."""
+    from .torch_compat import dxtb_device, float64_device
+
+    return float64_device(dxtb_device(device)[0])
+
+
 def _dxtb_setup(numbers, positions, method: str, device: str, field: bool = False):
-    """dxtb calculator in float64. ``field=True`` adds a zero ElectricField interaction (needed for
-    dipole derivatives); that requires dipole integrals from the libcint backend."""
+    """dxtb calculator in float64 on ``dxtb_run_device(device)``. ``field=True`` adds a zero
+    ElectricField interaction (needed for dipole derivatives); that requires dipole integrals from
+    the libcint backend."""
     import dxtb
     import torch
     from dxtb.components.field import new_efield
 
-    dev = torch.device(device)
+    dev = torch.device(dxtb_run_device(device))
     # float64 even on GPUs: low frequencies come from small differences of large Hessian elements,
     # and float32 Hessians give spurious imaginary modes.
     dtype = torch.float64
@@ -383,13 +392,18 @@ def _dxtb_setup(numbers, positions, method: str, device: str, field: bool = Fals
 
 def dxtb_hessian(numbers, positions, method: str = "gfn1-xtb", charge: int = 0, multiplicity: int = 1,
                  device: str = "cpu") -> np.ndarray:
-    """Analytic (autograd) GFN-xTB Hessian from dxtb, converted from Hartree/Bohr² to eV/Å²."""
+    """Analytic (autograd) GFN-xTB Hessian from dxtb, converted from Hartree/Bohr² to eV/Å².
+    Dense linear algebra the device lacks runs on the CPU (``torch_compat``); the double backward
+    through it stays on the CPU too."""
+    from .torch_compat import linalg_routing
+
     calc, pos_tensor = _dxtb_setup(numbers, positions, method, device)
     kwargs = {"chrg": charge}
     if multiplicity > 1:
         kwargs["spin"] = multiplicity - 1
     n = len(numbers)
-    h = calc.get_hessian(pos_tensor(), **kwargs)
+    with linalg_routing(dxtb_run_device(device)):
+        h = calc.get_hessian(pos_tensor(), **kwargs)
     return h.detach().cpu().double().numpy().reshape(3 * n, 3 * n) * HARTREE_EV / BOHR_ANG**2
 
 
@@ -431,11 +445,14 @@ def dxtb_dipole_derivatives(numbers, positions, method: str = "gfn1-xtb", charge
                             multiplicity: int = 1, device: str = "cpu") -> np.ndarray:
     """Analytic dipole derivative dμ/dR, shape (3, 3N), in e (= e·Bohr/Bohr = e·Å/Å).
     Needs the libcint backend (dipole integrals)."""
+    from .torch_compat import linalg_routing
+
     calc, pos_tensor = _dxtb_setup(numbers, positions, method, device, field=True)
     kwargs = {"chrg": charge}
     if multiplicity > 1:
         kwargs["spin"] = multiplicity - 1
-    d = calc.get_dipole_derivatives(pos_tensor(), **kwargs)
+    with linalg_routing(dxtb_run_device(device)):
+        d = calc.get_dipole_derivatives(pos_tensor(), **kwargs)
     return d.detach().cpu().double().numpy().reshape(3, 3 * len(numbers))
 
 
@@ -877,7 +894,8 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
     analytic = hessian == "analytic" or (hessian == "auto" and use_dxtb)
     if use_dxtb:
         need = estimate_dxtb_hessian_memory_gb(work.numbers, method)
-        budget = max_analytic_memory_gb if max_analytic_memory_gb is not None else 0.5 * available_memory_gb(device)
+        budget = (max_analytic_memory_gb if max_analytic_memory_gb is not None
+                  else 0.5 * available_memory_gb(dxtb_run_device(device)))
         if hessian == "auto" and need > budget:
             analytic = False
             say(f"analytic Hessian would need ~{need:.1f} GB (budget {budget:.1f} GB): "
@@ -908,6 +926,9 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
         if method == "aimnet2" and not use_dxtb:
             h = aimnet_hessian(calc, work)
         else:
+            if dxtb_run_device(device) != device:
+                say(f"analytic Hessian on {dxtb_run_device(device)} instead of {device} "
+                    "(float64 dxtb; see torch_compat.dxtb_device)")
             try:
                 h = dxtb_hessian(work.numbers, work.positions, method, charge, multiplicity, device)
             except Exception as exc:

@@ -31,8 +31,10 @@ def xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity
     import torch
     from dxtb.components.field import new_efield
 
-    dev = torch.device(device)
-    dtype = torch.float64 if dev.type == "cpu" else torch.float32
+    from . import torch_compat
+
+    dev = torch.device(torch_compat.dxtb_device(device)[0])     # CPU where dxtb is slower on the GPU
+    dtype = torch_compat.compute_dtype(dev)
     z = torch.as_tensor(np.asarray(numbers), device=dev)
     pos = torch.tensor(np.asarray(positions_ang) / BOHR_ANG, device=dev, dtype=dtype)
     kwargs = {"chrg": charge}
@@ -41,7 +43,8 @@ def xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity
     opts = {"verbosity": 0}
 
     calc = dxtb.Calculator(z, dxtb.GFN1_XTB, opts=opts, device=dev, dtype=dtype)
-    q_orb = calc.get_mulliken_charges(pos, **kwargs)
+    with torch_compat.linalg_routing(dev):
+        q_orb = calc.get_mulliken_charges(pos, **kwargs)
     q = calc.ihelp.reduce_orbital_to_atom(q_orb).detach().cpu().double().numpy()
     out = {
         "xtb_charges": [float(x) for x in q],
@@ -53,7 +56,8 @@ def xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity
     elif polarizability:
         field = torch.zeros(3, device=dev, dtype=dtype, requires_grad=True)
         fcalc = dxtb.Calculator(z, dxtb.GFN1_XTB, interaction=new_efield(field), opts=opts, device=dev, dtype=dtype)
-        alpha = fcalc.get_polarizability(pos, **kwargs).detach().cpu().double().numpy() * AU_POLARIZABILITY_A3
+        with torch_compat.linalg_routing(dev):
+            alpha = fcalc.get_polarizability(pos, **kwargs).detach().cpu().double().numpy() * AU_POLARIZABILITY_A3
         eig = np.linalg.eigvalsh(0.5 * (alpha + alpha.T))
         out["xtb_polarizability_iso_A3"] = float(eig.mean())
         out["xtb_polarizability_aniso_A3"] = float(eig.max() - eig.min())

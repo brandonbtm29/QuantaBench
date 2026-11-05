@@ -8,7 +8,7 @@ engine cannot run on the GPU it was given.
 Engine        Package        Device        Charged molecules   Notes
 -----------   -------------  ------------  ------------------  -----------------------------------
 mmff          rdkit          CPU threads   yes                 already applied during conformer search
-gfn1-xtb      dxtb           CPU or GPU    yes                 pure PyTorch: runs on ROCm and CUDA
+gfn1-xtb      dxtb           CPU or GPU    yes                 pure PyTorch: ROCm, CUDA, MPS (see torch_compat)
 gfn2-xtb      dxtb+libcint   CPU (ints)    yes                 libcint backend: Linux/WSL for now
 aimnet2       aimnet         CPU or GPU    yes                 wB97M-D3 quality for H,B,C,N,O,F,Si,P,S,Cl,As,Se,Br,I
 
@@ -235,7 +235,13 @@ def resolve_auto(numbers, solvent: str = "") -> str:
 
 # ---------------------------------------------------------------------------- dxtb
 class DxtbCalculator(Calculator):
-    """ASE calculator around dxtb (energies and autograd forces)."""
+    """ASE calculator around dxtb (energies and autograd forces).
+
+    float64 on the CPU, float32 on GPUs. ``device`` is a request: ``torch_compat.dxtb_device`` keeps
+    dxtb on the CPU for GPUs where it is slower there (``device_note`` says why; ``device`` is where it
+    runs). On a GPU without dense linear algebra (``QUANTABENCH_DXTB_GPU=on``) the Cholesky
+    factorization / eigensolver run on the CPU inside each evaluation (``torch_compat.linalg_routing``);
+    ``linalg_routed`` holds the ops routed in the last evaluation."""
 
     implemented_properties: ClassVar[list[str]] = ["energy", "free_energy", "forces"]
 
@@ -245,9 +251,15 @@ class DxtbCalculator(Calculator):
         import dxtb
         import torch
 
+        from . import torch_compat
+
         self._torch = torch
-        self.device = torch.device(device)
-        self.dtype = torch.float64 if self.device.type == "cpu" else torch.float32
+        self._compat = torch_compat
+        self.requested_device = str(device)
+        run_on, self.device_note = torch_compat.dxtb_device(device)
+        self.device = torch.device(run_on)
+        self.dtype = torch_compat.compute_dtype(self.device)
+        self.linalg_routed: frozenset[str] = frozenset()
         par = dxtb.GFN2_XTB if method == "gfn2-xtb" else dxtb.GFN1_XTB
         opts = {"verbosity": 0}
         if method == "gfn2-xtb":
@@ -266,8 +278,10 @@ class DxtbCalculator(Calculator):
         kwargs = {"chrg": self.charge}
         if self.spin:
             kwargs["spin"] = self.spin
-        energy = self._calc.get_energy(pos, **kwargs)
-        (grad,) = torch.autograd.grad(energy, pos)
+        with self._compat.linalg_routing(self.device) as routed:
+            energy = self._calc.get_energy(pos, **kwargs)
+            (grad,) = torch.autograd.grad(energy, pos)
+        self.linalg_routed = routed
         e_ev = float(energy.detach().cpu()) * HARTREE_EV
         self.results["energy"] = e_ev
         self.results["free_energy"] = e_ev
