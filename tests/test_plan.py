@@ -1,5 +1,7 @@
 """Weighted splitting (dist.plan) and weighted chunks in resumable runs (chem.jobs)."""
 
+import json
+
 import pytest
 
 from quantabench import cli
@@ -26,7 +28,8 @@ def test_positional_and_named_weights():
     assert dict(w) == {"1": 3.0, "2": 1.0} and not w.named and w.spec() == "3,1"
     w = plan.parse_weights(" BTM NOVA=3, brandons-macbook-pro=1.5 ")
     assert dict(w) == {"btm-nova": 3.0, "brandons-macbook-pro": 1.5} and w.named
-    assert w.spec() == "btm-nova=3,brandons-macbook-pro=1.5"
+    assert list(w) == ["brandons-macbook-pro", "btm-nova"]               # a mapping: chunks in name order
+    assert w.spec() == "brandons-macbook-pro=1.5,btm-nova=3"
     for bad in ("", "3,x", "3,-1", "0,0", "a=3,1", "a=1,a=2", "3,auto", "=2", "inf,1"):
         with pytest.raises(ValueError):
             plan.parse_weights(bad, "mmff", [])
@@ -135,6 +138,79 @@ def test_resolve_chunk():
     mine = sum(1 for i in IDS[:4700] if plan.weighted_index(i, chunk[2]) == 0)
     assert f"this machine (btm-nova, chunk 1/2, weight 1000): {mine:,} of 4,700 molecules" in text
     assert "--chunk-weights brandons-macbook-pro=1000,btm-nova=3000" in text and "warning:" in text
+
+
+def test_named_weights_in_any_order_give_one_split():
+    """Two machines given the same named weights typed in different orders run complementary shares (in
+    typed order they overlapped by a third and left a quarter of the list out)."""
+    a, wa, _ = plan.resolve_chunk("btm-nova=3,brandons-macbook-pro=1", None, this="btm-nova")
+    b, wb, _ = plan.resolve_chunk("brandons-macbook-pro=1,btm-nova=3", None, this="brandons-macbook-pro")
+    assert list(wa) == list(wb) == ["brandons-macbook-pro", "btm-nova"]
+    assert a == (1, 2, (1.0, 3.0)) and b == (0, 2, (1.0, 3.0))
+    ids = IDS[:4000]
+    mine_a = {i for i in ids if jobs.in_chunk(i, jobs.check_chunk(a))}
+    mine_b = {i for i in ids if jobs.in_chunk(i, jobs.check_chunk(b))}
+    assert not mine_a & mine_b and mine_a | mine_b == set(ids)
+    # an explicit --chunk K/N counts in the same name order, and the plan says so
+    c, w, warn = plan.resolve_chunk("btm-nova=3,brandons-macbook-pro=1", (1, 2), this="btm-nova")
+    assert c == a and not warn
+    text = plan.chunk_plan(w, c, ids, warn, this="btm-nova")
+    assert "chunks are the machines in name order: 1/2 = brandons-macbook-pro, 2/2 = btm-nova" in text
+    _, _, warn = plan.resolve_chunk("btm-nova=3,brandons-macbook-pro=1", (0, 2), this="btm-nova")
+    assert "brandons-macbook-pro's share" in warn[0]
+
+
+def test_equal_weights_printed_split_matches_what_runs():
+    """Equal weights are the modulo split in jobs (check_chunk); split(), explain() and chunk_plan() count
+    the same molecules (they used the weighted bins and printed other counts)."""
+    ids = IDS[:1000]
+    chunk, w, warn = plan.resolve_chunk("1,1", (0, 2))
+    runs = [i for i in ids if jobs.in_chunk(i, jobs.check_chunk(chunk))]
+    assert runs == [i for i in ids if jobs.chunk_index(i, 2) == 0]
+    assert plan.split(ids, w)["1"] == runs
+    assert f"this machine ({machine_name()}, chunk 1/2, weight 1): {len(runs):,} of 1,000 molecules" in \
+        plan.chunk_plan(w, chunk, ids, warn)
+    assert all(plan.assign(i, [2.0, 2.0, 2.0]) == jobs.chunk_index(i, 3) for i in ids)
+    assert all(plan.assign(i, [3, 1]) == plan.weighted_index(i, [3, 1]) for i in ids)
+    # a machine with weight 0 makes the weights unequal: weighted bins in jobs and in the plan alike
+    w0 = (1.0, 1.0, 0.0)
+    assert [i for i in ids if jobs.in_chunk(i, jobs.check_chunk((0, 3, w0)))] == plan.split(ids, dict(zip("abc", w0)))["a"]
+
+
+def test_auto_split_is_stored_and_reused_by_the_other_machines():
+    """--chunk-weights auto: the first machine stores the resolved split for the list; another machine that
+    resolves auto later (after a re-benchmark changed the registry) reuses it, so the shares still add up."""
+    ids = IDS[:3000]
+    profiles = [prof("btm-nova", mmff_at_cpu=3000.0), prof("brandons-macbook-pro", mmff_at_cpu=1000.0)]
+    a, wa, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="btm-nova", ids=ids)
+    assert any("stored this split" in n for n in wa.notes)
+    files = list(plan.splits_dir().glob("*.json"))
+    assert len(files) == 1 and files[0].stem == plan.split_key("mmff", list(reversed(ids)) + ids[:5])
+    profiles[1].throughput["mmff@cpu"] = 2500.0                           # the MacBook re-benchmarked
+    b, wb, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="brandons-macbook-pro", ids=ids)
+    assert b[2] == a[2] == (1000.0, 3000.0) and any("using the split stored for this list" in n for n in wb.notes)
+    mine_a = {i for i in ids if jobs.in_chunk(i, jobs.check_chunk(a))}
+    mine_b = {i for i in ids if jobs.in_chunk(i, jobs.check_chunk(b))}
+    assert not mine_a & mine_b and mine_a | mine_b == set(ids)
+    text = plan.chunk_plan(wb, b, ids, this="brandons-macbook-pro")
+    assert "stored: benchmark mmff@cpu" in text and "--chunk-weights brandons-macbook-pro=1000,btm-nova=3000" in text
+    # another list or method resolves (and stores) anew; explicit weights never use the store
+    c, _, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="btm-nova", ids=ids[:10])
+    assert c[2] == (2500.0, 3000.0)
+    assert plan.resolve_chunk("btm-nova=1,brandons-macbook-pro=1", None, "mmff", profiles, this="btm-nova",
+                              ids=ids)[0] == (1, 2, (1.0, 1.0))
+    # SyncThing conflict copy (two machines stored at once): every machine takes the oldest and warns
+    key = plan.split_key("mmff", ids)
+    conflict = plan.splits_dir() / f"{key}.sync-conflict-20261105-000000-ABCDEFG.json"
+    record = {**json.loads(files[0].read_text()), "weights": {"btm-nova": 1.0, "brandons-macbook-pro": 9.0},
+              "created": "2000-01-01T00:00:00+00:00", "created_by": "brandons-macbook-pro"}
+    conflict.write_text(json.dumps(record))
+    d, wd, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="btm-nova", ids=ids)
+    assert d[2] == (9.0, 1.0) and any("different splits were stored" in n for n in wd.notes)
+    (plan.splits_dir() / f"{key}.json").write_text("{half a fi")      # unreadable files are ignored
+    conflict.unlink()
+    e, we, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="btm-nova", ids=ids)
+    assert e[2] == (2500.0, 3000.0) and any("stored this split" in n for n in we.notes)
 
 
 # ------------------------------------------------------------------------------------ weighted chunks in jobs

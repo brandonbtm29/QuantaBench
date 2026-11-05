@@ -28,7 +28,6 @@ the tables with ``merge_tables``.
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import math
 import os
@@ -113,8 +112,9 @@ def chunk_index(mol_id: str, n: int) -> int:
     SHA-256 of the id rather than Python's ``hash`` (salted per process) or the row position (changes
     when the list is re-sorted), so every machine and every Python version agrees.
     """
-    digest = hashlib.sha256(mol_id.encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], "big") % n
+    from ..dist.plan import modulo_index
+
+    return modulo_index(mol_id, n)
 
 
 def check_chunk(chunk: Chunk | None) -> Chunk | None:
@@ -196,9 +196,9 @@ def in_chunk(mol_id: str, chunk: Chunk | None) -> bool:
     if chunk is None:
         return True
     if len(chunk) > 2 and chunk[2] is not None:
-        from ..dist.plan import weighted_index
+        from ..dist.plan import assign  # equal weights: the modulo split, as check_chunk normalizes them
 
-        return weighted_index(mol_id, chunk[2]) == chunk[0]
+        return assign(mol_id, chunk[2]) == chunk[0]
     return chunk_index(mol_id, chunk[1]) == chunk[0]
 
 
