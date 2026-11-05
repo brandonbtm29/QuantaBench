@@ -374,3 +374,27 @@ def test_engine_ase_hessian_and_refine_batched_use_adapter(random_model, calcs, 
     assert torch.allclose(model.energies_ev[1:], e_sub.double())
     engines.clear_caches()
 
+
+
+def test_no_combined_device_and_float64_casts_in_the_gpu_paths():
+    """`t.to("cpu", torch.float64)` casts on the device before the copy, and on an Apple GPU that raises
+    "Undefined type Double" (found on the first real Mac run). Move to the CPU first, then cast. There is
+    no MPS device in CI, so this keeps the pattern out of the modules that run on GPUs."""
+    import re
+
+    src = Path(at.__file__).parent
+    pattern = re.compile(r'\.to\(\s*(?:device\s*=\s*)?["\']cpu["\']\s*,\s*(?:dtype\s*=\s*)?torch\.(?:float64|double)')
+    hits = [f"{p.name}:{i}" for p in sorted(src.glob("*.py"))
+            for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1) if pattern.search(line)]
+    assert hits == []
+
+
+def test_batched_optimizer_casts_energies_on_the_cpu_side():
+    """The Warp-free calculator returns float64 CPU energies on MPS; the optimizer brings them to the
+    positions' device and dtype without a float64 tensor on the device."""
+    from quantabench.chem import batch_opt
+
+    e64 = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    ref = torch.zeros(2, 3, dtype=torch.float32)
+    out = batch_opt._like(e64, ref)
+    assert out.dtype == torch.float32 and out.device == ref.device and out.tolist() == [1.0, 2.0]

@@ -149,9 +149,17 @@ def test_benchmark_is_cancellable_and_rejects_fallbacks(monkeypatch):
     monkeypatch.setattr(pipeline, "run_molecule", fake)
     monkeypatch.setattr(engines, "available", lambda key: (True, ""))     # CI has no torch/dxtb
     monkeypatch.setattr(profile, "MIN_SECONDS", 0.0)
+    from quantabench.chem import torch_compat
+
+    monkeypatch.setattr(torch_compat, "dxtb_device", lambda dev: (str(dev), ""))       # dxtb would use the GPU
     details = {}
     assert profile.benchmark(["gfn1-xtb"], ["cuda:0"], details=details) == {}          # ran on the CPU instead
     assert details["gfn1-xtb@cuda:0"]["error"].startswith("fell back to cpu")
+    # where QuantaBench keeps dxtb on the CPU (MPS, NOVA's ROCm wheel) the GPU is not timed at all
+    monkeypatch.setattr(torch_compat, "dxtb_device", lambda dev: ("cpu", "dxtb ran on the CPU instead of mps"))
+    details = {}
+    assert profile.benchmark(["gfn1-xtb"], ["mps"], details=details) == {}
+    assert details["gfn1-xtb@mps"]["skipped"] and not details["gfn1-xtb@mps"]["error"]
     assert set(profile.benchmark(["gfn1-xtb"], ["cpu"])) == {"gfn1-xtb@cpu"}
     calls = {"n": 0}
 

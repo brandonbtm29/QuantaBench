@@ -2,6 +2,13 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Apple GPU: AIMNet2 on MPS (first run on the MacBook, 2026-11-05)
+- AIMNet2's Warp-free path failed on the Apple GPU with "Undefined type Double": `t.to("cpu", torch.float64)` casts on
+  the device before the copy, and MPS has no float64. Tensors now move to the CPU first and are cast there (and the
+  batched optimizer casts on the CPU side when bringing energies to the GPU). A test keeps the pattern out.
+- The benchmark no longer "times" dxtb on a GPU where QuantaBench keeps dxtb on the CPU (MPS, AMD's Windows wheel):
+  it records why instead of a fell-back-to-CPU error.
+
 ### Spartan QSAR documents: macOS streams, levels of theory, CAS join, wide table (IMPORT-2, 2026-11-05)
 - **Documents saved by Spartan for macOS are read.** They hold `Input`, `PropertyArchive`, ... uncompressed
   where Spartan for Windows writes `Input.gz`, ...; all of those molecules (the PM6 and conformer documents

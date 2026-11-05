@@ -109,13 +109,22 @@ def _cap_step(dr: torch.Tensor, max_step: float) -> torch.Tensor:
     return dr * scale[:, None, None]
 
 
+def _like(t: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
+    """``t`` on ``ref``'s device in ``ref``'s dtype, casting on the CPU side: a combined device + dtype change
+    can cast on the device first, and Apple GPUs (MPS) have no float64 ("Undefined type Double")."""
+    if t.device != ref.device and t.dtype != ref.dtype:
+        t = t.to(ref.dtype) if t.device.type == "cpu" else t.to("cpu").to(ref.dtype)
+    return t.to(ref)
+
+
 def _evaluate(fn: EnergyForcesFn, positions: torch.Tensor, index: torch.Tensor | None):
     if index is None:
         out = fn(positions)
     else:
         out = fn(positions[index], index)
     e, f = out[0], out[1]
-    return e.detach().to(positions).reshape(-1), f.detach().to(positions).reshape(-1, *positions.shape[1:])
+    return (_like(e.detach(), positions).reshape(-1),
+            _like(f.detach(), positions).reshape(-1, *positions.shape[1:]))
 
 
 def _minimize(fn: EnergyForcesFn, positions, fmax: float, max_steps: int,
@@ -447,7 +456,7 @@ class AIMNet2Batched(BatchedModel):
         }
         out = self.calc(data, forces=True)
         e = out["energy"].detach().reshape(b)
-        e64 = e.to("cpu", torch.float64)
+        e64 = e.to("cpu").to(torch.float64)          # CPU first: MPS has no float64
         if index is None:
             self.energies_ev = e64.clone()
         elif self.energies_ev is not None:

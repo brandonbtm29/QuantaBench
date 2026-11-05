@@ -422,7 +422,7 @@ def _split_atomic_shift(model):
         return None
     for m in outputs.modules():
         if isinstance(m, AtomicShift) and m.key_in == "energy" and m.key_out == "energy":
-            table = m.shifts.weight.detach().to("cpu", torch.float64).reshape(-1).clone()
+            table = m.shifts.weight.detach().to("cpu").to(torch.float64).reshape(-1).clone()
             m.float()
             with torch.no_grad():
                 m.shifts.weight.zero_()
@@ -627,7 +627,8 @@ class AIMNet2TorchCalculator:
 
         res = self._device_eval(coord, numbers, charge, mult, forces, hessian)
         if self._sae is not None:   # reference energies in float64 on the CPU (see the module docstring)
-            res["energy"] = res["energy"].to("cpu", torch.float64) + self._sae[numbers.cpu()].sum(-1)
+            # to the CPU first, then float64: .to("cpu", float64) casts on the device, and MPS has no float64
+            res["energy"] = res["energy"].to("cpu").to(torch.float64) + self._sae[numbers.cpu()].sum(-1)
         if flat:
             for k in ("charges", "spin_charges", "forces"):
                 if k in res:

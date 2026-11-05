@@ -50,6 +50,7 @@ BENCH_PROTOCOL = {"max_conformers": 4, "refine_top": 2, "protonate": False, "xtb
                   "write_files": False, "frequencies": False, "conformer_search": "rdkit", "solvent": "",
                   "qm_method": "", "seed": 42}
 DEFAULT_BENCH_METHODS = ("mmff", "gfn1-xtb", "gfn2-xtb", "aimnet2")
+DXTB_METHODS = ("gfn1-xtb", "gfn2-xtb")    # run where torch_compat.dxtb_device puts them
 DEFAULT_MAX_SECONDS = 60.0         # per method and device: two devices stay within ~2 minutes per method
 MIN_SECONDS = 5.0                  # a fast engine repeats the set (up to MAX_PASSES times) until this long
 MAX_PASSES = 20
@@ -528,6 +529,14 @@ def benchmark(methods: Sequence[str], devices: Sequence[str] | None = None, mole
             if device != "cpu" and not engines_mod.all_engines()[method].gpu_capable:
                 continue
             key = f"{method}@{device}"
+            if device != "cpu" and method in DXTB_METHODS:
+                from ..chem import torch_compat
+
+                run_on, why = torch_compat.dxtb_device(device)
+                if run_on == "cpu":         # a run on this GPU would be a CPU run: nothing to time
+                    log(f"  {key}: not timed, {why}")
+                    details[key] = {"device": device, "date": _now(), "error": "", "skipped": why}
+                    continue
             cfg = pipeline.BuildConfig(method=method, threads=n_threads, **BENCH_PROTOCOL, **_device_policy(device))
             rate = _bench_one(pipeline, cfg, mols, device, n_threads, key, max_seconds, details, user_stop, log)
             if rate:
