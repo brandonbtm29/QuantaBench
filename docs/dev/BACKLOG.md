@@ -251,7 +251,7 @@ Depends on: none (research only; can run any night).
   Use each lane's measured time per molecule: when the queue is shorter than (slow lane's time / fast lane's
   time), leave the rest to the fast lanes. Measure on NOVA with 8, 50 and 500 PFAS.
 
-### SCALE-1: The GUI at 14,000 molecules · ready
+### SCALE-1: The GUI at 14,000 molecules · done 2026-11-05 (batch memory: one follow-up)
 - From the PFAS QSAR project (2026-11-05): Spartan could not take 14,000 molecules in one document, so the
   work was cut into 200-molecule batches (1,067 `.spartan` files) that now have to be recombined by hand.
   QuantaBench's engine side already runs any number in one run folder (one job table, one `summary.csv` and
@@ -263,6 +263,20 @@ Depends on: none (research only; can run any night).
   `summary.csv`/the job table, and "Open run folder..." (also the 0.2 item "resume a run folder from the GUI").
 - Acceptance: open a 14,000-molecule run folder in under 5 s and under 500 MB, scroll, search and select
   any molecule; a GUI batch of 14,000 runs with flat memory.
+- 2026-11-05: `gui.molecule_list` (table model of light rows, search/status filter, LRU `ResultStore` of 12
+  read back with `export.read_molecule`/`jobs.load_result` off the GUI thread), File > Open run folder...,
+  Build > Resume run folder (stored settings, `jobs.stored_config`). Measured under xvfb on 2 shared cores
+  with a synthetic 14,000-molecule folder (`scratch/make_synthetic_run.py`: real MMFF templates written with
+  the engine's own writers): listed in 0.56 s, first molecule shown at 0.98 s, **+31 MB** RSS (+41 MB after
+  browsing 60 molecules); search 40 ms, sort 60 ms, reading one result ~5 ms. The window itself is ~1.1 GB
+  RSS before any molecule: torch (~500 MB, imported at startup by the GFN2 availability check,
+  `engines.libcint_status` -> dxtb) and VTK under software OpenGL. Selecting a molecule takes ~0.4 s
+  there, almost all VTK renders (~65 ms each, 3-4 per selection) under llvmpipe.
+- Follow-ups: (1) a 400-molecule MMFF batch from the GUI grew RSS by 8 MB (~20-29 KB/molecule) with the
+  list keeping rows only; ~5 KB/molecule of that is the light results `run_resumable` still returns,
+  the rest is not yet attributed (the Log view up to its 20,000-line cap is a candidate). Find it, and
+  let a GUI batch keep no per-molecule results at all (touches `dist/lanes.py`, after DIST-5). (2) Do not
+  import torch at startup just to label GFN2. (3) One VTK render per selection instead of 3-4.
 
 ### IMPORT-2: Read Spartan '24 `.spartan` documents · ready
 - A `.spartan` file is an OLE compound document with one storage per molecule (`Molecules/M0001/...`):

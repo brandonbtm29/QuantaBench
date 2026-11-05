@@ -95,9 +95,10 @@ Still open for 0.2:
 - [ ] Parallel CPU stage: a process pool for embedding and MMFF across molecules while the GPU refines.
 - [ ] Validation notebook against the Spartan Essential 76 PFAS results (RMSD, energy ranks,
       descriptors, frequencies).
-- [ ] GUI: resume a run folder from the app (today: `quantabench-cli build --resume`; GUI batches
-      already write the job table) and live pull-force plots. (The IR spectrum plot and normal-mode
-      animation landed with 0.3's Spectra panel.)
+- [x] GUI: resume a run folder from the app: File > Open run folder... and Build > Resume run folder
+      (SCALE-1, 2026-11-05; the list also holds 14,000 molecules now).
+- [ ] GUI: live pull-force plots. (The IR spectrum plot and normal-mode animation landed with 0.3's
+      Spectra panel.)
 
 Known science limits to keep in mind: GFN1/GFN2-xTB place C=O and carboxylate stretches far too high
 (PFOA anion 2013 vs ~1690 cm⁻¹); the SMD model is vacuum, rigid-adsorbate and non-polarizable, so its

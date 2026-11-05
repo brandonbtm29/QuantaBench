@@ -33,6 +33,17 @@ molecule/system navigator, the playback bar and the job monitor.
    later); trajectory analysis (RDF, MSD, density profiles, work/PMF); overlay/align.
 5. **Library:** project database of results, substructure search, previous runs and resumable batches.
 
+**The molecule navigator holds any number of molecules** (SCALE-1, done 2026-11-05). Spartan keeps every
+molecule of a document rendered in memory, which cut the 14,000-molecule PFAS QSAR set into 200-molecule
+documents. QuantaBench's Molecules dock is a virtualized table (`gui.molecule_list`): one light row per
+molecule (input order, status, id, conformers, best energy, name, method, formula), sortable by any
+column, with a search box (id, name, SMILES, formula) and a status filter. Only the selected molecule and
+the last 12 viewed keep their full result in memory; the others are read from their run-folder folder
+when selected, off the GUI thread. A batch's finished molecules become rows, not results kept in memory.
+**File > Open run folder...** lists a run folder (finished or partial) from its job table, and
+**Build > Resume run folder** continues its unfinished molecules with the folder's stored settings. The
+Library workspace and the project document (UI-2) build on this.
+
 **Shared chrome:**
 - A playback bar for conformers, molecules and trajectory frames.
 - A status bar with counts, point group, CPU threads, GPU and VRAM.

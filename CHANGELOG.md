@@ -2,6 +2,21 @@
 
 ## 0.3.0.dev (unreleased)
 
+### The GUI at 14,000 molecules (SCALE-1, 2026-11-05)
+- **The Molecules dock is a virtualized table** (`gui.molecule_list`): one light row per molecule (input
+  order, status, id, conformers, best energy, name, method, formula) instead of a list item plus the full
+  result in memory. Sort by any column; search id, name, SMILES or formula; filter built / failed / not
+  built. Only the selected molecule and the last 12 viewed keep their full result; the others are read from
+  their folder when selected, off the GUI thread (a few ms). A batch's finished molecules update their row
+  instead of keeping their result (a 400-molecule MMFF batch: +8 MB; the rest is a backlog follow-up).
+- **File > Open run folder...** lists a run folder, finished or partial, from its job table (or the
+  summary.csv of a plain batch). A synthetic 14,000-molecule folder opens in 0.6 s (first molecule shown
+  at 1.0 s) and adds 31 MB to the window's memory.
+- **Build > Resume run folder** continues the opened (or last) run folder's unfinished molecules with its
+  stored science settings: the 0.2 item "resume a run folder from the GUI".
+- New read helpers: `export.read_molecule` (a molecule's folder back into a `MoleculeResult`, every
+  conformer from the SDF), `jobs.molecule_rows`, `jobs.load_result`, `jobs.load_inputs`, `jobs.stored_config`.
+
 ### Large batches and joining machines (2026-11-05)
 - A worker measures its machine's throughput on its first start (a machine joining the pool), holding jobs
   meanwhile; `worker --bench auto|always|never`. Machines dock: "Benchmark this computer"; this computer is
