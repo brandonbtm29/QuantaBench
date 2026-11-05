@@ -261,13 +261,12 @@ def _build(args) -> int:
             if chunk:
                 label += f"_{jobs.chunk_label(chunk)}_{socket.gethostname()}"
             run_dir = new_run_dir(cfg.output_dir or settings_mod.load().output_path(), label)
-        from .dist import lanes as lanes_mod
+        from .dist import profile as profile_mod
 
-        spec = args.lanes or settings_mod.load().dist.lanes
-        try:
-            lanes = lanes_mod.parse_lanes(spec, cfg)
+        try:  # an explicit --lanes that does not fit is an error; this machine's setting falls back to one lane
+            lanes, _spec = profile_mod.resolve_lanes(args.lanes, cfg, log=print)
         except ValueError as exc:
-            print(f"--lanes {spec}: {exc}", file=sys.stderr)
+            print(f"--lanes {args.lanes}: {exc}", file=sys.stderr)
             return 2
         try:
             results, out = jobs.run_resumable(items or None, cfg, run_dir, progress=_progress, log=print,

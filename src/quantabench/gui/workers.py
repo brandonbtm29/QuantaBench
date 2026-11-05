@@ -17,7 +17,7 @@ class BuildWorker(QObject):
 
     def __init__(self, inputs, cfg, lanes=None):
         """``lanes``: a lane spec ("1", "auto", "4", "gpu:1x4,cpu:5x2"), a list of ``dist.lanes.Lane``, or
-        None for the "Parallel lanes" setting (``settings.dist.lanes``)."""
+        None for this machine's "Parallel lanes" setting (``Settings.lanes_for``)."""
         super().__init__()
         self.inputs = inputs
         self.cfg = cfg
@@ -31,21 +31,22 @@ class BuildWorker(QObject):
         """The lanes for a batch (parsed here, off the GUI thread: "auto" may detect the GPU). A setting that
         cannot be used on this machine is reported and the batch runs in one lane."""
         from ..dist import lanes as lanes_mod
-        from ..settings import load
+        from ..dist import profile
 
-        spec = self.lanes if self.lanes is not None else load().dist.lanes
-        if isinstance(spec, list):
-            return spec
+        if isinstance(self.lanes, list):
+            return self.lanes
+        if self.lanes is None:
+            return profile.resolve_lanes(None, self.cfg, log=self.log.emit)[0]
         try:
-            return lanes_mod.parse_lanes(spec, self.cfg)
+            return lanes_mod.parse_lanes(self.lanes, self.cfg)
         except ValueError as exc:
-            self.log.emit(f"Parallel lanes {spec!r} not usable here ({exc}); running in one lane")
+            self.log.emit(f"Parallel lanes {self.lanes!r} not usable here ({exc}); running in one lane")
             return lanes_mod.parse_lanes("1", self.cfg)
 
     def run(self) -> None:
         """One molecule runs directly; a batch goes through the resumable job table (``chem.jobs``), so an
         interrupted GUI batch can be finished with ``quantabench-cli build --resume RUN_DIR``. A batch runs in
-        the lanes of the settings (worker processes; ``dist.lanes``); results still arrive one molecule at a
+        this machine's lanes from the settings (worker processes; ``dist.lanes``); results still arrive one molecule at a
         time through ``molecule_done``."""
         from ..chem import jobs, pipeline
         from ..settings import Settings

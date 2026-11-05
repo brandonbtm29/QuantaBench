@@ -19,9 +19,13 @@ import argparse
 import contextlib
 import csv
 import dataclasses
+import functools
+import hashlib
+import http.client
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -41,9 +45,12 @@ from urllib.parse import urlsplit
 from .. import __version__
 from .. import settings as settings_mod
 from .worker import (
+    ARCHIVE_MANIFEST,
     DEFAULT_PORT,
     FINAL_STATES,
+    JOB_FILE,
     RESOURCE_FIELDS,
+    TABLES,
     TAILSCALE_NET4,
     TAILSCALE_NET6,
     VERSION_HEADER,
@@ -52,6 +59,12 @@ from .worker import (
 LOCAL = "local"
 GRID_FILE = "grid.json"
 MAX_JSON_RESPONSE = 32 * 1024 * 1024
+#: client-side share state: the worker answered that it does not know the job (404), refused the token (401)
+#: or the request (other 4xx). Waiting longer cannot change that, so following stops for this share.
+LOST = "lost"
+DONE_STATES = (*FINAL_STATES, LOST)
+#: a run folder name as a worker makes it (``<stamp>_<label>_<worker>``, maybe with a ``-2`` suffix)
+_FOLDER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}")
 
 
 def _noop(*_args) -> None:
@@ -98,21 +111,88 @@ def normalize_url(url: str) -> str:
     return f"{parts.scheme}://{host}:{port}"
 
 
-def check_private_host(url: str) -> None:
-    """Plain HTTP carries the token in clear text, so only to loopback or Tailscale addresses (WireGuard
-    encrypts those). MagicDNS names resolve to them."""
-    parts = urlsplit(url)
-    if parts.scheme == "https":
+def _ip(text: str):
+    addr = ipaddress.ip_address(str(text).split("%")[0])
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return addr
+
+
+def is_tailnet(addr) -> bool:
+    """``addr`` (ip_address) is in Tailscale's ranges (100.64.0.0/10, fd7a:115c:a1e0::/48)."""
+    return addr in (TAILSCALE_NET4 if addr.version == 4 else TAILSCALE_NET6)
+
+
+def check_route(peer: str, local: str, allow_any_host: bool = False) -> None:
+    """Refuse a connection that the token must not cross; called once the TCP connection is up and before a
+    byte is sent. Loopback is fine. A Tailscale peer needs a Tailscale *local* address too: 100.64.0.0/10 is
+    also carrier-grade NAT space, and with Tailscale stopped or disconnected here the connection leaves through
+    the default route (a café's Wi-Fi), where plain HTTP is readable; ``allow_any_host`` does not change that.
+    Any other peer only with ``allow_any_host``. Checking the connected socket, not a name lookup, also
+    covers MagicDNS names that resolve elsewhere later (another network, an expired cache)."""
+    p, here = _ip(peer), _ip(local)
+    if p.is_loopback:
         return
+    if is_tailnet(p):
+        if is_tailnet(here):
+            return
+        raise WorkerError(f"Tailscale is not connected on this machine: the connection to {p} goes out through "
+                          f"{here}, not the tailnet, so the token would cross that network unencrypted. Start "
+                          "Tailscale (`tailscale status`) and try again.")
+    if not allow_any_host:
+        raise WorkerError(f"{p} is not a Tailscale or loopback address: the token would cross that network "
+                          "unencrypted (allow_any_host / --allow-any-host to do it anyway)")
+
+
+def check_destination(host: str, port: int | None) -> None:
+    """Before connecting: every address ``host`` resolves to must be loopback or Tailscale, so that a LAN or
+    public address is refused without a packet sent to it. ``check_route`` then checks the connection that
+    is actually made (the name may resolve differently by then)."""
     try:
-        infos = socket.getaddrinfo(parts.hostname, parts.port, type=socket.SOCK_STREAM)
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError) as exc:
-        raise WorkerError(f"cannot resolve {parts.hostname}: {exc}") from None
+        raise WorkerError(f"cannot resolve {host}: {exc}") from None
     for info in infos:
-        addr = ipaddress.ip_address(str(info[4][0]).split("%")[0])
-        if not (addr.is_loopback or addr in TAILSCALE_NET4 or addr in TAILSCALE_NET6):
-            raise WorkerError(f"{parts.hostname} is {addr}, not a Tailscale or loopback address: the token would "
-                              "cross that network unencrypted (allow_any_host / --allow-any-host to do it anyway)")
+        addr = _ip(info[4][0])
+        if not (addr.is_loopback or is_tailnet(addr)):
+            raise WorkerError(f"{host} is {addr}, not a Tailscale or loopback address: the token would cross that "
+                              "network unencrypted (allow_any_host / --allow-any-host to do it anyway)")
+
+
+class _CheckedHTTPConnection(http.client.HTTPConnection):
+    """``HTTPConnection`` that checks every new connection (``check_destination`` before it, ``check_route``
+    once it is up), before the request and its Authorization header are written."""
+
+    def __init__(self, *args, allow_any_host: bool = False, **kw):
+        super().__init__(*args, **kw)
+        self.allow_any_host = allow_any_host
+
+    def connect(self) -> None:
+        if not self.allow_any_host:
+            check_destination(self.host, self.port)
+        super().connect()
+        try:
+            check_route(self.sock.getpeername()[0], self.sock.getsockname()[0], self.allow_any_host)
+        except BaseException:
+            self.sock.close()
+            self.sock = None
+            raise
+
+
+class _CheckedHTTPHandler(urlrequest.HTTPHandler):
+    def __init__(self, allow_any_host: bool = False):
+        super().__init__()
+        self.allow_any_host = allow_any_host
+
+    def http_open(self, req):
+        return self.do_open(functools.partial(_CheckedHTTPConnection, allow_any_host=self.allow_any_host), req)
+
+
+def _safe_name(name) -> bool:
+    """A machine name that can be one folder name (``parts/<machine>``): the label rules."""
+    from .worker import _LABEL_RE
+
+    return isinstance(name, str) and bool(_LABEL_RE.fullmatch(name))
 
 
 def config_for_workers(cfg, keep_resources: Sequence[str] = ()) -> dict:
@@ -147,9 +227,31 @@ def job_body(inputs, cfg, label: str, *, chunk: dict | None = None, lanes: str |
     return body
 
 
-def safe_extract(zip_path: str | Path, dest: str | Path) -> Path:
+def _check_manifest(zf: zipfile.ZipFile, members: list, top: str) -> None:
+    """The worker writes ``<top>/.qb-archive.json`` (every other member and its size) as the last member, and
+    only once every file is in: a stream that failed or was cut off on the way lacks it or does not match."""
+    name = f"{top}/{ARCHIVE_MANIFEST}"
+    if not members or members[-1].filename != name:
+        raise WorkerError("the archive has no manifest at its end: the download is incomplete, or the worker "
+                          "is older than this client (update it)")
+    try:
+        manifest = json.loads(zf.read(name).decode("utf-8"))
+        listed = {f"{top}/{e['path']}": int(e["size"]) for e in manifest["files"]}
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise WorkerError(f"the archive manifest cannot be read ({exc})") from None
+    actual = {i.filename: i.file_size for i in members[:-1] if not i.is_dir()}
+    if listed != actual:
+        missing = sorted(set(listed) - set(actual))[:3]
+        raise WorkerError("the archive does not match its manifest" + (f" (missing {', '.join(missing)})"
+                                                                       if missing else ""))
+
+
+def safe_extract(zip_path: str | Path, dest: str | Path, expected_top: str | None = None,
+                 require_manifest: bool = False) -> Path:
     """Extract a worker archive (one top folder) into ``dest`` and return that folder. Refuses absolute
-    paths, '..', drive letters, backslashes and links; a cut-off download fails here."""
+    paths, '..', drive letters, backslashes and links; a cut-off download fails here. ``expected_top``: the
+    run folder the archive must hold (the job's). ``require_manifest``: the worker's manifest must be the
+    last member and list exactly the other members (``download_archive``)."""
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     try:
@@ -167,14 +269,22 @@ def safe_extract(zip_path: str | Path, dest: str | Path) -> Path:
                 tops.add(parts[0])
             if len(tops) != 1:
                 raise WorkerError("a worker archive holds exactly one run folder")
+            top = next(iter(tops))
+            if expected_top is not None and top != expected_top:
+                raise WorkerError(f"the archive holds {top!r}, not the job's run folder {expected_top!r}")
+            if require_manifest:
+                _check_manifest(zf, members, top)
             bad = zf.testzip()
             if bad:
                 raise WorkerError(f"archive member {bad} is damaged")
             staging = dest / f".extract-{secrets.token_hex(4)}"
-            zf.extractall(staging)
+            try:
+                zf.extractall(staging)
+            except BaseException:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
     except zipfile.BadZipFile as exc:
         raise WorkerError(f"the archive is incomplete or damaged ({exc})") from None
-    top = tops.pop()
     target = dest / top
     if target.exists():
         shutil.rmtree(target)
@@ -192,8 +302,9 @@ class WorkerClient:
         self.token = token or ""
         self.timeout = timeout
         self.allow_any_host = allow_any_host
-        self._checked = False
-        self._opener = urlrequest.build_opener(urlrequest.ProxyHandler({}), _NoRedirect())  # never via a proxy
+        # never via a proxy, never a redirect; every connection is checked before the token is written
+        self._opener = urlrequest.build_opener(urlrequest.ProxyHandler({}), _NoRedirect(),
+                                               _CheckedHTTPHandler(allow_any_host))
 
     def __repr__(self) -> str:  # never shows the token
         return f"WorkerClient({self.url!r})"
@@ -202,9 +313,6 @@ class WorkerClient:
         if not self.token:
             raise WorkerError("no worker token: settings.dist.worker_token is empty (start a worker once, or wait "
                               "for the synced settings)")
-        if not self._checked and not self.allow_any_host:
-            check_private_host(self.url)
-            self._checked = True
         data = json.dumps(body).encode("utf-8") if body is not None else (b"" if method == "POST" else None)
         req = urlrequest.Request(self.url + path, data=data, method=method)
         req.add_header("Authorization", f"Bearer {self.token}")
@@ -278,8 +386,9 @@ class WorkerClient:
                 raise WorkerError(f"job {job_id} on {self.url} not finished after {timeout:.0f} s")
             time.sleep(poll)
 
-    def download_archive(self, job_id: str, dest_dir: str | Path) -> Path:
-        """Download the job's run folder as a zip and extract it into ``dest_dir``; returns the run folder."""
+    def download_archive(self, job_id: str, dest_dir: str | Path, expected_top: str | None = None) -> Path:
+        """Download the job's run folder as a zip and extract it into ``dest_dir``; returns the run folder.
+        The archive must end with the worker's manifest and, with ``expected_top``, hold that run folder."""
         dest_dir = Path(dest_dir).expanduser()
         dest_dir.mkdir(parents=True, exist_ok=True)
         part = dest_dir / f".{_job_id(job_id)}.zip.part"
@@ -287,11 +396,17 @@ class WorkerClient:
             with self._open("GET", f"/v1/jobs/{job_id}/archive", timeout=max(self.timeout, 300.0)) as resp, \
                     open(part, "wb") as f:
                 shutil.copyfileobj(resp, f, 1 << 20)
-            return safe_extract(part, dest_dir)
+            return safe_extract(part, dest_dir, expected_top=expected_top, require_manifest=True)
         except OSError as exc:
             raise WorkerError(f"downloading job {job_id} from {self.url} failed: {exc}") from None
         finally:
             part.unlink(missing_ok=True)
+
+
+def same_commit(a: str, b: str) -> bool:
+    """Two short commits (12 or more hex digits) name the same commit; unknown ('') counts as the same."""
+    a, b = (a or "").strip().lower(), (b or "").strip().lower()
+    return not a or not b or a.startswith(b) or b.startswith(a)
 
 
 def _job_id(job_id: str) -> str:
@@ -356,10 +471,17 @@ def discover(extra: Sequence[str] = (), token: str | None = None, timeout: float
         t.start()
     for t in threads:
         t.join(timeout + 5)
+    from ..chem.inputs import safe_id
+
     out: dict[str, WorkerRef] = {}
     for key, ref in refs.items():
-        if not ref.name:
-            ref.name = (ref.info or {}).get("name") or urlsplit(ref.url).hostname or key
+        if not ref.name:   # a bare --worker URL: named by the worker's answer, which must be folder-safe
+            reported = (ref.info or {}).get("name")
+            if reported is not None and not _safe_name(reported):
+                ref.error = (f"the worker reports the machine name {str(reported)[:60]!r}, which cannot name a "
+                             "folder; give it one with --worker NAME=URL")
+                ref.info, reported = None, None
+            ref.name = reported or safe_id(urlsplit(ref.url).hostname or key, "worker")
         out[ref.name] = ref
     return out
 
@@ -376,7 +498,9 @@ class Share:
     run_dir: str = ""              # as the machine that runs it sees it
     state: str = ""
     counts: dict = field(default_factory=dict)
-    source: str = ""               # where the merge read it: "local" | "synced" | "archive"
+    source: str = ""               # where the merge read it: "local" | "synced" | "archive" | "partial"
+    commit: str = ""               # git commit the machine runs (as its worker reports it)
+    error: str = ""                # why following or collecting this share stopped
 
     @property
     def finished(self) -> int:
@@ -399,6 +523,8 @@ class GridRun:
     state: str = "submitted"       # submitted | running | finished | merged | failed
     merged: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
+    commit: str = ""               # git commit of the client that started the grid (shares record their own)
+    failed_without_result: list[str] = field(default_factory=list)   # crashed the process twice: no summary row
 
     @property
     def path(self) -> Path:
@@ -538,25 +664,30 @@ class _RemoteTarget:
 def follow(grid: GridRun, targets: dict[str, object], poll: float = 5.0, log: Callable[[str], None] = print,
            only: set[str] | None = None, should_stop: Callable[[], bool] = lambda: False) -> None:
     """Print the combined progress until every share (or those in ``only``) is done, failed or cancelled.
-    An 'interrupted' share (its worker was stopped) resumes when that worker starts again, so it is waited
-    for."""
+    An 'interrupted' share (its worker was stopped) resumes when that worker starts again, and an unreachable
+    worker may come back, so both are waited for. A worker that answers with a 4xx (no such job, wrong token)
+    will not change its answer: that share becomes 'lost' and following it stops."""
     last = ""
     warned: set[str] = set()
     while True:
         pending = False
         for share in grid.shares:
             target = targets.get(share.machine)
-            if target is None or not share.job_id:
+            if target is None or not share.job_id or share.state == LOST:
                 continue
             try:
                 st = target.status()
                 share.state, share.counts = st.get("state", share.state), st.get("counts") or share.counts
                 warned.discard(share.machine)
             except WorkerError as exc:
-                if share.machine not in warned:
+                if 400 <= exc.status < 500:
+                    share.state, share.error = LOST, str(exc)
+                    log(f"{share.machine}: {exc}; no longer following this share (`grid merge --partial` uses "
+                        "a synced copy of its run folder if there is one)")
+                elif share.machine not in warned:
                     log(f"{share.machine}: {exc} (retrying)")
                     warned.add(share.machine)
-            if (only is None or share.machine in only) and share.state not in FINAL_STATES:
+            if (only is None or share.machine in only) and share.state not in DONE_STATES:
                 pending = True
         line = grid.summary()
         if line != last:
@@ -575,74 +706,244 @@ def _summary_rows(path: Path) -> int:
         return -1
 
 
+def _summary_ids(path: Path) -> set[str]:
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            return {row.get("id", "") for row in csv.DictReader(f)}
+    except (OSError, csv.Error, UnicodeDecodeError):
+        return set()
+
+
+def _job_file(folder: Path) -> dict | None:
+    """A run folder's worker.json (``{"job": ..., "environment": ..., "tables"?: ...}``), or None."""
+    try:
+        data = json.loads((Path(folder) / JOB_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("job"), dict) else None
+
+
 def is_job_folder(folder: Path, job_id: str) -> bool:
     """``folder`` is the run folder of worker job ``job_id`` (its worker.json says so), not merely a folder of
     the same name (a "local" share and a worker on the same machine, same label, same second)."""
-    from .worker import JOB_FILE
-
-    try:
-        data = json.loads((Path(folder) / JOB_FILE).read_text(encoding="utf-8"))
-        return data["job"]["id"] == job_id
-    except (OSError, ValueError, KeyError, TypeError):
-        return False
+    data = _job_file(folder)
+    return data is not None and data["job"].get("id") == job_id
 
 
-def _synced(folder: Path, expected: int, wait: float, job_id: str) -> bool:
-    """The worker's run folder is here (SyncThing) with its final tables: its own worker.json, summary.csv
-    with every finished molecule and no run lock (the worker removes it when the job ends)."""
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def final_tables(folder: Path, job_id: str) -> dict | None:
+    """The ``tables`` record of job ``job_id``'s worker.json when the job has ended and every table it lists
+    is here byte for byte, else None. The worker writes that record last, after the tables, with their sizes
+    and SHA-256: SyncThing brings files in any order, so a summary.csv that has arrived says nothing about
+    descriptors.csv (or about which version of either this is)."""
     from ..chem import jobs
 
+    folder = Path(folder)
+    data = _job_file(folder)
+    if data is None or data["job"].get("id") != job_id or data["job"].get("state") not in FINAL_STATES:
+        return None
+    tables = data.get("tables")
+    if not isinstance(tables, dict) or not isinstance(tables.get("files"), dict):
+        return None
+    if (folder / jobs.LOCK_NAME).exists():
+        return None
+    for name, meta in tables["files"].items():
+        if name not in TABLES:          # a synced file: it names nothing but the two tables
+            return None
+        path = folder / name
+        try:
+            if (not isinstance(meta, dict) or not path.is_file() or path.stat().st_size != int(meta["size"])
+                    or _file_sha256(path) != meta.get("sha256")):
+                return None
+        except (OSError, KeyError, TypeError, ValueError):
+            return None
+    return tables
+
+
+def _synced(folder: Path, job_id: str, wait: float) -> dict | None:
+    """``final_tables`` of the worker's run folder synced here (SyncThing), waiting up to ``wait`` seconds
+    for it (10 s at most when the folder is not here at all); None when it does not become complete."""
     deadline = time.monotonic() + (wait if folder.is_dir() else min(wait, 10.0))
     while True:
-        if (folder / "summary.csv").is_file() and not (folder / jobs.LOCK_NAME).exists() \
-                and is_job_folder(folder, job_id) and _summary_rows(folder / "summary.csv") >= expected:
-            return True
+        tables = final_tables(folder, job_id)
+        if tables is not None:
+            return tables
         if time.monotonic() >= deadline:
-            return False
+            return None
         time.sleep(2.0)
+
+
+@contextlib.contextmanager
+def _private_copy(folder: Path):
+    """A ``JobStore`` on a private copy of another machine's job table (jobs.sqlite and its -wal, which
+    SyncThing brings along). Reading the synced files themselves, even read-only, creates -wal/-shm files
+    there that SyncThing would send back to the machine writing the folder; ``immutable`` reads leave the
+    folder alone but skip the WAL, which holds the most recent molecules of a running job."""
+    import sqlite3
+    import tempfile
+
+    from ..chem import jobs
+
+    db = Path(folder) / jobs.DB_NAME
+    if not db.is_file():
+        raise WorkerError(f"no {jobs.DB_NAME} in {folder}")
+    with tempfile.TemporaryDirectory(prefix="qb-copy-") as tmp:
+        try:
+            shutil.copyfile(db, Path(tmp) / jobs.DB_NAME)
+            wal = db.with_name(db.name + "-wal")
+            if wal.is_file():
+                shutil.copyfile(wal, Path(tmp) / wal.name)
+            store = jobs.JobStore(tmp, create=False)
+        except (OSError, sqlite3.Error) as exc:
+            raise WorkerError(f"cannot read the job table of {folder} ({exc})") from None
+        try:
+            yield store
+        except (sqlite3.Error, ValueError) as exc:   # a damaged table, a row that is not JSON
+            raise WorkerError(f"cannot read the job table of {folder} ({exc})") from None
+        finally:
+            store.close()
+
+
+def copy_counts(folder: Path) -> dict[str, int]:
+    """Molecule counts of another machine's run folder (a synced copy), without changing it
+    (``_private_copy``)."""
+    with _private_copy(folder) as store:
+        return store.counts()
+
+
+def _snapshot(folder: Path, dest: Path) -> Path | None:
+    """The tables of a run folder that has not finished (or is not complete here), from a private copy of
+    its job table (``_private_copy``), written to ``dest/<run folder>``; None when nothing is finished."""
+    from ..chem import export
+
+    with _private_copy(folder) as store:
+        stored = store.stored_results()
+    if not stored:
+        return None
+    target = dest / folder.name
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    export.write_batch_tables(stored, target)
+    return target
+
+
+def _share_paths(grid: GridRun, share: Share, out: Path) -> tuple[Path, Path]:
+    """(synced run folder, download folder ``<grid>/parts/<machine>``) of a share, refusing names from
+    grid.json (a synced file) or a worker's answers that would lead out of those folders."""
+    if not _safe_name(share.machine):
+        raise WorkerError(f"machine name {share.machine!r} cannot name a folder")
+    if not isinstance(share.run_folder, str) or not _FOLDER_RE.fullmatch(share.run_folder):
+        raise WorkerError(f"run folder name {share.run_folder!r} is not a single folder name")
+    parts = (Path(grid.folder) / "parts").resolve()
+    dest = (parts / share.machine).resolve()
+    if dest.parent != parts:
+        raise WorkerError(f"machine name {share.machine!r} leads out of {parts}")
+    return out / share.run_folder, dest
+
+
+def _own_local(grid: GridRun, share: Share) -> Path | None:
+    """The run folder of the "local" share when this machine ran it (it started the grid, and the folder is
+    there); None on any other machine, which only has a synced copy (``grid merge --out`` there)."""
+    from . import profile
+
+    if share.machine != LOCAL or not share.run_dir or grid.client != profile.machine_name():
+        return None
+    folder = Path(share.run_dir)
+    return folder if folder.is_dir() else None
+
+
+def _collect_share(grid: GridRun, share: Share, out: Path, token: str, sync_wait: float,
+                   log: Callable[[str], None], allow_any_host: bool) -> tuple[Path | None, dict | None]:
+    """(run folder to merge or None, its final ``tables`` record or None) for one share; see ``collect``."""
+    own = _own_local(grid, share)
+    if own is not None:
+        share.source = LOCAL         # this machine ran it: its own folder, whatever its state
+        return own, (_job_file(own) or {}).get("tables")
+    here, dest = _share_paths(grid, share, out)
+    if share.state in FINAL_STATES:
+        tables = _synced(here, share.job_id, sync_wait)
+        if tables is not None:
+            share.source = "synced"
+            if "summary.csv" not in tables["files"]:
+                log(f"{share.machine}: {share.run_folder} has no finished molecule")
+                return None, tables
+            return here, tables
+        if share.url:
+            log(f"{share.machine}: {share.run_folder} is not (fully) synced here; downloading it")
+            try:
+                folder = WorkerClient(share.url, token, allow_any_host=allow_any_host).download_archive(
+                    share.job_id, dest, expected_top=share.run_folder)
+                share.source = "archive"
+                return folder, (_job_file(folder) or {}).get("tables")
+            except WorkerError as exc:
+                log(f"{share.machine}: downloading failed ({exc}); trying the synced copy")
+    # not finished (grid merge --partial), lost, or no download: what the synced copy has finished so far
+    if not is_job_folder(here, share.job_id):
+        raise WorkerError(f"no copy of {share.run_folder} here" + ("" if share.state in FINAL_STATES else
+                                                                  f" (the share is {share.state or 'unknown'})"))
+    snap = _snapshot(here, dest)
+    share.source = "partial"
+    rows = _summary_rows(snap / "summary.csv") if snap is not None else 0
+    log(f"{share.machine}: {share.state or 'unknown'}; merging the {max(rows, 0)} molecule(s) finished so far "
+        f"in the synced copy of {share.run_folder}")
+    return snap, None
 
 
 def collect(grid: GridRun, token: str, sync_wait: float = 60.0, log: Callable[[str], None] = print,
             allow_any_host: bool = False, local_output: Path | None = None) -> list[Path]:
-    """The run folder of every share, readable here: local ones in place, remote ones from the synced
-    output folder when complete, else downloaded into ``<grid folder>/parts/<machine>/``."""
+    """The run folder of every share, readable here: the local share in place; a finished remote one from
+    the synced output folder once its worker.json vouches for its tables (``final_tables``), else downloaded
+    into ``<grid folder>/parts/<machine>/``; a share that has not finished, or whose worker is gone or lost
+    the job, from what the synced copy has finished so far (``grid merge --partial``). A share that cannot be
+    collected is logged and left out (its molecules end up in ``grid.missing``); it does not stop the
+    others. Molecules that crashed their worker process twice have no summary row; they are recorded in
+    ``grid.failed_without_result``."""
     out = Path(local_output) if local_output else Path(grid.folder).parent
     dirs: list[Path] = []
+    crashed: set[str] = set()
     for share in grid.shares:
         if not share.job_id or not share.n:
             continue
-        if share.machine == LOCAL:
-            share.source = LOCAL
-            dirs.append(Path(share.run_dir))
+        try:
+            folder, tables = _collect_share(grid, share, out, token, sync_wait, log, allow_any_host)
+        except WorkerError as exc:
+            share.source, share.error = "", str(exc)
+            log(f"{share.machine}: {exc}; its molecules are left out of the merge")
             continue
-        here = out / share.run_folder
-        if _synced(here, share.finished, sync_wait, share.job_id):
-            share.source = "synced"
-            dirs.append(here)
-            continue
-        log(f"{share.machine}: {share.run_folder} is not (fully) synced here; downloading it")
-        client = WorkerClient(share.url, token, allow_any_host=allow_any_host)
-        dirs.append(client.download_archive(share.job_id, Path(grid.folder) / "parts" / share.machine))
-        share.source = "archive"
+        for item in (tables or {}).get("unrecorded_failures") or []:
+            if isinstance(item, list) and item and isinstance(item[0], str):
+                crashed.add(item[0])
+        if folder is not None:
+            dirs.append(folder)
+    wanted = set(grid.ids)
+    grid.failed_without_result = sorted(crashed & wanted)
     return dirs
 
 
 def merge(grid: GridRun, token: str, sync_wait: float = 60.0, log: Callable[[str], None] = print,
           allow_any_host: bool = False, out_dir: Path | None = None) -> list[Path]:
     """Collect every share and write the merged tables into the grid folder (or ``out_dir``); records the
-    molecules that are missing (not finished) in ``grid.missing``."""
+    molecules that are missing (not finished, or their share could not be collected) in ``grid.missing``."""
     from ..chem import jobs
 
     dirs = collect(grid, token, sync_wait, log, allow_any_host)
     target = Path(out_dir) if out_dir else Path(grid.folder)
-    written = jobs.merge_tables(dirs, target, log=log)
-    got = set()
-    summary = target / "summary.csv"
-    if summary.is_file():
-        with open(summary, newline="", encoding="utf-8") as f:
-            got = {row["id"] for row in csv.DictReader(f)}
+    written = jobs.merge_tables(dirs, target, log=log) if dirs else []
+    got = _summary_ids(target / "summary.csv") if any(p.name == "summary.csv" for p in written) else set()
+    crashed = set(grid.failed_without_result)
+    if crashed:
+        log(f"{len(crashed)} molecule(s) crashed their worker process twice and have no result row: "
+            + ", ".join(sorted(crashed)[:10]) + (" ..." if len(crashed) > 10 else ""))
     grid.merged = [str(p) for p in written]
-    grid.missing = [i for i in grid.ids if i not in got]
+    grid.missing = [i for i in grid.ids if i not in got and i not in crashed]
     grid.state = "merged"
     return written
 
@@ -697,9 +998,14 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
         if not allow_auto_method:
             raise GridError(msg + " (or pass --allow-auto-method)")
         log("Warning: " + msg)
+    commit = profile.git_commit()
+    commits: dict[str, str] = {LOCAL: commit}
     for n in names:
         if n == LOCAL:
             continue
+        if not _safe_name(n):
+            raise GridError(f"Machine name {n!r} cannot name a folder (letters, digits, . _ + -; start with a "
+                            "letter or digit)")
         ref = refs.get(n)
         if ref is None:
             known = ", ".join(sorted(refs)) or "none"
@@ -711,6 +1017,10 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
         if version != __version__ and not allow_version_mismatch:
             raise GridError(f"{n} runs QuantaBench {version}, this machine {__version__}: update both (git pull) or "
                             "pass --allow-version-mismatch")
+        commits[n] = str(ref.info.get("commit") or "")
+        if not same_commit(commit, commits[n]):
+            log(f"Warning: {n} runs commit {commits[n]}, this machine {commit}: the version number is the same, "
+                "but the code may differ (git pull on both). Both commits are recorded in grid.json.")
         engines = (ref.info.get("profile") or {}).get("engines") or {}
         if cfg.method != "auto" and engines.get(cfg.method) is False:
             raise GridError(f"{n} cannot run {cfg.method} (engine not available there)")
@@ -727,8 +1037,9 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
     config = config_for_workers(cfg, keep_resources)
     grid = GridRun(id=folder.name, folder=str(folder), label=label, created=_now(), client=profile.machine_name(),
                    quantabench_version=__version__, method=cfg.method, config=config, weights=w, ids=ids,
-                   shares=[Share(machine=n, url=refs[n].url if n != LOCAL else "", n=len(split[n]), weight=w[n])
-                           for n in names])
+                   shares=[Share(machine=n, url=refs[n].url if n != LOCAL else "", n=len(split[n]), weight=w[n],
+                                 commit=commits.get(n, "")) for n in names],
+                   commit=commit)
     grid.save()
 
     targets: dict[str, object] = {}
@@ -750,9 +1061,21 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
             grid.save()
             raise GridError(f"Submitting to {share.machine} failed: {exc}"
                             + ("; cancelled the shares already submitted" if submitted else "")) from None
-        job = reply["job"]
-        share.job_id, share.run_folder, share.run_dir = reply["id"], job["run_folder"], job["run_dir"]
-        share.state = job["state"]
+        try:  # what the worker answers names folders here: check it like any other input
+            job = reply["job"]
+            share.job_id, share.run_folder, share.run_dir = _job_id(reply["id"]), job["run_folder"], job["run_dir"]
+            share.state = job["state"]
+            if not isinstance(share.run_folder, str) or not _FOLDER_RE.fullmatch(share.run_folder):
+                raise WorkerError(f"bad run folder name {share.run_folder!r}")
+        except (KeyError, TypeError, WorkerError) as exc:
+            with contextlib.suppress(WorkerError, KeyError, TypeError):
+                client.cancel(reply["id"])
+            for c, job_id in submitted:
+                with contextlib.suppress(WorkerError):
+                    c.cancel(job_id)
+            grid.state = "failed"
+            grid.save()
+            raise GridError(f"{share.machine} answered the submission unexpectedly ({exc})") from None
         submitted.append((client, share.job_id))
         targets[share.machine] = _RemoteTarget(client, share.job_id)
         log(f"{share.machine}: {share.n} molecule(s) -> job {share.job_id} ({share.run_folder})")
@@ -764,7 +1087,8 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
         spec = validate_job(json.loads(json.dumps(body)), __version__)  # the checks a worker would make
         here = profile.machine_name()
         same = any(sh.machine == here for sh in grid.shares)     # a worker on this machine is listed too
-        manager = JobManager(out, f"{here}-local" if same else here, state_dir=None, lanes=s.dist.lanes)
+        # lanes=None: this machine's own spec from the settings (Settings.lanes_for), one lane if it does not fit
+        manager = JobManager(out, f"{here}-local" if same else here, state_dir=None, lanes=None)
         manager.start()
         job = manager.submit(spec)
         local.job_id, local.run_dir, local.run_folder = job.id, job.run_dir, Path(job.run_dir).name
@@ -823,7 +1147,10 @@ def find_grid(ident: str, output_dir: str | Path | None = None) -> GridRun:
 
 def refresh(grid: GridRun, token: str, allow_any_host: bool = False) -> dict[str, str]:
     """Update each share's state and counts from its worker (or, if unreachable, from a synced copy of its
-    run folder); returns per-machine notes."""
+    run folder, read without changing it: ``copy_counts``); returns per-machine notes. A worker that answers
+    with a 4xx for the job marks the share 'lost'."""
+    import sqlite3
+
     from ..chem import jobs
 
     notes: dict[str, str] = {}
@@ -838,19 +1165,30 @@ def refresh(grid: GridRun, token: str, allow_any_host: bool = False) -> dict[str
                 continue
             except WorkerError as exc:
                 notes[share.machine] = str(exc)
-        folder = Path(share.run_dir) if share.machine == LOCAL else out / share.run_folder
-        if share.machine != LOCAL and not is_job_folder(folder, share.job_id):
-            notes[share.machine] = notes.get(share.machine, "") + " (no synced copy here)"
-            continue
+                if 400 <= exc.status < 500:
+                    share.state, share.error = LOST, str(exc)
+        own = _own_local(grid, share)
+        if own is not None:
+            folder = own
+        else:
+            try:
+                folder = _share_paths(grid, share, out)[0]
+            except WorkerError as exc:
+                notes[share.machine] = notes.get(share.machine, "") + f" ({exc})"
+                continue
+            if not is_job_folder(folder, share.job_id):
+                notes[share.machine] = notes.get(share.machine, "") + " (no synced copy here)"
+                continue
         try:
-            rs = jobs.open_run(folder)
-            share.counts = dict(rs.counts)
-            share.state = share.state if share.machine != LOCAL else ("running" if rs.active else
-                                                                     "done" if not rs.remaining else "interrupted")
-            notes.setdefault(share.machine, "")
-            if share.machine != LOCAL:
-                notes[share.machine] += " (counts from the synced run folder)"
-        except (OSError, ValueError) as exc:
+            if own is not None:   # this machine's own run folder
+                rs = jobs.open_run(folder)
+                share.counts = dict(rs.counts)
+                share.state = "running" if rs.active else "done" if not rs.remaining else "interrupted"
+                notes.setdefault(share.machine, "")
+            else:     # another machine's folder, synced here: never write into it
+                share.counts = copy_counts(folder)
+                notes[share.machine] = notes.get(share.machine, "") + " (counts from the synced run folder)"
+        except (OSError, ValueError, sqlite3.Error, WorkerError) as exc:
             notes.setdefault(share.machine, f"no run folder here ({exc.__class__.__name__})")
     return notes
 
@@ -1006,9 +1344,11 @@ def _cli_merge(args) -> int:
               "so the grid folder keeps a single writer", file=sys.stderr)
         return 2
     refresh(grid, token, args.allow_any_host)
-    unfinished = [s.machine for s in grid.shares if s.job_id and s.state not in FINAL_STATES]
+    unfinished = [f"{s.machine} ({s.state or 'unknown'})" for s in grid.shares
+                  if s.job_id and s.state not in FINAL_STATES]
     if unfinished and not args.partial:
-        print(f"Not finished on {', '.join(unfinished)}; wait, or pass --partial", file=sys.stderr)
+        print(f"Not finished on {', '.join(unfinished)}; wait, or pass --partial to merge what is finished "
+              "(read from the synced run folders)", file=sys.stderr)
         return 1
     try:
         written = merge(grid, token, args.sync_wait, print, args.allow_any_host,

@@ -139,7 +139,7 @@ class SettingsDialog(QDialog):
         self.lanes = QComboBox()
         self.lanes.setEditable(True)
         self.lanes.addItems(self.LANE_PRESETS)
-        self.lanes.setCurrentText(self.s.dist.lanes or "1")
+        self.lanes.setCurrentText(self.s.lanes_for())         # this machine's spec (the file is shared)
         self.lanes.setToolTip("Batches run in this many worker processes, each on its own molecule:\n"
                               "1 = one process with all threads; auto = from the hardware and the method;\n"
                               "N = N CPU lanes sharing the threads; or a list such as gpu:1x4,cpu:5x2\n"
@@ -391,7 +391,7 @@ class SettingsDialog(QDialog):
 
         lanes = self.lanes.currentText().strip().lower() or "1"
         if not lanes_mod.spec_error(lanes):       # a malformed spec keeps the previous one (the plan line says why)
-            s.dist.lanes = lanes
+            s.set_lanes_for(lanes)                # this machine only: other machines keep their own spec
         b = s.build
         b.refine_method = self.method.currentData()
         b.ph = self.ph.value()

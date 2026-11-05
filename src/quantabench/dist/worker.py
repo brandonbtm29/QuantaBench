@@ -29,6 +29,8 @@ import argparse
 import collections
 import contextlib
 import dataclasses
+import errno
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -64,9 +66,16 @@ MAX_INPUTS = 100_000
 MIN_TOKEN_LENGTH = 24
 LOG_TAIL = 500                             # log lines kept in memory per job
 STATE_FILE = "jobs.json"
+STATE_BACKUP = "jobs.json.bak"             # the same list, written after STATE_FILE: one of them is always whole
 STATE_LOCK = "worker.lock"
-JOB_FILE = "worker.json"                   # in each run folder: the job and the worker's environment
+JOB_FILE = "worker.json"                   # in each run folder: the job, the worker's environment, final tables
 JOB_LOG = "worker.log"                     # in each run folder: the job's log
+TABLES = ("summary.csv", "descriptors.csv")
+ARCHIVE_MANIFEST = ".qb-archive.json"      # last member of an archive: every other member and its size
+#: SyncThing's temporary files (``~syncthing~name.tmp`` on Windows, ``.syncthing.name.tmp`` elsewhere): they
+#: appear and vanish while it pulls, so they never go into an archive
+SYNC_TEMP_PREFIXES = ("~syncthing~", ".syncthing.")
+_ADDR_NOT_AVAILABLE = {errno.EADDRNOTAVAIL, 10049}   # 10049: WSAEADDRNOTAVAIL (address not on this machine yet)
 STATES = ("queued", "running", "done", "failed", "cancelled", "interrupted")
 FINAL_STATES = ("done", "failed", "cancelled")
 #: BuildConfig fields that only say how fast this machine runs a job. A client normally leaves them out and
@@ -184,7 +193,8 @@ def validate_inputs(items) -> list:
     if len(items) > MAX_INPUTS:
         raise RequestError(400, f"at most {MAX_INPUTS} inputs per job")
     known = {f.name for f in dataclasses.fields(MoleculeInput)} - {"mol"} | {"molblock"}
-    out, seen = [], set()
+    out: list = []
+    seen: dict[str, str] = {}   # casefolded id -> id: Windows and macOS file systems ignore letter case
     for k, item in enumerate(items):
         if isinstance(item, str):
             try:
@@ -197,9 +207,13 @@ def validate_inputs(items) -> list:
         if unknown:
             raise RequestError(400, f"inputs[{k}]: unknown field(s) {', '.join(unknown)}")
         mol_id = check_mol_id(item.get("id"))
-        if mol_id in seen:
+        other = seen.get(mol_id.casefold())
+        if other == mol_id:
             raise RequestError(400, f"duplicate molecule id {mol_id!r}")
-        seen.add(mol_id)
+        if other is not None:
+            raise RequestError(400, f"molecule ids {other!r} and {mol_id!r} differ only in letter case: they would "
+                                    "share one folder on Windows and macOS (inputs.dedupe_ids renames them)")
+        seen[mol_id.casefold()] = mol_id
         for name in ("smiles", "name", "source", "molblock"):
             if name in item:
                 _check_str(f"inputs[{k}].{name}", item[name], _INPUT_LIMITS[name])
@@ -491,7 +505,17 @@ def resolve_bind(bind: str, allow_any: bool = False, tailscale_wait: float = 0.0
 
 def ensure_token(log: Callable[[str], None] = _noop) -> str:
     """``settings.dist.worker_token``; generated and saved on first use (the synced settings folder shares
-    it with the other machines)."""
+    it with the other machines). A settings file that exists but cannot be read is an error, not a first
+    start: saving then would replace every setting (and the token the other machines use) with defaults."""
+    path = settings_mod.settings_dir() / settings_mod.SETTINGS_FILE
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"cannot read {path} ({exc}); fix or restore it (SyncThing keeps old versions in "
+                             ".stversions) instead of letting the worker overwrite it") from None
+        if not isinstance(raw, dict):
+            raise ValueError(f"{path} is not a JSON object; fix or restore it")
     s = settings_mod.load()
     token = s.dist.worker_token
     if not token:
@@ -520,10 +544,34 @@ def git_commit() -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def _pid_alive(pid: int) -> bool:
+def _process_start(pid: int) -> float | None:
     import psutil
 
-    return pid != os.getpid() and psutil.pid_exists(pid)
+    try:
+        return psutil.Process(pid).create_time()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+        return None
+
+
+def _lock_owner_alive(info: dict | None) -> bool:
+    """Whether the worker that wrote ``worker.lock`` still runs: same host, and a process with that pid that
+    started when the lock says (after a reboot or a killed worker the pid may belong to another program, as
+    ``jobs._RunLock`` also checks). A lock without a start time (older versions) falls back to the pid."""
+    if not info or info.get("host") != socket.gethostname():
+        return False
+    try:
+        pid = int(info.get("pid", -1))
+    except (TypeError, ValueError):
+        return False
+    if pid == os.getpid() or pid <= 0:
+        return False
+    start = _process_start(pid)
+    if start is None:
+        return False
+    started = info.get("pid_started")
+    if not isinstance(started, (int, float)) or isinstance(started, bool):
+        return True
+    return abs(start - float(started)) < 1.0
 
 
 @contextlib.contextmanager
@@ -571,11 +619,61 @@ def default_state_dir() -> Path:
     return Path(user_state_dir(settings_mod.APP_NAME, appauthor=False)) / "worker"
 
 
-def _atomic_write(path: Path, text: str) -> None:
+def _fsync_dir(folder: Path) -> None:
+    """Make a rename in ``folder`` durable (POSIX; Windows cannot open a folder this way, NTFS journals it)."""
+    if os.name == "nt":
+        return
+    with contextlib.suppress(OSError):
+        fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def _atomic_write(path: Path, text: str, durable: bool = False) -> None:
+    """Write ``text`` to a temporary file and rename it over ``path``. ``durable``: fsync the data before the
+    rename and the folder after it, so a power cut leaves either the old or the new file, never a torn one.
+    On Windows a rename onto a file another program holds open for a moment (antivirus, SyncThing, an
+    editor) fails with PermissionError, so it is retried briefly."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        if durable:
+            f.flush()
+            os.fsync(f.fileno())
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            break
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.1 * (attempt + 1))
+    if durable:
+        _fsync_dir(path.parent)
+
+
+def _file_digest(path: Path) -> tuple[int, str]:
+    h = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+            size += len(block)
+    return size, h.hexdigest()
+
+
+def _csv_ids(path: Path) -> set[str]:
+    """The ``id`` column of a table (empty when it is missing or unreadable)."""
+    import csv
+
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            return {row.get("id", "") for row in csv.DictReader(f)}
+    except (OSError, csv.Error, UnicodeDecodeError):
+        return set()
 
 
 def _tail(path: Path, n: int) -> list[str]:
@@ -686,20 +784,41 @@ class JobManager:
             info = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             info = None
-        if info and info.get("host") == socket.gethostname() and _pid_alive(int(info.get("pid", -1))):
+        if not isinstance(info, dict):
+            info = None
+        if _lock_owner_alive(info):
             raise RuntimeError(f"another worker (pid {info.get('pid')}) uses {self.state_dir}; stop it or give "
                                "this one --state-dir")
-        _atomic_write(path, json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "since": _now()}))
+        if info:
+            self._log(f"Previous worker (pid {info.get('pid')}) ended without removing {path.name}; taking it over")
+        _atomic_write(path, json.dumps({"pid": os.getpid(), "pid_started": _process_start(os.getpid()) or 0.0,
+                                        "host": socket.gethostname(), "since": _now()}))
         self._locked = True
 
+    def _read_state(self) -> dict | None:
+        """The saved job list: ``jobs.json``, else its backup (a power cut can tear the file being written,
+        never both). An unreadable file is kept as ``*.unreadable`` for inspection."""
+        for name in (STATE_FILE, STATE_BACKUP):
+            path = self.state_dir / name
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict) or not isinstance(data.get("jobs", []), list):
+                    raise ValueError("not a job list")
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError) as exc:
+                self._log(f"Could not read {path} ({exc})" + ("; trying the backup" if name == STATE_FILE else ""))
+                with contextlib.suppress(OSError):
+                    shutil.copyfile(path, path.with_name(path.name + ".unreadable"))
+                continue
+            if name == STATE_BACKUP:
+                self._log(f"Restored the job list from {path}")
+            return data
+        return None
+
     def _load_state(self) -> None:
-        path = self.state_dir / STATE_FILE
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return
-        except (OSError, ValueError) as exc:
-            self._log(f"Could not read {path} ({exc}); starting with an empty job list")
+        data = self._read_state()
+        if data is None:
             return
         jobs_list = []
         for rec in data.get("jobs", []):
@@ -712,17 +831,27 @@ class JobManager:
                 if job.state not in STATES:
                     continue
                 self._jobs[job.id] = job
-                if job.state in ("running", "interrupted", "queued"):
-                    if job.state != "queued":
-                        job.resumed += 1
-                        self._log(f"Resuming job {job.id} ({job.label}) in {job.run_dir}")
-                    job.state, job.cancel_requested = "queued", False
-                    self._queue.append(job.id)
+                if job.state not in ("running", "interrupted", "queued"):
+                    continue
+                if job.cancel_requested:  # cancelled, then the worker stopped before the molecule ended
+                    job.state, job.finished = "cancelled", job.finished or _now()
+                    self._log(f"Job {job.id} ({job.label}) was cancelled before the worker stopped; not resuming it")
+                    self._drop_inputs(job.id)
+                    self._finish_run_folder(job)
+                    continue
+                if job.state != "queued":
+                    job.resumed += 1
+                    self._log(f"Resuming job {job.id} ({job.label}) in {job.run_dir}")
+                job.state = "queued"
+                self._queue.append(job.id)
             self._persist()
 
-    def _persist(self) -> None:
+    def _persist(self) -> bool:
+        """Save the job list (``jobs.json`` and then its backup, each fsynced). Never raises: a job list that
+        cannot be saved for a moment stays in memory and is saved with the next change, and the job threads
+        must not die of it."""
         if self.state_dir is None:
-            return
+            return True
         jobs_sorted = sorted(self._jobs.values(), key=lambda j: j.created)
         finished = [j for j in jobs_sorted if j.state in FINAL_STATES]
         drop = {j.id for j in finished[:-200]}            # keep the last 200 finished jobs
@@ -730,7 +859,15 @@ class JobManager:
             self._jobs.pop(job_id, None)
         data = {"format": 1, "worker": self.name, "updated": _now(),
                 "jobs": [j.to_record() for j in jobs_sorted if j.id not in drop]}
-        _atomic_write(self.state_dir / STATE_FILE, json.dumps(data, indent=1) + "\n")
+        text = json.dumps(data, indent=1, default=str) + "\n"
+        try:
+            _atomic_write(self.state_dir / STATE_FILE, text, durable=True)
+            _atomic_write(self.state_dir / STATE_BACKUP, text, durable=True)
+        except OSError as exc:
+            self._log(f"Could not save the job list in {self.state_dir} ({exc}); kept in memory, saved with the "
+                      "next change")
+            return False
+        return True
 
     # -------------------------------------------------------------- inputs
     def _inputs_path(self, job_id: str) -> Path:
@@ -742,7 +879,8 @@ class JobManager:
             return
         from ..chem import jobs as jobs_mod
 
-        _atomic_write(self._inputs_path(job_id), "".join(jobs_mod.input_to_json(x) + "\n" for x in inputs))
+        _atomic_write(self._inputs_path(job_id), "".join(jobs_mod.input_to_json(x) + "\n" for x in inputs),
+                      durable=True)
 
     def _load_inputs(self, job_id: str) -> list | None:
         if self.state_dir is None:
@@ -758,7 +896,10 @@ class JobManager:
     def _drop_inputs(self, job_id: str) -> None:
         self._memory_inputs.pop(job_id, None)
         if self.state_dir is not None:
-            self._inputs_path(job_id).unlink(missing_ok=True)
+            try:
+                self._inputs_path(job_id).unlink(missing_ok=True)
+            except OSError as exc:  # held open for a moment on Windows: a leftover file, not an error
+                self._log(f"Could not remove the queued inputs of job {job_id} ({exc})")
 
     # -------------------------------------------------------------- queue
     def _new_run_dir(self, label: str) -> Path:
@@ -785,7 +926,10 @@ class JobManager:
             job = Job(id=job_id, label=spec.label, run_dir=str(self._new_run_dir(spec.label)),
                       config=spec.config, created=_now(), chunk=spec.chunk, lanes=spec.lanes,
                       client=spec.client, client_version=spec.client_version, n_inputs=len(spec.inputs))
-            self._save_inputs(job_id, spec.inputs)
+            try:
+                self._save_inputs(job_id, spec.inputs)
+            except OSError as exc:
+                raise RequestError(503, f"the worker cannot save the job's inputs ({exc})") from None
             self._jobs[job_id] = job
             self._queue.append(job_id)
             self._persist()
@@ -859,15 +1003,18 @@ class JobManager:
             except Exception as exc:  # the worker must outlive any job
                 job.state, job.error = "failed", f"{type(exc).__name__}: {exc}"
                 self._log(f"Job {job.id} failed: {job.error}")
-            with self._lock:
-                job.finished = _now() if job.state in FINAL_STATES else job.finished
-                if job.state in FINAL_STATES:
-                    self._drop_inputs(job.id)
-                self._persist()
+            try:
+                with self._lock:
+                    job.finished = _now() if job.state in FINAL_STATES else job.finished
+                    if job.state in FINAL_STATES:
+                        self._drop_inputs(job.id)
+                    self._persist()
+            except Exception as exc:  # bookkeeping must not end this thread: the queue would stall silently
+                self._log(f"Job {job.id}: could not record its end ({type(exc).__name__}: {exc})")
 
     def _execute(self, job: Job) -> None:
         from ..chem import jobs as jobs_mod
-        from . import lanes as lanes_mod
+        from . import profile as profile_mod
 
         run_dir = Path(job.run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -884,10 +1031,11 @@ class JobManager:
             log(f"Job {job.id} ({job.label}) on {self.name}, QuantaBench {__version__}"
                 + (f" (resume {job.resumed})" if job.resumed else ""))
             self._write_job_file(job)
+            tables = None
             try:
                 cfg = build_config(job.config, self.output_dir)
-                spec = job.lanes or self.lanes or settings_mod.load().dist.lanes
-                lanes = lanes_mod.parse_lanes(spec, cfg)
+                # the job's own spec or --lanes must fit (an error); this machine's setting falls back to 1 lane
+                lanes, _spec = profile_mod.resolve_lanes(job.lanes or self.lanes, cfg, log=log)
                 chunk = (job.chunk["index"], job.chunk["count"]) if job.chunk and "count" in job.chunk else None
                 inputs = self._load_inputs(job.id)
                 with keep_awake(log) if self._awake else contextlib.nullcontext():
@@ -895,6 +1043,7 @@ class JobManager:
                                            should_stop=job.stop.is_set, log=log, lanes=lanes, chunk=chunk)
                 # final counts before the state changes, so no client sees "done" with old counts
                 job.counts = self._counts(job)
+                tables = self._final_tables(run_dir)
                 self._checkpoint(run_dir)
                 job.state = ("cancelled" if job.cancel_requested else "interrupted" if job.stop.is_set()
                              else "done")
@@ -903,10 +1052,58 @@ class JobManager:
                 job.state, job.error = "failed", f"{type(exc).__name__}: {exc}"
                 for line in traceback.format_exc().rstrip().splitlines():
                     log(line)
+                tables = self._final_tables(run_dir, rebuild=True)
             log(f"Job {job.id}: {job.state}" + (f" ({job.error})" if job.error else "")
                 + (" " + json.dumps(job.counts) if job.counts else ""))
-            self._write_job_file(job)
+            self._write_job_file(job, tables)   # last: a synced copy is complete once this matches its tables
         self._log(f"Job {job.id} ({job.label}): {job.state}")
+
+    @staticmethod
+    def _final_tables(run_dir: Path, rebuild: bool = False) -> dict:
+        """worker.json's ``tables``: size and SHA-256 of summary.csv and descriptors.csv as this job left them,
+        and the failed molecules that have no summary row (they crashed the process twice), so that a client
+        can tell a complete synced copy from one SyncThing is still bringing. ``rebuild``: write the tables
+        from the job table first (a failed run ends without them), unless another process holds the run."""
+        from ..chem import jobs as jobs_mod
+
+        db = run_dir / jobs_mod.DB_NAME
+        failures: list = []
+        if db.is_file():
+            with contextlib.suppress(Exception):  # an unreadable table: report the files that are there
+                status = jobs_mod.open_run(run_dir)
+                failures = list(status.failures)
+                if rebuild and not status.active:
+                    jobs_mod.rebuild_tables(run_dir)
+        files: dict = {}
+        for name in TABLES:
+            path = run_dir / name
+            with contextlib.suppress(OSError):
+                if path.is_file():
+                    size, digest = _file_digest(path)
+                    files[name] = {"size": size, "sha256": digest}
+        in_summary = _csv_ids(run_dir / "summary.csv")
+        return {"files": files, "unrecorded_failures": [[i, e] for i, e in failures if i not in in_summary],
+                "written": _now()}
+
+    def _finish_run_folder(self, job: Job) -> None:
+        """A job that ends without running (cancelled while the worker was down): give its run folder the
+        tables and final worker.json that a finished job has, and remove the dead process's run lock."""
+        from ..chem import jobs as jobs_mod
+
+        run_dir = Path(job.run_dir)
+        if not run_dir.is_dir():
+            return
+        try:
+            lock = run_dir / jobs_mod.LOCK_NAME
+            with contextlib.suppress(OSError, ValueError, TypeError):
+                if (json.loads(lock.read_text(encoding="utf-8")).get("host") == socket.gethostname()
+                        and not jobs_mod.open_run(run_dir).active):
+                    lock.unlink()
+            tables = self._final_tables(run_dir, rebuild=True)
+            self._checkpoint(run_dir)
+            self._write_job_file(job, tables)
+        except Exception as exc:
+            self._log(f"Job {job.id}: could not finish its run folder ({type(exc).__name__}: {exc})")
 
     @staticmethod
     def _checkpoint(run_dir: Path) -> None:
@@ -918,11 +1115,14 @@ class JobManager:
         with contextlib.suppress(Exception):
             jobs_mod.JobStore(run_dir, create=False).close()
 
-    def _write_job_file(self, job: Job) -> None:
-        with contextlib.suppress(OSError):
-            _atomic_write(Path(job.run_dir) / JOB_FILE,
-                          json.dumps({"job": job.to_record(), "environment": self.environment}, indent=1,
-                                     default=str) + "\n")
+    def _write_job_file(self, job: Job, tables: dict | None = None) -> None:
+        data = {"job": job.to_record(), "environment": self.environment}
+        if tables is not None:
+            data["tables"] = tables
+        try:
+            _atomic_write(Path(job.run_dir) / JOB_FILE, json.dumps(data, indent=1, default=str) + "\n")
+        except OSError as exc:
+            self._log(f"Job {job.id}: could not write {JOB_FILE} ({exc})")
 
     def _counts(self, job: Job) -> dict:
         from ..chem import jobs as jobs_mod
@@ -976,17 +1176,42 @@ _ROUTES = (
 
 
 class _ZipStream:
-    """Write-only, unseekable file object over the response socket (zipfile then uses data descriptors)."""
+    """Write-only, unseekable file object over the response socket (zipfile then uses data descriptors).
+    After ``abort()`` every write is dropped, so a ``ZipFile`` closed after an error cannot add the central
+    directory that would make a cut-off archive look complete."""
 
     def __init__(self, raw):
         self.raw = raw
+        self.aborted = False
 
     def write(self, data) -> int:
-        self.raw.write(data)
+        if not self.aborted:
+            self.raw.write(data)
         return len(data)
 
     def flush(self) -> None:
-        self.raw.flush()
+        if not self.aborted:
+            self.raw.flush()
+
+    def abort(self) -> None:
+        self.aborted = True
+
+
+def archive_members(run_dir: Path) -> list[Path]:
+    """The files of a run folder that go into its archive: no links, no run lock, no SyncThing temporary
+    files (they come and go while SyncThing pulls), no manifest of an earlier download."""
+    from ..chem import jobs as jobs_mod
+
+    files = []
+    for root, dirs, names in os.walk(run_dir, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if not (Path(root) / d).is_symlink() and not d.startswith(SYNC_TEMP_PREFIXES))
+        for name in sorted(names):
+            p = Path(root) / name
+            if (name in (jobs_mod.LOCK_NAME, ARCHIVE_MANIFEST) or name.startswith(SYNC_TEMP_PREFIXES)
+                    or p.is_symlink() or not p.is_file()):
+                continue
+            files.append(p)
+    return files
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -1139,22 +1364,13 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, mgr.queue_state())
 
     def _r_archive(self, job_id: str, query) -> None:
-        from ..chem import jobs as jobs_mod
-
         job = self._job_or_404(job_id)
         if job.state in ("queued", "running"):
             raise RequestError(409, f"job {job_id} is {job.state}; download it when it is done")
         run_dir = Path(job.run_dir)
         if not run_dir.is_dir():
             raise RequestError(404, f"the run folder of job {job_id} no longer exists")
-        files = []
-        for root, dirs, names in os.walk(run_dir, followlinks=False):
-            dirs[:] = sorted(d for d in dirs if not (Path(root) / d).is_symlink())
-            for name in sorted(names):
-                p = Path(root) / name
-                if name == jobs_mod.LOCK_NAME or p.is_symlink() or not p.is_file():
-                    continue
-                files.append(p)
+        files = archive_members(run_dir)
         self.send_response(200)
         self.send_header("Content-Type", "application/zip")
         self.send_header("Content-Disposition", f'attachment; filename="{run_dir.name}.zip"')
@@ -1162,12 +1378,29 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.send_header(VERSION_HEADER, __version__)
         self.end_headers()
-        # no Content-Length: the zip is streamed and the connection closes at the end; a cut-off stream has
-        # no central directory, so the client sees a damaged zip rather than a silently short result
-        with zipfile.ZipFile(_ZipStream(self.wfile), "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        # No Content-Length: the zip is streamed and the connection closes at the end. The manifest (every
+        # member and its size) is the last member, and an error drops the central directory, so a cut-off or
+        # failed stream reads as damaged or incomplete, never as a shorter result.
+        stream = _ZipStream(self.wfile)
+        zf = zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6)
+        top = run_dir.name
+        try:
+            entries = []
             for p in files:
-                zf.write(p, f"{run_dir.name}/{p.relative_to(run_dir).as_posix()}")
-        self.wfile.flush()
+                rel = p.relative_to(run_dir).as_posix()
+                zf.write(p, f"{top}/{rel}")
+                entries.append({"path": rel, "size": zf.infolist()[-1].file_size})
+            manifest = {"format": 1, "job": job_id, "run_folder": top, "files": entries, "written": _now()}
+            zf.writestr(f"{top}/{ARCHIVE_MANIFEST}", json.dumps(manifest, indent=1) + "\n")
+            zf.close()
+            self.wfile.flush()
+        except Exception as exc:  # the headers are out: no JSON error now, only an incomplete archive
+            stream.abort()
+            with contextlib.suppress(Exception):
+                zf.close()
+            if not isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+                self.server.worker.log(f"Archive of job {job_id} stopped ({type(exc).__name__}: {exc}); the "
+                                       "client gets an incomplete archive and refuses it")
         self.close_connection = True
 
 
@@ -1211,8 +1444,16 @@ class Worker:
     def info(self) -> dict:
         return {"api": API_VERSION, "name": self.name, "url": self.url, "quantabench_version": __version__,
                 "commit": self.commit, "python": sys.version.split()[0], "platform": sys.platform,
-                "output_dir": str(self.manager.output_dir), "lanes": self.manager.lanes or "",
+                "output_dir": str(self.manager.output_dir), "lanes": self.lanes_spec(),
                 "queue": self.manager.queue_state(), "profile": self.profile.to_dict()}
+
+    def lanes_spec(self) -> str:
+        """The lane spec jobs without their own run with: ``--lanes``, else this machine's setting."""
+        if self.manager.lanes:
+            return self.manager.lanes
+        with contextlib.suppress(Exception):
+            return settings_mod.load().lanes_for()
+        return "1"
 
     def _publish_profile(self) -> None:
         """Write this worker's URL into its machine profile in the (synced) registry, keeping measured
@@ -1285,6 +1526,24 @@ def _stamped_log(log_file: str | None) -> Callable[[str], None]:
     return log
 
 
+BIND_RETRY_S = 5.0
+
+
+def bind_with_retry(make: Callable[[], Worker], wait: float, log: Callable[[str], None] = _noop) -> Worker:
+    """``make()`` (which binds the socket), retried for up to ``wait`` seconds while the address is not on
+    this machine yet: at login ``tailscale ip -4`` can name the address before the Tailscale adapter has
+    it, and the worker would otherwise exit (Windows Task Scheduler does not reliably start it again)."""
+    deadline = time.monotonic() + max(0.0, wait)
+    while True:
+        try:
+            return make()
+        except OSError as exc:
+            if exc.errno not in _ADDR_NOT_AVAILABLE or time.monotonic() >= deadline:
+                raise
+            log(f"Cannot listen yet ({exc}); the Tailscale interface may still be coming up, retrying")
+            time.sleep(BIND_RETRY_S)
+
+
 def _cli_worker(args) -> int:
     log = _stamped_log(args.log_file)
     s = settings_mod.load()
@@ -1299,12 +1558,24 @@ def _cli_worker(args) -> int:
             "can submit jobs, and traffic is not encrypted")
     output = s.output_path()
     port = s.dist.worker_port if args.port is None else args.port
+    if args.lanes:  # an explicit --lanes must fit this machine; the setting falls back to one lane per job
+        from . import profile as profile_mod
+
+        try:
+            profile_mod.resolve_lanes(args.lanes, build_config({}, output))
+        except ValueError as exc:
+            print(f"worker: --lanes {args.lanes}: {exc}", file=sys.stderr)
+            return 2
+
+    def make() -> Worker:
+        return Worker(host, port, token, output, state_dir=args.state_dir or default_state_dir(), name=args.name,
+                      lanes=args.lanes or None, max_jobs=args.max_jobs,
+                      allow_version_mismatch=args.allow_version_mismatch,
+                      max_request_bytes=int(args.max_request_mb * 1024 * 1024), publish=args.publish, log=log)
+
+    tailscale = (args.bind or s.dist.worker_bind or "tailscale").strip() == "tailscale"
     try:
-        worker = Worker(host, port, token, output,
-                        state_dir=args.state_dir or default_state_dir(), name=args.name,
-                        lanes=args.lanes or s.dist.lanes, max_jobs=args.max_jobs,
-                        allow_version_mismatch=args.allow_version_mismatch,
-                        max_request_bytes=int(args.max_request_mb * 1024 * 1024), publish=args.publish, log=log)
+        worker = bind_with_retry(make, args.tailscale_wait if tailscale else 0.0, log)
     except OSError as exc:
         print(f"worker: cannot listen on {host}:{port}: {exc}", file=sys.stderr)
         return 2
@@ -1316,7 +1587,7 @@ def _cli_worker(args) -> int:
         with contextlib.suppress(ValueError, AttributeError, OSError):
             signal.signal(getattr(signal, name), on_term)
     log(f"QuantaBench {__version__} worker '{worker.name}' at {worker.url}; results in {output}; "
-        f"lanes {worker.manager.lanes}, {worker.manager.max_jobs} job(s) at a time. Ctrl+C stops it (running "
+        f"lanes {worker.lanes_spec()}, {worker.manager.max_jobs} job(s) at a time. Ctrl+C stops it (running "
         "jobs resume on the next start).")
     try:
         worker.serve_forever()

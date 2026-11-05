@@ -209,26 +209,32 @@ class ReadReport:
 def dedupe_ids(items: Iterable[MoleculeInput], warnings: list[str] | None = None) -> list[MoleculeInput]:
     """Make ids unique, because the id names the output folder and the job record.
 
-    An exact repeat (same id and structure) is dropped; the same id with a different structure gets a
-    ``_2``, ``_3``... suffix. The result depends only on input order, so re-reading the same list gives
-    the same ids, which resumable runs rely on.
+    Ids are compared ignoring letter case: Windows and macOS file systems are case-insensitive, so
+    ``c1ccccc1`` (benzene) and ``C1CCCCC1`` (cyclohexane), ids made from SMILES, would share one folder.
+    An exact repeat (same id and structure) is dropped; an id already taken (in any letter case) by a
+    different structure gets a ``_2``, ``_3``... suffix. The result depends only on input order, so
+    re-reading the same list gives the same ids, which resumable runs rely on.
     """
     out: list[MoleculeInput] = []
-    seen: dict[str, str] = {}
+    seen: dict[str, tuple[str, str]] = {}      # casefolded id -> (id as given, structure)
     dropped = 0
     for it in items:
         key = it.smiles or (Chem.MolToSmiles(it.mol) if it.mol is not None else "")
-        if it.id in seen:
-            if seen[it.id] == key:
+        taken = seen.get(it.id.casefold())
+        if taken is not None:
+            if taken == (it.id, key):
                 dropped += 1
                 continue
             n = 2
-            while f"{it.id}_{n}" in seen:
+            while f"{it.id}_{n}".casefold() in seen:
                 n += 1
             if warnings is not None:
-                warnings.append(f"Duplicate id {it.id!r} with a different structure renamed to {it.id}_{n}")
+                how = ("with a different structure" if taken[0] == it.id
+                       else f"(same as {taken[0]!r} except for letter case, which names one folder on Windows "
+                            "and macOS)")
+                warnings.append(f"Duplicate id {it.id!r} {how} renamed to {it.id}_{n}")
             it = replace(it, id=f"{it.id}_{n}")
-        seen[it.id] = key
+        seen[it.id.casefold()] = (it.id, key)
         out.append(it)
     if dropped and warnings is not None:
         warnings.append(f"Dropped {dropped} exact duplicate row(s) (same id and structure)")

@@ -95,7 +95,7 @@ class MachinesPanel(QWidget):
             cfg = self.win.current_config()
         except Exception:
             cfg = None
-        spec = s.dist.lanes or "1"
+        spec = s.lanes_for()
         plan = lanes_mod.plan_text(spec, cfg, getattr(self.win, "report", None), s.resources.parallel_molecules)
         return (f"<b>{profile.machine_name()}</b> (this computer). Parallel lanes <code>{spec}</code>: {plan}<br>"
                 "Change it in Settings &gt; Compute; split a list across machines with "
