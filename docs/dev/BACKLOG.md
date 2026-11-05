@@ -368,23 +368,23 @@ Still open:
   `EmbedParameters.timeout` since RDKit 2024.03). Large records (90-157 heavy atoms) took minutes on 1 CPU
   thread with MMFF; with xTB on the CPU much longer. A `max_seconds` per stage with a clear failure.
 - **Ids of the baseline cohorts** (needs-Brandon): cohorts 1-3 are titled by CAS number, cohorts 4-6 by a
-  name that is sometimes cut off ("Paraquat C", "Hectane C") with the CAS in `CAS_RN`. `--id-col CAS_RN`
+  name that is sometimes cut off after a word, with the CAS in `CAS_RN`. `--id-col CAS_RN`
   now gives CAS ids for those; decide which the merged QSAR table uses.
 - **Transition-metal spin states**: an odd-electron complex without drawn radicals is computed as a
   doublet (Cr(III) is d3, usually a quartet), with a note. Tables need optional `charge`/`multiplicity`
   columns (MoleculeInput has the fields; the CSV/Excel readers do not read them) so such records can be
   given their spin state. dxtb on that complex from unoptimized ETKDG geometries (no UFF parameters)
   ran for many minutes.
-- **Broken records with radicals**: trimethylamine borane is stored with a bare B (2 unpaired electrons,
+- **Broken records with radicals**: an amine-borane record is stored with a bare B (2 unpaired electrons,
   +1); it is now computed as a triplet cation with a "check the record" note. A heuristic for
   hydrogen-deficient B/N/C could fail such records instead.
 - **Memory of dxtb on large molecules** (highest priority for 14,000 molecules with lanes): four processes
-  were killed by the memory cgroup at 2-3.9 GB resident: the MMFF run at Dactinomycin (90 heavy atoms) and
-  Vincristine (+2) in the GFN1-xTB properties step (dxtb charges/polarizability, autograd field response),
+  were killed by the memory cgroup at 2-3.9 GB resident: the MMFF run at a 90-heavy-atom cyclic peptide and
+  a +2 alkaloid in the GFN1-xTB properties step (dxtb charges/polarizability, autograd field response),
   the gfn1-xtb run on a Cr(III) azo complex, and the tblite run in that properties step. The job table recovered (crash counted, molecule
   moved last), but on NOVA with many lanes this can kill lanes repeatedly. Measure memory vs atom count and
   skip (with a note) or chunk the polarizability above a size; or use tblite's finite-field polarizability.
-- **The xTB properties step on dications** (Esaprazole, +2 at pH 7) took minutes of GFN1-xTB SCF in the
+- **The xTB properties step on dications** (a piperazine, +2 at pH 7) took minutes of GFN1-xTB SCF in the
   MMFF run; measure and cap its SCF iterations.
 - Settings isolation: during this work `~/.config/QuantaBench/settings.json` (and `QuantaBench.conf`) were
   rewritten with test-like values (pH 0, 1 conformer, 1 K) by another process on the machine; check
