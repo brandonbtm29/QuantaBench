@@ -272,7 +272,8 @@ def _build(args) -> int:
         try:
             results, out = jobs.run_resumable(items or None, cfg, run_dir, progress=_progress, log=print,
                                               retry_failed=args.retry_failed, chunk=chunk, force=args.force,
-                                              lanes=lanes, keep_results=False)
+                                              lanes=lanes, keep_results=False,
+                                              speed_aware=args.speed_aware_lanes)
         except (jobs.ConfigMismatchError, jobs.RunInUseError) as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -691,6 +692,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_build_science_args(b)
     b.add_argument("--lanes", help="parallel worker processes on this machine: 1 (default), auto, N, or a list "
                                    "like gpu:1x4,cpu:5x2 (lanes x threads each); see docs/PLATFORMS.md")
+    b.add_argument("--speed-aware-lanes", action=argparse.BooleanOptionalAction, default=None,
+                   help="near the end of a batch, slower lanes leave the last molecules to clearly faster ones "
+                        "(a GPU lane) when those finish them first; default from settings (on)")
     b.add_argument("--chunk-weights", metavar="SPEC",
                    help="weighted split: 3,1 (with --chunk K/N), name=weight pairs in any order (chunks are "
                         "the names sorted; this machine's is found by name), or auto (the machine registry's "

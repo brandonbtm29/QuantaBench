@@ -582,7 +582,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
                   log: Callable[[str], None] = _noop,
                   on_result: Callable[[MoleculeResult], None] = _noop, retry_failed: bool = False,
                   chunk: Chunk | None = None, force: bool = False,
-                  lanes: list | None = None, keep_results: bool = True) -> tuple[list[MoleculeResult], Path]:
+                  lanes: list | None = None, keep_results: bool = True,
+                  speed_aware: bool | None = None) -> tuple[list[MoleculeResult], Path]:
     """Run (or continue) a batch in ``run_dir``; returns the results computed by this call.
 
     ``keep_results=False`` returns light copies (``light_result``: no RDKit molecule, no normal modes) so a
@@ -598,7 +599,9 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
     another chunk) unless ``force``, and ``RunInUseError`` if another process is working on it.
 
     ``lanes`` (``dist.lanes.Lane`` list): more than one runs molecules in parallel worker processes
-    (see ``dist.lanes``); ``None`` or one lane keeps the single-process loop.
+    (see ``dist.lanes``); ``None`` or one lane keeps the single-process loop. ``speed_aware`` (None: the
+    ``resources.speed_aware_lanes`` setting): slower lanes leave the last molecules to faster ones
+    (``dist.speed``).
     """
     run_dir = Path(run_dir).expanduser()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -636,7 +639,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
 
             results = lanes_mod.run_parallel(store, todo, cfg, lanes, run_dir, total=total, done_before=done_before,
                                              progress=progress, should_stop=should_stop, log=log,
-                                             on_result=on_result, keep_results=keep_results)
+                                             on_result=on_result, keep_results=keep_results,
+                                             speed_aware=speed_aware)
             todo = []
         elif lanes and lanes[0].device != "auto":       # one explicit lane, e.g. "cpu:1x4": its device and threads
             from dataclasses import replace

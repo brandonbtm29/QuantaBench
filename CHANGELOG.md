@@ -2,6 +2,16 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Speed-aware lanes (DIST-5, 2026-11-05)
+- With lanes of different speed (`--lanes auto` for AIMNet2 on a GPU machine: one GPU lane plus CPU lanes), a
+  slower lane no longer starts one of the last molecules when the faster lanes would finish everything left
+  before it: a small batch now ends no later than on the GPU lane alone. Speeds are measured per kind of lane
+  as molecules finish (seconds per atom), seeded from this machine's benchmark in the registry
+  (`machines --bench`); unknown speeds behave as before. A fast lane that dies or stalls releases the held
+  molecules. One log line says when lanes start holding back; the run ends with the measured lane speeds.
+- On by default: `build --no-speed-aware-lanes`, Settings > Compute "Speed-aware lanes" or
+  `resources.speed_aware_lanes` turn it off. Lanes of one kind (`--lanes 6`) are not affected.
+
 ### Installing with the dxtb fork (2026-11-05)
 - Fixed `pip` `ResolutionImpossible` when installing `.[all]` together with the dxtb fork (Windows and macOS
   installers): the `ml` extra no longer lists `tad-dftd3`, whose every release pins an old tad-mctc. AIMNet2's

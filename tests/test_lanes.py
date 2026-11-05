@@ -411,6 +411,126 @@ def test_interrupted_parallel_run_resumes(tmp_path):
     assert jobs.open_run(run_dir).counts["ok"] == 4
 
 
+# ------------------------------------------------------------------------------- speed-aware lanes
+SMALL = [(f"m{i:02d}", smi) for i, smi in enumerate(
+    ["CCO", "CC(=O)O", "OCC(F)(F)F", "FC(F)F", "CO", "CCC", "CC(F)F", "OC(F)(F)F", "CC#N", "CN", "CCN", "OCCO",
+     "FCC(F)(F)F", "CC(C)O", "OC=O", "CCF"])]
+
+
+def two_kinds():
+    """Two kinds of lane (the thread count differs), so the speed-aware policy applies; the test hooks make
+    cpu2 the slow one."""
+    return [Lane("cpu1", "cpu", 1), Lane("cpu2", "cpu", 2)]
+
+
+def seeds(monkeypatch, fast=0.001, slow=0.1):
+    """A machine benchmark that says cpu2 is 100x slower than cpu1."""
+    from quantabench.dist import speed
+
+    monkeypatch.setattr(speed, "registry_seeds", lambda lanes, method, profile=None: {"cpu1": fast, "cpu2": slow})
+
+
+def record_decisions(monkeypatch) -> list:
+    """(lane, molecules queued, took it, speed source) for every time the pool asks the policy."""
+    from quantabench.dist import speed
+
+    out = []
+    real = speed.SpeedPolicy.allow
+
+    def allow(self, name, sizes, states):
+        sizes = list(sizes)
+        ok = real(self, name, sizes, states)
+        out.append((name, len(sizes), ok, self.source(name)))
+        return ok
+
+    monkeypatch.setattr(speed.SpeedPolicy, "allow", allow)
+    return out
+
+
+def test_speed_aware_slow_lane_leaves_the_batch_to_the_fast_lane(tmp_path, monkeypatch):
+    """The benchmark says cpu2 is 100x slower: it leaves all 4 molecules to cpu1 (one log line says so), and
+    the run completes."""
+    seeds(monkeypatch)
+    monkeypatch.setenv(L.TEST_DELAY_ENV, "cpu2=2.0")
+    c = cfg(tmp_path)
+    logs = []
+    results, out = jobs.run_resumable(inputs(), c, tmp_path / "run", log=logs.append, lanes=two_kinds())
+    assert len(results) == 4 and all(r.status == "ok" for r in results), [r.error for r in results]
+    assert any(m.startswith("Lanes: ") and "speed-aware, benchmark speeds until measured" in m for m in logs)
+    held = [m for m in logs if m.startswith("Speed-aware lanes:")]
+    assert len(held) == 1 and "cpu2 (" in held[0] and "to cpu1 (" in held[0], held
+    assert "Molecules per lane: cpu1 4" in logs
+    assert any(m.startswith("Lane speeds: cpu1 ") and "(measured)" in m for m in logs)
+    assert jobs.open_run(out).counts["ok"] == 4 and lane_processes() == []
+
+
+def test_speed_aware_measured_slow_lane_stops_at_the_end(tmp_path, monkeypatch):
+    """No benchmark: both lanes start at unknown speed and cpu2 takes molecules; once timed (~10x slower than
+    cpu1) it never takes the last molecule, cpu1 is never held back, and the run completes."""
+    monkeypatch.setenv(L.TEST_DELAY_ENV, "cpu1=0.2,cpu2=3.0")
+    decisions = record_decisions(monkeypatch)
+    c = cfg(tmp_path)
+    logs = []
+    results, out = jobs.run_resumable(inputs(SMALL), c, tmp_path / "run", log=logs.append, lanes=two_kinds())
+    assert len(results) == len(SMALL) and all(r.status == "ok" for r in results), [r.error for r in results]
+    assert any(name == "cpu2" and ok and src == "unknown" for name, _q, ok, src in decisions)    # helped early
+    assert all(ok for name, _q, ok, _src in decisions if name == "cpu1")
+    timed = [(q, ok) for name, q, ok, src in decisions if name == "cpu2" and src == "measured"]
+    assert all(not ok for q, ok in timed if q <= 1), timed
+    if any(not ok for _q, ok in timed):
+        assert sum(m.startswith("Speed-aware lanes: cpu2") for m in logs) == 1
+    per_lane = next(m for m in logs if m.startswith("Molecules per lane"))
+    assert "cpu2" in per_lane and jobs.open_run(out).counts["ok"] == len(SMALL)
+    assert lane_processes() == []
+
+
+def test_speed_aware_fast_lane_crash_releases_the_slow_lane(tmp_path, monkeypatch):
+    """cpu2 holds back for cpu1, then cpu1 dies running TFE: while cpu1 restarts, cpu2 takes the molecules
+    held for it; TFE is counted and marked failed at the second crash; the run completes."""
+    seeds(monkeypatch)
+    monkeypatch.setenv(L.TEST_CRASH_ENV, "TFE")
+    decisions = record_decisions(monkeypatch)
+    c = cfg(tmp_path)
+    logs = []
+    results, out = jobs.run_resumable(inputs(), c, tmp_path / "run", log=logs.append, lanes=two_kinds())
+    by_id = {r.input.id: r for r in results}
+    assert by_id["TFE"].status == "failed" and by_id["TFE"].error == "crashed the process 2 times"
+    assert all(by_id[i].status == "ok" for i in ("ethanol", "acetic_acid", "fluoroform"))
+    assert any(name == "cpu2" and not ok for name, _q, ok, _src in decisions)     # held back first
+    assert any(name == "cpu2" and ok for name, _q, ok, _src in decisions)         # released by the crash
+    assert "cpu2" in next(m for m in logs if m.startswith("Molecules per lane"))
+    assert sum("lane died (exit code 86)" in m for m in logs) == jobs.MAX_CRASHES
+    st = jobs.open_run(out)
+    assert st.counts["ok"] == 3 and st.failures == [("TFE", "crashed the process 2 times")]
+    assert lane_processes() == []
+
+
+def test_speed_aware_off_is_todays_dispatch(tmp_path, monkeypatch):
+    """resources.speed_aware_lanes = off: the policy is never asked (every free lane takes the next
+    molecule), even with a benchmark that would hold cpu2 back. Lanes of one kind never get a policy."""
+    from quantabench import settings as sm
+    from quantabench.dist import speed
+
+    seeds(monkeypatch)
+
+    def boom(*_a, **_k):
+        raise AssertionError("the speed-aware policy was asked")
+
+    monkeypatch.setattr(speed.SpeedPolicy, "allow", boom)
+    s = sm.Settings()
+    s.resources.speed_aware_lanes = False
+    sm.save(s)
+    c = cfg(tmp_path)
+    logs = []
+    results, _ = jobs.run_resumable(inputs(), c, tmp_path / "run", log=logs.append, lanes=two_kinds())
+    assert all(r.status == "ok" for r in results) and len(results) == 4
+    assert any(m.endswith("molecules go to whichever lane is free") for m in logs)
+    assert not any(m.startswith(("Speed-aware", "Lane speeds")) for m in logs)
+    assert L.speed_policy(L.parse_lanes("2", c), c) is None
+    assert L.speed_policy(two_kinds(), c) is not None
+    assert lane_processes() == []
+
+
 needs_display = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
                                    reason="needs a display (xvfb-run)")
 
