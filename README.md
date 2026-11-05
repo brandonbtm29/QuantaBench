@@ -35,11 +35,31 @@ dynamics. Every step is visible in an OVITO-style 3D workspace.
 
 ## Quick start
 
-Install the PyTorch build for your GPU first ([docs/INSTALL.md](docs/INSTALL.md)), then:
+One script per OS installs everything (Python 3.12 and git are the only prerequisites). It is safe to
+rerun, and `--dry-run` / `-DryRun` shows the steps first. Details and options:
+[docs/INSTALL.md](docs/INSTALL.md).
 
 ```bash
-pip install -e ".[all]"
-quantabench                       # the desktop app
+# macOS (Apple Silicon)
+mkdir -p ~/GitHub\ Projects && cd ~/GitHub\ Projects && git clone https://github.com/brandonbtm29/QuantaBench.git && cd QuantaBench && bash scripts/install_macos.sh --with-engines --settings-dir ~/SyncThing/QuantaBench/Settings
+
+# Linux / WSL2
+mkdir -p ~/GitHub\ Projects && cd ~/GitHub\ Projects && git clone https://github.com/brandonbtm29/QuantaBench.git && cd QuantaBench && bash scripts/install_linux.sh --with-engines --settings-dir ~/SyncThing/QuantaBench/Settings
+```
+
+```powershell
+# Windows 11 (PowerShell, in an existing checkout)
+cd "$HOME\GitHub Projects\QuantaBench"; git pull; powershell -ExecutionPolicy Bypass -File scripts\install_windows.ps1 -WithEngines -SettingsDir "$HOME\SyncThing\QuantaBench\Settings"
+```
+
+Each script installs PyTorch first (Windows and Linux default to the CPU build; `--gpu` / `-Gpu` picks
+another), then `pip install -e ".[all,dev]"`. With `--with-engines` it also sets up xtb, CREST, MOPAC and
+Psi4 in conda environments. It ends with `quantabench-cli doctor`. Start the app from the Start Menu,
+`~/Applications/QuantaBench.app` or the application menu; none of them opens a terminal window. To update,
+use Help > Check for updates... or `quantabench-cli update`.
+
+```bash
+quantabench                       # the desktop app (from an activated .venv)
 quantabench-cli doctor --bench    # what hardware and engines QuantaBench sees, and how fast they are
 ```
 

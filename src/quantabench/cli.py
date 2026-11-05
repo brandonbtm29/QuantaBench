@@ -531,6 +531,27 @@ def _settings(args) -> int:
     return 0
 
 
+def _update(args) -> int:
+    """``update --check``: fetch and report. ``update``: git pull --ff-only, then pip install -e if the
+    dependencies changed (quantabench.update). 0 = up to date or updated, 1 = refused or failed."""
+    from . import update as update_mod
+
+    status = update_mod.check()
+    print(status.summary())
+    if status.state in ("error", "not-a-checkout"):
+        return 1
+    if args.check:
+        if status.can_update:
+            print("Run `quantabench-cli update` (or Help > Check for updates... in the app) to update.")
+        return 0
+    if not status.can_update:
+        return 0 if status.state in ("up-to-date", "ahead") else 1
+    print()
+    res = update_mod.update(status=status, log=print)
+    print(res.message)
+    return 0 if res.ok else 1
+
+
 def export_formats() -> list[str]:
     # kept in sync with chem.export.FORMATS by tests/test_cli.py; not imported here so that `doctor`
     # still starts when RDKit or ASE cannot load
@@ -682,6 +703,11 @@ def build_parser() -> argparse.ArgumentParser:
     mp = msub.add_parser("parse", help="summarize log.lammps and pull_force.txt (detachment work, peak force)")
     mp.add_argument("dir")
     mp.set_defaults(func=_md_parse)
+
+    up = sub.add_parser("update", help="update this QuantaBench checkout (git pull --ff-only, reinstall if "
+                                       "dependencies changed)")
+    up.add_argument("--check", action="store_true", help="only fetch and report how far behind origin/main it is")
+    up.set_defaults(func=_update)
 
     from .dist import cli as dist_cli
 
