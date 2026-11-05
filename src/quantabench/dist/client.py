@@ -842,8 +842,8 @@ def _share_paths(grid: GridRun, share: Share, out: Path) -> tuple[Path, Path]:
         raise WorkerError(f"machine name {share.machine!r} cannot name a folder")
     if not isinstance(share.run_folder, str) or not _FOLDER_RE.fullmatch(share.run_folder):
         raise WorkerError(f"run folder name {share.run_folder!r} is not a single folder name")
-    parts = (Path(grid.folder) / "parts").resolve()
-    dest = (parts / share.machine).resolve()
+    parts = Path(os.path.abspath(Path(grid.folder) / "parts"))   # abspath: see worker.JobManager._new_run_dir
+    dest = Path(os.path.abspath(parts / share.machine))
     if dest.parent != parts:
         raise WorkerError(f"machine name {share.machine!r} leads out of {parts}")
     return out / share.run_folder, dest

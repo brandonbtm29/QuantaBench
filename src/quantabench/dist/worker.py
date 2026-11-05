@@ -911,8 +911,11 @@ class JobManager:
         name, n = base, 2
         while name in taken or (self.output_dir / name).exists():
             name, n = f"{base}-{n}", n + 1
-        run_dir = (self.output_dir / name).resolve()
-        if not run_dir.is_relative_to(self.output_dir.resolve()):  # cannot happen with a checked label
+        # abspath, not resolve(): on Windows, resolve() while another thread creates folders here did not always
+        # return the same form, which made this check fail at random (BTM NOVA, 2 of 4 runs)
+        root = Path(os.path.abspath(self.output_dir))
+        run_dir = Path(os.path.abspath(root / name))
+        if run_dir.parent != root:                                   # cannot happen with a checked label
             raise RequestError(400, "label leads outside the output folder")
         return run_dir
 
