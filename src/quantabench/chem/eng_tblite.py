@@ -24,9 +24,20 @@ uniform electric field (6 SCFs restarted from the field-free wavefunction). The 
 electronic response of tblite's minimal valence basis: it is much smaller than experiment (GFN2 water
 0.37 Å³, experiment 1.45 Å³; out-of-plane components of planar molecules are nearly zero), so use it for
 trends or recalibrate it. It is **not** the ``Mol. α(0)`` that the xtb program prints: that number comes
-from the D4 dispersion model (charge-scaled atomic reference polarizabilities), not from the SCF. The
-polarizability is always computed in the gas phase (a uniform field acting on a molecule in a continuum
-is not the molecular property one tabulates).
+from the D4 dispersion model (charge-scaled atomic reference polarizabilities), not from the SCF. In a
+solvent every property, the polarizability included, is computed with the same solvation as the
+refinement: the field and the continuum act in one SCF, so the polarizability is the solute's response
+inside its reaction field (5-20 % above the gas-phase value in water). tblite supports a field together
+with ALPB, GBSA or CPCM; the dipole-derivative polarizability equals -d2E/dF2 of the same calculations to
+1e-4 Å^3 in water and in the gas phase (``tests/test_properties_solvent.py``).
+
+Solvation energy: with a named solvent, ALPB/GBSA are the parametrized models (polar generalized-Born term,
+a SASA-based cavity-dispersion-solvent-structure term and an empirical shift) in tblite's default ``gsolv``
+reference state: the transfer from 1 mol/L ideal gas to 1 mol/L ideal solution (Ben-Naim's ΔG*, no
+1 atm -> 1 mol/L term). The total energy in solution already contains this solvation free energy, so
+E(solution) - E(gas) is the solvation free energy. ``<prefix>_gsolv_kcal`` reports it at one geometry (the
+refined solution geometry, both SCFs self-consistent, as the xtb program's Gsolv with the gas SCF's
+polarization cost included); ``chem.phases`` gives the version with each phase's own geometry.
 
 Threads: tblite parallelizes with OpenMP inside this process (the PyPI wheel links the system libgomp and
 a bundled single-threaded reference BLAS/LAPACK; conda-forge builds use OpenBLAS). OpenMP reads
@@ -53,6 +64,7 @@ from . import engines
 from .engines import BOHR_ANG, HARTREE_EV
 
 DEBYE_PER_E_ANG = 4.80320471
+KCAL_PER_EV = 23.060548                  # same constant as conformers.KCAL_PER_EV
 AU_POLARIZABILITY_A3 = BOHR_ANG**3       # 1 bohr³ = 0.148185 Å³
 FIELD_STEP_AU = 5e-4                     # finite-field step (Hartree/(e·bohr) = 514 MV/cm per au)
 SOLVATION_MODELS = ("alpb", "gbsa", "cpcm")
@@ -312,15 +324,21 @@ def _properties(method: str, prefix: str):
         if homo is not None and lumo is not None:
             out[f"{prefix}_gap_ev"] = lumo - homo
         notes = list(calc.notes)
-        if polarizability:
-            gas = calc
-            if calc.solvation is not None:     # the polarizability is a gas-phase property (module docstring)
+        if calc.solvation is not None:
+            # E(solution) - E(gas) at this geometry: the solvation free energy (module docstring)
+            try:
                 gas = TBLiteCalculator(numbers, method, charge, multiplicity)
-                gas.singlepoint(atoms.positions, guess=calc._res)
-                notes.append(f"{prefix} polarizability: gas phase (other {prefix} properties: {calc.solvation_label})")
-            iso, aniso = polarizability_summary(gas.polarizability_au(atoms.positions, field_step))
+                e_gas = float(gas.singlepoint(atoms.positions).get("energy"))
+                e_solv = float(calc._res.get("energy"))
+                out[f"{prefix}_gsolv_kcal"] = (e_solv - e_gas) * HARTREE_EV * KCAL_PER_EV
+            except RuntimeError as exc:
+                notes.append(f"{prefix}_gsolv_kcal not computed: gas-phase SCF failed ({exc})")
+        if polarizability:     # with the calculator's own solvation: field and continuum in one SCF
+            iso, aniso = polarizability_summary(calc.polarizability_au(atoms.positions, field_step))
             out[f"{prefix}_polarizability_iso_A3"] = iso
             out[f"{prefix}_polarizability_aniso_A3"] = aniso
+        if calc.solvation is not None:
+            out[f"{prefix}_solvation"] = calc.solvation_label
         out["charges"] = [float(x) for x in calc.results["charges"]]
         if notes:
             out["_notes"] = notes

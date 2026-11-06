@@ -257,10 +257,22 @@ def write_qm(qm: dict, out_dir: Path, stem: str, spectrum: bool = False) -> list
     return written
 
 
+#: summary.csv columns repeated at the front of descriptors.csv, so that table joins by structure on its own
+KEY_COLUMNS = ("inchikey", "canonical_smiles", "input_inchikey")
+
+
+def descriptor_row(result) -> dict:
+    """One descriptors.csv row: the id, the structure keys (``KEY_COLUMNS``, when the summary row has them;
+    results from before they existed have none), then the descriptors."""
+    row = result.summary_row()
+    keys = {k: row[k] for k in KEY_COLUMNS if k in row}
+    return {"id": result.input.id, **keys, **result.descriptors}
+
+
 def write_batch_tables(results: list[MoleculeResult], run_dir: Path) -> list[Path]:
     run_dir.mkdir(parents=True, exist_ok=True)
     rows = [r.summary_row() for r in results]
-    desc_rows = [{"id": r.input.id, **r.descriptors} for r in results if r.descriptors]
+    desc_rows = [descriptor_row(r) for r in results if r.descriptors]
     out = []
     for name, data in (("summary.csv", rows), ("descriptors.csv", desc_rows)):
         if not data:

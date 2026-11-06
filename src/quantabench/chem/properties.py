@@ -5,6 +5,14 @@ Charges and the charge-based dipole need only dxtb's default PyTorch integrals. 
 needs an electric-field interaction, i.e. dipole integrals from the libcint backend; without it
 (PyPI's dxtb on Windows or macOS; the dxtb fork fixes that, FORK-1) the polarizability is skipped with a note.
 
+In an implicit solvent (``tblite_xtb_properties``) the same GFN1-xTB quantities come from tblite with the
+run's solvation model (ALPB by default): dxtb has no implicit solvent. The two implementations agree in
+the gas phase (Mulliken charges within 5e-5 e, the charge dipole within 1e-4 D, the polarizability within
+5e-4 Å^3 for acetate, PFPrA and methylammonium), so a gas/water difference of these columns is the solvent's
+effect, not the program's. The solvated polarizability is the finite-field response with the field and the
+continuum in one SCF (central differences of the dipole; it matches -d2E/dF2 of the same calculations to
+1e-4 Å^3, ``tests/test_properties_solvent.py``).
+
 These are the Spartan-style inputs to the "quantum parachor" idea (polarizability, dipole, volume).
 GFN1-xTB uses a minimal basis, so absolute polarizabilities are low (roughly half of DFT values);
 use them for trends and as ML features, or recalibrate against a DFT subset.
@@ -25,6 +33,11 @@ MAX_ALPHA_PER_HEAVY_ATOM_A3 = 10.0
 
 def available() -> bool:
     return has_package("dxtb") and has_package("torch")
+
+
+def tblite_available() -> bool:
+    """tblite can compute the xTB properties (in any solvent it has parameters for)."""
+    return has_package("tblite")
 
 
 def unphysical_polarizability(eigenvalues_A3, numbers, charge: int = 0) -> str:
@@ -49,6 +62,35 @@ def tblite_polarizability_A3(numbers, positions_ang, charge: int = 0, multiplici
     calc = TBLiteCalculator(numbers, "GFN1-xTB", charge, multiplicity)
     calc.singlepoint(np.asarray(positions_ang, float))
     return calc.polarizability_au(np.asarray(positions_ang, float)) * BOHR3_A3
+
+
+def tblite_xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity: int = 1, *,
+                          solvent: str = "", solvation_model: str = "alpb", polarizability: bool = True) -> dict:
+    """``xtb_properties`` from tblite's GFN1-xTB in ``solvent`` (canonical name, "" = gas phase): Mulliken charges,
+    the charge dipole about the center of mass and the finite-field polarizability, all with the same solvation.
+    ``_solvation`` holds the model used ("ALPB(water)")."""
+    from .eng_tblite import TBLiteCalculator, polarizability_summary
+
+    pos = np.asarray(positions_ang, float)
+    calc = TBLiteCalculator(numbers, "GFN1-xTB", charge, multiplicity, solvent=solvent or "",
+                            solvation_model=solvation_model or "alpb")
+    res = calc.singlepoint(pos)
+    q = np.asarray(res.get("charges"), float)
+    out: dict = {"xtb_charges": [float(x) for x in q],
+                 "xtb_dipole_debye": dipole_debye(pos, q, np.asarray(masses, float)),
+                 "_solvation": calc.solvation_label}
+    notes = list(calc.notes)
+    if polarizability:
+        alpha_au = calc.polarizability_au(pos)
+        eig = np.linalg.eigvalsh(0.5 * (alpha_au + alpha_au.T)) * AU_POLARIZABILITY_A3
+        why = unphysical_polarizability(eig, numbers, charge)
+        if why:
+            notes.append(f"xTB polarizability discarded: {why}")
+        else:
+            out["xtb_polarizability_iso_A3"], out["xtb_polarizability_aniso_A3"] = polarizability_summary(alpha_au)
+    if notes:
+        out["_notes"] = notes
+    return out
 
 
 def xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity: int = 1,

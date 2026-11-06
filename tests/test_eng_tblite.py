@@ -185,10 +185,20 @@ def test_properties_function(tb):
     assert props["tblite_gfn2_polarizability_aniso_A3"] > 0.5      # planar molecule: out-of-plane alpha ~ 0
     assert len(props["charges"]) == 3 and sum(props["charges"]) == pytest.approx(0.0, abs=1e-6)
     assert "_notes" not in props
+    assert "tblite_gfn2_gsolv_kcal" not in props and "tblite_gfn2_solvation" not in props
+    # in water every property, the polarizability too, comes from the ALPB calculation: the reaction field makes
+    # the solute more polarizable (GFN1 water: 0.290 -> 0.303 Å^3), and E(ALPB) - E(gas) is the solvation energy
     solv = engines.properties_function("tblite-gfn1")(atoms.numbers, atoms.positions, 0, 1, solvent="water")
-    assert solv["tblite_gfn1_dipole_debye"] > 0 and solv["tblite_gfn1_polarizability_iso_A3"] == pytest.approx(
-        1.95614 * 0.148184711, abs=2e-4)
-    assert any("gas phase" in n for n in solv["_notes"])
+    gas_alpha = 1.95614 * 0.148184711
+    assert solv["tblite_gfn1_dipole_debye"] > 0
+    assert gas_alpha * 1.01 < solv["tblite_gfn1_polarizability_iso_A3"] < gas_alpha * 1.3
+    assert solv["tblite_gfn1_solvation"] == "ALPB(water)" and "_notes" not in solv
+    assert -20.0 < solv["tblite_gfn1_gsolv_kcal"] < -3.0
+    # GFN2: E(ALPB water) - E(gas) from the xtb program 6.7.1 references at the same geometry (-9.15 kcal/mol)
+    gfn2 = engines.properties_function("tblite-gfn2")(atoms.numbers, atoms.positions, 0, 1, solvent="water",
+                                                      polarizability=False)
+    ref = (WATER_ALPB_GFN2 - REF[("H2O", "GFN2-xTB")]["energy"]) * EH * 23.060548
+    assert gfn2["tblite_gfn2_gsolv_kcal"] == pytest.approx(ref, abs=0.02)
 
 
 def test_ion_dipole_is_about_center_of_mass(tb):

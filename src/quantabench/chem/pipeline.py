@@ -34,9 +34,9 @@ from ..settings import Settings
 from . import batch_opt, engines, export, properties
 from . import conformers as confs
 from . import descriptors as desc
-from .inputs import MoleculeInput
+from .inputs import ID_NOTE, MoleculeInput
 from .optimize import Cancelled, optimize
-from .standardize import UnsupportedStructure, formal_charge, prepare, spin_multiplicity
+from .standardize import UnsupportedStructure, formal_charge, inchikey, prepare, spin_multiplicity
 
 KCAL_PER_EV = confs.KCAL_PER_EV
 
@@ -140,21 +140,38 @@ class MoleculeResult:
     qm: dict | None = None             # chem.qm stage results (see qm.QM_RESULT_KEYS)
     input_charge: int | None = None    # total formal charge of the record as drawn (all fragments)
     removed_fragments: list[str] = field(default_factory=list)   # SMILES of fragments standardization removed
+    # structure keys, for joining results to other tables (Spartan, a gas/water pair): the computed species
+    # after preparation, and the input record as drawn (all fragments); "" with a note when InChI fails
+    inchikey: str = ""
+    canonical_smiles: str = ""
+    input_inchikey: str = ""
+    phase: str = ""                    # the phase the run asked for: "gas" or the solvent (BuildConfig.solvent)
+    solvation_model: str = ""          # model of ``solvent`` ("alpb", "cosmo", ...); "" = gas phase
+    phase_steps: dict = field(default_factory=dict)   # step -> where it was computed ("ALPB(water)", "gas (why)")
 
     def to_dict(self) -> dict:
         d = {k: v for k, v in asdict(self).items() if k not in ("mol", "input")}
         d["input"] = {k: v for k, v in asdict(self.input).items() if k != "mol"}
         return d
 
+    def phase_notes(self) -> str:
+        """'refine: ALPB(water); xtb_properties: ALPB(water), tblite GFN1-xTB; ...', or 'gas' for a gas-phase run."""
+        if not self.phase_steps:
+            return "gas" if self.phase in ("", "gas") else ""
+        return "; ".join(f"{k}: {v}" for k, v in self.phase_steps.items())
+
     def summary_row(self) -> dict:
         best = self.conformers[0] if self.conformers else None
         return {
             "id": self.input.id, "name": self.input.name, "status": self.status, "error": self.error,
             "input_smiles": self.input.smiles, "smiles": self.smiles,
+            "inchikey": self.inchikey, "canonical_smiles": self.canonical_smiles, "input_inchikey": self.input_inchikey,
             "input_charge": "" if self.input_charge is None else self.input_charge, "charge": self.charge,
             "multiplicity": self.multiplicity, "removed_fragments": ".".join(self.removed_fragments),
             "method": self.method, "forcefield": self.forcefield,
-            "device": self.device, "solvent": self.solvent, "conformer_search": self.conformer_search,
+            "device": self.device, "phase": self.phase, "solvent": self.solvent,
+            "solvation_model": self.solvation_model, "phase_notes": self.phase_notes(),
+            "conformer_search": self.conformer_search,
             "n_embedded": self.n_embedded, "n_conformers": len(self.conformers),
             "best_energy_eV": best.energy_ev if best else "", "best_converged": best.converged if best else "",
             "dipole_debye": best.dipole_debye if best and best.dipole_debye is not None else "",
@@ -278,10 +295,6 @@ def run_molecule_limited(inp: MoleculeInput, cfg: BuildConfig, device: str, thre
     return tl.finish(run_molecule(inp, cfg, device, threads, tl, log, stage=tl.wrap_stage(stage)), log)
 
 
-class _Skipped(Exception):
-    """The memory guard skipped the xTB properties step (its note is already in the result)."""
-
-
 def _properties_plan(numbers, charge: int, multiplicity: int, cfg: BuildConfig) -> tuple[bool, str, str]:
     """``memory_guard.properties_plan`` for the GFN1-xTB properties step of the best conformer."""
     from ..resources import has_package
@@ -366,8 +379,10 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
 
 
 def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: ConformerResult, cfg: BuildConfig,
-                 should_stop: Callable[[], bool], log: Callable[[str], None]) -> None:
-    """Vibrational analysis of the best conformer; a failure becomes a note, not a failed molecule."""
+                 should_stop: Callable[[], bool], log: Callable[[str], None]) -> bool:
+    """Vibrational analysis of the best conformer; a failure becomes a note (and False), not a failed molecule.
+    Plugin engines (tblite, xtb, MOPAC) get the refinement's solvent: the Hessian (finite differences of the
+    forces), the tight re-optimization and the energy in the thermochemistry all include the continuum."""
     from . import vibrations
 
     atoms = export.mol_to_atoms(conf_set.mol, best.conf_id)
@@ -398,7 +413,7 @@ def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: Con
     except Exception as exc:
         result.notes.append(f"frequencies skipped ({type(exc).__name__}: {exc})")
         log(f"  {result.notes[-1]}")
-        return
+        return False
     # The tight re-optimization moves the atoms (up to a few tenths of an Å on flat perfluoroalkyl torsions).
     # The stored conformer is left alone, so its ranking energy, charges, dipole and 3D descriptors still
     # belong to its exported geometry; the frequency geometry is kept separately (``positions_A``, written
@@ -419,6 +434,31 @@ def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: Con
     t = vr.thermo
     log(f"  frequencies ({vr.hessian_method} Hessian): {vr.n_modes} modes, {vr.n_imaginary} imaginary"
         + (f", ZPE {t.zpe_kcal:.2f} kcal/mol, S {t.entropy_cal_molK:.2f} cal/(mol K)" if t else ""))
+    return True
+
+
+def solvation_model(method: str, solvent: str) -> str:
+    """The implicit-solvent model ``method`` uses for ``solvent`` by default ("alpb", "cosmo"; "" = gas phase):
+    the first of its ``EngineInfo.solvation`` models with parameters for that solvent."""
+    if not solvent:
+        return ""
+    from . import solvents
+
+    info = engines.all_engines().get(method)
+    for model in (info.solvation if info else ()):
+        if solvents.for_engine(solvent, model) is not None:
+            return model
+    return ""
+
+
+def solvation_label(method: str, solvent: str) -> str:
+    """'ALPB(water)' for what ``method`` computes in ``solvent``, 'gas' in the gas phase."""
+    model = solvation_model(method, solvent)
+    return f"{model.upper()}({solvent})" if model else "gas"
+
+
+def _gas_reason(method: str, solvent: str) -> str:
+    return f"gas ({engines.all_engines()[method].label} has no implicit solvent model for {solvent})"
 
 
 def _solvent_for(method: str, solvent: str, notes: list[str]) -> str:
@@ -475,11 +515,12 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
 
 
 def _engine_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,
-                       log: Callable[[str], None], should_stop: Callable[[], bool] = lambda: False) -> None:
-    """Properties from the refinement engine itself (e.g. MOPAC heat of formation, xtb GFN2 dipole)."""
+                       log: Callable[[str], None], should_stop: Callable[[], bool] = lambda: False) -> bool | None:
+    """Properties from the refinement engine itself (e.g. MOPAC heat of formation, xtb GFN2 dipole), with the
+    refinement's solvent. None when the engine has no properties function, False when it failed (noted)."""
     fn = engines.properties_function(result.method)
     if fn is None:
-        return
+        return None
     atoms = export.mol_to_atoms(mol, best.conf_id)
     try:
         props = dict(fn(atoms.numbers, atoms.positions, result.charge, result.multiplicity,
@@ -490,7 +531,7 @@ def _engine_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerRes
         result.notes.append(f"{engines.ENGINES[result.method].label} properties skipped "
                             f"({type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''})")
         log(f"  {result.notes[-1]}")
-        return
+        return False
     charges = props.pop("charges", None)
     for note in props.pop("_notes", []):
         result.notes.append(note)
@@ -502,6 +543,58 @@ def _engine_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerRes
             dip = props.get(f"{prefix}_dipole_debye")
             best.dipole_debye = float(dip) if dip is not None else None
         result.notes.append(f"atomic charges: {engines.ENGINES[result.method].label}")
+    return True
+
+
+def _xtb_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,
+                    solvated: bool, log: Callable[[str], None]) -> bool:
+    """GFN1-xTB charges, dipole and polarizability of the best conformer (``xtb_*`` descriptors): dxtb in the gas
+    phase (under the memory guard), tblite with the refinement's solvent when ``solvated``. False when the step
+    was skipped (memory guard) or failed (the reason is in the notes)."""
+    atoms = export.mol_to_atoms(mol, best.conf_id)
+    args = (atoms.numbers, atoms.positions, atoms.get_masses(), result.charge, result.multiplicity)
+    if solvated:     # tblite: no dxtb autograd graph, nothing for the memory guard to check
+        do_charges, pol_engine, guard_note = True, "tblite", ""
+    else:
+        do_charges, pol_engine, guard_note = _properties_plan(atoms.numbers, result.charge, result.multiplicity, cfg)
+    if guard_note:
+        result.notes.append(guard_note)
+        log(f"  {guard_note}")
+    if not do_charges:
+        return False
+    try:
+        if solvated:
+            props = properties.tblite_xtb_properties(*args, solvent=result.solvent)
+        else:
+            kw = {"polarizability": bool(pol_engine) or not engines.has_libcint(),
+                  "polarizability_engine": pol_engine or "dxtb"}
+            try:
+                props = properties.xtb_properties(*args, device=result.device, **kw)
+            except Exception:
+                if result.device == "cpu":
+                    raise
+                props = properties.xtb_properties(*args, device="cpu", **kw)
+    except Cancelled:
+        raise
+    except Exception as exc:
+        result.notes.append(f"xTB properties skipped ({type(exc).__name__}: {exc})")
+        return False
+    charges = props.pop("xtb_charges")
+    where = props.pop("_solvation", "")
+    for note in props.pop("_notes", []):
+        result.notes.append(note)
+        log(f"  {note}")
+    result.descriptors.update(props)
+    if best.charges is None:
+        best.charges, best.dipole_debye = charges, props["xtb_dipole_debye"]
+        result.notes.append("atomic charges: GFN1-xTB Mulliken" + (f" ({where})" if where else ""))
+    log(f"  GFN1-xTB properties{' in ' + where if where else ''}: dipole {props['xtb_dipole_debye']:.2f} D"
+        + (f", polarizability {props['xtb_polarizability_iso_A3']:.2f} Å^3"
+           if "xtb_polarizability_iso_A3" in props else ""))
+    if pol_engine == "tblite" and "xtb_polarizability_iso_A3" in props:
+        result.descriptors["xtb_polarizability_method"] = ("tblite GFN1-xTB finite field"
+                                                           + (f", {where}" if where else ""))
+    return True
 
 
 def _qm_stage(result: MoleculeResult, cs: confs.ConformerSet, cfg: BuildConfig, threads: int,
@@ -531,11 +624,24 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             torch_compat.apply_settings(cfg)
         stage("prepare")
         info: dict = {}
-        prepared, notes = prepare(inp.to_mol(), cfg.ph if cfg.protonate else None, cfg.keep_largest_fragment,
+        if inp.meta.get(ID_NOTE):
+            result.notes.append(str(inp.meta[ID_NOTE]))
+        from . import solvents
+
+        result.phase = solvents.canonical(cfg.solvent) or "gas"
+        drawn = inp.to_mol()
+        result.input_inchikey, why = inchikey(drawn)
+        if why:
+            result.notes.append(f"no input InChIKey: {why}")
+        prepared, notes = prepare(drawn, cfg.ph if cfg.protonate else None, cfg.keep_largest_fragment,
                                   cfg.protonation_method, info=info)
         result.input_charge = info.get("input_charge")
         result.removed_fragments = list(info.get("removed_fragments") or [])
         result.smiles = Chem.MolToSmiles(Chem.RemoveHs(prepared))
+        result.canonical_smiles = result.smiles
+        result.inchikey, why = inchikey(prepared)
+        if why:
+            notes.append(f"no InChIKey: {why}")
         result.charge = inp.charge if inp.charge is not None else formal_charge(prepared)
         if inp.charge is not None and inp.charge != formal_charge(prepared):
             notes.append(f"charge {inp.charge:+d} given with the input (the structure's formal charge is "
@@ -547,8 +653,6 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             notes.append(spin_note)
         result.notes += notes
         numbers = [a.GetAtomicNum() for a in prepared.GetAtoms()]
-        from . import solvents
-
         solvent = solvents.canonical(cfg.solvent)
         method = cfg.method
         if method == "auto":
@@ -578,6 +682,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
 
         stage("conformers")
         t = time.perf_counter()
+        conformer_solvent = result.solvent        # what CREST was given (RDKit's MMFF94s has no solvent)
         cs = _conformer_search(prepared, result, cfg, threads, should_stop, log)
         result.forcefield, result.n_embedded = cs.forcefield, cs.n_embedded
         result.timings["conformers"] = time.perf_counter() - t
@@ -626,6 +731,15 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                 log(f"  {result.notes[-1]}")
         method = result.method
         result.timings["refine"] = time.perf_counter() - t
+        result.solvation_model = solvation_model(method, result.solvent)
+        steps = result.phase_steps
+        if solvent:                  # a solvent run: where each step was computed, and why a step was not
+            if result.conformer_search == "crest":
+                steps["conformers"] = f"ALPB({conformer_solvent}) (CREST)" if conformer_solvent else "gas (CREST)"
+            else:
+                steps["conformers"] = (f"gas ({cs.forcefield or 'MMFF94s'} has no implicit solvent: the same "
+                                       "conformer pool in every phase)")
+            steps["refine"] = solvation_label(method, result.solvent) if result.solvent else _gas_reason(method, solvent)
 
         # re-prune on refined energies/geometries, rank, weight
         ids = [c.conf_id for c in refined]
@@ -662,55 +776,41 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                 result.notes.append("MOPAC COSMO energies are not smooth under small displacements: optimizations "
                                     "may stop short of fmax and COSMO frequencies are approximate (use the gas "
                                     "phase for frequencies)")
-        _engine_properties(result, cs.mol, kept[0], cfg, log, should_stop)
-        if cfg.xtb_properties and properties.available():
+        engine_props = _engine_properties(result, cs.mol, kept[0], cfg, log, should_stop)
+        if solvent and engine_props is not None:
+            steps["properties"] = (("skipped (see notes)" if not engine_props else solvation_label(method, result.solvent))
+                                   if result.solvent else _gas_reason(method, solvent))
+        # in a solvent, the GFN1-xTB properties come from tblite with the same solvation (dxtb has none)
+        solvated_props = bool(result.solvent) and properties.tblite_available()
+        if cfg.xtb_properties and (solvated_props or properties.available()):
             stage("properties")
-            best = kept[0]
-            atoms = export.mol_to_atoms(cs.mol, best.conf_id)
-            args = (atoms.numbers, atoms.positions, atoms.get_masses(), result.charge, result.multiplicity)
-            plan = _properties_plan(atoms.numbers, result.charge, result.multiplicity, cfg)
-            do_charges, pol_engine, guard_note = plan
-            if guard_note:
-                result.notes.append(guard_note)
-                log(f"  {guard_note}")
-            try:
-                if not do_charges:
-                    raise _Skipped()
-                kw = {"polarizability": bool(pol_engine) or not engines.has_libcint(),
-                      "polarizability_engine": pol_engine or "dxtb"}
-                try:
-                    props = properties.xtb_properties(*args, device=result.device, **kw)
-                except Exception:
-                    if result.device == "cpu":
-                        raise
-                    props = properties.xtb_properties(*args, device="cpu", **kw)
-                charges = props.pop("xtb_charges")
-                for note in props.pop("_notes", []):
-                    result.notes.append(note)
-                    log(f"  {note}")
-                result.descriptors.update(props)
-                if best.charges is None:
-                    best.charges, best.dipole_debye = charges, props["xtb_dipole_debye"]
-                    result.notes.append("atomic charges: GFN1-xTB Mulliken")
-                log(f"  GFN1-xTB properties: dipole {props['xtb_dipole_debye']:.2f} D"
-                    + (f", polarizability {props['xtb_polarizability_iso_A3']:.2f} Å^3"
-                       if "xtb_polarizability_iso_A3" in props else ""))
-                if pol_engine == "tblite" and "xtb_polarizability_iso_A3" in props:
-                    result.descriptors["xtb_polarizability_method"] = "tblite GFN1-xTB finite field"
-            except _Skipped:
-                pass
-            except Exception as exc:
-                result.notes.append(f"xTB properties skipped ({type(exc).__name__}: {exc})")
+            done = _xtb_properties(result, cs.mol, kept[0], cfg, solvated_props, log)
+            if solvent:
+                steps["xtb_properties"] = (
+                    "skipped (see notes)" if not done else
+                    f"{solvation_label('tblite-gfn1', result.solvent)}, tblite GFN1-xTB" if solvated_props
+                    else "gas (the refinement ran in the gas phase)" if not result.solvent
+                    else "gas (dxtb GFN1-xTB has no implicit solvent; install tblite for solvated xTB properties)")
+                if done and result.solvent and not solvated_props:
+                    result.notes.append(f"xTB properties: {steps['xtb_properties']}")
         result.timings["descriptors"] = time.perf_counter() - t
         if cfg.frequencies:
             stage("frequencies")
             t = time.perf_counter()
-            _frequencies(result, cs, kept[0], cfg, should_stop, log)
+            done = _frequencies(result, cs, kept[0], cfg, should_stop, log)
+            if solvent:
+                plugin_engine = engines.plugin(method) is not None
+                steps["frequencies"] = ("skipped (see notes)" if not done else
+                                        solvation_label(method, result.solvent) if result.solvent and plugin_engine
+                                        else _gas_reason(method, solvent))
             result.timings["frequencies"] = time.perf_counter() - t
         if cfg.qm_method:
             stage("qm")
             t = time.perf_counter()
             _qm_stage(result, cs, cfg, threads, should_stop, log)
+            if solvent and result.qm is not None:
+                qm_solvent = result.qm.get("solvent") or ""
+                steps["qm"] = f"PCM({qm_solvent})" if qm_solvent else "gas (see the QM notes)"
             result.timings["qm"] = time.perf_counter() - t
         result.status = "ok"
         log(f"  done: {len(kept)} conformer(s), best E = {e0:.5f} eV")

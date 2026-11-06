@@ -798,7 +798,7 @@ def merge_tables(run_dirs: Iterable[str | Path], out_dir: str | Path,
                 tables["summary.csv"].append(row)
                 keys["summary.csv"] += [k for k in row if k not in keys["summary.csv"]]
                 if r.descriptors:
-                    drow = {"id": r.input.id, **r.descriptors}
+                    drow = {k: "" if v is None else v for k, v in export.descriptor_row(r).items()}
                     tables["descriptors.csv"].append(drow)
                     keys["descriptors.csv"] += [k for k in drow if k not in keys["descriptors.csv"]]
             continue
