@@ -103,6 +103,22 @@ def test_pairing_with_three_phases_names_each_difference():
         phases.pair_rows([gas, wat], reference="octanol")
 
 
+def test_a_failure_row_without_an_inchikey_still_pairs():
+    """A lane that is killed (time limit, crash) records a failure without the structure keys: the input SMILES
+    decide then, and a row with neither key is matched by id."""
+    gas, wat = _tables()
+    wat.rows["e"] = {"id": "e", "status": "failed", "error": "time limit (900 s)", "input_smiles": "C"}
+    wat.rows["a"] = {"id": "a", "status": "failed", "error": "lane error"}
+    rows, _ = phases.pair_rows([gas, wat])
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["e"]["pair_status"] == "water failed" and by_id["e"]["pair_notes"] == ""
+    assert by_id["e"]["water_error"] == "time limit (900 s)"
+    assert by_id["a"]["pair_status"] == "water failed"
+    wat.rows["e"]["input_smiles"] = "CC"
+    rows, _ = phases.pair_rows([gas, wat])
+    assert "structure mismatch" in next(r for r in rows if r["id"] == "e")["pair_status"]
+
+
 def test_a_water_run_that_fell_back_to_the_gas_phase_has_no_dg():
     gas, wat = _tables()
     wat.rows["a"]["solvent"] = ""

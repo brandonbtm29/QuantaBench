@@ -217,6 +217,17 @@ def structure_key(row: dict) -> str:
     return str(row.get("input_inchikey") or "") or str(row.get("input_smiles") or "")
 
 
+def structure_conflict(a: dict, b: dict) -> str:
+    """'' when rows ``a`` and ``b`` can be the same input record, else 'KEY vs KEY'. Keys are compared like with
+    like: the input InChIKeys when both rows have one, else the input SMILES when both have them (a lane that was
+    killed records a failure without an InChIKey), else nothing contradicts the id."""
+    for col in ("input_inchikey", "input_smiles"):
+        ka, kb = str(a.get(col) or ""), str(b.get(col) or "")
+        if ka and kb:
+            return "" if ka == kb else f"{kb} vs {ka}"
+    return ""
+
+
 def _same(a, b) -> bool:
     na, nb = _num(a), _num(b)
     if na is not None and nb is not None:
@@ -287,14 +298,14 @@ def pair_rows(tables: Sequence[PhaseTable], reference: str | None = None) -> tup
         row["id"] = mol_id
         notes: list[str] = []
         status: list[str] = []
-        key = structure_key(base)
         for label, r in rows.items():
             if r is None:
                 status.append(f"{label} not computed")
             elif r.get("status") != "ok":
                 status.append(f"{label} {r.get('status')}")
-            if r is not None and r is not base and key and structure_key(r) and structure_key(r) != key:
-                notes.append(f"{label}: input structure differs ({structure_key(r)} vs {key}): not paired")
+            conflict = structure_conflict(base, r) if r is not None and r is not base else ""
+            if conflict:
+                notes.append(f"{label}: input structure differs ({conflict}): not paired")
                 rows[label] = None
         if any(n.endswith("not paired") for n in notes):
             status.append("structure mismatch")
