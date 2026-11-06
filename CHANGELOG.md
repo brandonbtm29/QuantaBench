@@ -2,6 +2,22 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Work sharing between machines in grid builds (2026-11-06)
+- **A machine that finishes early takes the others' unstarted molecules.** While `grid build` follows a
+  grid, it measures each machine's rate and moves molecules a busy machine has not started to an idle one.
+  It moves only when the busy machine's part ends at least 60 s sooner, after a 30 s start-up charge.
+  - The busy batch hands them over between molecules, from the end of its queue, and marks them `moved` in
+    its job table, so no molecule runs twice. The idle machine runs them as a new share of the grid
+    (`parent`, `ids` in `grid.json`).
+  - On by default; `--no-share-work` keeps the split as it is. New worker endpoint:
+    `POST /v1/jobs/<id>/release`.
+  - In the 2026-11-05 water run, the MacBook had been idle for 8 of 21 minutes.
+- **Largest molecules first:** each share's list is sorted by size before it is submitted.
+- `jobs.Handoff` and the `moved` status: `RunStatus.total` leaves moved molecules out, and a resume does not
+  run them.
+- **Fix:** the hardware probe (`resources.detect_isolated`) ignored a cancel when its child process finished
+  within the first 0.25 s poll. This made CI red on Linux and Windows.
+
 ### Areas and volumes: a SASA bug fixed, Spartan's radii as an option (2026-11-06)
 - **`sasa_A2` was wrong for every non-protein molecule.** It passed the radii of FreeSASA's ProtOr classifier,
   and those are 0 for any atom outside a protein residue, so the value was the union of bare 1.4 Å probe

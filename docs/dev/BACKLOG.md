@@ -573,7 +573,13 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   surface tension and the experimental physchem values. Check the property names on the workstation first
   (api-ccte.epa.gov is blocked in the cloud environment).
 
-### DIST-6: Grid weights from measured throughput · ready
+### DIST-6: Grid weights from measured throughput · done 2026-11-06 (work sharing; learned weights optional)
+- 2026-11-06: **work sharing** instead of learned weights: while `grid build` follows a grid, a machine that
+  has finished takes molecules another has not started (`client.WorkSharing`, `POST /v1/jobs/<id>/release`,
+  `jobs.Handoff`; docs/WORKERS.md), and every share runs its largest molecules first. In the 2026-11-05 water
+  run the MacBook was idle for 8 of 21 minutes; with sharing that tail is about one molecule per lane. Left
+  (optional): record molecules/hour per protocol from finished grids and use it for `--weights auto`, so
+  fewer molecules move; measure the first real grid with sharing on NOVA + MacBook.
 - Validation run (tblite GFN2, 50 conformers, top 5, frequencies), water phase: the MacBook finished its 169
   molecules in 12.5 min (811/h); NOVA took 20.8 min for its 131 (378/h). `--weights auto` had split them
   2680:2240 from the single-molecule benchmark. For the full run pass measured weights (about 2:1), and

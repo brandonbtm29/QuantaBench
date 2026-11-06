@@ -732,6 +732,7 @@ class Job:
     stop: threading.Event = field(default_factory=threading.Event, repr=False)
     log: collections.deque = field(default_factory=lambda: collections.deque(maxlen=LOG_TAIL), repr=False)
     progress: dict = field(default_factory=dict, repr=False)
+    handoff: object = field(default=None, repr=False)     # jobs.Handoff of the running batch (work sharing)
 
     RECORD = ("id", "label", "run_dir", "config", "state", "created", "started", "finished", "error", "chunk",
               "lanes", "client", "client_version", "n_inputs", "counts", "resumed", "cancel_requested")
@@ -989,6 +990,22 @@ class JobManager:
         self._log(f"Job {job_id}: cancel requested")
         return job
 
+    def release(self, job_id: str, n: int, dest: str = "", timeout: float = 30.0) -> list[str] | None:
+        """Work sharing: up to ``n`` molecules of a running job that it has not started, now 'moved' in its job
+        table and for the caller to run elsewhere (``jobs.Handoff``). [] when the job is not running (or none
+        are left); None when there is no such job."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            handoff = job.handoff if job.state == "running" else None
+        if handoff is None:
+            return []
+        ids = handoff.request(n, dest, timeout)
+        if ids:
+            self._log(f"Job {job_id}: {len(ids)} molecule(s) not started here moved to {dest or 'another machine'}")
+        return ids
+
     def set_paused(self, paused: bool) -> None:
         with self._cond:
             self.paused = bool(paused)
@@ -1072,10 +1089,11 @@ class JobManager:
                 lanes, _spec = profile_mod.resolve_lanes(job.lanes or self.lanes, cfg, log=log)
                 chunk = (job.chunk["index"], job.chunk["count"]) if job.chunk and "count" in job.chunk else None
                 inputs = self._load_inputs(job.id)
+                job.handoff = jobs_mod.Handoff()
                 with keep_awake(log) if self._awake else contextlib.nullcontext():
                     jobs_mod.run_resumable(inputs or None, cfg, run_dir, progress=progress,
                                            should_stop=job.stop.is_set, log=log, lanes=lanes, chunk=chunk,
-                                           keep_results=False)
+                                           keep_results=False, handoff=job.handoff)
                 # final counts before the state changes, so no client sees "done" with old counts
                 job.counts = self._counts(job)
                 tables = self._final_tables(run_dir)
@@ -1205,6 +1223,7 @@ _ROUTES = (
     ("POST", re.compile(r"/v1/jobs"), "submit"),
     ("GET", re.compile(r"/v1/jobs/([0-9a-f]{12})"), "job"),
     ("POST", re.compile(r"/v1/jobs/([0-9a-f]{12})/cancel"), "cancel"),
+    ("POST", re.compile(r"/v1/jobs/([0-9a-f]{12})/release"), "release"),
     ("GET", re.compile(r"/v1/jobs/([0-9a-f]{12})/archive"), "archive"),
     ("POST", re.compile(r"/v1/pause"), "pause"),
 )
@@ -1389,6 +1408,22 @@ class _Handler(BaseHTTPRequestHandler):
         self._job_or_404(job_id)
         mgr = self.server.worker.manager
         self._json(200, mgr.public(mgr.cancel(job_id), tail=0))
+
+    def _r_release(self, job_id: str, query) -> None:
+        """Work sharing: {"max": N, "to": "machine"} -> {"ids": [...] (moved, not started here), "job": ...}."""
+        body = self._body()
+        if set(body) - {"max", "to"}:
+            raise RequestError(400, 'body must be {"max": N, "to": "machine name"}')
+        n = body.get("max")
+        if type(n) is not int or not 1 <= n <= 100_000:
+            raise RequestError(400, "max must be an integer in [1, 100000]")
+        dest = _check_str("to", body.get("to", ""), 120)
+        if _CONTROL.search(dest):
+            raise RequestError(400, "to contains control characters")
+        self._job_or_404(job_id)
+        mgr = self.server.worker.manager
+        ids = mgr.release(job_id, n, dest)
+        self._json(200, {"ids": ids or [], "job": mgr.public(mgr.get(job_id), tail=0)})
 
     def _r_pause(self, query) -> None:
         body = self._body()

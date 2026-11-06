@@ -37,7 +37,7 @@ quantabench-cli worker [--bind tailscale|localhost|ADDR] [--port 8765] [--lanes 
 quantabench-cli grid machines [--worker NAME=URL]
 quantabench-cli grid build <same inputs and science options as build> --method M
                        [--machines btm-nova,brandons-macbook-pro,local] [--weights auto|3,1] [--wait]
-                       [--label L] [--worker NAME=URL] [--sync-wait 60]
+                       [--no-share-work] [--label L] [--worker NAME=URL] [--sync-wait 60]
 quantabench-cli grid status [GRID_ID]          (no id: recent grid runs)
 quantabench-cli grid cancel GRID_ID
 quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
@@ -52,6 +52,26 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
   with no profile at all gets the mean of the others. `3,1` gives one weight per machine in the order of
   `--machines`; `btm-nova=3,local=1` names them. The split is deterministic (SHA-256 of the molecule id), so
   re-running a list puts every molecule on the same machine again.
+- **Largest molecules first.** Each share's list is sorted by size (atoms with hydrogens) before it is
+  submitted, so the end of every queue holds short, cheap molecules.
+- **Work sharing** (on by default; `--no-share-work` turns it off). While `grid build` follows the grid
+  (with `--wait`, or while its local share runs), a machine whose shares are all done takes molecules that
+  another machine has not started:
+  - The rates are measured in this grid: molecules finished per second of each machine's shares, once 3 have
+    finished.
+  - For an idle machine T and a running share of machine D with P molecules not started, it moves
+    m = P r_T / (r_T + r_D), so that both would finish together. It only does so when that ends D's part at
+    least 60 s sooner, after charging T 30 s to start a job.
+  - D's batch hands them over between molecules, from the end of its queue (`POST /v1/jobs/<id>/release`).
+    They become `moved` in its job table (never run there, also not on a resume), and T runs them as a new
+    share of the grid (`parent` = D's job, `ids` = the molecules).
+  - A machine can get several shares this way. Each has its own run folder, and a download goes to
+    `parts/<machine>-<job id>`. `grid status` shows where a share's molecules came from, and the merge
+    takes every share.
+  - Machines whose share failed, was cancelled or was lost never take work. If T cannot start the molecules,
+    they go back to D as another job; if that fails too, they are logged and end up in `grid.missing`.
+
+  Weights still decide the first split, so good weights mean fewer moves.
 - **Threads and GPU** come from each machine's own settings. `--threads`/`--gpu` on `grid build` override
   them everywhere.
 - `local` runs its share inside the `grid build` process, so that command stays open until the local share
@@ -94,6 +114,7 @@ Every request needs `Authorization: Bearer <settings.dist.worker_token>`.
 | `POST /v1/jobs` | body `{inputs: [jobs.input_to_json(...)], config: {BuildConfig fields}, label, chunk?, lanes?, client?, allow_version_mismatch?}`; header `X-QuantaBench-Version`. 201 `{id, job}` |
 | `GET /v1/jobs/<id>?tail=20` | state (`queued`, `running`, `done`, `failed`, `cancelled`, `interrupted`), counts from the run folder's job table, `run_dir`, `run_folder`, progress, log tail |
 | `POST /v1/jobs/<id>/cancel` | a queued job is dropped; a running one stops after the current molecule (its run folder stays resumable) |
+| `POST /v1/jobs/<id>/release` `{"max": N, "to": "machine"}` | work sharing: up to N molecules the running job has not started, from the end of its queue, become `moved` there; 200 `{ids, job}` (`ids` empty when the job is not running or has none left). The batch answers between molecules: within 0.1 s with lanes, after the current molecule in one process (the request gives up after 30 s and then moves nothing) |
 | `GET /v1/jobs/<id>/archive` | zip stream of the run folder (finished jobs; 409 while running); its last member, `<run folder>/.qb-archive.json`, lists every other member and its size |
 | `POST /v1/pause` `{"paused": true}` | running jobs finish, new ones wait (keeps the machine responsive) |
 
@@ -259,6 +280,7 @@ version (`--allow-version-mismatch` on either side overrides).
 - One lane (the default) runs molecules in the worker process: a segfault in a native library ends the worker.
   launchd restarts it on the Mac; on Windows the Task Scheduler restart is unverified (see the setup section),
   so check `grid machines`. `jobs.py` marks a molecule failed after it has crashed the process twice. Several lanes (`--lanes`, see `dist.lanes`) run molecules in child processes.
-- No work stealing: each share stays on the machine it was given to. If a machine is slower than its weight
-  says, the others finish first and wait; measured throughput (`--weights auto`) keeps that small.
+- Work sharing needs a `grid build` that follows the grid. Without `--wait` it only runs while the local
+  share does. A worker in one lane hands molecules over only between molecules, so a release can wait for
+  the molecule in progress (up to 30 s, then it tries again at a later poll).
 - The archive of a large run folder (cubes, trajectories) is a large download; prefer the synced folder.

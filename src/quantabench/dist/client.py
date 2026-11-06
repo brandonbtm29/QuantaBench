@@ -4,10 +4,12 @@ your machines, follows the progress and merges the result tables.
 ``WorkerClient(url, token)``  info, submit, status, jobs, cancel, pause, wait, download_archive
 ``known_workers`` / ``discover``  workers from the machine registry (the URL a worker writes into its
                               profile), ``settings.dist.workers`` overrides and ``--worker [NAME=]URL``
-``grid_build(...)``           split (``dist.plan``), submit each share, run the "local" share in this process,
-                              follow, then merge with ``jobs.merge_tables``. A worker's run folder that has
-                              synced here (SyncThing) is read in place; otherwise its zip archive is downloaded
-                              into the grid folder first.
+``grid_build(...)``           split (``dist.plan``), submit each share (largest molecules first), run the
+                              "local" share in this process, follow, then merge with ``jobs.merge_tables``. A
+                              worker's run folder that has synced here (SyncThing) is read in place; otherwise
+                              its zip archive is downloaded into the grid folder first.
+``WorkSharing``               while following: a machine whose shares are all done takes molecules another
+                              machine has not started (``WorkerClient.release``), as a new share of the grid.
 
 A grid run is recorded as ``<output folder>/<stamp>_grid_<label>/grid.json`` (machines, job ids, run folders);
 the merged ``summary.csv``/``descriptors.csv`` land next to it. ``grid status|cancel|merge <grid id>`` use it.
@@ -63,6 +65,8 @@ MAX_JSON_RESPONSE = 32 * 1024 * 1024
 #: or the request (other 4xx). Waiting longer cannot change that, so following stops for this share.
 LOST = "lost"
 DONE_STATES = (*FINAL_STATES, LOST)
+#: the longest a worker waits for its batch to answer a release (``worker.JobManager.release``), seconds
+RELEASE_WAIT_S = 30.0
 #: a run folder name as a worker makes it (``<stamp>_<label>_<worker>``, maybe with a ``-2`` suffix)
 _FOLDER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}")
 
@@ -365,6 +369,16 @@ class WorkerClient:
     def cancel(self, job_id: str) -> dict:
         return self._json("POST", f"/v1/jobs/{_job_id(job_id)}/cancel")
 
+    def release(self, job_id: str, n: int, to: str = "") -> list[str]:
+        """Work sharing: up to ``n`` molecules the job has not started, now 'moved' in its job table for the
+        caller to run elsewhere ([] when the job is not running or has none left)."""
+        data = self._json("POST", f"/v1/jobs/{_job_id(job_id)}/release", {"max": int(n), "to": str(to)[:120]},
+                          timeout=max(self.timeout, RELEASE_WAIT_S + 30.0))
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise WorkerError(f"{self.url}: unexpected reply to a release")
+        return ids
+
     def pause(self, paused: bool = True) -> dict:
         return self._json("POST", "/v1/pause", {"paused": bool(paused)})
 
@@ -501,6 +515,9 @@ class Share:
     source: str = ""               # where the merge read it: "local" | "synced" | "archive" | "partial"
     commit: str = ""               # git commit the machine runs (as its worker reports it)
     error: str = ""                # why following or collecting this share stopped
+    started: str = ""              # when it was submitted
+    parent: str = ""               # work sharing: job id of the share its molecules were moved from ("" = the split)
+    ids: list[str] = field(default_factory=list)   # work sharing: its molecules (a split share's come from weights)
 
     @property
     def finished(self) -> int:
@@ -663,17 +680,19 @@ class _RemoteTarget:
 
 
 def follow(grid: GridRun, targets: dict[str, object], poll: float = 5.0, log: Callable[[str], None] = print,
-           only: set[str] | None = None, should_stop: Callable[[], bool] = lambda: False) -> None:
-    """Print the combined progress until every share (or those in ``only``) is done, failed or cancelled.
+           only: set[str] | None = None, should_stop: Callable[[], bool] = lambda: False,
+           on_poll: Callable[[], None] | None = None) -> None:
+    """Print the combined progress until every share (or those of the machines in ``only``) is done, failed or
+    cancelled. ``targets`` maps a share's job id (or, for one share per machine, its machine) to what reports
+    its status; ``on_poll`` runs after each round of status checks (``WorkSharing.step``).
     An 'interrupted' share (its worker was stopped) resumes when that worker starts again, and an unreachable
     worker may come back, so both are waited for. A worker that answers with a 4xx (no such job, wrong token)
     will not change its answer: that share becomes 'lost' and following it stops."""
     last = ""
     warned: set[str] = set()
     while True:
-        pending = False
-        for share in grid.shares:
-            target = targets.get(share.machine)
+        for share in list(grid.shares):
+            target = targets.get(share.job_id) or targets.get(share.machine)
             if target is None or not share.job_id or share.state == LOST:
                 continue
             try:
@@ -688,8 +707,10 @@ def follow(grid: GridRun, targets: dict[str, object], poll: float = 5.0, log: Ca
                 elif share.machine not in warned:
                     log(f"{share.machine}: {exc} (retrying)")
                     warned.add(share.machine)
-            if (only is None or share.machine in only) and share.state not in DONE_STATES:
-                pending = True
+        if on_poll is not None and not should_stop():
+            on_poll()                         # work sharing: may add shares (and their targets)
+        pending = any((only is None or s.machine in only) and s.job_id and s.state not in DONE_STATES
+                      and (targets.get(s.job_id) or targets.get(s.machine)) is not None for s in grid.shares)
         line = grid.summary()
         if line != last:
             log(f"[grid] {line}")
@@ -697,6 +718,125 @@ def follow(grid: GridRun, targets: dict[str, object], poll: float = 5.0, log: Ca
         if not pending or should_stop():
             return
         time.sleep(poll)
+
+
+class WorkSharing:
+    """Grid work sharing: a machine whose shares are all done takes molecules another machine has not started.
+
+    ``step()`` (from ``follow``'s ``on_poll``) measures each machine's rate while the grid runs (molecules
+    finished per second of its shares' running time, once ``min_done`` have finished) and, for an idle machine
+    T and a running share of machine D with P molecules not started, moves m = P r_T / (r_T + r_D) of them, so
+    both would finish together. A move happens only when it shortens D's remaining time by at least
+    ``min_gain_s``, after charging T ``start_s`` to start a job. ``release(share, n, dest)`` takes the molecules
+    from D's batch (they become 'moved' there); ``submit(machine, ids, parent)`` runs them on T as a new share
+    and returns it, or None. When T cannot take them they go back to D as another share; if that fails too they
+    are logged and end up in ``grid.missing``. One move per step: the next poll sees the new state.
+    Machines whose shares failed, were cancelled or lost never take work."""
+
+    MIN_GAIN_S = 60.0
+    START_S = 30.0
+    MIN_DONE = 3
+
+    def __init__(self, grid: GridRun, release: Callable[[Share, int, str], list[str]],
+                 submit: Callable[[str, list[str], Share], Share | None], log: Callable[[str], None] = print,
+                 clock: Callable[[], float] = time.monotonic, min_gain_s: float | None = None,
+                 start_s: float | None = None, min_done: int | None = None):
+        self.grid, self._release, self._submit, self.log, self.clock = grid, release, submit, log, clock
+        self.min_gain_s = self.MIN_GAIN_S if min_gain_s is None else float(min_gain_s)
+        self.start_s = self.START_S if start_s is None else float(start_s)
+        self.min_done = self.MIN_DONE if min_done is None else max(1, int(min_done))
+        self._t0: dict[str, float] = {}       # job id -> first seen
+        self._t1: dict[str, float] = {}       # job id -> first seen finished
+        self.moves: list[dict] = []           # what moved: {"from", "to", "n", "gain_s"}
+        self.unplaced: list[str] = []         # moved out of a batch, but no machine took them
+
+    def _observe(self, now: float) -> None:
+        for s in self.grid.shares:
+            if not s.job_id:
+                continue
+            self._t0.setdefault(s.job_id, now)     # first seen (submitted): time queued on a busy worker counts
+            if s.state in DONE_STATES:
+                self._t1.setdefault(s.job_id, now)
+
+    def rate(self, machine: str, now: float | None = None) -> float | None:
+        """Molecules per second of ``machine`` in this grid, or None before ``min_done`` have finished."""
+        now = self.clock() if now is None else now
+        done, busy = 0, 0.0
+        for s in self.grid.shares:
+            if s.machine != machine or s.job_id not in self._t0:
+                continue
+            done += s.finished
+            busy += max(0.0, self._t1.get(s.job_id, now) - self._t0[s.job_id])
+        if done < self.min_done or busy <= 0:
+            return None
+        return done / busy
+
+    @staticmethod
+    def not_started(share: Share) -> int:
+        return int(share.counts.get("pending", 0) or 0) + int(share.counts.get("cancelled", 0) or 0)
+
+    def plan(self, thief: str, now: float) -> tuple[float, Share, int] | None:
+        """The best move for idle ``thief``: (gain in s, donor share, molecules), or None."""
+        r_t = self.rate(thief, now)
+        if r_t is None:
+            return None
+        best = None
+        for d in self.grid.shares:
+            if d.machine == thief or d.state != "running" or not d.job_id:
+                continue
+            pending, r_d = self.not_started(d), self.rate(d.machine, now)
+            if pending < 1 or r_d is None:
+                continue
+            m = int(pending * r_t / (r_t + r_d))
+            if m < 1:
+                continue
+            gain = pending / r_d - max((pending - m) / r_d, self.start_s + m / r_t)
+            if gain >= self.min_gain_s and (best is None or gain > best[0]):
+                best = (gain, d, m)
+        return best
+
+    def step(self) -> Share | None:
+        """One round: returns the new share when molecules moved."""
+        now = self.clock()
+        self._observe(now)
+        by_machine: dict[str, list[Share]] = {}
+        for s in self.grid.shares:
+            if s.job_id:
+                by_machine.setdefault(s.machine, []).append(s)
+        for thief, own in by_machine.items():
+            if not all(s.state == "done" for s in own):
+                continue                  # busy, or a share failed / was cancelled / lost: not a thief
+            best = self.plan(thief, now)
+            if best is None:
+                continue
+            gain, donor, m = best
+            ids = self._release(donor, m, thief)
+            if not ids:
+                continue
+            donor.n = max(0, donor.n - len(ids))
+            if donor.ids:                 # a share made by an earlier move: keep its list to what it still runs
+                gone = set(ids)
+                donor.ids = [i for i in donor.ids if i not in gone]
+            share = self._submit(thief, ids, donor)
+            to = thief
+            if share is None:
+                self.log(f"Work sharing: {thief} could not take {len(ids)} molecule(s); giving them back to "
+                         f"{donor.machine} as another job")
+                share, to = self._submit(donor.machine, ids, donor), donor.machine
+            if share is None:
+                self.unplaced += ids
+                self.log(f"Work sharing: {len(ids)} molecule(s) were taken from {donor.machine}'s batch but no "
+                         f"machine could start them; they will be missing from the merge (rerun them): "
+                         + ", ".join(ids[:10]) + (" ..." if len(ids) > 10 else ""))
+                self.grid.save()
+                return None
+            self._t0[share.job_id] = now
+            self.moves.append({"from": donor.machine, "to": to, "n": len(ids), "gain_s": round(gain, 1)})
+            self.log(f"Work sharing: {len(ids)} molecule(s) {donor.machine} had not started -> {to} "
+                     f"(job {share.job_id}; about {gain / 60:.1f} min sooner)")
+            self.grid.save()
+            return share
+        return None
 
 
 def _summary_rows(path: Path) -> int:
@@ -836,6 +976,17 @@ def _snapshot(folder: Path, dest: Path) -> Path | None:
     return target
 
 
+def _part_name(grid: GridRun, share: Share) -> str:
+    """Download folder name of a share: its machine for the machine's first share, ``<machine>-<job id>`` for
+    the others (work sharing gives a machine more than one)."""
+    first = next((s for s in grid.shares if s.machine == share.machine and s.job_id), None)
+    if first is None or first.job_id == share.job_id:
+        return share.machine
+    if not re.fullmatch(r"[0-9a-f]{12}", str(share.job_id)):
+        raise WorkerError(f"job id {share.job_id!r} cannot name a folder")
+    return f"{share.machine}-{share.job_id}"
+
+
 def _share_paths(grid: GridRun, share: Share, out: Path) -> tuple[Path, Path]:
     """(synced run folder, download folder ``<grid>/parts/<machine>``) of a share, refusing names from
     grid.json (a synced file) or a worker's answers that would lead out of those folders."""
@@ -844,7 +995,7 @@ def _share_paths(grid: GridRun, share: Share, out: Path) -> tuple[Path, Path]:
     if not isinstance(share.run_folder, str) or not _FOLDER_RE.fullmatch(share.run_folder):
         raise WorkerError(f"run folder name {share.run_folder!r} is not a single folder name")
     parts = Path(os.path.abspath(Path(grid.folder) / "parts"))   # abspath: see worker.JobManager._new_run_dir
-    dest = Path(os.path.abspath(parts / share.machine))
+    dest = Path(os.path.abspath(parts / _part_name(grid, share)))
     if dest.parent != parts:
         raise WorkerError(f"machine name {share.machine!r} leads out of {parts}")
     return out / share.run_folder, dest
@@ -954,12 +1105,18 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
                allow_version_mismatch: bool = False, allow_auto_method: bool = False,
                keep_resources: Sequence[str] = (), poll: float = 5.0, sync_wait: float = 60.0,
                output_dir: str | Path | None = None, allow_any_host: bool = False, timeout: float = 30.0,
-               log: Callable[[str], None] = print, should_stop: Callable[[], bool] = lambda: False) -> GridRun:
+               log: Callable[[str], None] = print, should_stop: Callable[[], bool] = lambda: False,
+               share_work: bool = True, share_min_gain_s: float | None = None,
+               share_start_s: float | None = None, share_min_done: int | None = None) -> GridRun:
     """Split ``items`` (``MoleculeInput``) across ``machines`` (worker names and/or "local"), submit, and with
-    ``wait`` follow and merge. The local share always runs here (this call returns when it is done)."""
+    ``wait`` follow and merge. The local share always runs here (this call returns when it is done).
+
+    Each share runs its largest molecules first. ``share_work`` (with more than one machine, while this call
+    follows): a machine that has finished takes molecules another has not started (``WorkSharing``; the
+    ``share_*`` arguments override its thresholds)."""
     from ..chem.inputs import dedupe_ids
     from ..chem.pipeline import new_run_dir
-    from . import plan, profile
+    from . import plan, profile, speed
     from .worker import JobManager, RequestError, check_label, check_mol_id, validate_job
 
     s = settings_mod.load()
@@ -1032,6 +1189,9 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
     ids = [x.id for x in items]
     split = plan.split(ids, w)
     by_id = {x.id: x for x in items}
+    sizes = {i: speed.molecule_size(by_id[i]) for i in ids}
+    for n in split:                       # largest first: the end of each queue is short, cheap molecules
+        split[n] = sorted(split[n], key=lambda i: -sizes[i])
     log("Split: " + ", ".join(f"{n} {len(split[n])} (weight {w[n]:g})" for n in names))
 
     folder = new_run_dir(out, f"grid_{label}")
@@ -1040,7 +1200,7 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
     grid = GridRun(id=folder.name, folder=str(folder), label=label, created=_now(), client=profile.machine_name(),
                    quantabench_version=__version__, method=cfg.method, config=config, weights=w, ids=ids,
                    shares=[Share(machine=n, url=refs[n].url if n != LOCAL else "", n=len(split[n]), weight=w[n],
-                                 commit=commits.get(n, "")) for n in names],
+                                 commit=commits.get(n, ""), started=_now()) for n in names],
                    commit=commit)
     grid.save()
 
@@ -1079,31 +1239,84 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
             grid.save()
             raise GridError(f"{share.machine} answered the submission unexpectedly ({exc})") from None
         submitted.append((client, share.job_id))
-        targets[share.machine] = _RemoteTarget(client, share.job_id)
+        targets[share.job_id] = _RemoteTarget(client, share.job_id)
         log(f"{share.machine}: {share.n} molecule(s) -> job {share.job_id} ({share.run_folder})")
 
     manager = None
+    here = profile.machine_name()
+
+    def local_manager() -> JobManager:
+        nonlocal manager
+        if manager is None:
+            same = any(sh.machine == here for sh in grid.shares)     # a worker on this machine is listed too
+            # lanes=None: this machine's own spec from the settings (Settings.lanes_for), one lane if it does not fit
+            manager = JobManager(out, f"{here}-local" if same else here, state_dir=None, lanes=None)
+            manager.start()
+        return manager
+
+    def submit_local(share: Share, mol_ids: list[str]) -> None:
+        body = job_body([by_id[i] for i in mol_ids], config, label, client=here)
+        spec = validate_job(json.loads(json.dumps(body)), __version__)  # the checks a worker would make
+        mgr = local_manager()
+        job = mgr.submit(spec)
+        share.job_id, share.run_dir, share.run_folder = job.id, job.run_dir, Path(job.run_dir).name
+        share.state, share.source = job.state, LOCAL
+        targets[job.id] = _LocalTarget(mgr, job)
+
     local = next((sh for sh in grid.shares if sh.machine == LOCAL and sh.n), None)
     if local is not None:
-        body = job_body([by_id[i] for i in split[LOCAL]], config, label, client=profile.machine_name())
-        spec = validate_job(json.loads(json.dumps(body)), __version__)  # the checks a worker would make
-        here = profile.machine_name()
-        same = any(sh.machine == here for sh in grid.shares)     # a worker on this machine is listed too
-        # lanes=None: this machine's own spec from the settings (Settings.lanes_for), one lane if it does not fit
-        manager = JobManager(out, f"{here}-local" if same else here, state_dir=None, lanes=None)
-        manager.start()
-        job = manager.submit(spec)
-        local.job_id, local.run_dir, local.run_folder = job.id, job.run_dir, Path(job.run_dir).name
-        local.state, local.source = job.state, LOCAL
-        targets[LOCAL] = _LocalTarget(manager, job)
+        submit_local(local, split[LOCAL])
         log(f"local: {local.n} molecule(s) run here -> {local.run_folder}")
     grid.state = "running"
     grid.save()
     log(f"Grid {grid.id}: {GRID_FILE} in {folder}")
 
+    def release(share: Share, n: int, dest: str) -> list[str]:
+        try:
+            if share.machine == LOCAL:
+                got = manager.release(share.job_id, n, dest) if manager is not None else []
+            else:
+                got = WorkerClient(share.url, token, timeout, allow_any_host).release(share.job_id, n, dest)
+        except WorkerError as exc:
+            log(f"Work sharing: {share.machine} did not hand over molecules ({exc})")
+            return []
+        return [i for i in (got or []) if i in by_id]       # never more than the grid's own molecules
+
+    def submit_moved(machine: str, mol_ids: list[str], parent: Share) -> Share | None:
+        new = Share(machine=machine, url=refs[machine].url if machine != LOCAL else "", n=len(mol_ids), weight=0.0,
+                    commit=commits.get(machine, ""), started=_now(), parent=parent.job_id, ids=list(mol_ids))
+        try:
+            if machine == LOCAL:
+                submit_local(new, mol_ids)
+            else:
+                client = WorkerClient(new.url, token, timeout, allow_any_host)
+                reply = client.submit_body(job_body([by_id[i] for i in mol_ids], config, label,
+                                                    chunk={"index": len(grid.shares), "grid": grid.id[:120]},
+                                                    client=here, allow_version_mismatch=allow_version_mismatch))
+                job = reply["job"]
+                new.job_id, new.run_folder, new.run_dir = _job_id(reply["id"]), job["run_folder"], job["run_dir"]
+                new.state = job["state"]
+                if not isinstance(new.run_folder, str) or not _FOLDER_RE.fullmatch(new.run_folder):
+                    with contextlib.suppress(WorkerError):
+                        client.cancel(new.job_id)
+                    raise WorkerError(f"bad run folder name {new.run_folder!r}")
+                targets[new.job_id] = _RemoteTarget(client, new.job_id)
+        except (WorkerError, RequestError, KeyError, TypeError, OSError) as exc:
+            log(f"Work sharing: submitting {len(mol_ids)} molecule(s) to {machine} failed ({exc})")
+            return None
+        grid.shares.append(new)
+        grid.save()
+        return new
+
+    sharing = None
+    if share_work and len(names) > 1:
+        sharing = WorkSharing(grid, release, submit_moved, log, min_gain_s=share_min_gain_s,
+                              start_s=share_start_s, min_done=share_min_done)
+
     try:
         if wait or manager is not None:
-            follow(grid, targets, poll, log, only=None if wait else {LOCAL}, should_stop=should_stop)
+            follow(grid, targets, poll, log, only=None if wait else {LOCAL}, should_stop=should_stop,
+                   on_poll=sharing.step if sharing is not None else None)
     except KeyboardInterrupt:
         log("Stopped following. Remote shares keep running; the local share stops after its current molecule "
             f"(resume it with `quantabench-cli build --resume {local.run_dir}`)" if local else
@@ -1112,9 +1325,11 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
     finally:
         if manager is not None:
             manager.stop()
-            if local is not None:
-                local.state, local.counts = manager.public(manager.get(local.job_id), tail=0)["state"], \
-                    manager.public(manager.get(local.job_id), tail=0)["counts"]
+            for sh in grid.shares:
+                job = manager.get(sh.job_id) if sh.machine == LOCAL and sh.job_id else None
+                if job is not None:
+                    st = manager.public(job, tail=0)
+                    sh.state, sh.counts = st["state"], st["counts"]
         grid.save()
     if wait and not should_stop():
         grid.state = "finished"
@@ -1266,7 +1481,7 @@ def _cli_build(args) -> int:
                           extra_workers=args.worker, allow_version_mismatch=args.allow_version_mismatch,
                           allow_auto_method=args.allow_auto_method, keep_resources=keep, poll=args.poll,
                           sync_wait=args.sync_wait, output_dir=args.out, allow_any_host=args.allow_any_host,
-                          timeout=args.timeout)
+                          timeout=args.timeout, share_work=args.share_work)
     except (GridError, WorkerError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -1300,8 +1515,11 @@ def _cli_status(args) -> int:
         if not share.n:
             continue
         c = share.counts
+        origin = next((s.machine for s in grid.shares if share.parent and s.job_id == share.parent), "")
         print(f"  {share.machine:24s} job {share.job_id or '-':12s} {share.state or '-':11s} "
-              f"{share.finished}/{share.n} ({c.get('ok', 0)} ok, {c.get('failed', 0)} failed)  {share.run_folder}"
+              f"{share.finished}/{share.n} ({c.get('ok', 0)} ok, {c.get('failed', 0)} failed"
+              + (f", {c['moved']} moved on" if c.get("moved") else "") + f")  {share.run_folder}"
+              + (f"  (taken from {origin or share.parent})" if share.parent else "")
               + (f"  [{notes[share.machine].strip()}]" if notes.get(share.machine) else ""))
     print(f"  total {sum(s.finished for s in grid.shares)}/{len(grid.ids)}")
     return 0
@@ -1389,6 +1607,9 @@ def register_cli(subparsers) -> None:
     b.add_argument("--weights", default="auto", help="auto (measured throughput, else equal) or one number per "
                                                      "machine, e.g. 3,1")
     b.add_argument("--wait", action="store_true", help="follow until every share is done, then merge the tables")
+    b.add_argument("--no-share-work", dest="share_work", action="store_false",
+                   help="keep the split as it is: a machine that finishes early does not take molecules another "
+                        "machine has not started (work sharing is on by default while this command follows)")
     b.add_argument("--label", help="name for the run folders (default batch_<n>)")
     _worker_opts(b)
     b.add_argument("--allow-version-mismatch", action="store_true")

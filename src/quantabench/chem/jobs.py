@@ -23,6 +23,11 @@ proportion to ``weights`` instead (``dist.plan.weighted_index``; ``--chunk-weigh
 the machine registry); the weights are stored with the chunk, so a resume keeps the same split. Give each
 machine its own run_dir (SQLite must not be written by two machines through a synced folder) and combine
 the tables with ``merge_tables``.
+
+Work sharing between machines (``dist.client`` grid builds): a running batch can hand molecules it has not
+started to another machine through a ``Handoff``. Its own loop takes them from the end of its queue between
+molecules and marks them ``moved`` (with the destination in ``error``), so no molecule runs twice; ``moved``
+rows are not part of the batch any more (``RunStatus.total`` leaves them out).
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ import platform
 import socket
 import sqlite3
 import threading
+from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
@@ -51,7 +57,7 @@ from .pipeline import BuildConfig, MoleculeResult, ProgressFn
 DB_NAME = "jobs.sqlite"
 LOCK_NAME = "jobs.lock"
 SCHEMA_VERSION = 3                 # 2: molecules.crashes, 3: run.accepted
-STATUSES = ("pending", "running", "ok", "failed", "cancelled")
+STATUSES = ("pending", "running", "ok", "failed", "cancelled", "moved")   # moved: handed to another machine
 MAX_CRASHES = 2                    # a molecule that killed the process this often is marked failed
 
 # BuildConfig fields that change the numbers in the results. Resuming with a different value would
@@ -281,6 +287,64 @@ def _structure_key(d: dict) -> str:
 
 
 # ------------------------------------------------------------------------------------- the store
+class Handoff:
+    """Molecules a running batch has not started, handed to another machine (grid work sharing).
+
+    Another thread calls ``request(n, dest)``; the batch's own loop answers between molecules (``serve``) by
+    taking up to ``n`` molecules from the end of its queue and marking them 'moved', so they never run twice.
+    A request that is not answered within its timeout is withdrawn under the lock, so it moves nothing; after
+    ``close`` (the batch has ended) every request gets []. Never call ``request`` from the batch's own thread.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._one = threading.Lock()          # one request at a time
+        self._pending: dict | None = None
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def request(self, n: int, dest: str = "", timeout: float = 30.0) -> list[str]:
+        """Ask for up to ``n`` unstarted molecules; returns their ids (now 'moved' in the job table)."""
+        if n <= 0:
+            return []
+        with self._one:
+            req = {"n": int(n), "dest": str(dest), "ids": None, "event": threading.Event()}
+            with self._lock:
+                if self._closed:
+                    return []
+                self._pending = req
+            req["event"].wait(max(0.0, timeout))
+            with self._lock:
+                if self._pending is req:      # not served in time: withdrawn, nothing moved
+                    self._pending = None
+                    return []
+                return list(req["ids"] or [])
+
+    def serve(self, take: Callable[[int, str], list[str]]) -> None:
+        """Answer a waiting request with ``take(n, dest)`` (called by the batch's loop; cheap when none waits)."""
+        if self._pending is None:
+            return
+        with self._lock:
+            req, self._pending = self._pending, None
+            if req is None:
+                return
+            try:
+                req["ids"] = list(take(req["n"], req["dest"]))
+            finally:
+                req["event"].set()
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            req, self._pending = self._pending, None
+            if req is not None:
+                req["ids"] = []
+                req["event"].set()
+
+
 class JobStore:
     """The job table of one run folder. One connection per thread: open it where it is used."""
 
@@ -429,6 +493,18 @@ class JobStore:
                               "WHERE id = ?", (result.status, result.error, _now(), result_dir,
                                                _dumps(summary) if result.status != "cancelled" else None,
                                                result.input.id))
+
+    def mark_moved(self, ids: Sequence[str], dest: str = "") -> list[str]:
+        """Hand unstarted molecules to another machine (``Handoff``): 'moved', with the destination in
+        ``error``. Rows already started or finished are left alone; returns the ids that moved."""
+        note = f"moved to {dest}" if dest else "moved to another machine"
+        moved = []
+        with self.conn:
+            for mol_id in ids:
+                if self.conn.execute("UPDATE molecules SET status = 'moved', error = ?, finished = ? WHERE id = ? "
+                                     "AND status IN ('pending', 'cancelled')", (note, _now(), mol_id)).rowcount:
+                    moved.append(mol_id)
+        return moved
 
     def counts(self) -> dict[str, int]:
         out = dict.fromkeys(STATUSES, 0)
@@ -620,7 +696,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
                   on_result: Callable[[MoleculeResult], None] = _noop, retry_failed: bool = False,
                   chunk: Chunk | None = None, force: bool = False,
                   lanes: list | None = None, keep_results: bool = True,
-                  speed_aware: bool | None = None) -> tuple[list[MoleculeResult], Path]:
+                  speed_aware: bool | None = None,
+                  handoff: Handoff | None = None) -> tuple[list[MoleculeResult], Path]:
     """Run (or continue) a batch in ``run_dir``; returns the results computed by this call.
 
     ``keep_results=False`` returns light copies (``light_result``: no RDKit molecule, no normal modes) so a
@@ -639,7 +716,20 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
     (see ``dist.lanes``); ``None`` or one lane keeps the single-process loop. ``speed_aware`` (None: the
     ``resources.speed_aware_lanes`` setting): slower lanes leave the last molecules to faster ones
     (``dist.speed``).
+
+    ``handoff``: lets another thread take molecules this call has not started (``Handoff``); it is closed
+    when the call returns.
     """
+    try:
+        return _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, retry_failed, chunk,
+                              force, lanes, keep_results, speed_aware, handoff)
+    finally:
+        if handoff is not None:
+            handoff.close()
+
+
+def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, retry_failed, chunk, force,
+                   lanes, keep_results, speed_aware, handoff) -> tuple[list[MoleculeResult], Path]:
     run_dir = Path(run_dir).expanduser()
     run_dir.mkdir(parents=True, exist_ok=True)
     chunk = check_chunk(chunk)
@@ -666,7 +756,7 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
             log(f"{mol_id}: crashed the process {MAX_CRASHES} times; marked failed (--retry-failed redoes it)")
 
         todo = store.todo(retry_failed)
-        total = sum(store.counts().values())
+        total = sum(v for k, v in store.counts().items() if k != "moved")
         done_before = total - len(todo)
         if done_before:
             log(f"{done_before} of {total} molecule(s) already finished; {len(todo)} to do")
@@ -679,7 +769,7 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
             results = lanes_mod.run_parallel(store, todo, cfg, lanes, run_dir, total=total, done_before=done_before,
                                              progress=progress, should_stop=should_stop, log=log,
                                              on_result=on_result, keep_results=keep_results,
-                                             speed_aware=speed_aware)
+                                             speed_aware=speed_aware, handoff=handoff)
             todo = []
         elif lanes and lanes[0].device != "auto":       # one explicit lane, e.g. "cpu:1x4": its device and threads
             from dataclasses import replace
@@ -699,9 +789,26 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
             from dataclasses import replace
 
             cfg_run = replace(cfg_run, memory_budget_gb=pipeline.resolved_budget(cfg_run, 1, log))
-        for k, (mol_id, inp) in enumerate(todo):
+        queue = deque(todo)
+
+        def take(n: int, dest: str) -> list[str]:      # Handoff: the end of the queue, not started yet
+            picked = [queue.pop() for _ in range(min(n, len(queue)))]
+            moved = set(store.mark_moved([mol_id for mol_id, _ in picked], dest))
+            queue.extend(item for item in reversed(picked) if item[0] not in moved)   # could not move: kept
+            if moved:
+                log(f"Work sharing: {len(moved)} molecule(s) not started here go to {dest or 'another machine'}")
+            return [mol_id for mol_id, _ in picked if mol_id in moved]
+
+        k = -1
+        while queue:
+            if handoff is not None:
+                handoff.serve(take)
+                if not queue:
+                    break
             if should_stop():
                 break
+            mol_id, inp = queue.popleft()
+            k += 1
             i = done_before + k
             progress(i, total, "start", mol_id)
             store.mark_running(mol_id)
@@ -727,7 +834,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
         except OSError as exc:  # e.g. summary.csv open in Excel on Windows
             log(f"Could not rewrite the batch tables ({exc}); close them and call rebuild_tables")
     log(f"{counts['ok']} ok, {counts['failed']} failed, "
-        f"{counts['pending'] + counts['running'] + counts['cancelled']} remaining. Results in {run_dir}")
+        f"{counts['pending'] + counts['running'] + counts['cancelled']} remaining"
+        + (f", {counts['moved']} moved to another machine" if counts.get("moved") else "") + f". Results in {run_dir}")
     return results, run_dir
 
 
@@ -746,7 +854,8 @@ class RunStatus:
 
     @property
     def total(self) -> int:
-        return sum(self.counts.values())
+        """Molecules of this run folder; those handed to another machine ('moved') are not counted."""
+        return sum(v for k, v in self.counts.items() if k != "moved")
 
     @property
     def finished(self) -> int:
@@ -760,6 +869,8 @@ class RunStatus:
         parts = [f"{self.counts['ok']} ok", f"{self.counts['failed']} failed", f"{self.remaining} remaining"]
         if self.interrupted:
             parts.append(f"{self.interrupted} interrupted")
+        if self.counts.get("moved"):
+            parts.append(f"{self.counts['moved']} moved to another machine")
         where = f" ({chunk_label(self.chunk)})" if self.chunk else ""
         state = "running" if self.active else "idle"
         return f"{self.finished}/{self.total} done{where}, {state}: " + ", ".join(parts)

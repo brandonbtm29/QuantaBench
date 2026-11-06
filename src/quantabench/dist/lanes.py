@@ -896,14 +896,17 @@ def speed_policy(lanes: list[Lane], cfg):
 
 def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, done_before: int,
                  progress, should_stop, log, on_result, keep_results: bool = True,
-                 speed_aware: bool | None = None) -> list:
+                 speed_aware: bool | None = None, handoff=None) -> list:
     """Run ``todo`` ([(id, MoleculeInput)], from ``JobStore.todo``) in ``lanes`` worker processes. The
     calling thread is the only one that writes ``store`` and calls the callbacks. Returns the results in
     ``todo`` order (molecules not started because of a cancel are absent).
 
     ``speed_aware`` (None: ``settings.resources.speed_aware_lanes``): near the end of the batch, a lane
     leaves the last molecules to clearly faster lanes when they would finish them first (``dist.speed``).
-    Off, every free lane takes the next molecule."""
+    Off, every free lane takes the next molecule.
+
+    ``handoff`` (``jobs.Handoff``): molecules not started yet can be handed to another machine; they are
+    taken from the end of the queue between dispatches and marked 'moved'."""
     from dataclasses import replace
 
     from ..chem import jobs
@@ -960,6 +963,15 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                 and time.monotonic() - w.started_at < speed.STARTUP_GRACE_S):
             return speed.STARTING           # first start: counted on (a restart is not: it may never come back)
         return speed.DOWN
+
+    def take(n: int, dest: str) -> list[str]:
+        """``Handoff``: up to ``n`` molecules from the end of the queue (none of them started)."""
+        picked = [queue.pop() for _ in range(min(n, len(queue)))]
+        moved = set(store.mark_moved([mol_id for _, mol_id, _ in picked], dest))
+        queue.extend(item for item in reversed(picked) if item[1] not in moved)   # could not move: kept
+        if moved:
+            log(f"Work sharing: {len(moved)} molecule(s) not started here go to {dest or 'another machine'}")
+        return [mol_id for _, mol_id, _ in picked if mol_id in moved]
 
     def finish(w: _LaneProcess | None, k: int, mol_id: str, res, result_dir: str = "") -> None:
         nonlocal n_done
@@ -1097,6 +1109,8 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                 pool.stop_event.set()
                 busy = sum(w.busy is not None for w in pool.workers)
                 log(f"Cancelling: {busy} running molecule(s) stop after their current step")
+            if handoff is not None and not stopping:
+                handoff.serve(take)
             if not stopping:
                 states, held = None, []
                 for w in pool.workers:
