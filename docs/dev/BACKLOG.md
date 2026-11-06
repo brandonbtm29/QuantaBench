@@ -338,6 +338,15 @@ Depends on: none (research only; can run any night).
     (`jobs.run_resumable` and `pipeline.run` call `resources.select_device` before knowing whether the
     method needs torch: +~500 MB for the rest of the session). Select the device lazily, or only for
     torch engines (chem/jobs.py, chem/pipeline.py).
+- 2026-11-05 (branch `fix/runtime-guards`), for the 14,223-molecule split across NOVA and the MacBook:
+  - `lanes auto` plans a GPU lane only where this machine's benchmark (`<method>@<gpu>` vs `<method>@cpu`)
+    says the GPU is the faster lane; MacBook AIMNet2 (6,387/h CPU, 2,978/h MPS): CPU lanes only (6 x 2 with
+    the default 13 threads). Without a benchmark the GPU lane as before, and the reason says so. Still to check: a lanes benchmark on the Mac
+    (`machines --bench aimnet2` with `--lanes`), since 1 MPS lane + 4 CPU lanes might still beat 6 CPU lanes
+    if MPS and the CPU do not contend (the rule compares one lane with one lane).
+  - Benchmarks in water (`machines --solvent water`: `<method>+water@<device>`) and `--bench-set mixed`;
+    readers of the keys (speed-aware lanes, `lanes auto`, grid and chunk weights) use the run's solvent.
+  - Settings > Compute: memory per lane and time limit per molecule.
 
 ### IMPORT-2: Read Spartan '24 `.spartan` documents · in review 2026-11-05 (branches `feat/spartan-import`, `feat/spartan-qsar`; acceptance pending)
 - A `.spartan` file is an OLE compound document with one storage per molecule (`Molecules/M0001/...`):
@@ -399,6 +408,12 @@ Still open:
   molecule at its next checkpoint (best effort). The molecule is failed `time limit (N s) in <stage>`, and
   `--retry-failed` redoes it. Still open: RDKit embedding has no checkpoint (ETKDG `EmbedParameters.timeout`
   since RDKit 2024.03 would bound it in one process too).
+  Done on `fix/runtime-guards` (2026-11-05): the embedding gets `conformers.EMBED_TIME_FRACTION` (1/4) of the
+  limit, in one process and in lanes. RDKit's timeout ends a call with a single conformer however many it had
+  finished, so one conformer is timed first and fewer are asked for when they would not fit; the timeout is
+  the hard stop. Notes say when it ran out and with how many conformers. Still open: the MMFF optimization of
+  hundreds of conformers of such a molecule has no checkpoint either; the pipeline could pass
+  `timeout_s=confs.embed_time_limit(cfg.molecule_timeout_s)` explicitly (today: `resources.set_molecule_limits`).
 - **Ids of the baseline cohorts** (needs-Brandon): cohorts 1-3 are titled by CAS number, cohorts 4-6 by a
   name that is sometimes cut off after a word, with the CAS in `CAS_RN`. `--id-col CAS_RN`
   now gives CAS ids for those; decide which the merged QSAR table uses.
@@ -420,10 +435,17 @@ Still open:
   (memory goes as SCF iterations x nao²). An estimate per step is checked against a per-lane budget
   (`--memory-budget`, default available / lanes, at least 1.5 GB). Over budget, the polarizability comes from
   tblite (the same value), or is skipped with a note; a refinement that does not fit fails with the reason, or
-  `auto` moves on to its next engine. Measurements are in docs/ENGINES.md. Still open: the frequencies stage
-  (dxtb Hessian) is not guarded; the rule under-estimates hard SCF cases it cannot see (closed shell with
-  near-degenerate levels: 5.8x the neutral run for a peptide with two electrons removed); calibrate on NOVA's
-  ROCm torch and on the MacBook, whose allocators may differ.
+  `auto` moves on to its next engine. Measurements are in docs/ENGINES.md. Still open: the rule under-estimates
+  hard SCF cases it cannot see (closed shell with near-degenerate levels: 5.8x the neutral run for a peptide
+  with two electrons removed); calibrate on NOVA's ROCm torch and on the MacBook, whose allocators may differ.
+  Done on `fix/runtime-guards` (2026-11-05): the frequencies stage (`memory_guard.frequencies_plan`, one call at
+  the start of `vibrations.analyze`'s Hessian step). The analytic Hessian grows as atoms x nao² (TFA anion
+  353 MB, PFBA anion 1.2 GB, PFOA anion > 6 GB); over the budget it becomes finite differences (one energy +
+  forces of memory, about the same time), and finite differences or IR dipole derivatives that do not fit are
+  skipped with a note. Measured only up to 2 GB resident here (other agents on an 8 GB VM); the GFN2 and the
+  larger points of the rule are extrapolated: check a few on NOVA and the Mac. The pipeline could pass
+  `memory_budget_gb=memory_budget(cfg)` to `vibrations.analyze` explicitly (today: the lane's share through
+  `resources.set_molecule_limits`, auto in one process).
 - **The xTB properties step on dications** (a piperazine, +2 at pH 7) took minutes of GFN1-xTB SCF in the
   MMFF run; measure and cap its SCF iterations.
 - Settings isolation: during this work `~/.config/QuantaBench/settings.json` (and `QuantaBench.conf`) were

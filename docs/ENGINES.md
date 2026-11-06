@@ -106,10 +106,45 @@ below 0 turns the guard off. The run log states the budget.
 | GFN1 polarizability (properties step) | dxtb autograd | **tblite** GFN1-xTB finite field if tblite is installed: the same quantity (Ala10 39.1012 vs 39.1009 Å³). A note says so and `xtb_polarizability_method` = `tblite GFN1-xTB finite field`. Without tblite (or if tblite's estimate does not fit either) the polarizability is skipped, with a note. Charges and dipole stay dxtb's |
 | dxtb refinement (GFN1/GFN2), sequential | runs | `MemoryGuardError: ... refinement not started by the memory guard: estimated X GB ...`. Method `auto` tries its next engine and notes why. An explicit method fails the molecule with that reason, and the batch goes on |
 | dxtb refinement, batched | B conformers at once | batches small enough to fit (the results do not depend on the batch size), and the error above if not even one fits |
+| frequencies: analytic dxtb Hessian | autograd Hessian | **central finite differences** of the analytic forces (also with `--freq-hessian analytic`): the same frequencies to ~1 cm-1, at the memory of one energy + forces. A note says so |
+| frequencies: finite differences | runs, row by row | the frequencies are skipped with a note (`frequencies skipped (MemoryGuardError: ...)`); the molecule stays ok |
+| frequencies: dxtb dipole derivatives (IR) | autograd | the IR intensities are skipped with a note; frequencies and thermochemistry are unaffected |
 
 Every note is in `summary.csv`. dxtb's `scf_mode="implicit"` is not used as a cheaper path. It needs 4-5x less
 memory for energy + forces, but its forces differed by 0.83 eV/Å from the full mode on the C20 PFCA anion, and
-its polarizability came out 0. The frequencies stage (a dxtb Hessian) is not guarded yet.
+its polarizability came out 0.
+
+**The frequencies stage** is the largest consumer. dxtb's analytic Hessian differentiates the autograd forces
+once more for each of the 3N coordinates, so its memory grows as atoms x nao². Measured 2026-11-05 as above, one
+experiment at a time with an RSS watchdog at 2 GB resident (`scratch/hessian_memory.py`; step peak above the
+0.64 GB baseline):
+
+| molecule | atoms | nao | charge | GFN1 analytic Hessian | GFN1 finite differences | GFN1 dipole derivatives |
+|---|---|---|---|---|---|---|
+| TFA anion (C2) | 7 | 28 | -1 | 353 MB, 3.1 s (GFN2: 700 MB) | 21 MB, 3.1 s | 27 MB |
+| propane | 11 | 28 | 0 | 465 MB (GFN2: 934 MB) | | |
+| C3F8 | 11 | 44 | 0 | 647 MB | | |
+| PFBA (C4) | 14 | 54 | 0 | 1042 MB, 7.1 s | | |
+| PFBA anion | 13 | 52 | -1 | 1214 MB, 7.1 s | 22 MB, ~7 s | 49 MB |
+| Gly-Gly, Ala-Ala, PFPeA anion | 16-23 | 52-68 | | killed above 1.36 GB | | |
+| PFOA anion (C8) | 25 | 100 | -1 | > 6.4 GB (killed at 7 GB) | 45 MB, ~21 s | 146 MB |
+| PFDoA anion (C12) | 37 | 148 | -1 | | 74 MB, ~40 s | |
+| Ala5 | 53 | 158 | 0 | | 135 MB, ~69 s | 240 MB |
+| Ala10 | 103 | 308 | 0 | | 271 MB, ~445 s | |
+
+The full table (CF4 to pentane, glycine, alanine, GFN2) is in `chem/memory_guard.py`. Finite differences took
+about as long as the analytic Hessian where both ran (one thread), so the guard can be strict. The estimates:
+
+    analytic Hessian   MB = h[method] x scf_factor x atoms x nao² + 250     h = 0.025 (GFN1), 0.08 (GFN2)
+    finite differences MB = 2 x k[method] x scf_factor x nao² + 30          (one energy + forces, pool growth)
+    dipole derivatives MB = d[method] x scf_factor x nao² + 30              d = 0.009 (GFN1), 0.014 (GFN2)
+
+With a 5 GB lane the GFN1 analytic Hessian is kept up to about the C5 PFCA anion and neutral organics of ~20
+atoms. Everything larger takes finite differences. `vibrations.analyze(max_analytic_memory_gb=)` still works as
+a cap on the analytic estimate alone, and on a CUDA/ROCm device (dxtb GPU = on) half the free GPU memory is
+that cap. The stages that are not handed the run's settings (the Hessian, the embedding) read them from
+`resources.set_molecule_limits`, which the lanes, the CLI build, the GUI and grid workers call before the first
+molecule.
 
 **Time limit per molecule.** `resources.molecule_timeout_s` (`build --molecule-timeout S`) defaults to 1800 s;
 0 turns it off. The slowest molecule of the stress sample that finished took 429 s (a Cr complex in `auto`), so
@@ -120,9 +155,19 @@ not tried again in the run; `--retry-failed` (with a higher limit, or 0) redoes 
 - **Lanes:** the parent knows when each lane got its molecule. Past the limit it kills the lane with the
   programs the lane started, records the molecule, and restarts the lane if work is left.
 - **One process** (`--lanes 1`, the single-molecule GUI run): best effort. The molecule stops at the pipeline's
-  next `should_stop` checkpoint: every optimizer step and conformer, between stages, and the polls of external
-  programs. A step without a checkpoint (RDKit embedding, a single dxtb SCF, the xTB properties step) runs to
-  its end first. Use lanes when a hard limit matters.
+  next `should_stop` checkpoint: every optimizer step and conformer, every row of a finite-difference Hessian,
+  between stages, and the polls of external programs. A step without a checkpoint (a single dxtb SCF, the xTB
+  properties step, an analytic Hessian) runs to its end first. Use lanes when a hard limit matters.
+- **Conformer embedding** (RDKit ETKDG has no checkpoint): it gets a quarter of the limit (450 s of 1800 s;
+  `conformers.EMBED_TIME_FRACTION`), in one process and in lanes. One conformer is embedded first and timed;
+  when the conformers asked for would not fit the time left, fewer are asked for. RDKit's
+  `EmbedParameters.timeout` (whole seconds) is the hard stop of every call: a call stopped by it returns a
+  single conformer, however many it had finished, hence the timing first. A note says so ("conformer embedding
+  limited by the time limit: 120 of 300 conformers (one took 2.9 s, 450 s for the embedding)", or "... stopped
+  by the time limit ... after 451 s: 1 of 300 conformers"), and the molecule goes on with what it has. A
+  molecule that embeds within the limit gets the same conformers as without it (checked). Measured on a cyclic
+  peptide of 102 heavy atoms (199 atoms): ~1.4 s per conformer on one core; with a 60-atom one, 20 conformers
+  in 8.1 s, and a 5 s RDKit timeout returned 1 conformer.
 - The external-program limit `engines.timeout_s` (one xtb/CREST/MOPAC/Psi4 run) is separate and still applies.
 
 ## AIMNet2 and dxtb on GPUs
