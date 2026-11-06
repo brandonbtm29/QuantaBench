@@ -2,6 +2,11 @@
 
 ## 0.3.0.dev (unreleased)
 
+### macOS: one machine name (MacBook, 2026-11-05)
+- On a Mac the hostname follows the network (on Tailscale it became `Brandons-MBP.tail....ts.net`), so the MacBook
+  appeared in the registry as both `brandons-macbook-pro` and `brandons-mbp`. Machine names on macOS now come from
+  the Bonjour name in System Settings (`scutil --get LocalHostName`).
+
 ### Spartan import: no more hangs in bond perception (full re-import, 2026-11-05)
 - The re-import of all 1,067 documents stalled on one molecule: a tetrasodium dye whose four Na+ Spartan drew at one
   point, where RDKit's bond-order search never finishes (and its Hueckel mode crashes). Overlapping atoms (< 0.5 Å)

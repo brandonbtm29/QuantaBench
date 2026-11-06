@@ -31,6 +31,7 @@ and one larger molecule (``BENCH_SETS``; the set is recorded in ``benchmarks[key
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import platform
@@ -167,8 +168,23 @@ def machine_name() -> str:
     from .. import resources
     from .plan import norm_name
 
-    name = safe_machine_name(socket.gethostname().split(".")[0])
+    host = (_macos_local_hostname() if sys.platform == "darwin" else "") or socket.gethostname()
+    name = safe_machine_name(host.split(".")[0])
     return f"{name}-wsl" if resources.is_wsl() else name
+
+
+@functools.lru_cache(maxsize=1)
+def _macos_local_hostname() -> str:
+    """macOS: the Bonjour name set in System Settings > General > Sharing ("Brandons-MacBook-Pro"), "" if unknown.
+    ``socket.gethostname()`` on a Mac follows the network (reverse DNS: on Tailscale it became
+    "Brandons-MBP.tail....ts.net"), so one Mac showed up under two names in the registry."""
+    import subprocess
+
+    try:
+        out = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 MAX_MACHINE_NAME = 48     # room for "-wsl" and run-folder suffixes within the 60-character label limit

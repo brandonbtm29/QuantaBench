@@ -310,3 +310,20 @@ def test_machines_cli_passes_bench_set_and_solvent(monkeypatch):
     monkeypatch.setattr(profile, "_parse_methods", lambda text, engines: ["tblite-gfn2"])
     assert cli.main(["machines", "--bench", "tblite-gfn2", "--bench-set", "mixed", "--solvent", "water"]) == 130
     assert seen == {"solvent": "water", "bench_set": "mixed", "methods": ["tblite-gfn2"]}
+
+
+def test_machine_name_on_macos_is_the_bonjour_name(monkeypatch):
+    """On a Mac socket.gethostname() follows the network (on Tailscale: "Brandons-MBP.tail...ts.net"), which put
+    one Mac in the registry under two names; the LocalHostName from System Settings is stable."""
+    import socket
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(socket, "gethostname", lambda: "Brandons-MBP.tail70150b.ts.net")
+    monkeypatch.setattr(profile, "_macos_local_hostname", lambda: "Brandons-MacBook-Pro")
+    assert profile.machine_name() == "brandons-macbook-pro"
+    monkeypatch.setattr(profile, "_macos_local_hostname", lambda: "")          # scutil missing: the hostname
+    assert profile.machine_name() == "brandons-mbp"
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(profile, "_macos_local_hostname", lambda: "never-used")
+    assert profile.machine_name() == "brandons-mbp"
