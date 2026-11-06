@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import csv
-import json
 import logging
 import re
 import unicodedata
-import urllib.parse
-import urllib.request
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
@@ -105,22 +102,16 @@ def from_smiles(smiles: str, id: str | None = None, name: str = "") -> MoleculeI
 
 
 def lookup_name(name: str, timeout: float = 15.0) -> MoleculeInput:
-    """Resolve a chemical name, CAS number or DTXSID-free identifier through PubChem."""
-    quoted = urllib.parse.quote(name.strip())
-    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{quoted}/property/SMILES,IsomericSMILES,Title/JSON"
-    req = urllib.request.Request(url, headers={"User-Agent": "QuantaBench"})
+    """Resolve a chemical name, CAS number or DTXSID-free identifier through PubChem (``chem.pubchem``: the shared,
+    rate-limited and cached client)."""
+    from . import pubchem
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.load(resp)
-    except Exception as exc:
+        hit = pubchem.lookup(name, timeout=timeout)
+    except pubchem.PubChemError as exc:
         raise ValueError(f"PubChem lookup failed for {name!r}: {exc}") from exc
-    props = (data.get("PropertyTable", {}).get("Properties") or [{}])[0]
-    smiles = props.get("SMILES") or props.get("IsomericSMILES") or ""
-    if not smiles:
-        raise ValueError(f"PubChem returned no structure for {name!r}")
-    title = props.get("Title") or name
-    return MoleculeInput(id=safe_id(name), smiles=smiles, name=title, source="pubchem",
-                         meta={"pubchem_cid": props.get("CID")})
+    return MoleculeInput(id=safe_id(name), smiles=hit["smiles"], name=hit["title"], source="pubchem",
+                         meta={"pubchem_cid": hit["cid"]})
 
 
 def parse_text(text: str, skip_errors: bool = False, log: Callable[[str], None] | None = None,

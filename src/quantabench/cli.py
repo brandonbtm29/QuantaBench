@@ -979,6 +979,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_phases import register as register_phases
 
     register_phases(sub, b)     # build --phases, pair (quantabench.cli_phases)
+    from .cli_pubchem import register as register_pubchem
+
+    register_pubchem(sub)       # pubchem enrich, pubchem lookup (quantabench.cli_pubchem)
 
     se = sub.add_parser("settings", help="show settings, or move them (e.g. into a synced folder)")
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")
