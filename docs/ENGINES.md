@@ -539,6 +539,8 @@ quantabench-cli pubchem lookup 335-67-1 --experimental                          
   - `match`;
   - `stereo_differs`;
   - `charge_or_protonation_differs` (same first block, or a salt and its parent);
+  - `component_of_mixture` (PubChem's record has several components and QuantaBench's structure is one; the
+    note names the others and says when QuantaBench kept a smaller component than the largest);
   - `different_structure`;
   - `cas_not_in_pubchem`;
   - `ambiguous_cas`;

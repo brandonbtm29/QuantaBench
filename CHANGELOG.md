@@ -2,6 +2,32 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Dipoles from the validation run (300 molecules, gas and water, 2026-11-05)
+- **Spartan ion dipoles are now about the centre of mass.** Spartan writes an ion's `DIPOLE_VEC` about the
+  origin of the document's coordinates (its GUI hides the value, since it depends on where the molecule sits).
+  The import now moves it to the centre of mass, QuantaBench's convention for ions, and keeps Spartan's own value
+  in `spartan_dipole_origin_debye`. On the C3A B3LYP/C-PCM anions, 30 % moved by more than 1 D and some by up
+  to 10.5 D. `validate` states the convention and warns when a wide table was imported before this change.
+- **tblite conformers carry the real GFN2 dipole.** Each refined conformer used to store a Mulliken
+  point-charge dipole; it now stores tblite's electronic dipole, moved to the centre of mass. The calculator
+  already computes it, so this costs nothing. `dipole_debye_best` now equals the properties step's value, and
+  `dipole_debye_boltz` averages real dipoles.
+- What the validation showed for water (58 molecules, all ions):
+  - At Spartan's own geometries, GFN2/ALPB reproduces B3LYP/C-PCM dipoles to within 0.41 D for anions
+    (r 0.997) and 1.9 D for cations.
+  - The remaining 4.2 D gap between QuantaBench and Spartan comes from the conformer each program picks.
+    An ion's dipole about its centre of mass grows with the distance between the charge and the centre of mass.
+- **Windows: xtb dipoles and gaps were silently charge-only.** xtb 6.7.1 writes its "program call" with raw
+  backslashes, so `xtbout.json` was not valid JSON on Windows. Water came out at 1.6 D instead of 2.29 D. The
+  file is now read anyway.
+- **PubChem: `component_of_mixture`.** A CAS RN whose PubChem record has several components (a mixture, or a
+  salt with an organic counter-ion) no longer counts as `different_structure` when QuantaBench's structure is
+  one of the components. The note names the other components and flags when QuantaBench kept a smaller one than
+  the largest. The 50-molecule trial found one such case: a dipropylammonium salt of HFPO-DA kept as the amine.
+  The empty-cache line of `pubchem enrich` no longer says "cache: none".
+- **Windows: short per-molecule time limits now trip.** They are timed with `perf_counter`, because
+  `time.monotonic` ticks only every ~16 ms on Python 3.12.
+
 ### PubChem: identifiers, a structure check by CAS RN, and experimental values (surface tension groundwork, 2026-11-05)
 - **`quantabench-cli pubchem enrich LIST --out enriched.csv`** looks every molecule of a CSV/Excel table, SD
   file or run folder up in PubChem. It finds the CID by CAS RN (cross-checked with the CIDs' registry

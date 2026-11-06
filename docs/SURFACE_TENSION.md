@@ -138,7 +138,8 @@ compound's (a salt).
 1. Run QuantaBench in both phases (`build --phases gas,water`). `paired.csv` then has gas_/water_ descriptors
    and dG_solv.
 2. `pubchem enrich RUN --validate --experimental --records experimental.csv`. Drop molecules whose
-   `pubchem_match` is `different_structure` or `ambiguous_cas` unless resolved by hand.
+   `pubchem_match` is `different_structure` or `ambiguous_cas` unless resolved by hand, and check
+   `component_of_mixture` rows: a measured value belongs to the mixture or salt, not to the component.
 3. Target table for model (1): `condition_class == pure_liquid` records within 20-30 °C, or corrected to 25 °C
    with the compound's own dσ/dT where several temperatures exist (else −0.1 mN/m/K). Add Jasper, ThermoML and
    curated literature values with the same provenance columns. Per compound, take the median of independent

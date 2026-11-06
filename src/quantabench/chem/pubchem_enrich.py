@@ -20,7 +20,10 @@ Structure validation (``--validate``) compares QuantaBench's structure for a mol
 for the molecule's CAS RN, by standard InChIKey (``chem.validate``): ``match`` (identical), ``stereo_differs``
 (same connectivity and protonation, other stereo or isotopes), ``charge_or_protonation_differs`` (same first
 block, or the same after removing counter-ions and neutralizing: a salt and its parent acid),
-``different_structure``, ``cas_not_in_pubchem``, ``ambiguous_cas`` (several CIDs carry the CAS RN). Rows without
+``component_of_mixture`` (PubChem's record for the CAS RN has several components and QuantaBench's structure is
+one of them: a mixture or a salt with an organic counter-ion; the note names the others and says when QuantaBench
+kept a smaller component than the largest), ``different_structure``, ``cas_not_in_pubchem``, ``ambiguous_cas``
+(several CIDs carry the CAS RN). Rows without
 a CAS RN or without a structure get ``no_cas`` or ``no_structure``. QuantaBench's structure is the input as drawn
 (``input_inchikey``, or the SMILES / SD record), then the computed species (``inchikey``: desalted, protonated);
 the best agreement counts and ``pubchem_match_note`` says which key matched.
@@ -45,8 +48,8 @@ SMILES_COLUMNS = ("input_smiles", "smiles", "qsar_ready_smiles", "ms_ready_smile
                   "isomeric_smiles")
 CID_COLUMNS = ("cid", "pubchem_cid")
 DTXSID_COLUMNS = ("dtxsid",)
-OUTCOMES = ("match", "stereo_differs", "charge_or_protonation_differs", "different_structure", "cas_not_in_pubchem",
-            "ambiguous_cas", "no_cas", "no_structure", "error")
+OUTCOMES = ("match", "stereo_differs", "charge_or_protonation_differs", "component_of_mixture", "different_structure",
+            "cas_not_in_pubchem", "ambiguous_cas", "no_cas", "no_structure", "error")
 
 #: pubchem_* columns of the enriched table (after the input's own columns)
 PUBCHEM_COLUMNS = (
@@ -225,7 +228,8 @@ def qb_keys(q: Query) -> list[tuple[str, str]]:
     return out
 
 
-_RANK = {"match": 0, "stereo_differs": 1, "charge_or_protonation_differs": 2, "different_structure": 3}
+_RANK = {"match": 0, "stereo_differs": 1, "charge_or_protonation_differs": 2, "component_of_mixture": 3,
+         "different_structure": 4}
 
 
 def compare_inchikeys(qb: str, ref: str) -> str:
@@ -238,10 +242,32 @@ def compare_inchikeys(qb: str, ref: str) -> str:
     return "different_structure"
 
 
-def compare_structures(keys: list[tuple[str, str]], pubchem_inchikey: str) -> tuple[str, str]:
+def _components(smiles: str) -> list[tuple[str, int, str]]:
+    """(InChIKey, heavy atoms, SMILES) of each component of a multi-component SMILES; [] for one component."""
+    if "." not in (smiles or ""):
+        return []
+    from rdkit import Chem, rdBase
+
+    _quiet = rdBase.BlockLogs()
+    out = []
+    try:
+        for frag in dict.fromkeys(smiles.split(".")):
+            m = Chem.MolFromSmiles(frag)
+            if m is not None:
+                out.append((Chem.MolToInchiKey(m) or "", m.GetNumHeavyAtoms(), frag))
+    except Exception:  # noqa: BLE001 - no components is an answer here
+        return []
+    finally:
+        del _quiet
+    return out
+
+
+def compare_structures(keys: list[tuple[str, str]], pubchem_inchikey: str,
+                       pubchem_smiles: str = "") -> tuple[str, str]:
     """(outcome, note) of QuantaBench's keys against PubChem's InChIKey: the best agreement over the keys. A match of
     the parent only (a salt drawn, PubChem's CAS record the parent acid, or the reverse) is reported as
-    ``charge_or_protonation_differs``."""
+    ``charge_or_protonation_differs``. With ``pubchem_smiles`` of a multi-component record, QuantaBench's structure
+    equal to one component (same first block) is ``component_of_mixture``."""
     if not keys:
         return "no_structure", "no QuantaBench structure key"
     if not pubchem_inchikey:
@@ -254,6 +280,16 @@ def compare_structures(keys: list[tuple[str, str]], pubchem_inchikey: str) -> tu
         if _RANK[o] < _RANK[best]:
             best, best_label = o, label
     if best == "different_structure":
+        comps = _components(pubchem_smiles)
+        hit = next(((label, c) for label, key in keys for c in comps
+                    if len(key) == 27 and len(c[0]) == 27 and key[:14] == c[0][:14]), None)
+        if hit is not None:
+            label, (_ik, heavy, smi) = hit
+            others = [c[2] for c in comps if c[0][:14] != hit[1][0][:14]]
+            note = f"QuantaBench has {smi} ({label}); PubChem's record also has {'.'.join(others)}"
+            if heavy < max(c[1] for c in comps):
+                note += "; QuantaBench kept a smaller component than the largest"
+            return "component_of_mixture", note
         return best, f"PubChem {pubchem_inchikey} vs QuantaBench {keys[0][1]}"
     note = f"on the {best_label} structure" if best_label != "as drawn" else ""
     if best != "match":
@@ -429,7 +465,7 @@ def enrich(queries: list[Query], client: pc.PubChemClient, experimental: bool = 
                 mnote = f"CIDs {';'.join(map(str, r.cids))}" + (f"; QuantaBench's structure is CID {hits[0]}"
                                                                  if hits else "")
             else:
-                outcome, mnote = compare_structures(keys, p.get("InChIKey", ""))
+                outcome, mnote = compare_structures(keys, p.get("InChIKey", ""), p.get("SMILES", ""))
             out["pubchem_match"], out["pubchem_match_note"] = outcome, mnote
             counts["match"][outcome] += 1
         if experimental:

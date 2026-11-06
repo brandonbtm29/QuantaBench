@@ -17,7 +17,8 @@ ENRICH_DESCRIPTION = (
     "Look every molecule of a list up in PubChem and write one row per molecule with pubchem_* columns: CID(s), "
     "title, CAS RNs (synonyms + registry numbers, check digit verified), formula, weights, SMILES, InChI(Key), "
     "XLogP, TPSA, complexity, H-bond counts, charge. --validate compares QuantaBench's structure with PubChem's "
-    "for the molecule's CAS RN (match, stereo_differs, charge_or_protonation_differs, different_structure, "
+    "for the molecule's CAS RN (match, stereo_differs, charge_or_protonation_differs, component_of_mixture, "
+    "different_structure, "
     "cas_not_in_pubchem, ambiguous_cas). --experimental adds PubChem's experimental values (PUG View: surface "
     "tension, density, boiling and melting points, vapor pressure, viscosity, solubility, logP, pKa, ...) as a "
     "summary per molecule and, with --records, every value in long form with its source, reference, temperature "
@@ -91,7 +92,7 @@ def enrich_command(args) -> int:
         return 2
     n_cas = sum(1 for q in queries if q.cas)
     print(f"{len(queries)} molecule(s), {n_cas} with a CAS RN; cache: "
-          f"{client.cache.path if client.cache else 'none'}{' (offline)' if args.offline else ''}")
+          f"{client.cache.path if client.cache is not None else 'none'}{' (offline)' if args.offline else ''}")
     if not args.offline:
         est = pe.estimate_requests(len(queries), args.experimental)
         print(f"at most {est} request(s) with an empty cache: about {est / client.limiter.rate / 60:.0f} min at "

@@ -435,6 +435,29 @@ def test_compare_inchikeys():
     assert out == "match" and "computed species" in note
 
 
+
+def test_component_of_a_mixture_record():
+    """A CAS RN whose PubChem record has several components (a mixture, a salt with an organic counter-ion):
+    QuantaBench's structure equal to one of them is component_of_mixture, and keeping a smaller one is said."""
+    from rdkit import Chem
+
+    def ik(smi):
+        return Chem.MolToInchiKey(Chem.MolFromSmiles(smi))
+
+    salt = "CCCNCCC.C(=O)(C(C(F)(F)F)(OC(C(C(F)(F)F)(F)F)(F)F)F)O"           # 165951-17-7 in PubChem
+    rec = ik(salt)
+    out, note = pe.compare_structures([("as drawn", ik("CCCNCCC"))], rec, salt)
+    assert out == "component_of_mixture" and "smaller component" in note and "CCCNCCC" in note
+    acid = "OC(=O)C(F)(OC(F)(F)C(F)(F)C(F)(F)F)C(F)(F)F"
+    out, note = pe.compare_structures([("as drawn", ik(acid))], rec, salt)
+    assert out == "component_of_mixture" and "smaller" not in note
+    mix = "COC(C(C(F)(F)F)(F)F)(F)F.C(=C/Cl)\\Cl"                          # 218462-19-2: ether + DCE
+    out, _ = pe.compare_structures([("as drawn", ik("COC(F)(F)C(F)(F)C(F)(F)F"))], ik(mix), mix)
+    assert out == "component_of_mixture"
+    assert pe.compare_structures([("as drawn", ik("CCO"))], rec, salt)[0] == "different_structure"
+    assert pe.compare_structures([("as drawn", ik("CCO"))], ik("CCCO"), "CCCO")[0] == "different_structure"
+    assert pe.OUTCOMES.index("component_of_mixture") < pe.OUTCOMES.index("different_structure")
+
 def test_structure_validation_outcomes(tmp_path):
     pfoa_anion = PFOA.replace("OC(=O)", "[O-]C(=O)")
     queries = [
