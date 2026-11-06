@@ -36,6 +36,8 @@
   dications); 1,3-diamines keep two.
 - **`--id-col CAS_RN` on SD files**: a record without the property takes its title as the id (it took DTXSID/ID
   first), with a note in the molecule's notes.
+- Version 0.3.0.dev2. A solvent run (other than MMFF) started with an earlier version is not resumed silently: its
+  gas-phase `xtb_*` and tblite polarizability columns would mix with solvated ones (`--force` continues anyway).
 
 ### Apple GPU: AIMNet2 on MPS (first run on the MacBook, 2026-11-05)
 - AIMNet2's Warp-free path failed on the Apple GPU with "Undefined type Double": `t.to("cpu", torch.float64)` casts on

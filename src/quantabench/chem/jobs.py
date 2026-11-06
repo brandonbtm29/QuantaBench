@@ -70,6 +70,9 @@ SCIENCE_FIELDS = (
 #: an aimnet2 (or method "auto") run started before it cannot be mixed with results computed now.
 AIMNET_NBLIST_FIX_VERSION = "0.3.0.dev1"
 AIMNET_METHODS = ("aimnet2", "auto")
+#: Versions before this one computed the xTB properties (xtb_*) of a solvent run with dxtb in the gas phase, and
+#: tblite's polarizability in the gas phase: a solvent run started before it is not resumed silently.
+SOLVATED_PROPERTIES_VERSION = "0.3.0.dev2"
 
 # (i, n): 0-based chunk i of n, by ``chunk_index`` (modulo). (i, n, weights): weighted chunk, by
 # ``dist.plan.weighted_index(id, weights) == i`` with one weight per chunk (``--chunk-weights``).
@@ -123,13 +126,26 @@ def version_key(version: str) -> tuple:
 
 def version_differences(stored_version: str, stored_config: dict) -> tuple[dict[str, tuple], list[str]]:
     """Versions whose results for this run's method differ from today's: ({"version": (old, new)}, reasons)."""
+    from . import solvents
+
     method = stored_config.get("method", BuildConfig().method)
+    reasons = []
     if method in AIMNET_METHODS and version_key(stored_version) < version_key(AIMNET_NBLIST_FIX_VERSION):
-        return ({"version": (stored_version, __version__)},
-                [f"It was started with QuantaBench {stored_version or '?'}, before {AIMNET_NBLIST_FIX_VERSION} fixed "
-                 "aimnet's neighbor lists: AIMNet2 energies of molecules computed after a smaller one in the same "
-                 f"process were wrong by up to ~0.2 eV, so method {method!r} results would mix old and corrected "
-                 "numbers."])
+        reasons.append(f"It was started with QuantaBench {stored_version or '?'}, before {AIMNET_NBLIST_FIX_VERSION} "
+                       "fixed aimnet's neighbor lists: AIMNet2 energies of molecules computed after a smaller one in "
+                       f"the same process were wrong by up to ~0.2 eV, so method {method!r} results would mix old and "
+                       "corrected numbers.")
+    try:
+        solvent = solvents.canonical(stored_config.get("solvent") or "")
+    except ValueError:
+        solvent = ""
+    if solvent and method != "mmff" and version_key(stored_version) < version_key(SOLVATED_PROPERTIES_VERSION):
+        reasons.append(f"It was started with QuantaBench {stored_version or '?'}, before {SOLVATED_PROPERTIES_VERSION} "
+                       f"computed the properties in the solvent: its {solvent} results have gas-phase xtb_* charges, "
+                       "dipoles and polarizabilities (and a gas-phase tblite polarizability), which would mix with "
+                       "solvated ones.")
+    if reasons:
+        return {"version": (stored_version, __version__)}, reasons
     return {}, []
 
 

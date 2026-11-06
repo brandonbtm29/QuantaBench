@@ -343,6 +343,29 @@ def test_aimnet2_runs_from_before_the_neighbor_list_fix_are_not_resumed_silently
     assert jobs.version_key("0.3.0.dev0") < jobs.version_key("0.3.0.dev1") < jobs.version_key("0.3.0")
 
 
+def test_solvent_runs_from_before_solvated_properties_are_not_resumed_silently(tmp_path, monkeypatch):
+    """Before SOLVATED_PROPERTIES_VERSION a water run had gas-phase xtb_* properties: resuming it is refused unless
+    forced; gas-phase runs and MMFF in water resume."""
+    monkeypatch.setattr(pipeline, "run_molecule",
+                        lambda inp, *a, **k: pipeline.MoleculeResult(input=inp, status="ok", method="tblite-gfn2"))
+
+    def started_with(version, **kw):
+        run_dir = tmp_path / f"{version}-{'-'.join(f'{k}{v}' for k, v in kw.items())}"
+        jobs.run_resumable(inputs(["ethanol"]), cfg(tmp_path, write_files=False, **kw), run_dir)
+        with sqlite3.connect(run_dir / jobs.DB_NAME) as con:
+            con.execute("UPDATE run SET version = ?", (version,))
+        return run_dir
+
+    old = started_with("0.3.0.dev1", method="tblite-gfn2", solvent="water")
+    with pytest.raises(jobs.ConfigMismatchError) as exc:
+        jobs.run_resumable(None, cfg(tmp_path, method="tblite-gfn2", solvent="water", write_files=False), old)
+    assert "gas-phase xtb_*" in str(exc.value)
+    jobs.run_resumable(None, cfg(tmp_path, method="tblite-gfn2", solvent="water", write_files=False), old, force=True)
+    for kw in ({"method": "tblite-gfn2", "solvent": ""}, {"method": "mmff", "solvent": "water"}):
+        jobs.run_resumable(None, cfg(tmp_path, write_files=False, **kw), started_with("0.3.0.dev1", **kw))
+    assert jobs.version_key(jobs.SOLVATED_PROPERTIES_VERSION) <= jobs.version_key(jobs.__version__)
+
+
 def test_light_results_for_big_batches(tmp_path):
     full = []
     cfg = pipeline.BuildConfig(method="mmff", max_conformers=3, refine_top=1, xtb_properties=False,
