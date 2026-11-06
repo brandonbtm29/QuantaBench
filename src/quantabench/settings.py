@@ -14,6 +14,7 @@ Paths inside settings may use ``~``; they are stored portably so the same file w
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from dataclasses import asdict, dataclass, field, fields
@@ -334,21 +335,62 @@ def set_settings_dir(new_dir: str | Path | None, pointer_place: Path | None = No
     return new
 
 
+#: (section, field) of the settings that hold one entry per machine (machine name -> value). The file is shared
+#: by every machine, so ``save`` writes only the entries this process changed and keeps the others' from disk.
+PER_MACHINE_TABLES = (("engines", "machine_paths"), ("dist", "machine_lanes"))
+_AS_LOADED = "_per_machine_as_loaded"     # attribute (not a dataclass field: never written) set by load/save
+
+
+def _machine_tables(s: Settings) -> dict[tuple[str, str], dict]:
+    return {(sec, name): {machine_key(k): copy.deepcopy(v) for k, v in getattr(getattr(s, sec), name).items()}
+            for sec, name in PER_MACHINE_TABLES}
+
+
+def _merge_machine_table(disk: dict, before: dict, mine: dict) -> dict:
+    """The table to write: the file's entries, with the machines whose entry this process changed (``before`` is
+    the table as loaded, ``mine`` as it is now; added, changed or removed) taken from ``mine``."""
+    out = {machine_key(k): v for k, v in disk.items()}
+    mine = {machine_key(k): v for k, v in mine.items()}
+    for key in set(before) | set(mine):
+        if before.get(key) != mine.get(key):
+            if key in mine:
+                out[key] = mine[key]
+            else:
+                out.pop(key, None)
+    return out
+
+
 def load() -> Settings:
     path = settings_dir() / SETTINGS_FILE
     try:
-        return Settings.from_dict(json.loads(path.read_text(encoding="utf-8")))
-    except FileNotFoundError:
-        return Settings()
-    except (OSError, ValueError):
-        return Settings()
+        s = Settings.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):   # FileNotFoundError included: defaults
+        s = Settings()
+    setattr(s, _AS_LOADED, _machine_tables(s))
+    return s
 
 
 def save(settings: Settings) -> Path:
+    """Write ``settings``. The per-machine tables (``PER_MACHINE_TABLES``) of settings that came from ``load``
+    are merged with the file as it is now: an entry this process did not change is taken from the file, so a
+    GUI that stayed open for hours does not write back its old copy of another machine's CREST path or lanes.
+    Settings made in code (no ``load``) are written as they are."""
     folder = settings_dir()
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / SETTINGS_FILE
+    before = getattr(settings, _AS_LOADED, None)
+    if before is not None and path.is_file():
+        try:
+            disk = _machine_tables(Settings.from_dict(json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, ValueError):
+            disk = None
+        if disk is not None:
+            for sec, name in PER_MACHINE_TABLES:
+                mine = getattr(getattr(settings, sec), name)
+                setattr(getattr(settings, sec), name,
+                        _merge_machine_table(disk[(sec, name)], before.get((sec, name), {}), mine))
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(settings.to_dict(), indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
+    setattr(settings, _AS_LOADED, _machine_tables(settings))
     return path

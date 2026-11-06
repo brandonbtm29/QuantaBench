@@ -23,7 +23,11 @@
   - `doctor` and the build log name a CREST linked to Accelerate on macOS.
 - **Engine paths per machine** (`engines.machine_paths`, like `dist.machine_lanes`): the shared settings file can
   hold NOVA's `wsl:` CREST and the Mac's own. Settings > Engines saves for this machine only;
-  `quantabench-cli settings --engine-path crest=PATH [--machine NAME]` sets it from a script.
+  `quantabench-cli settings --engine-path crest=PATH [--machine NAME]` sets it from a script. Older versions drop
+  `machine_paths` when they save the settings: update every machine sharing the file first.
+- **Saving keeps the other machines' entries** (`settings.save`): the per-machine tables (`engines.machine_paths`,
+  `dist.machine_lanes`) are merged with the file as it is now, so a GUI that stayed open for hours (it saves at
+  every Run) no longer writes back its old copy of another machine's CREST path or lanes.
 - **Proposed install of the Mac build** (not released): `scripts/fork-packages.json` > `macos` > `programs` >
   `crest` (url, sha256, exe). `install_macos.sh --with-engines` downloads it, checks the sha256, unpacks it into
   `~/Library/Application Support/QuantaBench/programs` and sets the Mac's CREST path. The url stays empty

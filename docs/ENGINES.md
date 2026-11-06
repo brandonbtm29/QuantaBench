@@ -230,7 +230,10 @@ is); `--machine NAME` sets another machine's, and `crest=` (empty) goes back to 
 there. `engines.paths` stays the default of every machine (a path that does not exist on a machine, or a
 `wsl:` path off Windows, is skipped there). `doctor` names the source: "settings (this machine)" or
 "settings". A machine's entry wins over the environment variable, as `engines.paths` always did; to try
-another binary for one run, pass `QUANTABENCH_CREST` on a machine without an entry.
+another binary for one run, pass `QUANTABENCH_CREST` on a machine without an entry. Saving merges the
+per-machine tables with the file as it is then, so a GUI left open on NOVA does not undo the Mac's entry. A QuantaBench from
+before this change (0.3.0.dev3 and older) does not know `engines.machine_paths` and drops it when it saves the settings (its GUI saves them at
+every Run and on closing): update every machine that shares the file before setting per-machine paths.
 
 Ready-made environments are in [`envs/`](../envs): `tools.yml` (xtb, CREST, MOPAC; Linux/WSL),
 `tools-windows.yml` (xtb, MOPAC; Windows) and `psi4.yml` (Psi4 with the pins below). Keep Psi4 in its

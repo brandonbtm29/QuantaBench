@@ -107,3 +107,39 @@ def test_bad_machine_paths_are_dropped(isolated_settings):
     s = sm.load()
     assert s.engines.machine_paths == {"nova": {"crest": "wsl:crest"}}
     assert s.engines.paths == {"crest": "/opt/crest"}
+
+
+def test_save_keeps_the_other_machines_entries(isolated_settings):
+    """The settings file is shared: a GUI that loaded it hours ago (and saves at every Run) must not write back
+    its old copy of another machine's CREST path or lanes, nor bring back an entry another machine removed."""
+    s0 = sm.load()
+    s0.set_lanes_for("auto", "btm-nova")
+    s0.set_lanes_for("4", "old-laptop")
+    sm.save(s0)
+    nova = sm.load()                                    # NOVA's GUI, open all day
+    mac = sm.load()                                     # meanwhile on the Mac:
+    mac.set_engine_path_for("crest", "~/qb/crest-macos-arm64/bin/crest", "brandons-macbook-pro")
+    mac.set_lanes_for("5", "brandons-macbook-pro")
+    del mac.dist.machine_lanes["old-laptop"]
+    sm.save(mac)
+    nova.set_lanes_for("12", "btm-nova")                # NOVA changes its own lanes and saves its stale copy
+    nova.resources.threads = 20
+    sm.save(nova)
+    again = sm.load()
+    assert again.engines.machine_paths == {"brandons-macbook-pro": {"crest": "~/qb/crest-macos-arm64/bin/crest"}}
+    assert again.dist.machine_lanes == {"btm-nova": "12", "brandons-macbook-pro": "5"}
+    assert again.resources.threads == 20                # everything else: the saving process's values
+    assert nova.engines.machine_paths == again.engines.machine_paths   # and its copy is current again
+    nova.set_engine_path_for("crest", "", "brandons-macbook-pro")      # removing another machine's entry works
+    sm.save(nova)
+    assert "brandons-macbook-pro" not in sm.load().engines.machine_paths
+
+
+def test_settings_made_in_code_are_written_as_they_are(isolated_settings):
+    s = sm.load()
+    s.set_lanes_for("auto", "btm-nova")
+    sm.save(s)
+    fresh = sm.Settings()                               # not from load(): no merge
+    fresh.set_lanes_for("2", "brandons-macbook-pro")
+    sm.save(fresh)
+    assert sm.load().dist.machine_lanes == {"brandons-macbook-pro": "2"}

@@ -753,6 +753,11 @@ the code, but three things never arrived through it.
   LAMMPS on NOVA), handed over through run-folder artifacts.
 - 2026-11-06: CREST on the Mac needs the fork build (FORK-5); conda-forge's fails from 19 atoms. The machines'
   CREST paths can differ now (`engines.machine_paths`), which routing will rely on.
+- Shared-settings race, fixed for the per-machine tables (2026-11-06): the GUI saves the settings it loaded at
+  start on every Run and on closing, so a GUI open on one machine wrote back its old copy of the other machines'
+  `engines.machine_paths` and `dist.machine_lanes` entries. `settings.save` now re-reads the file and writes only
+  the entries this process changed. Still open: every other setting is last-writer-wins, and a QuantaBench
+  without `machine_paths` (0.3.0.dev3 and older) drops that table when it saves.
 
 ### FORK-1: dxtb with tad-libcint 0.4 (GFN2 on Windows and macOS) · done 2026-11-05 (upstream PR pending Brandon's OK)
 - tad-libcint 0.4.0 (2026-10-20) has Windows and macOS-arm64 wheels but needs tad-mctc ≥ 0.11; dxtb 0.4
