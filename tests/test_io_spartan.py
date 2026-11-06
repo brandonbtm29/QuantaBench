@@ -478,6 +478,66 @@ def test_label_join_by_structure_ambiguous_unresolved(tmp_path, monkeypatch):
                                         "inchikey", "canonical_smiles"]
 
 
+EST_DFT = "SOPT DLXD2XV EST POSTENERGY CESTNMR=1"
+
+
+def _est_dft_mol(label: str, post: float, mu=(1.0, 2.0, 2.0), *, swap=None) -> dict:
+    """A conformer as a multi-step conformer search writes it out (label MoleculeN) after an Est. DFT single point:
+    a ωB97X-D/6-31G* SCF (SPENERGY, its dipole as QM_DIPOLE) and the neural-network energy (POSTENERGY)."""
+    props = ("PROP VALUE SPENERGY =  -500.1000000000 \r\nPROP STRING SPENERGYAT = \"WB97X-D/6-31G(d)\"\r\n"
+             f"PROP VALUE POSTENERGY =  {post:.6f} \r\nPROP STRING POSTENERGYAT = \"DLXD2XV\"\r\n"
+             "PROP VALUE:STATIC OPTENERGY =   0.0500000000 \r\n"
+             f"PROP VALUE QM_DIPOLE 3 BEGIN\r\n {mu[0]:.6f} {mu[1]:.6f} {mu[2]:.6f}\r\nEND\r\n")
+    return {"Input": _inp(label, EST_DFT, swap=swap), "PropertyArchive": props, "Calculations": _calculations(EST_DFT),
+            "JobLog": JOBLOG_WINDOWS}
+
+
+def test_conformer_documents_molecule_labels_and_est_dft_dipoles(tmp_path, monkeypatch):
+    """The documents a multi-step conformer search writes its conformers to label them MoleculeN (resolved by
+    structure); their Est. DFT single points give the ωB97X-D/6-31G* SCF dipole (QM_DIPOLE) and are ranked by
+    the neural-network energy (POSTENERGY), not by OPTENERGY."""
+    assert not io_spartan.has_own_label("Molecule41") and not io_spartan.has_own_label("Molecule41[2]")
+    assert io_spartan.has_own_label("Molecule") and io_spartan.has_own_label("335-67-1")
+    ref = _input_positions()
+    search = _props(np.stack([ref, _rotated(ref, 0.4)]), [0.0, 1.0],
+                    extra="PROP VALUE QM_DIPOLE 3 BEGIN\r\n 0.0 0.0 4.0\r\nEND\r\n")
+    docs = {"set.spartan": _doc([(INPUT, search), (_inp("TEST-2", "MS_CONFP2_BW MMFF", swap=17), None)]),
+            "set_Conf.TEST-1.spartan": _mac_doc([_est_dft_mol("Molecule1", -501.0, (0.0, 0.0, 2.0)),
+                                                  _est_dft_mol("Molecule5", -501.5)], gz=True),
+            "other_Conf.X.spartan": _mac_doc([_est_dft_mol("Molecule2", -100.0, swap=17)])}
+    monkeypatch.setattr(io_spartan, "open_container", lambda path: docs[Path(path).name])
+    s = io_spartan.write_table(list(docs), tmp_path / "long.csv", wide=tmp_path / "wide.csv")
+    assert not s.errors and s.label_sources == {"input": 2, "structure": 2, "unresolved": 1}
+    rows = {(Path(r["source_file"]).name, r["label"]): r for r in csv.DictReader((tmp_path / "long.csv").open())}
+    m1, m5 = rows[("set_Conf.TEST-1.spartan", "Molecule1")], rows[("set_Conf.TEST-1.spartan", "Molecule5")]
+    assert (m1["label_resolved"], m1["label_source"], m1["spartan_method"]) == ("TEST-1", "structure", "DLXD2XV")
+    assert float(m1["dipole_debye"]) == pytest.approx(2.0) and float(m5["dipole_debye"]) == pytest.approx(3.0)
+    assert m5["qm_dipole_level"] == "WB97X-D/6-31G(d)" and not m1.get("homo_ev")
+    assert not rows[("set.spartan", "TEST-1")].get("dipole_debye")   # a conformer search's QM_DIPOLE: not mapped
+    assert rows[("other_Conf.X.spartan", "Molecule2")]["label_source"] == "unresolved"
+    assert s.prefixes["dlxd2xv"] == "DLXD2XV SOPT"
+    wide = {r["label_resolved"]: r for r in csv.DictReader((tmp_path / "wide.csv").open(encoding="utf-8"))}
+    assert set(wide) == {"TEST-1", "TEST-2"}                           # no MoleculeN rows of their own
+    t1 = wide["TEST-1"]
+    assert (t1["dlxd2xv_n_rows"], t1["dlxd2xv_label"]) == ("2", "Molecule5")   # the lower POSTENERGY wins
+    assert float(t1["dlxd2xv_dipole_debye"]) == pytest.approx(3.0)
+    assert t1["dlxd2xv_qm_dipole_level"] == "WB97X-D/6-31G(d)"
+    from quantabench.chem import validate as val
+
+    table = val.read_spartan(tmp_path / "wide.csv")
+    lev = table.levels["dlxd2xv"]
+    assert lev.quantum and lev.phase == "gas" and "WB97X-D/6-31G(d) SCF" in lev.text
+    (row,) = [r for r in table.rows if r.label == "TEST-1"]
+    assert row.values["dlxd2xv"] == {"dipole": pytest.approx(3.0)}
+    assert not any(lev.quantum for p, lev in table.levels.items() if p.startswith("conf"))
+    # a QuantaBench gas-phase QM stage (qm_dipole_debye) pairs with it
+    qb = tmp_path / "qb.csv"
+    qb.write_text("id,smiles,formula,qm_dipole_debye\nTEST-1,CC(F)(F)F,C2H3F3,3.25\n", encoding="utf-8")
+    res = val.validate(val.read_quantabench([qb]), table, tmp_path / "out", plots=False)
+    (pair,) = [r for r in res.summary if r["group_type"] == "all" and r["pair"] == "gas_dipole_qm_vs_dlxd2xv"]
+    assert int(pair["n"]) == 1 and float(pair["mae"]) == pytest.approx(0.25)
+
+
 TFA_ANION = """ OPT PM6\r
 TFA\r
 {charge} 1\r

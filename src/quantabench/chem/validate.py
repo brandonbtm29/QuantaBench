@@ -435,12 +435,15 @@ def read_spartan(path: str | Path, log: Callable[[str], None] | None = None) -> 
         hset = set(header)
         levels: dict[str, Level] = {}
         first_level: dict[str, str] = {}
+        first_scf: dict[str, str] = {}
         rows: list[SpartanRow] = []
         computed = 0
         for k, raw in enumerate(reader):
             for p in prefixes:
                 if p not in first_level and raw.get(f"{p}_level"):
                     first_level[p] = raw[f"{p}_level"]
+                if p not in first_scf and raw.get(f"{p}_qm_dipole_level"):
+                    first_scf[p] = raw[f"{p}_qm_dipole_level"]
             charge = _int(raw.get("charge"))
             keys = {c: raw.get(c, "") for c in ("inchikey", "canonical_smiles", "structure_charge", "charge_check")}
             key_source = "table" if keys["inchikey"] or keys["canonical_smiles"] else ""
@@ -485,6 +488,10 @@ def read_spartan(path: str | Path, log: Callable[[str], None] | None = None) -> 
         text = first_level.get(p, "")
         phase, quantum = _level_of(text)
         quantum = quantum and any(f"{p}_{c}" in hset for c in ("homo_ev", "dipole_debye", "spartan_e_homo"))
+        if not quantum and first_scf.get(p) and f"{p}_dipole_debye" in hset:
+            # an Est. DFT level (DLXD2XV: a neural-network energy) whose dipole is its ωB97X-D/6-31G* SCF's
+            # (io_spartan.scf_dipole): a quantum level for the dipole, named after that SCF
+            quantum, text = True, f"{text} (dipole: {first_scf[p]} SCF)"
         levels[p] = Level(p, text, phase if quantum else "", quantum)
     if log:
         log(f"{path.name}: {len(rows)} rows, levels {', '.join(p for p, lev in levels.items() if lev.quantum)}"

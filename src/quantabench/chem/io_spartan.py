@@ -22,6 +22,7 @@ CONTRACT:
     structure_key(mol) -> str; stereo_key(rdkit_mol) -> str   # the join keys
     drawn_mol(mol) -> RDKit Mol | None; species(mol) -> {inchikey, canonical_smiles, structure_charge, charge_check}
     solvent_name("WASSER") -> "water"                         # Spartan solvent -> chem.solvents name
+    scf_dipole(mol) -> (debye, "WB97X-D/6-31G(d)") | None     # QM_DIPOLE of an Est. DFT job (no DIPOLE_MAG)
     molecule_row(mol) -> dict                                 # one table row (best conformer)
     conformer_rows(mol) -> list[dict]                         # one row per saved conformer
     to_mol(mol, conformer=None) -> RDKit Mol (Spartan's bonds; rdDetermineBonds as a fallback)
@@ -162,6 +163,10 @@ stays ``spartan_*``):
     DIPOLE_MAG (debye)                     dipole_debye        the method's dipole (PM6, B3LYP); ions: DIPOLE_VEC
                                                                moved to the centre of mass (ion_dipole_about_com),
                                                                Spartan's own in spartan_dipole_origin_debye
+    QM_DIPOLE (debye, vector), no          dipole_debye        |vector|: the SCF dipole of an Est. Density
+    DIPOLE_MAG; SPENERGYAT                 qm_dipole_level     Functional job (SOPT DLXD2XV: WB97X-D/6-31G(d));
+                                                               neutral molecules, not conformer searches
+                                                               (scf_dipole)
     ZEROPOINT (kcal/mol)                   zpe_kcal
     H_TOT (kcal/mol)                       h_corr_kcal         H - E, as chem.vibrations
     G_THERMO (kcal/mol)                    g_corr_kcal         G - E
@@ -196,11 +201,12 @@ by structure (``chem.validate``):
 Labels and the structure join
 -----------------------------
 Spartan keeps a molecule's label only in the document it was built in. A document of extracted conformers,
-or a new job document made from them, labels its molecules ``M0003``, ``M0001[2]``, ... (and the spreadsheet
+or a new job document made from them, labels its molecules ``M0003``, ``M0001[2]``, ... (the documents a
+multi-step conformer search writes its conformers to: ``Molecule1``, ``Molecule41``, ...; and the spreadsheet
 streams hold no labels either), so every row says where its label comes from:
 
-- ``label_source`` = ``input``: the Input label is the molecule's own (anything but ``M<digits>[<n>]``,
-  :data:`SPARTAN_DEFAULT_LABEL`); ``label_resolved`` = ``label``.
+- ``label_source`` = ``input``: the Input label is the molecule's own (anything but ``M<digits>[<n>]`` and
+  ``Molecule<digits>[<n>]``, :data:`SPARTAN_DEFAULT_LABEL`); ``label_resolved`` = ``label``.
 - otherwise the row is joined to its *base document*: the document among the inputs whose stem is the longest
   prefix of this one's followed by ``_`` (``C1B_P5_SemiEmp_PM6`` -> ``C1B_P5``; document names are the user's,
   so this is the only use made of them). ``structure_key`` (elements, connectivity from Spartan's bonds, total
@@ -218,7 +224,7 @@ structure columns, ``formula``, ``smiles``, ``charge``, ``multiplicity``, ``n_at
 theory in the run, the best row of that label at that level as ``<prefix>_<column>`` plus ``<prefix>_level``
 (the level in words), ``<prefix>_n_rows`` (rows of the label at that level, e.g. conformers) and
 ``<prefix>_n_failed``. Best = completed before failed, then the lowest energy (the conformer energy in a
-conformer search, else ``E_KCAL``, else ``OPTENERGY``). The prefix comes from the level, not from the
+conformer search, else ``E_KCAL``, else ``POSTENERGY`` (Est. Density Functional jobs), else ``OPTENERGY``). The prefix comes from the level, not from the
 document name (:func:`level_prefixes`): ``conf`` (conformer search), ``mm`` (molecular mechanics), the method
 for semi-empirical ones (``pm6``), ``hf``, ``dft``; when the run has two levels with the same prefix, each
 gets its level appended (``conf_dlff03`` and ``conf_mmff``, ``dft_b3lyp_6_311pgss_wasser``), so one column
@@ -923,9 +929,10 @@ def iter_molecules(source, source_file: str | None = None, errors: list[str] | N
 
 
 # ----------------------------------------------------------------------------------------- structure keys
-#: A label Spartan made up (``M0003``, ``M0018[1]``): the molecule's own label was lost (extracted conformers,
-#: a new job document), so it is resolved from the base document by structure.
-SPARTAN_DEFAULT_LABEL = re.compile(r"^M\d{3,}(\[\d+\])?$")
+#: A label Spartan made up (``M0003``, ``M0018[1]``; ``Molecule41`` in the documents a conformer search writes its
+#: conformers to): the molecule's own label was lost (extracted conformers, a new job document), so it is resolved
+#: from the base document by structure.
+SPARTAN_DEFAULT_LABEL = re.compile(r"^(M\d{3,}|Molecule\d+)(\[\d+\])?$")
 
 
 def has_own_label(label: str) -> bool:
@@ -1233,6 +1240,28 @@ def ion_dipole_about_com(mol: SpartanMolecule) -> float | None:
     return float(np.linalg.norm(mu))
 
 
+def scf_dipole(mol: SpartanMolecule) -> tuple[float, str] | None:
+    """(|μ| in debye, the SCF's level as Spartan names it) from ``QM_DIPOLE`` of a calculation that has no
+    ``DIPOLE_MAG`` of its own: Spartan's Est. Density Functional single points (``SOPT DLXD2XV``: a ωB97X-D/6-31G*
+    SCF, then a neural-network energy, ``SPENERGYAT`` = ``WB97X-D/6-31G(d)``) write the SCF's dipole vector there,
+    in debye and the Input frame (Psi4 ωB97X-D/6-31G* at the same geometry: the same vector to 1e-4 D).
+
+    None for conformer searches (their ``QM_DIPOLE`` is of the Input geometry, not of the reported conformer; the
+    documents of the saved conformers carry one per conformer), for ions (the origin of ``QM_DIPOLE`` is not known)
+    and without a 3-vector."""
+    if mol.level.is_conformer_search or mol.input.charge:
+        return None
+    prop = mol.properties.get("QM_DIPOLE")
+    if prop is None or not isinstance(prop.value, np.ndarray) or prop.value.size != 3:
+        return None
+    vec = np.asarray(prop.value, float).ravel()
+    if not np.all(np.isfinite(vec)):
+        return None
+    at = mol.properties.get("SPENERGYAT")
+    level = at.value.strip() if at is not None and isinstance(at.value, str) else ""
+    return float(np.linalg.norm(vec)), level or mol.level.describe()
+
+
 def molecule_row(mol: SpartanMolecule, conformer: int | None = None, rdkit_mol=None) -> dict:
     """One table row: key columns, QuantaBench columns, ``spartan_*`` scalars and the conformer's values."""
     row: dict = {"source_file": mol.source_file, "molecule_index": mol.molecule_index, "storage": mol.storage,
@@ -1272,6 +1301,10 @@ def molecule_row(mol: SpartanMolecule, conformer: int | None = None, rdkit_mol=N
         if com is not None:        # Spartan's value is about its frame's origin: keep it, report the COM one
             row["spartan_dipole_origin_debye"] = row["dipole_debye"]
             row["dipole_debye"] = com
+    if mapped and "dipole_debye" not in row:
+        scf = scf_dipole(mol)
+        if scf is not None:
+            row["dipole_debye"], row["qm_dipole_level"] = scf
     row.update(mol.conformer_values(conformer))
     if mol.warnings:
         row["spartan_notes"] = " | ".join(mol.warnings)
@@ -1434,10 +1467,11 @@ def _prefix_order(item: tuple[str, str]) -> tuple:
 
 def _rank(row: dict, kind: str) -> tuple:
     """Sort key of the rows of one label and level: completed before failed, then the lowest energy (the
-    conformer energy in a conformer search, else Spartan's E_KCAL, else OPTENERGY: all rows of one label and
-    level have the same ones), then the first."""
+    conformer energy in a conformer search, else Spartan's E_KCAL, else the post-SCF energy of an Est. Density
+    Functional job (POSTENERGY, what Spartan ranks and weights those conformers by; their OPTENERGY is not a total
+    energy), else OPTENERGY: all rows of one label and level have the same ones), then the first."""
     order = ("spartan_conf_energy_kcal", "spartan_e_kcal") if kind == "conf" else \
-        ("spartan_e_kcal", "spartan_optenergy", "spartan_conf_energy_kcal")
+        ("spartan_e_kcal", "spartan_postenergy", "spartan_optenergy", "spartan_conf_energy_kcal")
     e = math.inf
     for k in order:
         v = row.get(k)
