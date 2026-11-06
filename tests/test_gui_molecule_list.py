@@ -258,6 +258,8 @@ def test_one_3d_render_per_selection(tmp_path, template):
         calls = []
         real = w.viewer.plotter.render
         w.viewer.plotter.render = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+        _wait(app, lambda: False, 0.5)                           # the first selection's render, window exposes
+        calls.clear()
         _wait(app, lambda: False, 0.5)
         assert calls == []                                       # idle: nothing re-renders on a timer
         for i in (2, 5, 1, 6):

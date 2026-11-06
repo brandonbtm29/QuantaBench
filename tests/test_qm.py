@@ -491,6 +491,6 @@ print(sys.getfilesystemencoding(), open(files[0], "rb").read().decode("utf-8").s
     if probe.stdout.strip().lower().replace("-", "") in ("utf8",):
         pytest.skip("cannot get a non-UTF-8 locale here")
     out = subprocess.run([sys.executable, "-c", code, str(tmp_path / "out")], env=env, capture_output=True,
-                         text=True, timeout=300)
+                         encoding="utf-8", timeout=300)      # the child prints UTF-8 (PYTHONIOENCODING)
     assert out.returncode == 0, out.stderr[-2000:]
     assert "Β-Tocopherol test" in out.stdout
