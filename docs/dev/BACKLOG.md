@@ -551,8 +551,14 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   have `grid build` learn: record each machine's molecules/hour per protocol from finished grids, and
   prefer that over the benchmark in `--weights auto`. Work stealing (a machine that finishes early takes
   the other's pending molecules) would make this unnecessary.
-- Lane layouts: both machines ran 6 lanes x 2 threads. Timings for 6x2, 7x2, 10x1 and 14x1 on the Mac
-  are in `scratch/lanes_test` (2026-11-05). NOVA's 12x1 and 12x2 are still to do.
+- Lane layouts: both machines ran 6 lanes x 2 threads. Timed on 49 molecules (`scratch/lanes_test` on
+  each machine, 2026-11-05):
+  - Mac 6x2 181 s, 14x1 141 s.
+  - NOVA 6x2 427 s, 12x1 363 s, 24x1 331 s, 12x2 318 s.
+
+  `lanes auto` now gives tblite one lane per physical core with the threads shared out (c0427d9). On the same
+  49 molecules the Mac is 2.3x NOVA, so pass `--weights brandons-macbook-pro=2.3,local=1` until grids
+  learn their weights.
 
 ### PERF-2: tblite Windows wheel with OpenBLAS · ready
 - One GFN2/ALPB energy+gradient (`scratch/tblite_scf_bench.py`, 1 thread): MacBook 13.5 / 32.5 / 81 ms
