@@ -191,6 +191,28 @@ Depends on: none (research only; can run any night).
 - MOPAC COSMO: energies step as surface segments switch (CF3COO⁻ in water: finite-difference forces off by
   0.3 eV/Å at h = 1 mÅ); consider running MOPAC frequencies in the gas phase automatically.
 
+## VAL-1: Validation tooling against Spartan · in review 2026-11-05 (branch `feat/validate`; the 300-molecule run needs-Brandon)
+Done (docs/VALIDATION.md):
+- Spartan wide table: `inchikey`, `canonical_smiles` of the structure as Spartan drew it (formal charges from
+  its bond orders), `structure_charge` + `charge_check`, `spartan_solvent` as QuantaBench's name
+  (`spartan_solvent_raw` keeps `WASSER`), and one row per ambiguous structure (`label_resolved` empty,
+  `label_source` = ambiguous, `cas_candidates`).
+- `quantabench-cli sample`: reproducible validation set stratified by cohort x charge class (300, seed
+  20261105), DFT-water first within a stratum, spread over size bins, AIMNet2's elements, <= 60 heavy atoms.
+- `quantabench-cli validate`: joins by InChIKey / canonical SMILES / stereo-free InChIKey with a CAS
+  cross-check; gas vs PM6, water vs DFT-water, solvation shifts flagged as mixed levels; N, MAE, RMSE, MSE, r,
+  ρ, fit and outliers per pair, cohort and charge class; validation.csv, join.csv, summary.csv, report.md,
+  parity plots.
+Open (needs-Brandon):
+- Re-import the 1,067 documents (`import --wide`) so every row has its keys, the ambiguous structures their
+  rows and the charge check (the staged table predates them: 504 rows have no key from their `smiles`).
+- Spartan's charge does not fit the drawn structure for some ions (C3A sample: 12 of 47, cations calculated as
+  -1, phosphate dianions as -1); recalculate them or leave them out (the sampler does).
+- The default sample has 237 molecules with PM6 and 64 with DFT-water but only 1 with both: DFT-water exists
+  almost only for the charged cohorts, which have no PM6. Decide whether to add PM6 (or gas DFT) for those, or
+  sample `--require dft` separately for the water comparison.
+- Run the 300 in the gas phase and in ALPB water at GFN2-xTB (and AIMNet2), then `validate`.
+
 ## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · ready (after VAL-1 data)
 - The QM stage reproduces Spartan's level (Spartan used 6-31G*: run `wb97x-d/6-31g*` too). Compare
   dipoles, polarizabilities, 0.002 au volumes/areas and ESP extrema with Spartan's exports; recommend a
@@ -491,8 +513,9 @@ Still open:
   crashed (now pinned `<0.13`). Still to check by hand: HiDPI picking feel, 20k-atom slab frame rate.
 - **HW-4 · needs-Brandon:** LAMMPS `in.smd` with the GPU (OpenCL) build on Windows.
 - **DEC-1 · needs-Brandon:** approve `docs/SIMULATE_DESIGN.md` (after RES-1).
-- **VAL-1 · needs-Brandon:** Spartan Essential 76 PFAS comparison needs his Spartan exports (SDF/CSV of
-  ωB97X-D geometries and properties) placed somewhere the runs can read.
+- **VAL-1 · in review 2026-11-05:** tooling done on `feat/validate` (see VAL-1 above); the Spartan wide table of
+  the PFAS QSAR run is the reference. Still needs-Brandon: a re-import for the new key columns, the charge
+  mismatches, and the 300-molecule gas/water run. The Essential 76 ωB97X-D comparison is VAL-2.
 
 ## Later (from ROADMAP)
 Orbital isosurfaces, NMR (PySCF), properties inspector,
