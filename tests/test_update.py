@@ -504,6 +504,7 @@ def test_bad_fork_file_stops_the_upgrade(repos, monkeypatch):
     assert "is missing, so the packages were not upgraded" in res.message and len(pip.calls) == 1
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="creating a symlink needs a privilege on Windows (WinError 1314)")
 def test_macos_relinks_tblite_openmp_after_pip(tmp_path, monkeypatch):
     ours = tmp_path / "tblite" / ".dylibs" / "libomp.dylib"
     theirs = tmp_path / "torch" / "lib" / "libomp.dylib"
