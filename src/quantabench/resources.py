@@ -405,6 +405,8 @@ def detect_isolated(timeout: float = 180.0, cancel=None) -> tuple[HardwareReport
     if sys.platform == "win32":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     why = ""
+    if cancel is not None and cancel.is_set():
+        return None                  # cancelled before the child started (a fast child could finish first)
     try:
         proc = subprocess.Popen([str(exe), "-c", code], **kwargs)  # noqa: S603
     except OSError as exc:
@@ -413,6 +415,8 @@ def detect_isolated(timeout: float = 180.0, cancel=None) -> tuple[HardwareReport
     while True:
         try:
             stdout, stderr = proc.communicate(timeout=0.25)
+            if cancel is not None and cancel.is_set():
+                return None          # cancelled while the child ran: its result is not wanted
             break
         except subprocess.TimeoutExpired:
             if (cancel is not None and cancel.is_set()) or time.monotonic() - t0 > timeout:
