@@ -127,7 +127,10 @@ class Prop:
 
 
 PROPS: dict[str, Prop] = {p.name: p for p in (
-    Prop("dipole", "D", "dipole moment", "comparison"),
+    Prop("dipole", "D", "dipole moment", "comparison",
+         "an ion's dipole depends on the origin: both sides are about the centre of mass (the Spartan import moves "
+         "Spartan's frame-origin DIPOLE_VEC there); it also grows with the charge's distance from the centre of mass, "
+         "so for ions it is conformer-sensitive"),
     Prop("homo", "eV", "HOMO energy", "comparison"),
     Prop("lumo", "eV", "LUMO energy", "comparison"),
     Prop("gap", "eV", "HOMO-LUMO gap", "comparison"),
@@ -1068,6 +1071,12 @@ def validate(records: list[QBRecord], table: SpartanTable, out_dir: str | Path, 
                 if None not in (g, w, d) and abs(w - g) > 1e-6 and abs(d + (w - g)) < 1e-6 * max(1.0, abs(d)):
                     warnings.append(f"{m.rec.id}: delta_{col} is gas - water; QuantaBench's shifts here are water - gas")
     pairs = [p for p in pairs if data[p.key]]               # pairs no molecule has both values of: dropped
+    ion_dipoles = sum(1 for p in pairs if p.prop == "dipole"
+                      for m, *_ in data[p.key] if m.charge_class in ("anion", "cation"))
+    if ion_dipoles and not any(c.endswith("_spartan_dipole_origin_debye") for c in table.columns):
+        warnings.append(f"{ion_dipoles} ion dipoles: the Spartan table was imported before QuantaBench moved Spartan's "
+                        "ion dipoles to the centre of mass (they are about Spartan's frame origin here, off by up to "
+                        "~10 D); re-import the documents (quantabench-cli import ... --wide)")
     summary = []
     for p in pairs:
         pts = data[p.key]

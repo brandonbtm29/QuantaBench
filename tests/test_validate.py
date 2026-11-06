@@ -237,6 +237,21 @@ def test_paired_delta_sign_warning(tmp_path):
     assert any("gas - water" in w for w in res.warnings)
 
 
+def test_ion_dipoles_from_an_older_import_are_flagged(tmp_path):
+    """A wide table without *_spartan_dipole_origin_debye has ion dipoles about Spartan's frame origin."""
+    paired = _write(tmp_path / "anion.csv", [
+        {"id": "14477-72-6", "smiles": "O=C([O-])C(F)(F)F", "charge": -1, "water_tblite_gfn2_dipole_debye": 4.2}])
+    recs = val.read_quantabench([paired])
+    old = val.validate(recs, val.read_spartan(_spartan(tmp_path)), tmp_path / "old", plots=False)
+    assert any("frame origin" in w for w in old.warnings)
+    header = WIDE_HEADER + ["dft_spartan_dipole_origin_debye"]
+    rows = list(csv.DictReader((tmp_path / "wide.csv").open(encoding="utf-8")))
+    new = val.validate(recs, val.read_spartan(_write(tmp_path / "wide2.csv", rows, header)), tmp_path / "new",
+                       plots=False)
+    assert not any("frame origin" in w for w in new.warnings)
+    assert "centre of mass" in (tmp_path / "new" / "report.md").read_text(encoding="utf-8")
+
+
 # ------------------------------------------------------------------------------------------------- the sampler
 def _sampler_table(tmp_path: Path) -> val.SpartanTable:
     rows = []

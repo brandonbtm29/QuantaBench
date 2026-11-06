@@ -159,7 +159,9 @@ stays ``spartan_*``):
     atomic numbers + Spartan's bonds       formula, smiles     RDKit (CalcMolFormula, canonical SMILES)
     atomic numbers                         n_atoms
     E_HOMO, E_LUMO (hartree)               homo_ev, lumo_ev    x 27.211386 (+ gap_ev = lumo_ev - homo_ev)
-    DIPOLE_MAG (debye)                     dipole_debye        the method's dipole (PM6, B3LYP)
+    DIPOLE_MAG (debye)                     dipole_debye        the method's dipole (PM6, B3LYP); ions: DIPOLE_VEC
+                                                               moved to the centre of mass (ion_dipole_about_com),
+                                                               Spartan's own in spartan_dipole_origin_debye
     ZEROPOINT (kcal/mol)                   zpe_kcal
     H_TOT (kcal/mol)                       h_corr_kcal         H - E, as chem.vibrations
     G_THERMO (kcal/mol)                    g_corr_kcal         G - E
@@ -1200,6 +1202,36 @@ def hill_formula(numbers: Iterable[int], charge: int = 0) -> str:
     return s
 
 
+_DEBYE_PER_E_ANG = 4.80320471     # chem.descriptors.DEBYE_PER_E_ANG
+
+
+def ion_dipole_about_com(mol: SpartanMolecule) -> float | None:
+    """|μ| (debye) of a charged molecule about its centre of mass, QuantaBench's convention for ions
+    (``descriptors.dipole_debye``, ``eng_tblite``, ``eng_xtb``), from Spartan's dipole vector.
+
+    The dipole of an ion depends on the origin (μ(R) = μ(0) - Q·R). Spartan writes ``DIPOLE_VEC``/``DIPOLE_MAG``
+    about the origin of the document's coordinates, which is near the centre of mass for most molecules but not
+    all (checked on B3LYP/6-311+G** C-PCM anions: the vector is parallel to the ESP-charge dipole about the
+    frame origin, cos = 1.000, and frames up to 1.5 Å off the centre of mass move |μ| by up to 7 D); its GUI does
+    not show the value for that reason (manual: "it depends on the location and orientation of the molecule in
+    space"). The shift uses the Input geometry, the one the calculation ran at. None for neutral molecules,
+    non-quantum levels or without a 3-vector."""
+    if not mol.input.charge or not mol.level.is_quantum:
+        return None
+    prop = mol.properties.get("DIPOLE_VEC") or mol.properties.get("QM_DIPOLE")
+    if prop is None or not isinstance(prop.value, np.ndarray) or prop.value.size != 3:
+        return None
+    pos = np.asarray(mol.input.positions_A, float)
+    if pos.shape != (mol.n_atoms, 3) or not mol.n_atoms:
+        return None
+    from ase.data import atomic_masses
+
+    m = atomic_masses[np.asarray(mol.numbers, int)]
+    com = (pos * m[:, None]).sum(0) / m.sum()
+    mu = np.asarray(prop.value, float).ravel() - float(mol.input.charge) * com * _DEBYE_PER_E_ANG
+    return float(np.linalg.norm(mu))
+
+
 def molecule_row(mol: SpartanMolecule, conformer: int | None = None, rdkit_mol=None) -> dict:
     """One table row: key columns, QuantaBench columns, ``spartan_*`` scalars and the conformer's values."""
     row: dict = {"source_file": mol.source_file, "molecule_index": mol.molecule_index, "storage": mol.storage,
@@ -1234,6 +1266,11 @@ def molecule_row(mol: SpartanMolecule, conformer: int | None = None, rdkit_mol=N
             row[f"spartan_{name.lower()}"] = p.value
     if "homo_ev" in row and "lumo_ev" in row:
         row["gap_ev"] = row["lumo_ev"] - row["homo_ev"]
+    if mapped and mol.input.charge and "dipole_debye" in row:
+        com = ion_dipole_about_com(mol)
+        if com is not None:        # Spartan's value is about its frame's origin: keep it, report the COM one
+            row["spartan_dipole_origin_debye"] = row["dipole_debye"]
+            row["dipole_debye"] = com
     row.update(mol.conformer_values(conformer))
     if mol.warnings:
         row["spartan_notes"] = " | ".join(mol.warnings)

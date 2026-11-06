@@ -635,3 +635,42 @@ def test_bond_perception_guards_do_not_hang(monkeypatch):
                                input=types.SimpleNamespace(charge=-8, multiplicity=1))
     m = io_spartan._mol_at(s4, pos)
     assert m.GetProp("qb_bonds").startswith("connectivity only (4 P/S")
+
+
+def test_ion_dipole_is_moved_to_the_centre_of_mass():
+    """Spartan writes an ion's dipole about its frame's origin; the QuantaBench column is about the centre of mass
+    (as eng_tblite/eng_xtb/descriptors report ions), the same for any placement of the molecule, and Spartan's
+    own value is kept. A neutral molecule's dipole is left alone."""
+    from ase.data import atomic_masses
+
+    def doc(charge: int, shift: np.ndarray, mu0: np.ndarray):
+        inp = TFA_ANION.replace("{charge}", str(charge))
+        lines = inp.split("\r\n")
+        for i, line in enumerate(lines):
+            parts = line.split()
+            if len(parts) == 4 and parts[0].isdigit():
+                xyz = np.array([float(v) for v in parts[1:]]) + shift
+                lines[i] = f" {parts[0]}  " + "  ".join(f"{v:.6f}" for v in xyz)
+        mu = mu0 + charge * shift * 4.80320471               # μ(0) of the shifted molecule: μ(0) + Q·shift
+        props = (_pm6() + f"PROP VALUE DIPOLE_VEC 3 BEGIN\r\n {mu[0]:.8f} {mu[1]:.8f} {mu[2]:.8f}\r\nEND\r\n"
+                 ).replace("DIPOLE_MAG =       2.5000000", f"DIPOLE_MAG = {np.linalg.norm(mu):.8f}")
+        return _doc([("\r\n".join(lines), props)])
+
+    (m,) = io_spartan.iter_molecules(doc(-1, np.zeros(3), np.zeros(3)))
+    z = np.asarray(m.numbers)
+    pos = m.input.positions_A
+    com = (pos * atomic_masses[z][:, None]).sum(0) / atomic_masses[z].sum()
+    mu_com = np.array([1.0, -2.0, 0.5])                  # the ion's dipole about its centre of mass (debye)
+    mu_origin = mu_com - com * 4.80320471                # μ(0) = μ(com) + Q·com, Q = -1
+    values = []
+    for shift in (np.zeros(3), np.array([1.5, -0.7, 2.0])):
+        (m,) = io_spartan.iter_molecules(doc(-1, shift, mu_origin))
+        row = io_spartan.molecule_row(m)
+        values.append(row["dipole_debye"])
+        assert row["spartan_dipole_origin_debye"] == pytest.approx(np.linalg.norm(mu_origin - shift * 4.80320471))
+    assert values == pytest.approx([np.linalg.norm(mu_com)] * 2, abs=1e-4)
+    # neutral: Spartan's value as it is (origin-independent), no extra column
+    (m,) = io_spartan.iter_molecules(doc(0, np.array([3.0, 0.0, 0.0]), np.array([0.0, 2.5, 0.0])))
+    row = io_spartan.molecule_row(m)
+    assert row["dipole_debye"] == pytest.approx(2.5) and "spartan_dipole_origin_debye" not in row
+    assert io_spartan.ion_dipole_about_com(m) is None
