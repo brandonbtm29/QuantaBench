@@ -474,6 +474,43 @@ Still open:
   rewritten with test-like values (pH 0, 1 conformer, 1 K) by another process on the machine; check
   that no test or GUI path writes there when `QUANTABENCH_SETTINGS_DIR` is set.
 
+### QSAR-3: Surface tension model on QuantaBench descriptors · ready (data pull needs-Brandon)
+Plan: docs/SURFACE_TENSION.md. Two targets, never pooled: pure-liquid σ at 25 °C for compounds that are liquid
+there, and γ_CMC/CMC of PFAS surfactants in water.
+- Data: `build --phases gas,water` on the QSAR cohorts, then on NOVA (PubChem is blocked in the cloud
+  environment) `pubchem enrich RUN --validate --experimental --records experimental.csv`. Add Jasper (1972)
+  coefficients (via the MIT `chemicals` package) and NIST ThermoML (free bulk download) for pure liquids, and
+  curated literature γ(c) data for PFAS (Brusseau 2019 Table S1 sources), each with the same provenance columns
+  as the PubChem records.
+- Baselines: group-contribution parachor and a parachor fitted on QuantaBench volumes, σ = (Pρ/M)⁴; TEST
+  predictions from CompTox.
+- QSPR: α, α/V, vdW volume, SASA, μ, μ²/V, ESP (GIPF) descriptors, polar surface, F/C and fluorinated surface
+  fraction, dG_solv. Ridge/PLS first, then GPR/boosting.
+- Validation: leave-cohort-out, leave-class-out, leave-chain-length-out; applicability domain by leverage,
+  kNN distance and F/C range; flag compounds solid at 25 °C.
+- Acceptance: a training table with provenance per value, and a model report (MAE/RMSE vs the baselines per
+  split).
+- Needs Brandon: the target choice (pure-liquid σ vs γ_CMC first), 20 or 25 °C, and access to DIPPR/TRC for
+  validation.
+
+### PUBCHEM-1: PubChem follow-ups · ready
+- **`build --pubchem-validate`** (not done: it would touch the pipeline's summary row, which other branches are
+  changing). Add `pubchem_cid`/`pubchem_match` to each molecule's summary row when online, never failing a
+  molecule when PubChem is unreachable. Today: `pubchem enrich RUN --validate` after the build gives the same
+  columns.
+- **Annotation index:** `pug_view/annotations/heading/Surface%20Tension/JSON?page=N` lists every compound with a
+  surface-tension annotation in a few requests (paged). Use it to fetch PUG View only for CIDs that have one,
+  and to find surface-tension data for compounds outside the input list. Capture one page as a fixture first:
+  the format is not covered by the current fixtures.
+- **Refetch policy:** 404s are cached forever; add `--refresh-missing DAYS` for records PubChem adds later.
+- **Parent CIDs:** `/compound/cid/X/cids/JSON?cids_type=parent` would tell a salt's CAS RN from its parent's
+  without RDKit's largest-fragment rule.
+- **Condition classes:** check the classifier on the full pull. List every `needs_review` surface-tension
+  record, and extend the reference rules (pure-liquid tables vs surfactant literature) from what is there.
+- **CompTox (CTX API):** the same enrichment by DTXSID (batch POSTs of 1,000; free key): TEST's predicted
+  surface tension and the experimental physchem values. Check the property names on the workstation first
+  (api-ccte.epa.gov is blocked in the cloud environment).
+
 ### DIST-4: Per-stage routing · later
 - Different stages of one molecule on different machines (CREST + Psi4 on the Mac, GPU refinement +
   LAMMPS on NOVA), handed over through run-folder artifacts.

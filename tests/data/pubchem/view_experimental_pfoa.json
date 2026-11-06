@@ -1,0 +1,903 @@
+{
+  "Record": {
+    "RecordType": "CID",
+    "RecordNumber": 9554,
+    "RecordTitle": "Perfluorooctanoic acid",
+    "Section": [
+      {
+        "TOCHeading": "Chemical and Physical Properties",
+        "Description": "Various chemical and physical properties that are experimentally determined for this compound.  See also the Safety and Hazard Properties section (if available), which has additional properties pertinent to chemical safety and hazards.",
+        "Section": [
+          {
+            "TOCHeading": "Experimental Properties",
+            "Description": "Various experimentally determined properties for this compound.  See also the Safety and Hazard Properties section (if available), which has additional properties pertinent to chemical safety and hazards.",
+            "Section": [
+              {
+                "TOCHeading": "Physical Description",
+                "Description": "The appearance or features of this compound, including color, odor, state, taste and more in general.",
+                "Information": [
+                  {
+                    "ReferenceNumber": 28,
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "White solid with pungent odor; [ICSC] White or cream crystalline solid; [MSDSonline]"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 31,
+                    "Name": "",
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "WHITE POWDER WITH PUNGENT ODOUR."
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Color/Form",
+                "Description": "Color is the aspect of any object that may be described in terms of hue, lightness, and saturation.",
+                "URL": "https://www.britannica.com/science/color",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Yalkowsky, S.H., He, Yan, Jain, P. Handbook of Aqueous Solubility Data Second Edition. CRC Press, Boca Raton, FL 2010, p. V5: 3524"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Yalkowsky, S.H., He, Yan, Jain, P. Handbook of Aqueous Solubility Data Second Edition. CRC Press, Boca Raton, FL 2010, p. V5: 3524",
+                        "Matched": {
+                          "PCLID": 900034320,
+                          "Citation": "Yalkowsky, S.H., He, Yan, Jain, P. Handbook of Aqueous Solubility Data Second Edition. CRC Press, Boca Raton, FL 2010, p. V5: 3524"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "White to off-white powder"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Boiling Point",
+                "Description": "The temperature at which this compound changes state from liquid to gas at a given atmospheric pressure.",
+                "URL": "https://chem.libretexts.org/Bookshelves/Organic_Chemistry/Organic_Chemistry_Lab_Techniques_(Nichols)/06%3A_Miscellaneous_Techniques/6.02%3A_Boiling_Point",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Haynes, W.M. (ed.). CRC Handbook of Chemistry and Physics. 95th Edition. CRC Press LLC, Boca Raton: FL 2014-2015, p. 3-436"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Haynes, W.M. (ed.). CRC Handbook of Chemistry and Physics. 95th Edition. CRC Press LLC, Boca Raton: FL 2014-2015, p. 3-436",
+                        "Matched": {
+                          "PCLID": 900056991,
+                          "Citation": "Haynes, W.M. (ed.). CRC Handbook of Chemistry and Physics. 95th Edition. CRC Press LLC, Boca Raton: FL 2014-2015, p. 3-436"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "192 °C"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 31,
+                    "Name": "",
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "189 °C"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 79,
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "189 °C @760 [mm Hg]"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Melting Point",
+                "Description": "This section provides the melting point and/or freezing point. The melting point is the temperature at which a substance changes state from solid to liquid at atmospheric pressure. When considered as the temperature of the reverse change (from liquid to solid), it is referred to as the freezing point.",
+                "URL": "https://chem.libretexts.org/Bookshelves/Organic_Chemistry/Organic_Chemistry_Lab_Techniques_(Nichols)/06%3A_Miscellaneous_Techniques/6.01%3A_Melting_Point",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Haynes, W.M. (ed.). CRC Handbook of Chemistry and Physics. 95th Edition. CRC Press LLC, Boca Raton: FL 2014-2015, p. 3-436"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Haynes, W.M. (ed.). CRC Handbook of Chemistry and Physics. 95th Edition. CRC Press LLC, Boca Raton: FL 2014-2015, p. 3-436",
+                        "Matched": {
+                          "PCLID": 900056991,
+                          "Citation": "Haynes, W.M. (ed.). CRC Handbook of Chemistry and Physics. 95th Edition. CRC Press LLC, Boca Raton: FL 2014-2015, p. 3-436"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "54.3 °C"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 31,
+                    "Name": "",
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "52-54 °C"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Solubility",
+                "Description": "The solubility of a substance is the amount of that substance that will dissolve in a given amount of solvent. The default solvent is water, if not indicated.",
+                "URL": "https://chem.libretexts.org/Courses/Purdue/Purdue%3A_Chem_26505%3A_Organic_Chemistry_I_(Lipton)/Chapter_4._Intermolecular_Forces_and_Physical_Properties/4.4_Solubility",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Yalkowsky, S.H., He, Yan, Jain, P. Handbook of Aqueous Solubility Data Second Edition. CRC Press, Boca Raton, FL 2010, p. V5: 3524"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Yalkowsky, S.H., He, Yan, Jain, P. Handbook of Aqueous Solubility Data Second Edition. CRC Press, Boca Raton, FL 2010, p. V5: 3524",
+                        "Matched": {
+                          "PCLID": 900034320,
+                          "Citation": "Yalkowsky, S.H., He, Yan, Jain, P. Handbook of Aqueous Solubility Data Second Edition. CRC Press, Boca Raton, FL 2010, p. V5: 3524"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "When heated to decomposition it emits toxic vapors of F(-)."
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Inoue Y et al: Arch Environ Contam Toxicol 62: 672-80 (2012)"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Inoue Y et al: Arch Environ Contam Toxicol 62: 672-80 (2012)",
+                        "Matched": {
+                          "PCLID": 3838013,
+                          "Citation": "Inoue Y, Hashizume N, Yakata N, Murakami H, Suzuki Y, Kikushima E, Otsuka M. Unique Physicochemical Properties of Perfluorinated Compounds and Their Bioconcentration in Common Carp Cyprinus carpio L. Archives of Environmental Contamination and Toxicology. 2011 Nov 30;62(4):672–80. doi: 10.1007/s00244-011-9730-7.",
+                          "PMID": 22127646,
+                          "DOI": "10.1007/s00244-011-9730-7"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "In water, 3300 mg/L at 25 °C",
+                          "Markup": [
+                            {
+                              "Start": 3,
+                              "Length": 5,
+                              "URL": "https://pubchem.ncbi.nlm.nih.gov/compound/water",
+                              "Type": "PubChem Internal Link",
+                              "Extra": "CID-962"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Rahman MF et al; Water Research 50: 318-40 (2014)"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Rahman MF et al; Water Research 50: 318-40 (2014)",
+                        "Matched": {
+                          "PCLID": 900032840,
+                          "Citation": "Rahman MF et al; Water Research 50: 318-40 (2014)"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "In water, 4340 mg/L at 24.1 °C",
+                          "Markup": [
+                            {
+                              "Start": 3,
+                              "Length": 5,
+                              "URL": "https://pubchem.ncbi.nlm.nih.gov/compound/water",
+                              "Type": "PubChem Internal Link",
+                              "Extra": "CID-962"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 31,
+                    "Name": "",
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "Solubility in water: none"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Density",
+                "Description": "This section provides information on the density (with unit) and specific gravity (without unit) of a compound. Density is mass of a unit volume of a compound and commonly expressed in units of kg/m3 or g/cm3. Specific gravity, also known as relative density, is a unit-less quantity, defined as the ratio of the density of a compound to that of a standard reference material (typically, water at 4 °C for liquids and air at room temperature [20 °C or 68 °F] for gases).",
+                "URL": "https://chem.libretexts.org/Bookshelves/Introductory_Chemistry/Map%3A_Fundamentals_of_General_Organic_and_Biological_Chemistry_(McMurry_et_al.)/01%3A_Matter_and_Measurements/1.12%3A_Density_and_Specific_Gravity",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Savu PM; Fluorinated Higher Carboxylic Acids. Kirk-Othmer Encyclopedia of Chemical Technology. (1999-2016). New York, NY: John Wiley & Sons. Online Posting Date: 4 Dec 2000"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Savu PM; Fluorinated Higher Carboxylic Acids. Kirk-Othmer Encyclopedia of Chemical Technology. (1999-2016). New York, NY: John Wiley & Sons. Online Posting Date: 4 Dec 2000",
+                        "Matched": {
+                          "PCLID": 900070618,
+                          "Citation": "Savu PM; Fluorinated Higher Carboxylic Acids. Kirk-Othmer Encyclopedia of Chemical Technology. (1999-2016). New York, NY: John Wiley & Sons. Online Posting Date: 4 Dec 2000"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "1.792 g/mL at 20 °C"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 31,
+                    "Name": "",
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "1.79 g/cm³"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 79,
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "1.792 @ 20°C"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Vapor Pressure",
+                "Description": "Vapor pressure (or equilibrium vapor pressure) is the pressure of a vapor in thermodynamic equilibrium with its condensed phases in a closed system.",
+                "URL": "https://chem.libretexts.org/Bookshelves/General_Chemistry/Map%3A_Chemistry_-_The_Central_Science_(Brown_et_al.)/11%3A_Liquids_and_Intermolecular_Forces/11.05%3A_Vapor_Pressure",
+                "Information": [
+                  {
+                    "ReferenceNumber": 28,
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "0.15 [mmHg]"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "PMID:21112604",
+                      "Bhhatarai B, Gramatica P; Environ Sci Technol 45(19): 8120-8 (2011)"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "PMID:21112604",
+                        "Matched": {
+                          "PCLID": 20118563,
+                          "Citation": "Bhhatarai B, Gramatica P. Modelling physico-chemical properties of (benzo)triazoles, and screening for environmental partitioning. Water Res. 2011 Jan;45(3):1463–71. doi: 10.1016/j.watres.2010.11.006. PMID: 21112604.",
+                          "PMID": 21112604,
+                          "DOI": "10.1016/j.watres.2010.11.006"
+                        }
+                      },
+                      {
+                        "Citation": "Bhhatarai B, Gramatica P; Environ Sci Technol 45(19): 8120-8 (2011)",
+                        "Matched": {
+                          "PCLID": 14709004,
+                          "Citation": "Bhhatarai B, Gramatica P. Prediction of aqueous solubility, vapor pressure and critical micelle concentration for aquatic partitioning of perfluorinated chemicals. Environ Sci Technol. 2011 Oct 01;45(19):8120–8. doi: 10.1021/es101181g. PMID: 20958003.",
+                          "PMID": 20958003,
+                          "DOI": "10.1021/es101181g"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "3.16X10-2 mm Hg at 25 °C"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 79,
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "0.15 [mm Hg] @20 °C"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 93,
+                    "Reference": [
+                      "J. Chem. Eng. Data 2020, 65, 2332-2342 DOI:10.1021/acs.jced.9b00922"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "J. Chem. Eng. Data 2020, 65, 2332-2342 DOI:10.1021/acs.jced.9b00922",
+                        "Matched": {
+                          "PCLID": 12903950,
+                          "Citation": "Zhang M, Yamada K, Bourguet S, Guelfo J, Suuberg EM. Vapor pressure of nine perfluoroalkyl substances (PFASs) determined using the Knudsen Effusion Method. J Chem Eng Data. 2020 May 14;65(5):2332–42. PMID: 32968326; PMCID: PMC7505237.",
+                          "PMID": 32968326,
+                          "PMCID": "PMC7505237",
+                          "DOI": "10.1021/acs.jced.9b00922"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "0.37 ± 0.01 [log Psd at 298.15 K (Pa)]"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "LogP",
+                "Description": "Log P is the partition coefficient expressed in logarithmic form.  The partition coefficient is the ratio of concentrations of a compound in a mixture of two immiscible solvents at equilibrium.  This ratio is therefore used to compare the solubilities of the solute in these two solvents.  Because octanol and water are the most commonly used pair of solvents for measuring partition coefficients, the Log P values listed in this section refer to octanol/water partition coefficients, unless indicated otherwise.",
+                "Information": [
+                  {
+                    "ReferenceNumber": 31,
+                    "Name": "",
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "6.3"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Stability/Shelf Life",
+                "Description": "Tendency of a material to resist change or decomposition due to internal reaction, or due to the action of air, heat, light, pressure, etc. See also the Stability and Reactivity subsection under the Safety and Hazards section on this page (when available).",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Sigma-Aldrich; Safety Data Sheet for Perfluorooctanoic acid. Product Number: 171468, Version 4.8 (Revision Date 12/28/2015). Available from, as of January 27, 2016: https://www.sigmaaldrich.com/safety-center.html"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Sigma-Aldrich; Safety Data Sheet for Perfluorooctanoic acid. Product Number: 171468, Version 4.8 (Revision Date 12/28/2015). Available from, as of January 27, 2016: https://www.sigmaaldrich.com/safety-center.html",
+                        "Matched": {
+                          "PCLID": 900018137,
+                          "Citation": "Sigma-Aldrich; Safety Data Sheet for Perfluorooctanoic acid. Product Number: 171468, Version 4.8 (Revision Date 12/28/2015). Available from, as of January 27, 2016: https://www.sigmaaldrich.com/safety-center.html"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "Stable under recommended storage conditions."
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Decomposition",
+                "Description": "Information on the decomposition of this compound, including the decomposition conditions and products.",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Lewis, R.J. Sr. (ed) Sax's Dangerous Properties of Industrial Materials. 11th Edition. Wiley-Interscience, Wiley & Sons, Inc. Hoboken, NJ. 2004., p. 2861"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Lewis, R.J. Sr. (ed) Sax's Dangerous Properties of Industrial Materials. 11th Edition. Wiley-Interscience, Wiley & Sons, Inc. Hoboken, NJ. 2004., p. 2861",
+                        "Matched": {
+                          "PCLID": 900130573,
+                          "Citation": "Lewis, R.J. Sr. (ed) Sax's Dangerous Properties of Industrial Materials. 11th Edition. Wiley-Interscience, Wiley & Sons, Inc. Hoboken, NJ. 2004., p. 2861"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "When heated to decomposition it emits toxic vapors of /flourine/."
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Surface Tension",
+                "Description": "Surface tension is a contractive tendency of the surface of a liquid that allows it to resist an external force. It is measured as the energy required to increase the surface area of a liquid by a unit of area.",
+                "URL": "https://chem.libretexts.org/Bookshelves/Physical_and_Theoretical_Chemistry_Textbook_Maps/Supplemental_Modules_(Physical_and_Theoretical_Chemistry)/Physical_Properties_of_Matter/States_of_Matter/Properties_of_Liquids/Surface_Tension",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Moody CA, Field JA; Environ Sci Technol 34: 3864-70 (2000)"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Moody CA, Field JA; Environ Sci Technol 34: 3864-70 (2000)",
+                        "Matched": {
+                          "PCLID": 678344244,
+                          "Citation": "Moody CA, Field JA. Perfluorinated Surfactants and the Environmental Implications of Their Use in Fire-Fighting Foams. Environ. Sci. Technol. 2000 Aug 12;34(18):3864–70. doi: 10.1021/es991359u.",
+                          "DOI": "10.1021/es991359u"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "15.2 dynes/cm"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Enthalpy of Sublimation",
+                "Description": "The enthalpy (or heat) of sublimation is the amount of energy that must be added to a mole of solid at constant pressure to turn it directly into a gas (without passing through the liquid phase).",
+                "URL": "https://chem.libretexts.org/Bookshelves/Physical_and_Theoretical_Chemistry_Textbook_Maps/Supplemental_Modules_(Physical_and_Theoretical_Chemistry)/Thermodynamics/Energies_and_Potentials/Enthalpy/Heat_of_Sublimation",
+                "Information": [
+                  {
+                    "ReferenceNumber": 93,
+                    "Reference": [
+                      "J. Chem. Eng. Data 2020, 65, 2332-2342 DOI:10.1021/acs.jced.9b00922"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "J. Chem. Eng. Data 2020, 65, 2332-2342 DOI:10.1021/acs.jced.9b00922",
+                        "Matched": {
+                          "PCLID": 12903950,
+                          "Citation": "Zhang M, Yamada K, Bourguet S, Guelfo J, Suuberg EM. Vapor pressure of nine perfluoroalkyl substances (PFASs) determined using the Knudsen Effusion Method. J Chem Eng Data. 2020 May 14;65(5):2332–42. PMID: 32968326; PMCID: PMC7505237.",
+                          "PMID": 32968326,
+                          "PMCID": "PMC7505237",
+                          "DOI": "10.1021/acs.jced.9b00922"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "86.0 ± 1.4 [ΔsubHb (kJ/mol) at 273.4-307.4 K]"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Dissociation Constants",
+                "Description": "A specific type of equilibrium constant that measures the propensity of a larger object to separate (dissociate) reversibly into smaller components, as when a complex falls apart into its component molecules, or when a salt splits up into its component ions. This includes pKa (the negative logarithm of the acid dissociation constant) and pKb (the negative logarithm of the base dissociation constant).",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Kutsuna S, Hori H; Atmos Environ 42: 8883-8892 (2008)"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Kutsuna S, Hori H; Atmos Environ 42: 8883-8892 (2008)",
+                        "Matched": {
+                          "PCLID": 662305546,
+                          "Citation": "Kutsuna S, Hori H. Experimental determination of Henry's law constant of perfluorooctanoic acid (PFOA) at 298K by means of an inert-gas stripping method with a helical plate. Atmospheric Environment. 2008 Dec;42(39):8883–92. doi: 10.1016/j.atmosenv.2008.09.008.",
+                          "DOI": "10.1016/j.atmosenv.2008.09.008"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "pKa = 1.30"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Moody CA, Field JA; Environ Sci Technol 34: 3864-70 (2000)"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Moody CA, Field JA; Environ Sci Technol 34: 3864-70 (2000)",
+                        "Matched": {
+                          "PCLID": 678344244,
+                          "Citation": "Moody CA, Field JA. Perfluorinated Surfactants and the Environmental Implications of Their Use in Fire-Fighting Foams. Environ. Sci. Technol. 2000 Aug 12;34(18):3864–70. doi: 10.1021/es991359u.",
+                          "DOI": "10.1021/es991359u"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "pKa = 2.80"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "PMID:18284146",
+                      "Goss KU; Environ Sci Technol 42: 456-8 (2008)"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "PMID:18284146",
+                        "Matched": {
+                          "PCLID": 33575429,
+                          "Citation": "Goss K. The p<i>K</i><sub>a</sub> Values of PFOA and Other Highly Fluorinated Carboxylic Acids. Environ. Sci. Technol. 2007 Dec 12;42(2):456–8. doi: 10.1021/es702192c.",
+                          "PMID": 18284146,
+                          "DOI": "10.1021/es702192c"
+                        }
+                      },
+                      {
+                        "Citation": "Goss KU; Environ Sci Technol 42: 456-8 (2008)",
+                        "Matched": {
+                          "PCLID": 33575429,
+                          "Citation": "Goss K. The p<i>K</i><sub>a</sub> Values of PFOA and Other Highly Fluorinated Carboxylic Acids. Environ. Sci. Technol. 2007 Dec 12;42(2):456–8. doi: 10.1021/es702192c.",
+                          "PMID": 18284146,
+                          "DOI": "10.1021/es702192c"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "pKa range = -0.5 to 4.2"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Collision Cross Section",
+                "Description": "Collision cross section (CCS) represents the effective area for the interaction between an individual ion and the neutral gas through which it is traveling (e.g., in ion mobility spectrometry (IMS) experiments).  It quantifies the probability of a collision taking place between two or more particles.",
+                "URL": "https://pubmed.ncbi.nlm.nih.gov/28035808/",
+                "Information": [
+                  {
+                    "ReferenceNumber": 4,
+                    "Reference": [
+                      "https://tarheels.live/bakerlab/ | DOI:10.1021/acs.est.2c00201 | DOI:10.1038/s41597-024-04363-0"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "https://tarheels.live/bakerlab/ | DOI:10.1021/acs.est.2c00201 | DOI:10.1038/s41597-024-04363-0",
+                        "Matched": {
+                          "PCLID": 34124978,
+                          "Citation": "Foster M, Rainey M, Watson C, Dodds JN, Kirkwood KI, Fernández FM, Baker ES. Uncovering PFAS and Other Xenobiotics in the Dark Metabolome Using Ion Mobility Spectrometry, Mass Defect Analysis, and Machine Learning. Environ Sci Technol. 2022 Jun 21;56(12):9133–43. PMID: 35653285; PMCID: PMC9474714.",
+                          "PMID": 35653285,
+                          "PMCID": "PMC9474714",
+                          "DOI": "10.1021/acs.est.2c00201"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "228.9 Å² [M-H]- [CCS Type: DT; Buffer gas: N2; Ionization: ESI-; Dataset: TOXCAST; Source Identifier: DTXSID8037708]",
+                          "Markup": [
+                            {
+                              "Start": 14,
+                              "Length": 1,
+                              "Type": "Superscript"
+                            }
+                          ]
+                        },
+                        {
+                          "String": "139.5 Å² [M-H-CO2]- [CCS Type: DT; Buffer gas: N2; Ionization: ESI-; Dataset: PFAS]",
+                          "Markup": [
+                            {
+                              "Start": 18,
+                              "Length": 1,
+                              "Type": "Superscript"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 77,
+                    "Reference": [
+                      "S79 | UACCSCEC | Collision Cross Section (CCS) Library from UAntwerp | DOI:10.5281/zenodo.4704648"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "S79 | UACCSCEC | Collision Cross Section (CCS) Library from UAntwerp | DOI:10.5281/zenodo.4704648",
+                        "Matched": {
+                          "PCLID": 408574578,
+                          "Citation": "S79 | UACCSCEC | Collision Cross Section (CCS) Library from UAntwerp | DOI:10.5281/zenodo.4704648",
+                          "DOI": "10.5281/zenodo.4704648"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "156.37 Å² [M-H]-",
+                          "Markup": [
+                            {
+                              "Start": 15,
+                              "Length": 1,
+                              "Type": "Superscript"
+                            }
+                          ]
+                        },
+                        {
+                          "String": "139.44 Å² [M-H-CO2]-",
+                          "Markup": [
+                            {
+                              "Start": 19,
+                              "Length": 1,
+                              "Type": "Superscript"
+                            }
+                          ]
+                        },
+                        {
+                          "String": "226.58 Å² [2M-H]-",
+                          "Markup": [
+                            {
+                              "Start": 16,
+                              "Length": 1,
+                              "Type": "Superscript"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Kovats Retention Index",
+                "Description": "The Kovats retention index is a dimensionless quantity that characterizes the rate at which a compound is processed through a gas chromatography column.",
+                "URL": "https://goldbook.iupac.org/terms/view/R05360",
+                "DisplayControls": {
+                  "CreateTable": {
+                    "FromInformationIn": "ThisSection",
+                    "NumberOfColumns": 2,
+                    "ColumnContents": [
+                      "Name",
+                      "Value"
+                    ]
+                  },
+                  "ListType": "CommaSeparated"
+                },
+                "Information": [
+                  {
+                    "ReferenceNumber": 73,
+                    "Name": "Semi-standard non-polar",
+                    "Value": {
+                      "Number": [
+                        1045
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "TOCHeading": "Other Experimental Properties",
+                "Description": "Other experimental properties of this chemical.",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Yalkowsky, S.H., He, Yan, Jain, P. Handbook of Aqueous Solubility Data Second Edition. CRC Press, Boca Raton, FL 2010, p. V5: 3524"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Yalkowsky, S.H., He, Yan, Jain, P. Handbook of Aqueous Solubility Data Second Edition. CRC Press, Boca Raton, FL 2010, p. V5: 3524",
+                        "Matched": {
+                          "PCLID": 900034320,
+                          "Citation": "Yalkowsky, S.H., He, Yan, Jain, P. Handbook of Aqueous Solubility Data Second Edition. CRC Press, Boca Raton, FL 2010, p. V5: 3524"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "BP: 189 °C at 736 mm Hg"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Savu PM; Fluorinated Higher Carboxylic Acids. Kirk-Othmer Encyclopedia of Chemical Technology. (1999-2016). New York, NY: John Wiley & Sons. Online Posting Date: 4 Dec 2000"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Savu PM; Fluorinated Higher Carboxylic Acids. Kirk-Othmer Encyclopedia of Chemical Technology. (1999-2016). New York, NY: John Wiley & Sons. Online Posting Date: 4 Dec 2000",
+                        "Matched": {
+                          "PCLID": 900070618,
+                          "Citation": "Savu PM; Fluorinated Higher Carboxylic Acids. Kirk-Othmer Encyclopedia of Chemical Technology. (1999-2016). New York, NY: John Wiley & Sons. Online Posting Date: 4 Dec 2000"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "The perfluoroalkyl acids with six carbons or less are liquids; the higher analogues are solids. /Perfluoroalkyl acids/"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "Reference": [
+      {
+        "ReferenceNumber": 4,
+        "SourceName": "Baker Lab, Chemistry Department, The University of North Carolina at Chapel Hill",
+        "SourceID": "b_9554",
+        "Name": "Perfluorooctanoic acid",
+        "Description": "The Baker research group utilizes multidimensional separation techniques such as solid phase extractions, liquid chromatography, ion mobility spectrometry, and mass spectrometry to evaluate molecules present and changing in biological and environmental systems. Research projects include the development of high-throughput analyses to study numerous samples in a short time period as well as informatics studies to evaluate and connect the complex multi-omic data with available phenotypic data.",
+        "LicenseNote": "CC-BY 4.0",
+        "LicenseURL": "https://creativecommons.org/licenses/by/4.0/",
+        "ANID": 19824546
+      },
+      {
+        "ReferenceNumber": 77,
+        "SourceName": "NORMAN Suspect List Exchange",
+        "SourceID": "nrm_9554",
+        "Name": "PFOA",
+        "Description": "The NORMAN network enhances the exchange of information on emerging environmental substances, and encourages the validation and harmonisation of common measurement methods and monitoring tools so that the requirements of risk assessors and risk managers can be better met. The NORMAN Suspect List Exchange (NORMAN-SLE) is a central access point to find suspect lists relevant for various environmental monitoring questions, described in DOI:10.1186/s12302-022-00680-6",
+        "LicenseNote": "Data: CC-BY 4.0; Code (hosted by ECI, LCSB): Artistic-2.0",
+        "LicenseURL": "https://creativecommons.org/licenses/by/4.0/",
+        "ANID": 9033173
+      },
+      {
+        "ReferenceNumber": 28,
+        "SourceName": "Haz-Map, Information on Hazardous Chemicals and Occupational Diseases",
+        "SourceID": "hz6596",
+        "Name": "Perfluorooctanoic acid",
+        "Description": "Haz-Map® is an occupational health database designed for health and safety professionals and for consumers seeking information about the adverse effects of workplace exposures to chemical and biological agents.",
+        "LicenseNote": "Copyright (c) 2026 Haz-Map(R). All rights reserved.\u000AUnless otherwise indicated, all materials from Haz-Map are copyrighted by Haz-Map(R). No part of these materials, either text or image may be used for any purpose other than for personal use. Therefore, reproduction, modification, storage in a retrieval system or retransmission, in any form or by any means, electronic, mechanical or otherwise, for reasons other than personal use, is strictly prohibited without prior written permission.",
+        "ANID": 17279997
+      },
+      {
+        "ReferenceNumber": 31,
+        "SourceName": "ILO-WHO International Chemical Safety Cards (ICSCs)",
+        "SourceID": "1613",
+        "Name": "PERFLUOROOCTANOIC ACID",
+        "Description": "The International Chemical Safety Cards (ICSCs) are data sheets intended to provide essential safety and health information on chemicals in a clear and concise way. The primary aim of the Cards is to promote the safe use of chemicals in the workplace.",
+        "URL": "https://chemicalsafety.ilo.org/dyn/icsc/showcard.display?p_card_id=1613",
+        "LicenseNote": "Creative Commons CC BY 4.0",
+        "LicenseURL": "https://www.ilo.org/global/copyright/lang--en/index.htm",
+        "ANID": 2261421
+      },
+      {
+        "ReferenceNumber": 30,
+        "SourceName": "Hazardous Substances Data Bank (HSDB)",
+        "SourceID": "7137",
+        "Name": "Perfluorooctanoic acid",
+        "Description": "The Hazardous Substances Data Bank (HSDB) is a toxicology database that focuses on the toxicology of potentially hazardous chemicals. It provides information on human exposure, industrial hygiene, emergency handling procedures, environmental fate, regulatory requirements, nanomaterials, and related areas. The information in HSDB has been assessed by a Scientific Review Panel.",
+        "URL": "https://pubchem.ncbi.nlm.nih.gov/source/hsdb/7137",
+        "LicenseURL": "https://www.nlm.nih.gov/web_policies.html",
+        "IsToxnet": true,
+        "ANID": 4743
+      },
+      {
+        "ReferenceNumber": 79,
+        "SourceName": "PAC Chemical Database, U.S. Department of Energy",
+        "SourceID": "335-67-1",
+        "Name": "Pentadecafluorooctanoic acid",
+        "Description": "",
+        "URL": "https://emhub1.energy.gov/pacteel/search#335-67-1",
+        "LicenseURL": "https://www.energy.gov/web-policies",
+        "ANID": 56700622
+      },
+      {
+        "ReferenceNumber": 93,
+        "SourceName": "Suuberg Lab, School of Engineering, Brown University",
+        "SourceID": "brn_335-67-1",
+        "Name": "PFOA",
+        "Description": "The Suuberg Lab at Brown University is focused on developing modeling tools for examining vapor intrusion, on the thermodynamics of mixtures of high molecular weight organic compounds and on fire safety.",
+        "URL": "https://doi.org/10.1021/acs.jced.9b00922",
+        "ANID": 13200289
+      },
+      {
+        "ReferenceNumber": 73,
+        "SourceName": "NIST Mass Spectrometry Data Center",
+        "SourceID": "RI for SNGREZUHAYWORS-UHFFFAOYSA-N",
+        "Name": "Pentadecafluorooctanoic acid",
+        "Description": "The NIST Mass Spectrometry Data Center, a Group in the Biomolecular Measurement Division (BMD), develops evaluated mass spectral libraries and provides related software tools. These products are intended to assist compound identification by providing reference mass spectra for GC/MS (by electron ionization) and LC-MS/MS (by tandem mass spectrometry) as well as gas phase retention indices for GC.",
+        "URL": "http://www.nist.gov/srd/nist1a.cfm",
+        "LicenseNote": "Data covered by the Standard Reference Data Act of 1968 as amended.",
+        "LicenseURL": "https://www.nist.gov/srd/public-law",
+        "ANID": 299045
+      }
+    ]
+  }
+}

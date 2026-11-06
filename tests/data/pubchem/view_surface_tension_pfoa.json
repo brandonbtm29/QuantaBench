@@ -1,0 +1,65 @@
+{
+  "Record": {
+    "RecordType": "CID",
+    "RecordNumber": 9554,
+    "RecordTitle": "Perfluorooctanoic acid",
+    "Section": [
+      {
+        "TOCHeading": "Chemical and Physical Properties",
+        "Description": "Various chemical and physical properties that are experimentally determined for this compound.  See also the Safety and Hazard Properties section (if available), which has additional properties pertinent to chemical safety and hazards.",
+        "Section": [
+          {
+            "TOCHeading": "Experimental Properties",
+            "Description": "Various experimentally determined properties for this compound.  See also the Safety and Hazard Properties section (if available), which has additional properties pertinent to chemical safety and hazards.",
+            "Section": [
+              {
+                "TOCHeading": "Surface Tension",
+                "Description": "Surface tension is a contractive tendency of the surface of a liquid that allows it to resist an external force. It is measured as the energy required to increase the surface area of a liquid by a unit of area.",
+                "URL": "https://chem.libretexts.org/Bookshelves/Physical_and_Theoretical_Chemistry_Textbook_Maps/Supplemental_Modules_(Physical_and_Theoretical_Chemistry)/Physical_Properties_of_Matter/States_of_Matter/Properties_of_Liquids/Surface_Tension",
+                "Information": [
+                  {
+                    "ReferenceNumber": 30,
+                    "Description": "PEER REVIEWED",
+                    "Reference": [
+                      "Moody CA, Field JA; Environ Sci Technol 34: 3864-70 (2000)"
+                    ],
+                    "ExtendedReference": [
+                      {
+                        "Citation": "Moody CA, Field JA; Environ Sci Technol 34: 3864-70 (2000)",
+                        "Matched": {
+                          "PCLID": 678344244,
+                          "Citation": "Moody CA, Field JA. Perfluorinated Surfactants and the Environmental Implications of Their Use in Fire-Fighting Foams. Environ. Sci. Technol. 2000 Aug 12;34(18):3864–70. doi: 10.1021/es991359u.",
+                          "DOI": "10.1021/es991359u"
+                        }
+                      }
+                    ],
+                    "Value": {
+                      "StringWithMarkup": [
+                        {
+                          "String": "15.2 dynes/cm"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "Reference": [
+      {
+        "ReferenceNumber": 30,
+        "SourceName": "Hazardous Substances Data Bank (HSDB)",
+        "SourceID": "7137",
+        "Name": "Perfluorooctanoic acid",
+        "Description": "The Hazardous Substances Data Bank (HSDB) is a toxicology database that focuses on the toxicology of potentially hazardous chemicals. It provides information on human exposure, industrial hygiene, emergency handling procedures, environmental fate, regulatory requirements, nanomaterials, and related areas. The information in HSDB has been assessed by a Scientific Review Panel.",
+        "URL": "https://pubchem.ncbi.nlm.nih.gov/source/hsdb/7137",
+        "LicenseURL": "https://www.nlm.nih.gov/web_policies.html",
+        "IsToxnet": true,
+        "ANID": 4743
+      }
+    ]
+  }
+}

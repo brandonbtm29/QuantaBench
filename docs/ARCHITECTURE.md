@@ -33,6 +33,7 @@
 | `quantabench.resources` | Hardware detection (CPU, RAM, WSL, PyTorch backend: ROCm/CUDA/MPS), thread caps for BLAS/OpenMP/PyTorch, device selection with memory cap, matmul benchmark. |
 | `quantabench.settings` | `Settings` dataclasses, JSON load/save, and the settings-folder pointer (env var, then repo-local pointer, then per-user config). |
 | `chem.inputs` | `MoleculeInput` records from SMILES, PubChem names, structure files, CSV and Excel (CompTox-aware: DTXSID, preferred name, SMILES-column fallback per row, `ReadReport` of skipped rows). |
+| `chem.pubchem`, `chem.pubchem_enrich` | PubChem PUG REST + PUG View client within the usage policy (rate limit, `X-Throttling-Control` backoff, SQLite response cache, offline mode); CAS RN check digit; experimental records with units, temperature and condition class; `enrich` (CIDs, `pubchem_*` columns, structure check by CAS RN) behind `pubchem enrich`. |
 | `chem.standardize` | RDKit cleanup, largest fragment, neutralize, and the pH protonation rule table (or Dimorphite-DL). |
 | `chem.conformers` | ETKDGv3 embedding, MMFF94s/UFF, energy-window plus RMSD pruning, Boltzmann weights. |
 | `chem.engines` | Engine registry and ASE calculator factory: `DxtbCalculator`, AIMNet2, and `register()` for plugin engines (`PLUGINS`), each with an availability check, a calculator factory, optional properties and native optimizer. `method_keys`, `auto_candidates` (solvent-aware). |
@@ -62,7 +63,7 @@
 | `gui.selection` | `SelectionModel` (ordered atom indices, `changed` signal), measurements, the shared accent color. |
 | `gui.spectra_panel`, `gui.surface_panel`, `gui.import_action` | Optional panels installed by `MainWindow._install_panels`; they follow `MainWindow.resultChanged`. |
 | `gui.surface_dialog`, `gui.settings_dialog`, `gui.workers` | Dialogs and `QThread` workers. |
-| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`. |
+| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`). |
 
 ## Key decisions
 

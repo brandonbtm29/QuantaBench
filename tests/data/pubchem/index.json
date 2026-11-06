@@ -1,0 +1,74 @@
+{
+ "name_cas_pfoa_cids": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/335-67-1/cids/JSON",
+  "status": 200,
+  "bytes": 60,
+  "throttling": "Request Count status: Green (0%), Request Time status: Green (0%), Service status: Red (87%)"
+ },
+ "name_cas_pfos_cids": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/1763-23-1/cids/JSON",
+  "status": 200,
+  "bytes": 61,
+  "throttling": "Request Count status: Green (0%), Request Time status: Green (0%), Service status: Red (83%)"
+ },
+ "inchikey_pfoa_cids": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/inchikey/SNGREZUHAYWORS-UHFFFAOYSA-N/cids/JSON",
+  "status": 200,
+  "bytes": 60,
+  "throttling": "Request Count status: Green (0%), Request Time status: Green (0%), Service status: Yellow (53%)"
+ },
+ "smiles_post_cids": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/cids/JSON?smiles=OC(=O)C(F)(F)C(F)(F)F",
+  "status": 200,
+  "bytes": 61,
+  "throttling": "Request Count status: Green (0%), Request Time status: Green (0%), Service status: Yellow (60%)"
+ },
+ "properties_batch": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/9554,74483,8058,702/property/MolecularFormula,MolecularWeight,ConnectivitySMILES,SMILES,CanonicalSMILES,IsomericSMILES,InChI,InChIKey,XLogP,TPSA,Complexity,HBondDonorCount,HBondAcceptorCount,RotatableBondCount,Charge,HeavyAtomCount,ExactMass/JSON",
+  "status": 200,
+  "bytes": 2577,
+  "throttling": "Request Count status: Green (1%), Request Time status: Green (0%), Service status: Red (80%)"
+ },
+ "synonyms_pfoa": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/9554/synonyms/JSON",
+  "status": 200,
+  "bytes": 3460,
+  "throttling": "Request Count status: Green (1%), Request Time status: Green (0%), Service status: Yellow (57%)"
+ },
+ "xref_rn_pfoa": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/9554/xrefs/RegistryID,RN/JSON",
+  "status": 200,
+  "bytes": 6351,
+  "throttling": "Request Count status: Green (1%), Request Time status: Green (0%), Service status: Green (47%)"
+ },
+ "view_surface_tension_hexane": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/8058/JSON?heading=Surface+Tension",
+  "status": 200,
+  "bytes": 3365,
+  "throttling": "Request Count status: Green (0%), Request Time status: Green (0%), Service status: Green (2%)"
+ },
+ "view_surface_tension_ethanol": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/702/JSON?heading=Surface+Tension",
+  "status": 200,
+  "bytes": 3370,
+  "throttling": "Request Count status: Green (0%), Request Time status: Green (0%), Service status: Green (2%)"
+ },
+ "view_surface_tension_pfoa": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/9554/JSON?heading=Surface+Tension",
+  "status": 200,
+  "bytes": 3399,
+  "throttling": "Request Count status: Green (0%), Request Time status: Green (0%), Service status: Green (2%)"
+ },
+ "view_experimental_pfoa": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/9554/JSON?heading=Experimental+Properties",
+  "status": 200,
+  "bytes": 46839,
+  "throttling": "Request Count status: Green (0%), Request Time status: Green (0%), Service status: Green (2%)"
+ },
+ "not_found_name": {
+  "url": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/notarealchemicalnamexyzzy/cids/JSON",
+  "status": 404,
+  "bytes": 156,
+  "throttling": "Request Count status: Green (1%), Request Time status: Green (0%), Service status: Green (47%)"
+ }
+}
