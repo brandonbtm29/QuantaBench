@@ -262,6 +262,29 @@ def test_optimizer_problem():
     assert crest.optimizer_problem("") == ""
 
 
+def test_build_problem_flags_an_accelerate_crest(monkeypatch):
+    """macOS: a CREST linked to Apple's Accelerate (conda-forge's osx-arm64 3.0.2) is named in doctor and the log."""
+    import subprocess
+
+    linked = {"/conda/bin/crest": "\t/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate (x)\n",
+              "/fork/bin/crest": "\t@rpath/libopenblas.0.dylib (compatibility version 0.0.0)\n"}
+
+    def fake_run(cmd, **kw):
+        assert cmd[:2] == ["otool", "-L"]
+        return subprocess.CompletedProcess(cmd, 0, cmd[2] + ":\n" + linked[cmd[2]], "")
+
+    crest.build_problem.cache_clear()
+    monkeypatch.setattr(crest.sys, "platform", "darwin")
+    monkeypatch.setattr(crest.subprocess, "run", fake_run)
+    assert "Accelerate" in crest.build_problem("/conda/bin/crest") and "fork" in crest.build_problem("/conda/bin/crest")
+    assert crest.build_problem("/fork/bin/crest") == ""
+    assert crest.build_problem("wsl:/home/u/crest") == ""
+    monkeypatch.setattr(crest.sys, "platform", "linux")
+    crest.build_problem.cache_clear()
+    assert crest.build_problem("/conda/bin/crest") == ""
+    crest.build_problem.cache_clear()
+
+
 def _crest_cfg(**kw):
     base = {"method": "mmff", "conformer_search": "crest", "crest_method": "gfnff", "max_conformers": 5,
             "write_files": False, "xtb_properties": False, "threads": 1}

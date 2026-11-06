@@ -39,8 +39,11 @@ Implementation notes:
 
 from __future__ import annotations
 
+import functools
 import os
 import re
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -103,6 +106,24 @@ def optimizer_problem(text: str) -> str:
         if int(total) >= 2 and int(done) == 0:   # one structure may legitimately fail
             return (f"CREST's optimizer failed on all {total} structures of a stage ('0 of {total} structures "
                     "successfully optimized'): a broken CREST build (docs/ENGINES.md, CREST on macOS)")
+    return ""
+
+
+@functools.lru_cache(maxsize=8)
+def build_problem(path: str) -> str:
+    """'' unless the CREST binary at ``path`` is a build known to be broken. macOS: one linked to Apple's
+    Accelerate (conda-forge's osx-arm64 crest 3.0.2) gets single-precision BLAS functions wrong, and its optimizer
+    then fails on every molecule of 19 atoms or more (docs/ENGINES.md)."""
+    if sys.platform != "darwin" or not path or path.startswith("wsl:"):
+        return ""
+    try:
+        cp = subprocess.run(["otool", "-L", path], capture_output=True, text=True, timeout=20,
+                            stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if "/Accelerate.framework/" in cp.stdout:
+        return ("this CREST links Apple's Accelerate (conda-forge's osx-arm64 build): its optimizer fails on molecules "
+                "of 19+ atoms, which then get RDKit's conformers; use the fork's macOS build (docs/ENGINES.md, CREST)")
     return ""
 
 
@@ -241,6 +262,9 @@ def generate(mol: Chem.Mol, cfg, *, threads: int = 1, solvent: str = "", charge:
         raise Cancelled()
     log(f"  CREST {method}{' --quick' if getattr(cfg, 'crest_quick', True) else ''} "
         f"(start: ETKDGv3 + {ff}){' in ' + solvent if solvent else ''}, {threads} thread(s)")
+    problem = build_problem(program.path)
+    if problem:
+        log(f"  WARNING: {problem}")
     with external.work_dir("crest") as d:
         write_xyz(d / "input.xyz", numbers, start.GetConformer().GetPositions(), "QuantaBench CREST input")
         run = external.run_program(cmd, d, threads=threads, env=env, timeout=timeout, log_name="crest.log",

@@ -7,7 +7,9 @@
 # Options:
 #   --with-engines       also set up the external programs: Miniforge (only if no conda, mamba or
 #                        micromamba is found), then the conda environments envs/tools.yml (xtb, CREST,
-#                        MOPAC) and envs/psi4.yml (Psi4), created or updated
+#                        MOPAC) and envs/psi4.yml (Psi4), created or updated, and the fork builds listed
+#                        in scripts/fork-packages.json ("macos" > "programs": CREST, once one is
+#                        released), set as this machine's paths in the settings
 #   --settings-dir DIR   keep settings in DIR, e.g. ~/SyncThing/QuantaBench/Settings
 #   --gpu auto|mps|cpu   accepted for symmetry with the other installers: PyPI's macOS PyTorch is one build
 #                        that runs on the CPU and on the Apple GPU (mps)
@@ -35,6 +37,8 @@ PIP_FLAGS=""
 MINIFORGE_DIR="$HOME/miniforge3"
 MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
 APP="$HOME/Applications/QuantaBench.app"
+# fork builds of external programs (scripts/fork-packages.json "programs"), one folder per release
+PROGRAMS_DIR="$HOME/Library/Application Support/QuantaBench/programs"
 
 DRY_RUN=0 WITH_ENGINES=0 SETTINGS_DIR="" GPU="auto" TORCH_INDEX="" REPLACE_TORCH=0 PYTHON="" CONDA=""
 MAKE_APP=1 REINSTALL=0
@@ -102,6 +106,40 @@ load_forks() {                            # load_forks PLATFORM: sets FORK_PKGS 
   done
 }
 need_value() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value (see --help)"; }
+program_value() {                         # program_value NAME KEY: scripts/fork-packages.json macos.programs.NAME.KEY
+  "$ANYPY" -c 'import json, sys
+entry = (json.load(open(sys.argv[1], encoding="utf-8"))["macos"].get("programs") or {}).get(sys.argv[2]) or {}
+print(entry.get(sys.argv[3]) or "")' "$REPO/scripts/fork-packages.json" "$1" "$2"
+}
+install_program() {                       # install_program NAME: a fork build of an external program, if released
+  local name=$1 url sha exe release dest archive
+  url=$(program_value "$name" url) || die "scripts/fork-packages.json is missing or not valid (error above)"
+  if [ -z "$url" ]; then
+    info "$name: no fork build released yet (scripts/fork-packages.json: macos > programs > $name > url is empty)"
+    info "$(program_value "$name" until_released)"
+    return 0
+  fi
+  sha=$(program_value "$name" sha256)
+  exe=$(program_value "$name" exe)
+  release=$(program_value "$name" release)
+  [ -n "$sha" ] && [ -n "$exe" ] || die "scripts/fork-packages.json: macos > programs > $name needs sha256 and exe"
+  dest="$PROGRAMS_DIR/$name-${release:-${sha:0:12}}"
+  if [ -x "$dest/$exe" ]; then
+    ok "$name: $dest/$exe"
+  else
+    archive="${TMPDIR:-/tmp}/qb-$name-$$.tar.gz"
+    run curl -fsSL --retry 3 -o "$archive" "$url"
+    if [ "$DRY_RUN" = 0 ] && [ "$(sha256 "$archive")" != "$sha" ]; then
+      rm -f "$archive"
+      die "$name: the file at $url does not have the sha256 in scripts/fork-packages.json"
+    fi
+    run mkdir -p "$dest"
+    run tar -xzf "$archive" -C "$dest"
+    run rm -f "$archive"
+  fi
+  # this machine only (engines.machine_paths): the settings file is shared, and the other machines keep theirs
+  run_quiet "$VENV/bin/quantabench-cli" settings --engine-path "$name=$dest/$exe"
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -359,6 +397,7 @@ if [ "$WITH_ENGINES" = 1 ]; then
   fi
   setup_env "$REPO/envs/tools.yml"
   setup_env "$REPO/envs/psi4.yml"
+  install_program crest
   info "QuantaBench finds these environments by itself; \`quantabench-cli doctor\` below lists the programs"
 fi
 

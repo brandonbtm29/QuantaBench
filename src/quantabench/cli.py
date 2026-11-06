@@ -103,6 +103,12 @@ def _doctor(args) -> int:
             print(f"    --  {name:30s} not found: {hint}")
         else:
             print(f"    OK  {name + ' ' + info.version:30s} {info.path} ({info.source})")
+            if name == "crest":
+                from .chem import crest
+
+                problem = crest.build_problem(info.path)
+                if problem:
+                    print(f"    !!  {'':30s} {problem}")
     py = external.find_python_with("psi4", "psi4_python")
     print(f"    {'OK ' if py else '-- '} {'psi4 Python':30s} {py or 'no interpreter that can import psi4'}")
     print("  Optional      " + ", ".join(f"{k}={'yes' if v else 'no'}" for k, v in rep.optional_packages.items()))

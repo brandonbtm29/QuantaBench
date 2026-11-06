@@ -142,6 +142,39 @@ def test_macos_dry_run_reads_the_fork_packages(tmp_path):
     assert cp.returncode != 0 and "fork-packages.json is missing or not valid" in cp.stderr
 
 
+@pytest.mark.skipif(sys.platform != "linux" or BASH is None, reason="fakes macOS on Linux")
+def test_macos_dry_run_installs_released_fork_programs(tmp_path):
+    """--with-engines: a fork build from fork-packages.json ("macos" > "programs") is downloaded, checked, unpacked
+    and set as this machine's path; with no release (empty url) the installer says so and leaves the conda one."""
+    repo = copy_repo(tmp_path)
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "uname").write_text('#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n', encoding="utf-8")
+    (fake / "sw_vers").write_text("#!/bin/sh\necho 27.2\n", encoding="utf-8")
+    for f in fake.iterdir():
+        f.chmod(0o755)
+    cmd = [BASH, str(repo / "scripts" / "install_macos.sh"), "--dry-run", "--python", sys.executable, "--no-app",
+           "--with-engines", "--conda", shutil.which("true")]
+    env = {"PATH": f"{fake}{os.pathsep}{os.environ.get('PATH', '')}", "HOME": str(tmp_path / "home")}
+    cp = run_script(cmd, tmp_path, **env)
+    out = cp.stdout + cp.stderr
+    assert cp.returncode == 0, out
+    assert "crest: no fork build released yet" in out and "conformer_fallback" in out   # today: not released
+    assert "--engine-path" not in out
+    forks = json.loads((repo / "scripts" / "fork-packages.json").read_text(encoding="utf-8"))
+    entry = forks["macos"]["programs"]["crest"]
+    entry["url"], entry["sha256"] = entry["proposed_url"], "0" * 64
+    (repo / "scripts" / "fork-packages.json").write_text(json.dumps(forks), encoding="utf-8")
+    cp = run_script(cmd, tmp_path, **env)
+    out = cp.stdout + cp.stderr
+    assert cp.returncode == 0, out
+    dest = f"{tmp_path / 'home'}/Library/Application Support/QuantaBench/programs/crest-qb-v3.0.2-macos1"
+    assert "curl -fsSL --retry 3 -o" in out and entry["proposed_url"] in out
+    assert "tar -xzf" in out and "settings --engine-path" in out
+    assert f"'crest={dest}/crest-macos-arm64/bin/crest'" in out
+    assert not (tmp_path / "home" / "Library").exists()                                # a dry run writes nothing
+
+
 @pytest.mark.skipif(_native_bash_script() is None, reason="needs Linux or macOS")
 def test_foreign_venv_is_left_alone(tmp_path):
     """A Windows .venv (e.g. a checkout on /mnt/c seen from WSL) must not get a Linux venv on top."""
