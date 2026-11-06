@@ -292,13 +292,18 @@ conda env create -f envs/tools.yml    # xtb, CREST and MOPAC have native osx-arm
 conda env create -f envs/psi4.yml
 ```
 
-What to expect on a Mac today:
-- The Apple GPU (`mps`) has no float64. GPU engines run in float32.
-- AIMNet2 and dxtb need FORK-3 and FORK-4 before they run on the Mac GPU. Until then they use the CPU.
-- dxtb's GFN2, polarizability and IR intensities (libcint) need the dxtb fork with tad-libcint 0.4,
-  whose macOS arm64 wheel is the first one (FORK-1). Tested in the fork's CI on `macos-14`, not on a Mac
-  yet. `tblite-gfn2` and `xtb-gfn2` also give GFN2.
-- CREST runs natively, unlike on Windows.
+What to expect on a Mac (first run on Brandon's MacBook Pro, Apple Silicon, macOS 27, 2026-11-05):
+- The Apple GPU (`mps`) has no float64. AIMNet2 runs there in float32 through QuantaBench's Warp-free path
+  (energies match the CPU to ~1e-5 eV), but for PFAS-sized molecules the M-series CPU is faster
+  (benchmark: 8,230 vs 5,305 molecules/h), so `lanes auto` gives CPU lanes when the benchmark says so.
+- dxtb (GFN1/GFN2) stays on the CPU on MPS by design (no float64, incomplete linear algebra). Its GFN2,
+  polarizability and IR intensities work with the dxtb fork and tad-libcint 0.4 (the installer brings both).
+- `tblite-gfn2` (gas and ALPB water) runs in process: 2,860 / 2,547 molecules/h on the benchmark set. The
+  installer links tblite's OpenMP runtime to PyTorch's (see below).
+- CREST, xtb, MOPAC and Psi4 run natively from the conda environments (`--with-engines`).
+- A worker (`quantabench-cli worker`) should be started from Terminal in your own session (or the LaunchAgent
+  in docs/WORKERS.md), not over SSH: a worker started over SSH listened on its Tailscale address but received
+  no connections.
 
 **tblite and PyTorch on macOS.** tblite's wheel and PyTorch each bundle LLVM's OpenMP runtime (`libomp.dylib`),
 and a process that loads both aborts with `OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib
