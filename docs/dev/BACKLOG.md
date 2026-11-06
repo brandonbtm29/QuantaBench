@@ -240,11 +240,36 @@ Open (needs-Brandon):
     documents); Bondi radii give −6.8 % volume, RDKit's `volume_A3` −4.1 %.
   - `sasa_A2` used FreeSASA's ProtOr radii, 0 for non-protein atoms: fixed (Bondi + 1.4 Å probe).
 
-## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · ready (after VAL-1 data)
+## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · in progress 2026-11-06 (branch `feat/val2-essential76`; the runs needs-Brandon)
 - The QM stage reproduces Spartan's level (Spartan used 6-31G*: run `wb97x-d/6-31g*` too). Compare
   dipoles, polarizabilities, 0.002 au volumes/areas and ESP extrema with Spartan's exports; recommend a
   default level for the 4,700-PFAS descriptor run with timings (PFBA anion: ~4.5 min on 2 threads with
   PCM, cubes and finite-field α).
+- Done 2026-11-06 (docs/VALIDATION.md, "VAL-2"):
+  - The Essential 76 documents are a multi-step conformer search (MMFF -> DLFF03 -> Spartan's neural-network
+    ωB97X-D/6-31G* geometry DLFFG1 -> ωB97X-D/6-31G* single points -> DLXD2XV ranking): 63 of 76 completed
+    (1,006 conformers); 13 failed (I, Si, P, a Na salt: outside Spartan's neural networks; PFOS drawn as the
+    anion, calculated as neutral). Spartan's ωB97X-D/6-31G* values are gas-phase energies and dipoles per
+    conformer. HOMO/LUMO, ESP extrema, density-surface area/volume and EST_POLARIZ at that level exist for one
+    molecule (perfluorooctane, a C-PCM water optimization), in all 1,067 documents.
+  - Import fixes: `MoleculeN` labels resolved by structure (76 wide rows, not 847); the Est. DFT rows'
+    ωB97X-D/6-31G* SCF dipole (`QM_DIPOLE`) as `dipole_debye` + `qm_dipole_level`; their best row by
+    `POSTENERGY`; `validate` pairs `qm_dipole_debye` with that level (`gas_dipole_qm_vs_dlxd2xv`).
+  - Pilot at Spartan's geometry (TFA, PFPrA, triflic acid, PFHpA): Psi4 = Spartan to 5e-5 Eh (exact integrals)
+    or 4e-4 Eh (density fitting) and 0.001 D. Timings scale as nbf^2.5. In PCM water, the finite-field α is three
+    quarters of the cost.
+  - QM stage fixes found on the way: scratch cleaned after a failed free-atom SCF; `run_driver` stops a driver
+    that hangs after writing its result.
+- Open (needs-Brandon): run the stages in `scratch/val2/run_val2_nova.ps1` (and `run_val2_mac.sh`) when NOVA is
+  free, then pick the default level from the report.
+- Open (code): an option to compute the QM polarizability in the gas phase (analytic) when the SCF is PCM, or to
+  skip it. Under PCM it is about 70 % of the QM stage, which takes the 4,700 run from about 1-2 weeks on NOVA in
+  water to about the gas-phase cost.
+- Open: the full import's wide table (`spartan-qsar-v5`) has 771 `MoleculeN` rows from the Essential 76
+  conformer documents. Re-import with this branch. Spartan reference values for HOMO/LUMO, ESP and areas at
+  a DFT level exist only at B3LYP/6-311+G** C-PCM (the charged cohorts); a Psi4 B3LYP/6-311+G** PCM run at
+  Spartan's geometries would compare those (needs ESP/density-surface pairs in `validate`: QSAR_ELPOT_MIN/MAX,
+  QSAR_ELPOT_AREA/VOLUME, polar areas vs `qm_surf_*`).
 
 ## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · ready (Surfaces & radii, Display done 2026-11-06)
 Review of Spartan '24's eleven tabs: Brandon's Claude Doc "Spartan Preferences review and QuantaBench settings plan".

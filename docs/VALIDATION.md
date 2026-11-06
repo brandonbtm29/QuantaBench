@@ -93,6 +93,10 @@ Like with like, in QuantaBench's units:
 
 - Gas-phase QuantaBench values pair with Spartan's gas-phase quantum levels (PM6 at its PM6 geometry); ALPB
   water values with the water levels (B3LYP/6-311+G** C-PCM single points at the MMFF geometry, ωB97X-D/6-31G*).
+- QuantaBench's QM stage (`qm_dipole_debye`, `qm_homo_ev`, ...: source `qm`) pairs the same way. Spartan's Est.
+  Density Functional level (`dlxd2xv`, a neural-network energy) counts as a gas-phase quantum level for the
+  dipole only: its `dlxd2xv_dipole_debye` is the ωB97X-D/6-31G* SCF's (`dlxd2xv_qm_dipole_level`), so
+  `gas_dipole_qm_vs_dlxd2xv` compares like with like at the level, not at the geometry (VAL-2 below).
 - **Correlation only** where the quantities differ: Spartan's CPK surface is the van der Waals surface, not the
   solvent-accessible one, and its volume uses other radii; `EST_POLARIZ` is an estimate (≈ 45-60 for molecules
   whose computed polarizability is ≈ 5-15 Å³); charge partitions differ between methods. Errors are listed, but
@@ -119,3 +123,151 @@ A 10-molecule check (GFN2-xTB with tblite, 3 conformers, gas and ALPB water) aga
 all 10 by InChIKey with their CAS ids; GFN2's HOMO tracks PM6's (r = 0.96, 1.3 eV lower), its LUMO and gap do
 not (MAE 4.7 / 3.5 eV), and the dipoles agree to about 1.2-1.5 D MAE (N = 8, and the optimizations stopped
 at the test machine's 10-step limit: a plumbing check, not a result).
+
+# VAL-2: the QM stage against Spartan's ωB97X-D/6-31G* (Essential 76 PFAS)
+
+The question: does QuantaBench's Psi4 stage reproduce Spartan at Spartan's level, and which level should the
+4,700-PFAS descriptor run use?
+
+## What Spartan computed
+
+The "Spartan EPA Essential 76 PFAS" folder (128 documents, 1.4 GB, February 2026), imported 2026-11-06:
+
+- **The main document** (76 neutral molecules, the CompTox "Essential" list): one multi-step conformer
+  distribution per molecule (`MS_CONFP2`). The steps are:
+  1. an MMFF94 search (40 kJ/mol window, at most 200 conformers);
+  2. DLFF03 energies;
+  3. two optimizations with DLFFG1, Spartan's neural-network estimate of the ωB97X-D/6-31G* geometry;
+  4. ωB97X-D/6-31G* gas-phase single points (at most 30 conformers within 10 kJ/mol);
+  5. DLXD2XV, the neural-network estimate of ωB97X-V/6-311+G(2df,2p)//ωB97X-D/6-31G*, which ranks the
+     conformers and gives their Boltzmann weights;
+  6. DLNMR1 NMR shifts.
+
+  63 molecules completed. 13 failed: Spartan's neural networks cover only closed-shell neutral molecules of H,
+  C, N, O, F, S, Cl and Br, which leaves out 6 iodides, 3 silanes, 2 phosphonic acids and the sodium salt
+  2806-15-7. PFOS (45298-90-6) was drawn as the anion but calculated as a neutral molecule (`charge_check` =
+  mismatch).
+- **`Conformer NMR, Est DFT/`** (63 documents, 1,006 conformers): the saved conformers of each search, labelled
+  `Molecule1`, `Molecule41`, ... Each one has the ωB97X-D/6-31G* energy (`SPENERGY`, hartree), the dipole
+  vector (`QM_DIPOLE`, debye), the quadrupole, the DLXD2XV energy (`POSTENERGY`) and NMR shieldings. The lowest
+  `POSTENERGY` conformer is the main document's geometry (to 1e-6 Å) and has its values.
+- **`Conformer Distribution/`** (64 documents, 4,890 conformers): an earlier DLFF03 search with force-field
+  energies only. One extra: perfluorooctane (307-34-6) also has 59 MMFF/water optimizations and one
+  ωB97X-D/6-31G* C-PCM water optimization with Spartan's QSAR properties (HOMO/LUMO, ESP extrema and polar
+  areas, density-surface area and volume, CPK, EST_POLARIZ).
+
+So Spartan's ωB97X-D/6-31G* reference for the 63 molecules is **gas-phase energies and dipoles per conformer**,
+at its neural-network geometries. HOMO/LUMO, ESP extrema, 0.002 au areas and volumes and polarizabilities at
+that level exist for one molecule, across all 1,067 of the PFAS QSAR documents. Spartan's DFT QSAR properties
+otherwise exist only at B3LYP/6-311+G** C-PCM water (the charged cohorts, VAL-1).
+
+## The import
+
+```bash
+quantabench-cli import "Spartan EPA Essential 76 PFAS"/**/*.spartan --table essential76_long.csv \
+    --wide essential76_wide.csv --sdf essential76_best.sdf
+```
+
+- 5,972 molecules give 76 wide rows. Every `MoleculeN` conformer is resolved to its CAS label by structure;
+  before `MoleculeN` was treated as a Spartan default label, there were 847 rows.
+- Prefixes:
+  - `conf_dlxd2xv`: the 63 searches;
+  - `conf_hf`: the 13 failed searches;
+  - `dlxd2xv`: the Est. DFT single points, best conformer by `POSTENERGY`, with `dlxd2xv_dipole_debye`,
+    `dlxd2xv_qm_dipole_level` = `WB97X-D/6-31G(d)` and `dlxd2xv_spartan_spenergy`;
+  - `mm_dlff03`;
+  - `mm_mmff_solvent_wasser` and `dft` (perfluorooctane only).
+- InChIKeys:
+  - 65 equal the CompTox export's;
+  - 10 differ only in the stereo layer: Spartan's geometry gives R/S where CompTox gives none, and `validate`'s
+    stereo-free join matches them;
+  - 2806-15-7 has none, because Spartan drew the Na bonded to two O.
+- `charge_check` is `ok` for 74 molecules. PFOS is the mismatch.
+
+## Pairs
+
+| Spartan (wide table / per conformer) | QuantaBench | same geometry | where |
+|---|---|---|---|
+| `dlxd2xv_dipole_debye` (ωB97X-D/6-31G* SCF, best conformer) | `qm_dipole_debye` (`--qm wb97x-d/6-31g*`, gas) | fixed-geometry runs: yes; `build`: no | script; `validate` (`gas_dipole_qm_vs_dlxd2xv`) |
+| `dlxd2xv_spartan_spenergy` (hartree) | the QM energy | fixed-geometry runs | script |
+| `SPENERGY` of every conformer | conformer energies (P1E) | yes | script: relative energies, ranking |
+| Boltzmann-averaged `QM_DIPOLE` (DLXD2XV weights) | `qm_dipole_debye` | no | script (`spartan_conformers_wb97xd.csv`) |
+| perfluorooctane `dft_homo_ev`, `dft_lumo_ev`, `dft_spartan_qsar_elpot_min/max` (kcal/mol), `_polar_area_75/100/125`, `_area`, `_volume` (its density surface) | `qm_homo_ev`, `qm_lumo_ev`, `qm_surf_esp_min/max_kcal`, `qm_surf_esp_polar_area_*_A2`, `qm_surf_area_A2`, `qm_surf_volume_A3` | no (the import keeps the starting geometry of an optimization) | one molecule |
+
+## The pilot (Psi4 1.9.1 through QuantaBench's driver, Spartan's best-conformer geometry, 2 threads)
+
+| molecule | basis functions | ΔE Psi4 - Spartan, exact integrals | ΔE, density fitting (the default) | Δ dipole |
+|---|---|---|---|---|
+| TFA (76-05-1) | 107 | -1.5e-5 Eh | +5.9e-5 Eh | +0.0001 D |
+| triflic acid (1493-13-6) | 126 | | +1.8e-4 Eh | +0.001 D |
+| PFPrA (422-64-0) | 152 | +4.6e-5 Eh | +1.3e-4 Eh | -0.0007 D |
+| PFHpA (375-85-9) | 332 | | +4.1e-4 Eh | 0.000 D |
+
+The dipole vectors agree in Spartan's frame (angle < 0.04°), and the basis-function counts show that Spartan's
+6-31G* uses Cartesian d functions, as Psi4's does. QuantaBench's QM stage therefore reproduces Spartan's
+ωB97X-D/6-31G*. The density-fitting error, 0.04-0.26 kcal/mol in total energy, does not affect properties.
+
+The other levels at the same geometry for TFA and PFPrA, against ωB97X-D/6-31G* gas:
+
+| level | dipole | HOMO, LUMO | α |
+|---|---|---|---|
+| def2-SVP gas | -0.05 to -0.07 D | -0.21 to -0.25 eV | -4 % |
+| 6-31G* PCM water | +0.75 to +0.83 D (+26 to +28 %) | HOMO -0.04 eV, LUMO +0.13 eV | +20 % (finite field, reaction field included) |
+
+PCM water also moves the 0.002 au ESP minimum by -7 kcal/mol and the maximum by +14 kcal/mol; the area does not
+change.
+
+PFHpA (375-85-9, 23 atoms) at the same geometry:
+
+| level | dipole (D) | HOMO / LUMO (eV) | α (Å³) | 0.002 au area / volume | V_min / V_max (kcal/mol) |
+|---|---|---|---|---|---|
+| 6-31G* gas | 1.92 | -10.86 / 0.45 | 11.82 | 223.3 / 210.3 | -28.8 / 79.5 |
+| def2-SVP gas | 2.07 | -11.12 / 0.20 | 11.37 | 223.1 / 213.2 | -28.6 / 79.0 |
+| def2-SVP PCM water | 2.51 | -11.02 / 0.36 | 13.83 | 223.2 / 213.1 | -32.9 / 88.4 |
+
+**Timings.** These are wall times per molecule with 2 threads in the cloud container, a Xeon at 2.1 GHz (the
+"full" protocol: SCF, properties, cubes and polarizability):
+
+| protocol | TFA (107 bf) | PFPrA (152) | PFHpA (332) | steps at PFHpA |
+|---|---|---|---|---|
+| 6-31G* gas | 29 s | 63 s | 533 s | SCF 127, properties 112, cubes 44, analytic α 247 |
+| def2-SVP gas | 29 s | 88 s | 507 s | SCF 101, properties 102, cubes 71, analytic α 229 |
+| def2-SVP PCM water | 128 s | 113 s | 857 s | SCF 130, properties 56, cubes 50, finite-field α 617 |
+
+- The time grows as nbf^2.5. The 63 molecules have a median of 365 basis functions (6-31G*) and a maximum of
+  647.
+- On NOVA (3 lanes x 4 threads, taking a lane as 2-4x a cloud job), the P1, P2a, P2b, P2c and P2d set takes
+  about 9-19 h (P2b's diffuse basis about 4.5 h of that), or half that with the MacBook taking `--part 2/2`.
+  P1E takes about 4-9 h, and `qb` and `qbwater` about 2.5 h each.
+- The 4,700-PFAS list has 3,708 SMILES-defined molecules of at most 60 heavy atoms, with a median of 26 heavy
+  atoms and about 400 basis functions. On NOVA alone, the full protocol takes about 5-10 days in the gas phase
+  (def2-SVP) and 9-17 days in PCM water.
+- In PCM, three quarters of the water cost is the finite-field polarizability: six more PCM SCFs. Computing α
+  in the gas phase (analytic) or not at all brings the water protocol close to the gas one.
+
+**Psi4 pitfalls found here** (ENGINES.md):
+- ESP cubes need density fitting.
+- `scf_type pk` filled 12 GB of disk at 332 basis functions.
+- One free-atom SCF of the MBIS step failed (triflic acid, def2-SVP), and the Psi4 process then hung after
+  writing its result. The driver now cleans up and `run_driver` stops such a process.
+
+## The runs (`scratch/val2/` on NOVA, not in the repository)
+
+- `val2_import.py`: the import above, plus `spartan_conformers_wb97xd.csv`, `essential76_summary.csv` and the
+  CompTox inputs `val2_inputs_63.csv` and `val2_inputs_all.csv`.
+- `val2_fixed_geometry.py`: the driver at Spartan's geometries.
+  - Protocols:
+    - P1: ωB97X-D/6-31G* gas, full properties;
+    - P1E: every conformer's energy;
+    - P1K: P1 with exact integrals;
+    - P2a: def2-SVP gas;
+    - P2b: def2-SVPD gas;
+    - P2c: 6-31G* water;
+    - P2d: def2-SVP water;
+    - P2e: def2-TZVP gas.
+  - It is resumable and shares a list between machines (`--part K/N`).
+  - Psi4 runs in local scratch; only small files go to SyncThing.
+  - The report compares each level with Spartan and with P1, and fits t = a·nbf^b per protocol.
+- `run_val2_nova.ps1` and `run_val2_mac.sh`: the stages `fixed`, `fixedE`, `qb` and `qbwater` (QuantaBench's own
+  geometries: RDKit -> AIMNet2 -> `--qm wb97x-d/6-31g* --qm-top 3 --cubes`, and the candidate default GFN2-xTB/ALPB
+  -> `--qm wb97x-d/def2-svp` in PCM water), then `validate`.

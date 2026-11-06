@@ -27,6 +27,8 @@ warnings. Frequencies: ``result.vibrations``-compatible dict under ``qm["vibrati
 
 IMPLEMENTATION NOTES
 
+- A driver still running ``EXIT_GRACE_S`` after it wrote ``result.json`` is stopped and its result used, with a
+  warning (Psi4 1.9.1 can hang at exit once a failed SCF left its timers on).
 - One driver process per molecule runs every conformer and then the extras of the lowest-energy one
   (properties, polarizability, cubes, Hessian). That saves the Psi4 import per conformer, keeps the best
   wavefunction in memory (charges, orbitals and cubes need no new SCF) and lets the polarizability SCFs start
@@ -68,6 +70,8 @@ DRIVER = Path(__file__).with_name("psi4_driver.py")
 TASK_FILE, RESULT_FILE, LOG_FILE, PSI4_OUTPUT = "task.json", "result.json", "driver.log", "output.dat"
 PROGRESS = "QB| "          # progress prefix printed by psi4_driver.say()
 TASKS = ("energy", "optimize")
+#: seconds a driver may keep running after it wrote result.json before it is stopped (run_driver)
+EXIT_GRACE_S = 60.0
 
 # Spellings people use for the same thing -> Psi4's name.
 METHOD_ALIASES = {"ωb97x-d": "wb97x-d", "wb97xd": "wb97x-d", "ωb97x-d3": "wb97x-d3", "ωb97m-v": "wb97m-v",
@@ -184,17 +188,34 @@ def run_driver(task: dict, wd: Path, python: str, *, threads: int = 1, timeout: 
     """Write ``task`` into ``wd``, run the driver there and return its result (``ExternalProgramError`` if it
     failed or wrote nothing usable)."""
     from . import external
+    from .optimize import Cancelled
 
     wd = Path(wd)
     wd.mkdir(parents=True, exist_ok=True)
     (wd / TASK_FILE).write_text(json.dumps(task), encoding="utf-8")
     shutil.copy2(DRIVER, wd / DRIVER.name)
     pump = _ProgressPump(wd / LOG_FILE, log)
-    run = external.run_program([python, "-I", DRIVER.name, TASK_FILE], wd, threads=threads,
-                               env=external.program_env(threads, scratch=wd), timeout=timeout, log_name=LOG_FILE,
-                               should_stop=lambda: pump() or should_stop(), check=False)
-    pump()
     res_path = wd / RESULT_FILE
+    seen: dict[str, float] = {}
+
+    def finished_but_running() -> bool:
+        # the driver writes result.json (atomically) as its last act; a Psi4 process still running EXIT_GRACE_S
+        # later is stuck (seen after a failed SCF left Psi4's timers on: it hangs at exit) and is stopped
+        if "at" not in seen and res_path.is_file():
+            seen["at"] = time.monotonic()
+        return "at" in seen and time.monotonic() - seen["at"] > EXIT_GRACE_S
+
+    hung = False
+    try:
+        run = external.run_program([python, "-I", DRIVER.name, TASK_FILE], wd, threads=threads,
+                                   env=external.program_env(threads, scratch=wd), timeout=timeout, log_name=LOG_FILE,
+                                   should_stop=lambda: pump() or should_stop() or finished_but_running(), check=False)
+    except Cancelled:
+        if should_stop() or not res_path.is_file():
+            raise
+        hung = True
+        run = external.ProgramRun(-1, 0.0, wd / LOG_FILE)
+    pump()
     try:
         out = json.loads(res_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -202,6 +223,9 @@ def run_driver(task: dict, wd: Path, python: str, *, threads: int = 1, timeout: 
                                             f"{run.tail()}") from None
     if not out.get("ok"):
         raise external.ExternalProgramError(f"Psi4: {out.get('error', 'unknown error')}\n{run.tail(15)}")
+    if hung:
+        out.setdefault("warnings", []).append(f"the Psi4 driver did not exit {EXIT_GRACE_S:g} s after writing its "
+                                              "result and was stopped (the result is complete)")
     return out
 
 

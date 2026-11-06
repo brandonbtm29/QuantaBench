@@ -422,6 +422,10 @@ quantabench-cli build "OC(=O)C(F)(F)C(F)(F)C(F)(F)F PFBA" --method xtb-gfn2 --so
   - PCM solvents: PCMSolver has no DMF, n-hexane, diethyl ether, octanol or ethyl acetate; those QM stages
     run in the gas phase with a note.
   - libint 2.13 makes Psi4 1.9.1 segfault: pin `libint=2.9`.
+  - Cubes need density fitting: with `scf_type pk` (exact integrals, a `psi4_options` override) Psi4 1.9.1's
+    ESP cube fails ("Bad BraKet type in Libint2TwoElectronInt"). The driver's default `df` changes ωB97X-D/6-31G*
+    energies by 0.03-0.3 kcal/mol and dipoles by under 0.001 D. For exact integrals use `direct`: `pk` keeps
+    N⁴/8 integrals on disk when they do not fit in memory (about 12 GB at 330 basis functions).
   - pint ≥ 0.25 breaks qcelemental 0.30, so every optimization fails: pin `pint<0.25`. The driver
     patches this for its own process and warns.
   - `-d3bj`/`-d4` functionals need `dftd3-python` / `dftd4-python`.
@@ -477,8 +481,14 @@ quantabench-cli import cohorts/*/*.spartan --table all.csv --wide qsar.csv # + o
   the energies (a heat of formation for PM6, a total energy for DFT) stay `spartan_*`; their units are in
   `chem/io_spartan.py`. In this long table a PM6 and a DFT HOMO are both `homo_ev`, told apart by
   `spartan_method` next to them.
+- **Est. Density Functional single points** (`SOPT DLXD2XV`, e.g. the conformers a multi-step conformer search
+  writes out) run a ωB97X-D/6-31G* SCF and then a neural-network energy (`POSTENERGY`). They have no
+  `DIPOLE_MAG`: `dipole_debye` is the SCF's dipole (`QM_DIPOLE`, debye) and `qm_dipole_level` names the SCF
+  (`WB97X-D/6-31G(d)`, Spartan's `SPENERGYAT`); `spartan_spenergy` is its total energy (hartree). Neutral
+  molecules only; a conformer search's own `QM_DIPOLE` is not mapped (it belongs to the Input geometry).
 - **Labels.** Spartan keeps a molecule's label (the CAS number in the PFAS QSAR batches) only in the document
-  it was built in; extracted conformers and the PM6/DFT documents made from them say `M0003` or `M0001[2]`.
+  it was built in; extracted conformers and the PM6/DFT documents made from them say `M0003` or `M0001[2]`,
+  the documents a multi-step conformer search writes its conformers to `Molecule1`, `Molecule41`, ...
   Those rows are joined to their base document (`C1B_P5_SemiEmp_PM6.spartan` -> `C1B_P5.spartan`, which must
   be among the inputs) by structure: elements, connectivity and charge must match exactly one label there.
   `label_source` is `input`, `structure`, `ambiguous` (several base labels share the structure, e.g. an anion
@@ -493,7 +503,8 @@ quantabench-cli import cohorts/*/*.spartan --table all.csv --wide qsar.csv # + o
 - `spartan_solvent` is QuantaBench's solvent name (`WASSER` -> `water`); `spartan_solvent_raw` and the level
   text keep Spartan's keyword.
 - **`--wide`** writes one row per resolved label with each level of theory's best result (completed first,
-  then lowest energy) as prefixed columns: `conf_*` (conformer search), `mm_*`, `pm6_*`, `dft_*`, ... plus
+  then lowest energy: the conformer energy, `E_KCAL`, `POSTENERGY` for Est. DFT jobs, `OPTENERGY`) as prefixed
+  columns: `conf_*` (conformer search), `mm_*`, `pm6_*`, `dft_*`, ... plus
   `<prefix>_level`, `<prefix>_n_rows` (e.g. conformers at that level) and `<prefix>_n_failed`. The prefix
   comes from the method and task, not the document name; when a run has two levels with one prefix, each
   gets its level appended (`conf_dlff03`, `conf_mmff`), so a column never mixes levels. The command prints
