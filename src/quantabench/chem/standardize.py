@@ -14,9 +14,13 @@ Salts, mixtures and metals (the conservative choices; ``prepare`` notes each one
   Fe-C) are kept as drawn, so an organotin or organomercury compound is computed whole (xTB covers
   these elements), not as a cation with its ligand silently removed.
 * Of several fragments the largest is kept. Removed fragments are named in the notes ("removed Na+
-  (counter-ion)"). A removed fragment holding any other metal (a carbonyl complex, a cobalamin or a
-  ferrocene drawn as ions) raises ``UnsupportedStructure``: computing the ligand alone would be a
+  (counter-ion)"). Bondless Al, Fe, Cu and Zn cations (``SALT_METALS``) are counter-ions too when the
+  record is a salt of an organic ion (fosetyl-Al: one ethyl phosphonate anion is computed); see
+  ``salt_counterion_problem`` for the test. A removed fragment holding any other metal, or a salt metal
+  next to fragments that are not counter-ions (a carbonyl complex, a cobalamin, a phosphine complex or a
+  ferrocene drawn as ions), raises ``UnsupportedStructure``: computing the ligand alone would be a
   different molecule.
+* ``inchikey``: the standard InChIKey of a species, for joining results to other tables by structure.
 """
 
 from __future__ import annotations
@@ -29,6 +33,10 @@ from rdkit.Chem.MolStandardize import rdMolStandardize
 
 #: Alkali and alkaline-earth metals: their bonds are treated as ionic, and their ions as counter-ions.
 COUNTERION_METALS = frozenset({3, 11, 19, 37, 55, 87, 4, 12, 20, 38, 56, 88})
+#: Al, Fe, Cu, Zn: a bondless cation of these is a salt counter-ion when the rest of the record is an organic
+#: ion and counter-ions (``salt_counterion_problem``). Their bonds are never disconnected: an Al-O, Zn-C or
+#: Fe-C bond drawn in the record keeps the molecule whole, as for every metal outside COUNTERION_METALS.
+SALT_METALS = frozenset({13, 26, 29, 30})
 #: Every metal (metalloids B, Si, Ge, As, Sb, Te are not): Al, Ga, In, Sn, Tl, Pb, Bi, Po, the
 #: transition metals, lanthanides and actinides, and the alkali/alkaline-earth metals.
 METALS = frozenset({3, 4, 11, 12, 13, 19, 20, 31, 37, 38, 49, 50, 55, 56, 81, 82, 83, 84, 87, 88}
@@ -65,6 +73,49 @@ def _describe_removed(labels: list[str]) -> str:
     """'[Na+]', '2 x [Cl-]', ... (fragment SMILES) for the notes."""
     counts = Counter(labels)
     return ", ".join(f"{n} x {s}" if n > 1 else s for s, n in counts.items())
+
+
+def _metal_ion(frag: Chem.Mol, metals: frozenset[int]) -> bool:
+    """A single bondless atom of ``metals`` with a positive charge (Al3+, Zn2+, ...)."""
+    if frag.GetNumAtoms() != 1:
+        return False
+    atom = frag.GetAtomWithIdx(0)
+    return atom.GetAtomicNum() in metals and atom.GetFormalCharge() > 0
+
+
+def _carbanion(frag: Chem.Mol) -> bool:
+    return any(a.GetAtomicNum() == 6 and a.GetFormalCharge() < 0 for a in frag.GetAtoms())
+
+
+def salt_counterion_problem(parent: Chem.Mol, removed: list[Chem.Mol]) -> str:
+    """Why the ``SALT_METALS`` cations among ``removed`` are not plain counter-ions of ``parent`` ("" if they are).
+
+    They are when the kept fragment is an organic ion whose charge does not sit on carbon (a carboxylate,
+    phosphonate, sulfonate, phenolate or ammonium, not a cyclopentadienide or cyanide ligand) and every other
+    removed fragment is a counter-ion too: a metal cation, a copy of the kept ion (salt stoichiometry), an
+    inorganic ion or water of hydration, or another organic ion of that kind. A neutral organic fragment
+    (CO, a phosphine, a corrin) next to the metal makes the record a metal complex drawn without its bonds."""
+    if not any(a.GetAtomicNum() == 6 for a in parent.GetAtoms()):
+        return "the kept fragment is inorganic"
+    if sum(a.GetFormalCharge() for a in parent.GetAtoms()) == 0:
+        return "the kept fragment is neutral, so the metal is not its counter-ion"
+    if _carbanion(parent):
+        return "the kept fragment is a carbanion (a ligand, e.g. cyclopentadienide or cyanide)"
+    key = _fragment_label(parent, max_len=10**6)
+    for frag in removed:
+        if _metal_ion(frag, SALT_METALS | COUNTERION_METALS) or _fragment_label(frag, max_len=10**6) == key:
+            continue
+        charge = sum(a.GetFormalCharge() for a in frag.GetAtoms())
+        organic = any(a.GetAtomicNum() == 6 for a in frag.GetAtoms())
+        water = Chem.MolToSmiles(Chem.RemoveHs(frag, sanitize=False)) == "O"
+        if any(a.GetAtomicNum() in METALS for a in frag.GetAtoms()):
+            return f"{_fragment_label(frag)} holds another metal"
+        if not organic and (charge != 0 or water):
+            continue                       # halide, sulfate, nitrate, hydroxide, water of hydration
+        if organic and charge != 0 and not _carbanion(frag):
+            continue                       # a second organic counter-ion
+        return f"{_fragment_label(frag)} is not a counter-ion (a ligand)"
+    return ""
 
 
 @dataclass(frozen=True)
@@ -118,13 +169,18 @@ def standardize(mol: Chem.Mol, keep_largest_fragment: bool = True, neutralize: b
         key = _fragment_label(parent, max_len=10**6)
         keep = labels.index(key) if key in labels else max(range(len(frags)), key=lambda i: frags[i].GetNumAtoms())
         removed = [f for i, f in enumerate(frags) if i != keep]
+        salt_problem = ""
+        if any(_metal_ion(f, SALT_METALS) for f in removed):
+            salt_problem = salt_counterion_problem(parent, removed)
         metals = sorted({a.GetSymbol() for f in removed for a in f.GetAtoms()
                          if a.GetAtomicNum() in METALS
-                         and not (a.GetAtomicNum() in COUNTERION_METALS and f.GetNumAtoms() == 1)})
+                         and not (a.GetAtomicNum() in COUNTERION_METALS and f.GetNumAtoms() == 1)
+                         and not (_metal_ion(f, SALT_METALS) and not salt_problem)})
         if metals:
             raise UnsupportedStructure(
                 f"metal complex: keeping the largest fragment ({_fragment_label(parent)}) would remove "
-                f"{', '.join(metals)} ({_describe_removed([_fragment_label(f) for f in removed])}); not computed. "
+                f"{', '.join(metals)} ({_describe_removed([_fragment_label(f) for f in removed])})"
+                + (f": {salt_problem}" if salt_problem else "") + "; not computed. "
                 "A complex drawn as separate ions (or without its metal-ligand bonds) is a different molecule "
                 "without its metal; draw the metal-ligand bonds to compute it whole")
         mol = parent
@@ -137,10 +193,25 @@ def standardize(mol: Chem.Mol, keep_largest_fragment: bool = True, neutralize: b
     return mol
 
 
+#: A basic site within this many bonds of an N+ (one protonated by these rules, or a quaternary ammonium) is
+#: left neutral: the second pKa of piperazine (5.6), ethylenediamine (6.9) or a guanidine's other NH2 is at or
+#: below pH 7, so these get one proton. 1,3-diamines (4 bonds apart, second pKa ~ 9) still get two.
+BASE_EXCLUSION_BONDS = 3
+
+
+def _ammonium(atom: Chem.Atom) -> bool:
+    """An sp3 N+ (ammonium), not the N+ of a nitro group, an N-oxide or an aromatic cation."""
+    return (atom.GetAtomicNum() == 7 and atom.GetFormalCharge() == 1 and not atom.GetIsAromatic()
+            and all(b.GetBondType() == Chem.BondType.SINGLE for b in atom.GetBonds())
+            and all(nb.GetFormalCharge() >= 0 for nb in atom.GetNeighbors()))
+
+
 def _apply_rules(mol: Chem.Mol, ph: float) -> tuple[Chem.Mol, list[str]]:
     rw = Chem.RWMol(mol)
     changes = []
     done: set[int] = set()
+    dist = Chem.GetDistanceMatrix(mol)
+    cations = {a.GetIdx() for a in mol.GetAtoms() if _ammonium(a)}
     for rule in RULES:
         patt = Chem.MolFromSmarts(rule.smarts)
         site_idx = next((a.GetIdx() for a in patt.GetAtoms() if a.GetAtomMapNum() == 1), 0)
@@ -156,15 +227,21 @@ def _apply_rules(mol: Chem.Mol, ph: float) -> tuple[Chem.Mol, list[str]]:
                 changes.append(f"deprotonated {rule.name} (pKa~{rule.pka:g})")
                 done.add(idx)
             elif rule.kind == "base" and ph < rule.pka:
+                done.add(idx)
+                if any(dist[idx][j] <= BASE_EXCLUSION_BONDS for j in cations):
+                    changes.append(f"left {rule.name} neutral (within {BASE_EXCLUSION_BONDS} bonds of an N+: one "
+                                   "proton for basic sites that close, as in piperazine or a 1,2-diamine)")
+                    continue
                 atom.SetFormalCharge(atom.GetFormalCharge() + 1)
                 atom.SetNumExplicitHs(atom.GetTotalNumHs() + 1)
                 atom.SetNoImplicit(True)
                 changes.append(f"protonated {rule.name} (pKa~{rule.pka:g})")
-                done.add(idx)
+                cations.add(idx)
     out = rw.GetMol()
     Chem.SanitizeMol(out)
     counts = Counter(changes)     # one note per rule: "deprotonated 2 x phosphate/phosphonate ..."
-    return out, [c if n == 1 else c.replace("protonated ", f"protonated {n} x ", 1) for c, n in counts.items()]
+    return out, [c if n == 1 else c.replace("left ", f"left {n} x ", 1) if c.startswith("left ")
+                 else c.replace("protonated ", f"protonated {n} x ", 1) for c, n in counts.items()]
 
 
 def protonate(mol: Chem.Mol, ph: float = 7.0, method: str = "rules") -> tuple[Chem.Mol, list[str]]:
@@ -186,6 +263,25 @@ def protonate(mol: Chem.Mol, ph: float = 7.0, method: str = "rules") -> tuple[Ch
 
 def formal_charge(mol: Chem.Mol) -> int:
     return sum(a.GetFormalCharge() for a in mol.GetAtoms())
+
+
+def inchikey(mol: Chem.Mol | None) -> tuple[str, str]:
+    """(standard InChIKey, note) of ``mol`` as it is: charges, fragments and stereo as drawn, so an anion
+    and its acid differ in the protonation flag (the last letter: -M for one proton removed, -N neutral). ``("",
+    why)`` when RDKit has no InChI support or InChI cannot represent the species (the note says so)."""
+    if mol is None:
+        return "", "no structure"
+    from rdkit.Chem import inchi as rd_inchi
+
+    if not rd_inchi.INCHI_AVAILABLE:
+        return "", "RDKit was built without InChI support"
+    try:
+        with rdBase.BlockLogs():
+            text = rd_inchi.MolToInchi(mol)
+            key = rd_inchi.InchiToInchiKey(text) if text else ""
+    except Exception as exc:  # noqa: BLE001 - InChI's reason, as a note
+        return "", f"InChI failed ({type(exc).__name__}: {exc})"
+    return (key, "") if key else ("", "InChI could not represent this structure")
 
 
 def unpaired_electrons(mol: Chem.Mol) -> int:

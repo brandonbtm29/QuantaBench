@@ -90,9 +90,14 @@ def test_bonds_to_tin_and_mercury_are_kept(smiles):
     assert info["removed_fragments"] == []
 
 
-@pytest.mark.parametrize("smiles, metal", [("[Fe+2].c1cc[cH-]c1.c1cc[cH-]c1", "Fe"),        # ferrocene as ions
-                                           ("[C-]#[O+].[C-]#[O+].[C-]#[O+].[C-]#[O+].[Co]", "Co"),   # carbonyl
-                                           ("[Al+3].CCOP(=O)[O-].CCOP(=O)[O-].CCOP(=O)[O-]", "Al")])
+@pytest.mark.parametrize("smiles, metal", [
+    ("[Fe+2].c1cc[cH-]c1.c1cc[cH-]c1", "Fe"),                              # ferrocene as ions: carbanion ligands
+    ("[C-]#[O+].[C-]#[O+].[C-]#[O+].[C-]#[O+].[Co]", "Co"),                # metal carbonyl
+    ("[C-]#[O+].[C-]#[O+].[Cl-].[Cl-].[Rh].[Rh]", "Rh"),                   # rhodium carbonyl chloride
+    ("[Cu+2].c1ccc(P(c2ccccc2)c2ccccc2)cc1.CC(=O)[O-].CC(=O)[O-]", "Cu"),  # a phosphine next to the metal
+    ("[Zn+2].[C-]#N.[C-]#N", "Zn"),                                        # cyanide: charge on carbon
+    ("[Al+3].CCOP(=O)[O-].CCOP(=O)[O-].CCOP(=O)[O-].C=O", "Al"),           # a neutral organic fragment too
+])
 def test_a_metal_is_never_dropped_silently(smiles, metal):
     """Keeping the largest fragment of a complex drawn as ions computed cyclopentadiene for ferrocene and CO
     for a metal carbonyl. Now the molecule is refused with a reason naming the metal."""
@@ -100,6 +105,74 @@ def test_a_metal_is_never_dropped_silently(smiles, metal):
 
     with pytest.raises(UnsupportedStructure, match=f"metal complex.*{metal}"):
         prepare(Chem.MolFromSmiles(smiles), 7.0)
+
+
+@pytest.mark.parametrize("smiles, kept, removed", [
+    # fosetyl-Al: one ethyl phosphonate anion, the Al3+ and the other two anions are the salt
+    ("[Al+3].CCO[PH](=O)[O-].CCO[PH](=O)[O-].CCO[PH](=O)[O-]", "CCO[PH](=O)[O-]",
+     ["[Al+3]", "CCO[PH](=O)[O-]", "CCO[PH](=O)[O-]"]),
+    ("[Zn+2].CC(=O)[O-].CC(=O)[O-].O.O", "CC(=O)[O-]", ["O", "[Zn+2]", "CC(=O)[O-]", "O"]),   # with hydrate water
+    ("[Ca+2].[O-]C(=O)C(F)(F)C(F)(F)F.[O-]C(=O)C(F)(F)C(F)(F)F", "O=C([O-])C(F)(F)C(F)(F)F",
+     ["[Ca+2]", "O=C([O-])C(F)(F)C(F)(F)F"]),
+    ("[Mg+2].[O-]S(=O)(=O)C(F)(F)F.[O-]S(=O)(=O)C(F)(F)F", "O=S(=O)([O-])C(F)(F)F",
+     ["[Mg+2]", "O=S(=O)([O-])C(F)(F)F"]),
+    ("[Ba+2].[O-]c1ccccc1.[O-]c1ccccc1", "[O-]c1ccccc1", ["[Ba+2]", "[O-]c1ccccc1"]),
+    ("[Sr+2].CC(=O)[O-].CC(=O)[O-]", "CC(=O)[O-]", ["[Sr+2]", "CC(=O)[O-]"]),
+    ("[Fe+3].[O-]C(=O)C(F)(F)F.[O-]C(=O)C(F)(F)F.[O-]C(=O)C(F)(F)F", "O=C([O-])C(F)(F)F",
+     ["[Fe+3]", "O=C([O-])C(F)(F)F", "O=C([O-])C(F)(F)F"]),
+    ("[Fe+2].[O-]C(=O)CC.[O-]C(=O)CC", "CCC(=O)[O-]", ["[Fe+2]", "CCC(=O)[O-]"]),
+    ("[Cu+2].[O-]S(=O)(=O)c1ccccc1.[O-]S(=O)(=O)c1ccccc1", "O=S(=O)([O-])c1ccccc1",
+     ["[Cu+2]", "O=S(=O)([O-])c1ccccc1"]),
+    ("[Zn+2].[Cl-].[Cl-].[Cl-].[Cl-].C[N+](C)(C)CCCCCCCCCCCC.C[N+](C)(C)CCCCCCCCCCCC",   # ZnCl4(2-) salt
+     "CCCCCCCCCCCC[N+](C)(C)C", ["[Zn+2]", "[Cl-]", "[Cl-]", "[Cl-]", "[Cl-]", "CCCCCCCCCCCC[N+](C)(C)C"]),
+])
+def test_bondless_metal_cations_of_organic_salts_are_counter_ions(smiles, kept, removed):
+    """Al3+, Zn2+, Ca2+, Mg2+, Ba2+, Sr2+, Fe2+/3+ and Cu2+ drawn as separate ions next to an organic ion are a
+    salt: the organic ion is computed with its charge as drawn (no pH model), the rest is named in
+    removed_fragments."""
+    info = {}
+    mol, notes = prepare(Chem.MolFromSmiles(smiles), None, info=info)
+    assert Chem.MolToSmiles(Chem.RemoveHs(mol)) == kept
+    assert sorted(info["removed_fragments"]) == sorted(removed)
+    assert formal_charge(mol) == Chem.GetFormalCharge(Chem.MolFromSmiles(kept))
+    assert any("kept the largest of" in n for n in notes)
+
+
+def test_covalently_bonded_salt_metals_stay_whole():
+    """Only a bondless metal cation is a counter-ion: an Al-O or Zn-C bond drawn in the record is kept."""
+    for smiles in ("CCO[Al](OCC)OCC", "CC[Zn]CC"):
+        info = {}
+        mol, _ = prepare(Chem.MolFromSmiles(smiles), None, info=info)
+        assert mol.GetNumHeavyAtoms() == Chem.MolFromSmiles(smiles).GetNumHeavyAtoms()
+        assert info["removed_fragments"] == []
+
+
+@pytest.mark.parametrize("smiles, charge", [("C1CNCCN1", 1),          # piperazine: pKa2 5.6
+                                            ("CN1CCN(C)CC1", 1),
+                                            ("NCCN", 1),              # ethylenediamine: pKa2 6.9
+                                            ("NC(=N)N", 1),           # guanidine: one proton, not one per NH2
+                                            ("C[N+](C)(C)CCN", 1),    # an amine next to a quaternary ammonium
+                                            ("NCCCN", 2),             # 1,3-diamine (4 bonds): both
+                                            ("NCCCCCCN", 2)])
+def test_close_basic_sites_get_one_proton_at_ph7(smiles, charge):
+    """The pH-7 rules protonated every aliphatic amine: piperazine and 1,2-diamines came out as dications. Two basic
+    sites within three bonds now get one proton."""
+    mol, notes = prepare(Chem.MolFromSmiles(smiles), 7.0)
+    assert formal_charge(mol) == charge
+    if charge == 1 and "+" not in smiles:
+        assert any(n.startswith("left ") and "within 3 bonds" in n for n in notes)
+
+
+def test_inchikey_of_ions_and_unrepresentable_species():
+    from quantabench.chem.standardize import inchikey
+
+    acid, _ = inchikey(Chem.MolFromSmiles("CC(=O)O"))
+    anion, _ = inchikey(Chem.MolFromSmiles("CC(=O)[O-]"))
+    assert acid == "QTBSBXVTEAMEQO-UHFFFAOYSA-N" and anion == "QTBSBXVTEAMEQO-UHFFFAOYSA-M"   # -M: one H+ removed
+    assert inchikey(Chem.AddHs(Chem.MolFromSmiles("CC(=O)[O-]")))[0] == anion                 # explicit H: same key
+    assert inchikey(None) == ("", "no structure")
+    key, why = inchikey(Chem.MolFromSmiles("*C", sanitize=False))      # a dummy atom: InChI has no key for it
+    assert key == "" and why
 
 
 def test_whole_record_when_fragments_are_kept():
