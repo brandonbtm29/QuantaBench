@@ -2,6 +2,24 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Spartan's Essential 76 PFAS and the QM stage (VAL-2, 2026-11-06)
+- **QuantaBench's Psi4 stage reproduces Spartan's ωB97X-D/6-31G*.** At Spartan's own geometries (TFA, PFPrA,
+  triflic acid, PFHpA) the total energies agree to 5e-5 Eh with exact integrals and to 4e-4 Eh with the default
+  density fitting. The dipoles agree to 0.001 D, with the same vector. Spartan's 6-31G* uses Cartesian d
+  functions, like Psi4's.
+- **Spartan import:**
+  - The documents a multi-step conformer search writes its conformers to label them `Molecule1`,
+    `Molecule41`, ... These labels are now resolved by structure like `M0003`. The Essential 76 set now gives
+    76 wide rows, not 847.
+  - Est. Density Functional single points (`SOPT DLXD2XV`) give their ωB97X-D/6-31G* SCF dipole (`QM_DIPOLE`)
+    as `dipole_debye`, with the SCF's level in `qm_dipole_level`.
+  - A level's best row is the one with the lowest `POSTENERGY`, the energy Spartan ranks conformers by.
+  - `validate` pairs `qm_dipole_debye` with that level.
+- **QM stage robustness:**
+  - A failed free-atom SCF (MBIS volume ratios) no longer leaves its scratch files to the next SCF. One left
+    the polarizability failing and Psi4 hanging at exit.
+  - `run_driver` stops a driver that is still running 60 s after writing its result, and uses the result.
+
 ### Areas and volumes: a SASA bug fixed, Spartan's radii as an option (2026-11-06)
 - **`sasa_A2` was wrong for every non-protein molecule.** It passed the radii of FreeSASA's ProtOr classifier,
   and those are 0 for any atom outside a protein residue, so the value was the union of bare 1.4 Å probe
