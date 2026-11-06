@@ -223,3 +223,35 @@ def test_pipeline_with_solvent(tb):
     vib = res.vibrations
     assert vib and vib["n_imaginary"] == 0 and len(vib["frequencies_cm1"]) == 12
     assert "dipole from the calculator" in vib["ir_source"] and max(vib["ir_intensities_km_mol"]) > 10
+
+
+def test_duplicate_openmp_on_macos_is_reported_and_a_link_fixes_it(tmp_path, monkeypatch):
+    """tblite's macOS wheel and PyTorch each bundle libomp.dylib; with both loaded a run aborts (OMP Error #15).
+    tblite is then unavailable with the fix in the reason; linked to PyTorch's copy it is fine again."""
+    import importlib.util
+    import sys
+    import types
+
+    from quantabench.chem import eng_tblite
+
+    tb, th = tmp_path / "tblite", tmp_path / "torch"
+    (tb / ".dylibs").mkdir(parents=True)
+    (th / "lib").mkdir(parents=True)
+    (tb / ".dylibs" / "libomp.dylib").write_bytes(b"tblite's libomp")
+    (th / "lib" / "libomp.dylib").write_bytes(b"torch's libomp")
+    specs = {"tblite": types.SimpleNamespace(submodule_search_locations=[str(tb)]),
+             "torch": types.SimpleNamespace(submodule_search_locations=[str(th)])}
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: specs.get(name))
+    monkeypatch.setattr(eng_tblite, "has_package", lambda name: True)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert eng_tblite.duplicate_openmp() == (tb / ".dylibs" / "libomp.dylib", th / "lib" / "libomp.dylib")
+    ok, why = eng_tblite.available()
+    assert not ok and "OMP Error #15" in why and "ln -s" in why
+    ours = tb / ".dylibs" / "libomp.dylib"
+    ours.rename(ours.with_name("libomp.dylib.qb-orig"))
+    ours.symlink_to(th / "lib" / "libomp.dylib")
+    assert eng_tblite.duplicate_openmp() is None and eng_tblite.available() == (True, "")
+    monkeypatch.setattr(sys, "platform", "linux")            # Linux wheels use GNU libgomp: no check there
+    ours.unlink()
+    ours.write_bytes(b"tblite's libomp")
+    assert eng_tblite.duplicate_openmp() is None

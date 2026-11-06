@@ -228,6 +228,20 @@ else
   fi
 fi
 
+# tblite's macOS wheel and PyTorch each bundle libomp.dylib; a process that loads both aborts with OMP Error #15.
+# Link tblite's copy to PyTorch's so one OpenMP runtime loads (quantabench.chem.eng_tblite.duplicate_openmp).
+# Done on every run: a reinstall of tblite brings its own copy back.
+dup=$("$VPY" -c "from quantabench.chem.eng_tblite import duplicate_openmp as d; r = d(); print('' if r is None else str(r[0]) + chr(10) + str(r[1]))" 2>/dev/null || true)
+if [ -n "$dup" ]; then
+  omp_ours=$(printf '%s\n' "$dup" | sed -n 1p)
+  omp_theirs=$(printf '%s\n' "$dup" | sed -n 2p)
+  if run mv "$omp_ours" "$omp_ours.qb-orig" && run ln -s "$omp_theirs" "$omp_ours"; then
+    ok "tblite now uses PyTorch's OpenMP runtime (one libomp.dylib per process)"
+  else
+    warn "could not link tblite's libomp.dylib to PyTorch's: runs that load both abort (docs/INSTALL.md)"
+  fi
+fi
+
 # ------------------------------------------------------------------------------- 5. settings folder
 if [ -n "$SETTINGS_DIR" ]; then
   step "Settings folder"

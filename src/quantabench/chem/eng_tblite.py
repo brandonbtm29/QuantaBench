@@ -54,6 +54,7 @@ the brandonbtm29/tblite fork's wheels (``INSTALL_HINT_WINDOWS``, docs/INSTALL.md
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -75,9 +76,45 @@ INSTALL_HINT_WINDOWS = (f"pip install tblite --only-binary tblite --find-links {
                         "(or, in a conda environment, conda install -c conda-forge tblite-python)")
 
 
+def duplicate_openmp() -> tuple[Path, Path] | None:
+    """macOS: (tblite's, PyTorch's) bundled ``libomp.dylib`` when they are two different files, else None.
+
+    tblite's macOS wheel and PyTorch each ship LLVM's OpenMP runtime. A process that loads both (any QuantaBench
+    run that also imports torch) aborts at the first parallel region with "OMP: Error #15: Initializing
+    libomp.dylib, but found libomp.dylib already initialized" (seen on the MacBook, 2026-11-05).
+    ``scripts/install_macos.sh`` makes tblite's copy a symlink to PyTorch's, so one runtime loads; energies are
+    unchanged (water GFN2-xTB identical to 1e-12 Eh with either runtime)."""
+    if sys.platform != "darwin":
+        return None
+    import importlib.util
+
+    try:
+        tb, th = importlib.util.find_spec("tblite"), importlib.util.find_spec("torch")
+    except (ImportError, ValueError):
+        return None
+    if tb is None or th is None or not tb.submodule_search_locations or not th.submodule_search_locations:
+        return None
+    ours = Path(next(iter(tb.submodule_search_locations))) / ".dylibs" / "libomp.dylib"
+    theirs = Path(next(iter(th.submodule_search_locations))) / "lib" / "libomp.dylib"
+    if not (ours.exists() and theirs.exists()):
+        return None
+    try:
+        if ours.resolve() == theirs.resolve() or ours.samefile(theirs):
+            return None
+    except OSError:
+        return None
+    return ours, theirs
+
+
 def available() -> tuple[bool, str]:
     if not has_package("tblite"):
         return False, INSTALL_HINT_WINDOWS if sys.platform == "win32" else INSTALL_HINT
+    dup = duplicate_openmp()
+    if dup is not None:
+        ours, theirs = dup
+        return False, ("tblite and PyTorch each bundle libomp.dylib, and a run that loads both aborts (OMP Error #15). "
+                       "Rerun scripts/install_macos.sh, or link tblite's copy to PyTorch's: "
+                       f'mv "{ours}" "{ours}.qb-orig" && ln -s "{theirs}" "{ours}"')
     return True, ""
 
 

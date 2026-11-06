@@ -2,6 +2,12 @@
 
 ## 0.3.0.dev (unreleased)
 
+### macOS: tblite and PyTorch share one OpenMP runtime (MacBook, 2026-11-05)
+- tblite's macOS wheel and PyTorch each bundle `libomp.dylib`; a run that loaded both aborted with "OMP: Error #15"
+  (the Mac's benchmark stopped at tblite-gfn2). `install_macos.sh` now links tblite's copy to PyTorch's on every run,
+  and where both copies are still present tblite reports itself unavailable with the fix instead of aborting.
+  Energies are unchanged (GFN2-xTB water identical to 1e-12 Eh with either runtime).
+
 ### Gas and water phases, paired per molecule (PFAS QSAR run, 2026-11-05)
 - **`build --phases gas,water`** (any list of solvents; `gas` = none) runs the same input once per phase into
   sibling run folders, `RUN/gas` and `RUN/water`: normal resumable runs with their own job tables, so

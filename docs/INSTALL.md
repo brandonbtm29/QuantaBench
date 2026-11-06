@@ -300,6 +300,12 @@ What to expect on a Mac today:
   yet. `tblite-gfn2` and `xtb-gfn2` also give GFN2.
 - CREST runs natively, unlike on Windows.
 
+**tblite and PyTorch on macOS.** tblite's wheel and PyTorch each bundle LLVM's OpenMP runtime (`libomp.dylib`),
+and a process that loads both aborts with `OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib
+already initialized`. The installer links tblite's copy to PyTorch's (`tblite/.dylibs/libomp.dylib` becomes a
+symlink; the original is kept as `libomp.dylib.qb-orig`), so one runtime loads. After a `pip install` of tblite by
+hand, rerun the installer; `quantabench-cli doctor` lists tblite as unavailable, with the fix, until then.
+
 ## dxtb's libcint backend (GFN2, polarizability, IR intensities)
 
 dxtb's GFN2-xTB (`gfn2-xtb`) and every dxtb electric-field property (xTB polarizability, IR
