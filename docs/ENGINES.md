@@ -15,7 +15,7 @@ through WSL on Windows. `quantabench-cli doctor` lists what it found and where.
 | `tblite-gfn2`, `tblite-gfn1` | GFN-xTB (tblite) | tight binding | in process | ALPB, GBSA, CPCM | yes (fork wheel) | GFN2 without libcint |
 | `xtb-gfn2`, `xtb-gfn1`, `gfnff` | the xtb program | tight binding / force field | external | ALPB, GBSA | yes | native optimizer |
 | `mopac-pm7`, `mopac-pm6` | PM7, PM6-D3H4X (MOPAC) | semi-empirical | external | COSMO | yes | energy = ΔHf |
-| CREST | iMTD-GC conformer search | conformers | external | ALPB | via WSL | `--conformers crest` |
+| CREST | iMTD-GC conformer search | conformers | external | ALPB | via WSL | `--conformers crest`; macOS: the fork build, not conda-forge's (below) |
 | Psi4 | DFT/HF QM stage | DFT | external (own env) | PCM | yes | `--qm wb97x-d/def2-svp` |
 
 `method="auto"` tries AIMNet2 > GFN2-xTB (dxtb) > GFN2-xTB (tblite) > GFN2-xTB (xtb) > GFN1-xTB > MMFF,
@@ -222,6 +222,16 @@ the `QUANTABENCH_XTB` / `QUANTABENCH_CREST` / `QUANTABENCH_MOPAC` / `QUANTABENCH
 environment variables, PATH, the running Python environment, and conda/mamba environments in the usual
 places (`~/miniforge3/envs/*`, `~/mambaforge`, `~/miniconda3`, `~/micromamba`, ...).
 
+**Paths per machine.** The settings file is shared by every machine (SyncThing), but a program's path
+usually belongs to one: NOVA runs CREST as `wsl:/home/<you>/micromamba/envs/qb-tools/bin/crest`, the Mac
+its own build. Settings > Engines and `quantabench-cli settings --engine-path crest=PATH` therefore store
+the path for this machine only (`engines.machine_paths`, keyed by the machine name as `dist.machine_lanes`
+is); `--machine NAME` sets another machine's, and `crest=` (empty) goes back to finding it automatically
+there. `engines.paths` stays the default of every machine (a path that does not exist on a machine, or a
+`wsl:` path off Windows, is skipped there). `doctor` names the source: "settings (this machine)" or
+"settings". A machine's entry wins over the environment variable, as `engines.paths` always did; to try
+another binary for one run, pass `QUANTABENCH_CREST` on a machine without an entry.
+
 Ready-made environments are in [`envs/`](../envs): `tools.yml` (xtb, CREST, MOPAC; Linux/WSL),
 `tools-windows.yml` (xtb, MOPAC; Windows) and `psi4.yml` (Psi4 with the pins below). Keep Psi4 in its
 own environment.
@@ -337,17 +347,60 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
 
 ## CREST (`--conformers crest`)
 
-- **Install.** Linux/WSL/macOS: `conda install -c conda-forge crest "xtb>=6.7.1"` in one environment
-  (`envs/tools.yml`). No Windows build: install it inside WSL2 and set Settings > Engines > CREST to
-  `wsl:/home/<you>/miniforge3/envs/qb-tools/bin/crest`. The full path is needed because WSL starts it
-  without conda's PATH.
+- **Install.**
+  - Linux/WSL: `conda install -c conda-forge crest "xtb>=6.7.1"` in one environment (`envs/tools.yml`).
+  - Windows: install it inside WSL2 and set NOVA's CREST path to
+    `wsl:/home/<you>/miniforge3/envs/qb-tools/bin/crest` (Settings > Engines on NOVA, or
+    `quantabench-cli settings --engine-path crest=wsl:/home/...` there: this machine only, see Finding
+    programs). The full path is needed because WSL starts it without conda's PATH.
+  - macOS (Apple Silicon): **not conda-forge's crest.** Its osx-arm64 3.0.2 cannot optimize molecules of 19
+    atoms or more (below). Use the fork's macOS build: `crest-macos-arm64.tar.gz` from `brandonbtm29/crest`
+    (branch `qb/macos`, workflow `qb-macos`). Unpack it anywhere, keep `bin/` and `lib/` together, and set it
+    as the Mac's path: `quantabench-cli settings --engine-path crest=<folder>/crest-macos-arm64/bin/crest`.
+    `scripts/install_macos.sh --with-engines` does this by itself once the build is released
+    (`scripts/fork-packages.json`, `macos` > `programs` > `crest`; FORK-5). Keep conda-forge's xtb in
+    qb-tools: `gfn2//gfnff` runs it.
 - **Levels.** `--crest-method gfn2 | gfnff | gfn2//gfnff | gfn1`; `--quick` is the default
   (`--crest-full` for a full run). gfn2, gfn1 and gfnff run inside CREST 3. `gfn2//gfnff` needs
   CREST's `--legacy` mode (added automatically) and an `xtb` on the PATH CREST sees.
 - **Timings, 1-2 threads.** Ethanol gfnff 2 s; CF3COOH gfn2 38 s; PFBA anion gfnff in water 9 s;
   PFBA gfn2 about 2 min. For C8+ PFAS use gfnff and refine with `xtb-gfn2`.
-- Conformers whose bonds changed (CREST can find tautomers) are dropped and logged. If CREST is missing
-  or fails, the run falls back to RDKit ETKDGv3 with a note.
+- Conformers whose bonds changed (CREST can find tautomers) are dropped and logged.
+- **When CREST fails.** CREST missing, a crash, "Initial geometry optimization failed!", or a stage in which
+  no optimization succeeded ("0 of N structures successfully optimized": CREST can print that and still
+  exit 0, crest-lab/crest#412). By default (`--crest-fallback rdkit`) the molecule is built with RDKit's
+  ETKDGv3 + MMFF94s conformers and flagged:
+  - a note with CREST's own reason, the exit code and the kept job folder, also as a WARNING line in the log:
+    `CREST conformer search failed (ExternalProgramError: Initial geometry optimization failed! (exit code 1;
+    job files in /tmp/QuantaBench/crest_x1)); used RDKit ETKDGv3 + MMFF94s instead`;
+  - `summary.csv`: `conformer_search` = `rdkit` and `conformer_fallback` = the reason (empty when the
+    conformers are CREST's);
+  - at the end of the batch, "WARNING: CREST failed for N of M molecule(s) ..." with the first ten; the
+    count is also in `quantabench-cli status`, in the GUI's run summary ("N ok with RDKit conformers because
+    CREST failed") and on its status bar.
+  - `--crest-fallback fail` (GUI: untick "If CREST fails, use RDKit's conformers") marks those molecules
+    failed instead (`ConformerSearchError: ...`), so `--retry-failed` redoes them once CREST works.
+- **conda-forge's osx-arm64 CREST 3.0.2** (build `hb2118c8_1`, diagnosed 2026-11-06 on the M3 Max, macOS
+  27.2; details in the fork's `docs/MACOS.md`):
+  1. It links Apple's Accelerate directly instead of conda's OpenBLAS (CMake's FindBLAS takes Accelerate when
+     no `BLA_VENDOR` is set). Accelerate's classic BLAS keeps the f2c convention: a REAL function returns a
+     double, so CREST's `real(sp) :: sdot` reads garbage (3.7e19 for 569.8). ANCOPT's rational-function step
+     uses that `sdot` in its Davidson solver when nvar + 1 >= 50, i.e. from 19 atoms. So every initial
+     optimization of 19+ atoms fails, and smaller molecules pass. The same binary relinked to conda's
+     OpenBLAS (`install_name_tool`) works.
+  2. libgfortran 16 (in the same environment) rejects ANCOPT's format `'(1x,"("f7.2"%)")'` ("Missing comma
+     between descriptors"), so `crest --opt` stops after cycle 0 with exit code 2. This hits any platform
+     with a gfortran >= 15 runtime; the fork adds the commas (11 formats).
+  The first Mac benchmark (2026-11-06) ran with it. 18 of 20 molecules fell back to RDKit, flagged only by a
+  note at the time.
+- **The fork's macOS build on the MacBook** (CI run 42295799792; table in the fork's `docs/MACOS.md`). On PFBA⁻,
+  PFHxA and PFOA⁻ every mode runs: single point, `--opt`, iMTD-GC with `--gfn2`, `--gfnff` and `--alpb water`,
+  `--quick`, `--gfn2//gfnff` (legacy, conda-forge's xtb 6.7.1), `--cregen`, `--protonate`, `--deprotonate`,
+  `--tautomerize`, `--thermo`, `--entropy` and QCG with 3 waters. Energies match conda-forge's linux-64 3.0.2
+  (NOVA's WSL build) to 1e-8 to 2e-5 Eh, and `--thermo` on the same frequencies is identical. That Linux
+  build itself stops in `--opt` and QCG with the libgfortran 16 format error; QuantaBench's runs use neither.
+  The Mac is 5-9x faster than 2 Linux cores in iMTD-GC (12 threads), but slower in legacy mode and
+  `--tautomerize`.
 
 ## tblite (`tblite-gfn2`, `tblite-gfn1`)
 

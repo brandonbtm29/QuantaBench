@@ -2,6 +2,33 @@
 
 ## 0.3.0.dev (unreleased)
 
+### CREST on the Mac, loud CREST failures, engine paths per machine (2026-11-06)
+- **Why the Mac's CREST failed.** conda-forge's osx-arm64 `crest 3.0.2` links Apple's Accelerate, whose classic
+  BLAS returns a double from `sdot` (f2c convention). ANCOPT's Davidson step (19+ atoms) then fails, so every
+  initial optimization of 19+ atoms stops ("Initial geometry optimization failed!"). Separately, libgfortran 16
+  stops `crest --opt` at ANCOPT's first printout (a format without a comma; Linux too). Details in
+  docs/ENGINES.md (CREST) and the fork's `docs/MACOS.md`.
+- **The fork's macOS build** (`brandonbtm29/crest`, branch `qb/macos`, workflow `qb-macos`): conda-forge's
+  compilers with OpenBLAS instead of Accelerate (`-DBLA_VENDOR=OpenBLAS`), one OpenMP runtime (libomp),
+  packaged as a folder that runs from anywhere (`crest-macos-arm64.tar.gz`: `bin/crest` + `lib/`).
+- **CREST failures are loud** (`chem/pipeline.py`, `chem/crest.py`, `chem/jobs.py`):
+  - each molecule: a note with CREST's own reason ("Initial geometry optimization failed! (exit code 1; job
+    files in ...)"), a WARNING log line, and `summary.csv`'s new `conformer_fallback` column;
+  - each batch: "WARNING: CREST failed for N of M molecule(s) ..." at the end, the count in `status`, in the
+    GUI's run summary and on its status bar;
+  - `--crest-fallback fail` (GUI: untick "If CREST fails, use RDKit's conformers") fails those molecules
+    instead of building them with RDKit's conformers;
+  - a CREST that exits 0 after a stage in which no optimization succeeded ("0 of N structures successfully
+    optimized", crest-lab/crest#412) counts as failed;
+  - `doctor` and the build log name a CREST linked to Accelerate on macOS.
+- **Engine paths per machine** (`engines.machine_paths`, like `dist.machine_lanes`): the shared settings file can
+  hold NOVA's `wsl:` CREST and the Mac's own. Settings > Engines saves for this machine only;
+  `quantabench-cli settings --engine-path crest=PATH [--machine NAME]` sets it from a script.
+- **Proposed install of the Mac build** (not released): `scripts/fork-packages.json` > `macos` > `programs` >
+  `crest` (url, sha256, exe). `install_macos.sh --with-engines` downloads it, checks the sha256, unpacks it into
+  `~/Library/Application Support/QuantaBench/programs` and sets the Mac's CREST path. The url stays empty
+  until a fork release exists.
+
 ### Comparing conformer sets: `conformers compare` (2026-11-06)
 - **`quantabench-cli conformers compare --a ... --b ... --out DIR`** (`chem/conformer_compare.py`): which
   conformers two programs found for the same molecules. Either side can be Spartan documents, a Spartan import

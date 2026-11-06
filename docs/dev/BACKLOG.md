@@ -165,6 +165,11 @@ Depends on: none (research only; can run any night).
   (`taskkill /T`), paths with spaces ("GitHub Projects"), Psi4's PCMSolver on win-64, GUI Engines tab.
 
 ## ENG-2: CREST through WSL · needs-Brandon
+- 2026-11-06: Brandon's decision: Windows runs CREST through WSL (conda-forge linux-64 3.0.2 in NOVA's Ubuntu ran
+  the 20-molecule benchmark through QuantaBench). Set NOVA's path for NOVA only, so the Mac keeps its own in the
+  shared settings file: `quantabench-cli settings --engine-path crest=wsl:/home/brandonbtm29/micromamba/envs/qb-tools/bin/crest`
+  on NOVA (or Settings > Engines there; `engines.machine_paths`). The CLI batch path is proven; the GUI checks
+  below are still open.
 - `wsl:/home/<user>/miniforge3/envs/qb-tools/bin/crest` from the Windows GUI on a PFAS: `--cd` path
   translation, `WSLENV` thread variables, cancellation of the WSL process, and gfn2//gfnff (needs `xtb` on
   WSL's default PATH). Only covered by mocked tests so far (a fake `wsl.exe` on Linux runs the real wrapper).
@@ -746,6 +751,8 @@ the code, but three things never arrived through it.
 ### DIST-4: Per-stage routing · later
 - Different stages of one molecule on different machines (CREST + Psi4 on the Mac, GPU refinement +
   LAMMPS on NOVA), handed over through run-folder artifacts.
+- 2026-11-06: CREST on the Mac needs the fork build (FORK-5); conda-forge's fails from 19 atoms. The machines'
+  CREST paths can differ now (`engines.machine_paths`), which routing will rely on.
 
 ### FORK-1: dxtb with tad-libcint 0.4 (GFN2 on Windows and macOS) · done 2026-11-05 (upstream PR pending Brandon's OK)
 - tad-libcint 0.4.0 (2026-10-20) has Windows and macOS-arm64 wheels but needs tad-mctc ≥ 0.11; dxtb 0.4
@@ -776,9 +783,25 @@ the code, but three things never arrived through it.
   path has a space ("GitHub Projects"): an unquoted path in its device-detection call. Harmless so far;
   reproduce outside QuantaBench and report to ROCm.
 
-### FORK-5: CREST on native Windows · later
-- Look into a win-64 build in the conda-forge crest feedstock (MinGW-w64). Low priority: WSL and the Mac
-  (via DIST-2) already run CREST.
+### FORK-5: CREST builds outside conda-forge · macOS done in CI 2026-11-06 (release needs-Brandon); Windows later
+- **macOS arm64.** conda-forge's osx-arm64 crest 3.0.2 links Apple's Accelerate and fails every optimization of
+  19+ atoms (docs/ENGINES.md, CREST). The fork builds it right: `brandonbtm29/crest` branch `qb/macos`
+  (= `qb/windows` + workflow `qb-macos.yml`, docs/MACOS.md there): conda-forge's compilers, OpenBLAS instead of
+  Accelerate, one OpenMP runtime, a folder that runs from anywhere. Run 42295799792 (commit `12eb61d`):
+  artifact `crest-macos-arm64.tar.gz`, sha256 `47ba7883...4a33`; smoke cases match the Linux build of the
+  same commit to 1e-10 Eh (single points, optimizations), and the MacBook's PFAS run modes match conda-forge's
+  Linux 3.0.2 to 1e-8 to 2e-5 Eh.
+  - needs-Brandon: publish it as a fork release (proposed tag `qb-v3.0.2-macos1`, the tarball unchanged:
+    `gh run download 42295799792 -R brandonbtm29/crest -n crest-macos-arm64` (the artifact expires 2026-12-06),
+    then `gh release create qb-v3.0.2-macos1 crest-macos-arm64.tar.gz -R brandonbtm29/crest --target
+    12eb61d12b9dbb506c087902cc92bbe739a9c4b2`), then
+    copy `proposed_url` into `url` in `scripts/fork-packages.json` (`macos` > `programs` > `crest`).
+    `install_macos.sh --with-engines` then installs it and sets the Mac's CREST path.
+  - `quantabench-cli update` does not reinstall `programs` entries yet: add that when the first release exists.
+  - The conda-forge feedstock fix is one CMake flag (`-DBLA_VENDOR=OpenBLAS`, or `Generic`) plus the format
+    commas (or a pin to libgfortran < 15 at run time): worth a feedstock issue/PR when Brandon OKs upstream contact.
+- **Windows:** `qb/windows` has a native build (docs/WINDOWS.md there), but Brandon decided on WSL (ENG-2).
+  Look at it again only if WSL becomes a problem.
 
 ### FORK-7: pyvistaqt 0.13 crash upstream · ready
 - Minimal repro of the `initializeGL` access violation with the AMD driver, filed upstream; re-check the

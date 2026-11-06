@@ -362,7 +362,7 @@ pip install torch                 # PyPI's macOS build includes the Apple GPU ba
 pip install -e ".[all,dev]"       # tblite's wheel needs macOS 15 or newer
 pip install "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1" "tad-libcint>=0.4"   # dxtb GFN2, IR
 quantabench-cli doctor --bench
-conda env create -f envs/tools.yml    # xtb, CREST and MOPAC have native osx-arm64 builds
+conda env create -f envs/tools.yml    # xtb, MOPAC (and conda-forge's CREST, which fails on macOS: see below)
 conda env create -f envs/psi4.yml
 ```
 
@@ -376,9 +376,13 @@ What to expect on a Mac (first run on Brandon's MacBook Pro, Apple Silicon, macO
   polarizability and IR intensities work with the dxtb fork and tad-libcint 0.4 (the installer brings both).
 - `tblite-gfn2` (gas and ALPB water) runs in process: 2,860 / 2,547 molecules/h on the benchmark set. The
   installer links tblite's OpenMP runtime to PyTorch's (see below).
-- CREST, xtb, MOPAC and Psi4 run natively from the conda environments (`--with-engines`). QuantaBench finds
+- xtb, MOPAC and Psi4 run natively from the conda environments (`--with-engines`). QuantaBench finds
   them in `~/miniforge3/envs`, Homebrew's Miniforge cask and any environment conda lists in
   `~/.conda/environments.txt`, without a PATH change.
+- CREST: conda-forge's osx-arm64 build (in `qb-tools`) links Apple's Accelerate and fails every optimization of
+  19 atoms or more; QuantaBench flags each such molecule and `doctor` names the build. Use the fork's macOS
+  build and set it as this Mac's path: `quantabench-cli settings --engine-path crest=<folder>/crest-macos-arm64/bin/crest`
+  (docs/ENGINES.md, CREST; the installer does it once the build is released, FORK-5).
 - LAMMPS (`md`): PyPI's macOS wheel links MPICH's `libmpi.12.dylib` without shipping it, so `import lammps`
   works and running LAMMPS fails with `Library not loaded: @rpath/libmpi.12.dylib`. The `md` extra installs
   `lammps[mpi]` on macOS, which brings PyPI's `mpich` wheel; an older install needs `pip install mpich` (or a
