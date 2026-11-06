@@ -216,6 +216,25 @@ def _masses(numbers) -> np.ndarray:
     return np.asarray([atomic_masses[int(z)] for z in numbers], dtype=float)
 
 
+_BAD_ESCAPE = re.compile(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})')   # a backslash that starts no JSON escape
+
+
+def read_xtbout(path: Path) -> dict:
+    """``xtbout.json``, or {} when missing or unreadable. xtb writes its "program call" line verbatim, so on
+    Windows the path's backslashes make the file invalid JSON (``Invalid \\escape``); those are escaped and the
+    file read again, rather than losing the dipole, gap and charges to the charge-only fallback."""
+    if not path.is_file():
+        return {}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    for attempt in (text, _BAD_ESCAPE.sub(r"\\\\", text)):
+        try:
+            data = json.loads(attempt)
+        except ValueError:
+            continue
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
 def dipole_about_com(numbers, positions_A, charge: int, dipole_origin_au=None, charges=None) -> np.ndarray | None:
     """Dipole (e·bohr) about the centre of mass, from xtb's origin-based dipole or from charges."""
     pos = np.asarray(positions_A, dtype=float).reshape(-1, 3) / BOHR_ANG
@@ -243,12 +262,7 @@ def read_results(folder: Path, numbers, positions_A, charge: int, method: str, l
         raise external.ExternalProgramError("xtb wrote no energy\n" + "\n".join(log_text.splitlines()[-30:]))
     if grad and (gradient is None or gradient.shape != (n, 3)):
         raise external.ExternalProgramError("xtb wrote no gradient\n" + "\n".join(log_text.splitlines()[-30:]))
-    data = {}
-    if (folder / "xtbout.json").is_file():
-        try:
-            data = json.loads((folder / "xtbout.json").read_text(encoding="utf-8", errors="replace"))
-        except ValueError:
-            data = {}
+    data = read_xtbout(folder / "xtbout.json")
     charges = None
     for name in ("gfnff_charges", "charges") if method == "gfnff" else ("charges",):
         if (folder / name).is_file():

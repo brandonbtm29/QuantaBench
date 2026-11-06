@@ -571,3 +571,23 @@ def test_real_native_optimize_dipole_matches_a_fresh_single_point(smiles, charge
     assert mu_opt == pytest.approx(np.asarray(b.calc.results["dipole"]), abs=2e-3)
     a.calc.close()
     b.calc.close()
+
+
+def test_xtbout_with_a_windows_program_call_is_still_read(tmp_path):
+    """xtb 6.7.1 on Windows writes "program call" with raw backslashes: invalid JSON. The dipole must still come
+    from the file, not from the charge-only fallback."""
+    raw = ('{\n   "total energy":          -5.07022229,\n   "dipole / a.u.": [ -0.0, 0.0, -0.89954472],\n'
+           '   "partial charges": [ -0.56105341, 0.28052671, 0.28052671],\n'
+           '   "program call": "C:\\Users\\Brand\\miniforge3\\envs\\qb-tools\\Library\\bin\\xtb.exe calc.xyz '
+           '--gfn 2 --json",\n   "xtb version": "6.7.1 (edcfbbe)"\n}\n')
+    path = tmp_path / "xtbout.json"
+    path.write_text(raw, encoding="utf-8")
+    with pytest.raises(ValueError):
+        json.loads(raw)
+    data = eng_xtb.read_xtbout(path)
+    assert data["dipole / a.u."][2] == pytest.approx(-0.89954472) and data["xtb version"].startswith("6.7.1")
+    assert "Users" in data["program call"]
+    path.write_text('{"dipole / a.u.": [0, 0, 1], "note": "tab\\t and \\u00e9"}', encoding="utf-8")
+    assert eng_xtb.read_xtbout(path)["note"] == "tab\t and \u00e9"          # valid escapes untouched
+    path.write_text("not json", encoding="utf-8")
+    assert eng_xtb.read_xtbout(path) == {} and eng_xtb.read_xtbout(tmp_path / "missing.json") == {}
