@@ -228,8 +228,9 @@ Open (needs-Brandon):
     (the `*_DFT_Top5` documents hold 5 per molecule).
   - The same fixed-geometry test for the gas phase against PM6 (r 0.62-0.67; C1B 0.18). It should show whether
     PM6 or the conformer is the cause.
-  - GFN2's LUMO sits about 5.5 eV above PM6's, and its gap about 4.4 eV above (r 0.80-0.82). Document this
-    as a systematic offset for QSAR: use the values as correlated descriptors, not as absolute values.
+  - GFN2's LUMO sits about 5.5 eV below PM6's and its HOMO 1.1 eV below, so its gap is 4.4 eV smaller
+    (r 0.80-0.88). Document this as a systematic offset for QSAR: use the values as correlated descriptors,
+    not as absolute values.
   - The Psi4 B3LYP subset on QuantaBench geometries (VAL-2) closes the loop on method vs geometry.
 
 ## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · ready (after VAL-1 data)
