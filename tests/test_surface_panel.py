@@ -99,19 +99,37 @@ def test_panel_installs_and_draws_charge_surface(tmp_path, built):
 
     # coloring changes only restyle the actor
     data = panel.current
+    assert panel.range_value.suffix() == " kJ/mol" and panel.range_value.stored() == 30.0   # 30 kcal/mol inside
     panel.range_box.setCurrentIndex(panel.range_box.findData("fixed"))
-    panel.range_value.setValue(12.5)
+    panel.range_value.setValue(12.5)                                      # kJ/mol (Settings > Display)
     panel.cmap_box.setCurrentIndex(panel.cmap_box.findData("coolwarm"))
     panel.opacity_box.setValue(0.5)
     app.processEvents()
     assert panel.current is data
     mapper = _actors(w)[sp.ACTOR].GetMapper()
-    assert mapper.GetLookupTable().GetRange() == pytest.approx((-12.5, 12.5))
+    kcal = 12.5 / 4.184                                                   # the mesh's ESP is in kcal/mol
+    assert mapper.GetLookupTable().GetRange() == pytest.approx((-kcal, kcal))
     assert _actors(w)[sp.ACTOR].GetProperty().GetOpacity() == pytest.approx(0.5)
     assert "+12.5" in panel.legend_hi.text() and "red = negative" in panel.legend_text.text()   # default
+    assert panel.legend_text.text().startswith("ESP, kJ/mol:")
+    assert "kJ/mol" in panel.readout.text() and "(kJ/mol)²" in panel.readout.text()
+    vmin = f"{d['esp_min_kcal'] * 4.184:.2f}"
+    assert f"<td align='right'>{vmin}</td><td>kJ/mol</td>" in panel.readout.text()
     panel.reverse_box.setChecked(False)
     assert "blue = negative" in panel.legend_text.text()
     panel.reverse_box.setChecked(True)
+    # other units: the same colours and range, shown in kcal/mol
+    w.s.display.relative_energy_unit = "kcal/mol"
+    w.apply_display()
+    assert panel.range_value.suffix() == " kcal/mol" and panel.range_value.value() == pytest.approx(2.99)
+    assert mapper.GetLookupTable().GetRange() == pytest.approx((-kcal, kcal))
+    assert panel.color_range() == pytest.approx(kcal)
+    assert panel.legend_hi.text() == "+3.0" and panel.legend_text.text().startswith("ESP, kcal/mol:")
+    assert f"<td align='right'>{d['esp_min_kcal']:.2f}</td><td>kcal/mol</td>" in panel.readout.text()
+    assert "(kcal/mol)²" in panel.readout.text() and panel.current is data
+    w.s.display.relative_energy_unit = "kJ/mol"
+    w.apply_display()
+    assert panel.range_value.value() == pytest.approx(12.5) and panel.color_range() == pytest.approx(kcal)
 
     # atom picking goes through the surface (the viewer ray-casts its own spheres)
     disp = w.viewer.world_to_display(w.viewer.atoms.positions)

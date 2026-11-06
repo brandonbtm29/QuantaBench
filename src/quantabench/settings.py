@@ -104,6 +104,17 @@ class SurfaceSettings:
 
 
 @dataclass
+class DisplaySettings:
+    """How the GUI shows energies (``quantabench.units``), as Spartan's Preferences > Document. Display only: not
+    a science setting (``jobs.SCIENCE_FIELDS``), never sent to grid workers, and exported files keep their columns
+    and units (``_kcal``, ``_eV``)."""
+    energy_unit: str = "kJ/mol"           # total energies (conformer E, best E, QM E, H, G): kJ/mol | kcal/mol | eV | hartree
+    relative_energy_unit: str = "kJ/mol"  # differences (ΔE, energy window, ZPE, H − E, G − E) and the ESP on surfaces
+    significant_digits: int = 0           # 0 = automatic (QuantaBench's precision per value), else 1-15
+    number_style: str = "auto"            # "auto" | "decimal" | "scientific"
+
+
+@dataclass
 class Settings:
     output_dir: str = ""              # "" = Documents/QuantaBench/Runs
     resources: ResourceSettings = field(default_factory=ResourceSettings)
@@ -111,6 +122,7 @@ class Settings:
     engines: EngineSettings = field(default_factory=EngineSettings)
     dist: DistSettings = field(default_factory=DistSettings)
     surfaces: SurfaceSettings = field(default_factory=SurfaceSettings)
+    display: DisplaySettings = field(default_factory=DisplaySettings)
     recent_files: list[str] = field(default_factory=list)
 
     # ---------------------------------------------------------------- paths

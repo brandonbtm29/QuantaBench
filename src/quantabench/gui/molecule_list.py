@@ -28,11 +28,14 @@ from pathlib import Path
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, Signal
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableView
 
+from .. import units
+
 STATUS_ICON = {"ok": "✔", "failed": "✖", "cancelled": "○", "pending": "…", "running": "▶"}
 FINISHED = ("ok", "failed", "cancelled")
-#: (attribute, header, default width): the "#" column is the input order (sorting by it restores it)
+#: (attribute, header, default width): the "#" column is the input order (sorting by it restores it); the energy
+#: header gets the display unit (Settings > Display): "E (kJ/mol)"
 COLUMNS = (("seq", "#", 46), ("status", "", 24), ("id", "ID", 120), ("conformers", "Conf.", 44),
-           ("energy", "E (eV)", 84), ("name", "Name", 150), ("method", "Method", 90), ("formula", "Formula", 90))
+           ("energy", "E", 96), ("name", "Name", 150), ("method", "Method", 90), ("formula", "Formula", 90))
 COL = {key: i for i, (key, _h, _w) in enumerate(COLUMNS)}
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 STATUS_FILTERS = (("", "All"), ("ok", "Built"), ("failed", "Failed"), ("todo", "Not built"))
@@ -164,13 +167,26 @@ def load_result(ident: str, folder: str, run_dir: str, inp=None):
 
 # ============================================================================================ model
 class MoleculeTableModel(QAbstractTableModel):
-    """Light rows for any number of molecules. Rows are plain dataclasses; ``_pos`` finds a row by id."""
+    """Light rows for any number of molecules. Rows are plain dataclasses; ``_pos`` finds a row by id. Energies are
+    kept in eV and shown in the display unit (``set_display``)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, display=None):
         super().__init__(parent)
         self._rows: list[MoleculeRow] = []
         self._pos: dict[str, int] = {}
         self._next_seq = 0
+        self._energy = units.EnergyDisplay.of(display)
+
+    def set_display(self, display) -> None:
+        """Show the energy column in the units of ``display`` (``Settings``, its ``display`` or an EnergyDisplay)."""
+        d = units.EnergyDisplay.of(display)
+        if d == self._energy:
+            return
+        self._energy = d
+        col = COL["energy"]
+        self.headerDataChanged.emit(Qt.Orientation.Horizontal, col, col)
+        if self._rows:
+            self.dataChanged.emit(self.index(0, col), self.index(len(self._rows) - 1, col))
 
     # -- Qt
     def rowCount(self, parent=QModelIndex()) -> int:  # noqa: B008, N802 - Qt's signature
@@ -182,6 +198,8 @@ class MoleculeTableModel(QAbstractTableModel):
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
         if orientation == Qt.Orientation.Horizontal and 0 <= section < len(COLUMNS):
             if role == Qt.ItemDataRole.DisplayRole:
+                if COLUMNS[section][0] == "energy":
+                    return self._energy.header("E", "absolute")
                 return COLUMNS[section][1]
             if role == Qt.ItemDataRole.ToolTipRole:
                 return {"seq": "Input order", "status": "Status", "energy": "Energy of the best conformer"}.get(
@@ -203,7 +221,7 @@ class MoleculeTableModel(QAbstractTableModel):
             if key == "conformers":
                 return "" if r.n_conformers is None else str(r.n_conformers)
             if key == "energy":
-                return "" if r.energy_ev is None else f"{r.energy_ev:.4f}"
+                return self._energy.text(r.energy_ev, units.EV, "absolute", 4)    # "" when None
             if key == "method":
                 return r.stage or r.method
             return getattr(r, key)

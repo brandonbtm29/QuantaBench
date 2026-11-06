@@ -6,7 +6,7 @@ CONTRACT (implemented by the surfaces builder):
         Adds a "Surfaces" dock (right area, tabified with Pipeline) and Analyze/View menu actions. For the
         selected molecule (``win.current_result()`` / ``win.resultChanged``) offers: surface kind (density
         0.002 au from ``res.qm["files"]["density"]``, or vdW/SAS from charges), color by (ESP, none), opacity,
-        color range (symmetric auto / fixed kcal/mol), colormap (bwr, coolwarm), and shows the GIPF
+        color range (symmetric auto / fixed), colormap (bwr, coolwarm), and shows the GIPF
         descriptors. Rendering goes into ``win.viewer.plotter`` as an extra actor named "qb_surface" that is
         removed when the molecule changes; it must not break picking (set ``pickable=False``).
 
@@ -23,6 +23,10 @@ displayed conformer's charges, else the best conformer's, else the QM stage's MB
 else RDKit Gasteiger charges). Meshes are computed on a worker thread (``gui.workers.FunctionWorker``) unless the
 molecule is small enough to take a few tens of milliseconds, and cached per molecule, geometry and settings.
 
+ESP values (colour range, legend, descriptors) are shown in the relative-energy unit of Settings > Display
+(``win.energy_display()``, updated by ``win.displayChanged``); the mesh, ``color_range()`` and the descriptors stay in
+kcal/mol (``esp_kcal``, ``esp_*_kcal``), so the lookup table and the exported columns never change with the unit.
+
 Colormaps follow matplotlib's direction (the first color is the most negative ESP): ``bwr`` paints negative
 regions blue and positive ones red; "Reverse" (on by default) gives the Spartan/GaussView convention (red = negative) that
 the viewer's charge coloring uses.
@@ -37,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, QTimer
+from PySide6.QtCore import QObject, QSignalBlocker, Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -51,6 +55,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .. import units
+from .energy_widgets import EnergySpinBox
 
 ACTOR = "qb_surface"
 SOURCES = (("qm", "QM density isosurface"), ("vdw", "van der Waals (point charges)"),
@@ -206,6 +213,7 @@ class SurfacePanel(QWidget):
         self._running: set = set()
         self._cache: OrderedDict = OrderedDict()
         self._preferred = "qm"
+        self.energy = win.energy_display() if hasattr(win, "energy_display") else units.EnergyDisplay()
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(0)
@@ -218,6 +226,8 @@ class SurfacePanel(QWidget):
                 w.setEnabled(False)
             return
         win.resultChanged.connect(self._on_result_changed)
+        if hasattr(win, "displayChanged"):
+            win.displayChanged.connect(self.set_display)
         self.viewer.sceneRebuilt.connect(self._on_scene_changed)
         self.viewer.coordinatesChanged.connect(self._on_scene_changed)
         self._update_sources(win.current_result())
@@ -267,10 +277,8 @@ class SurfacePanel(QWidget):
         self.range_box = QComboBox()
         self.range_box.addItem("Auto (symmetric)", "auto")
         self.range_box.addItem("Fixed ±", "fixed")
-        self.range_value = QDoubleSpinBox()
-        self.range_value.setRange(0.5, 500.0)
-        self.range_value.setValue(30.0)
-        self.range_value.setSuffix(" kcal/mol")
+        self.range_value = EnergySpinBox(0.5, 500.0, units.KCAL, self.energy.relative)   # kcal/mol inside
+        self.range_value.set_stored(30.0)
         row.addWidget(self.range_box, 1)
         row.addWidget(self.range_value, 1)
         form.addRow("Range", row)
@@ -501,9 +509,20 @@ class SurfacePanel(QWidget):
         return lut
 
     def color_range(self) -> float:
+        """Half-width of the colour scale, kcal/mol (the mesh's ``esp_kcal``), whatever unit is shown."""
         if self.range_box.currentData() == "fixed" or self.current is None or self.current.esp is None:
-            return float(self.range_value.value())
+            return float(self.range_value.stored())
         return float(max(np.max(np.abs(self.current.esp)), 1e-3))
+
+    def set_display(self, display) -> None:
+        """Show ESP values in the relative-energy unit of ``display`` (Settings > Display); the surface, its
+        colours and the fixed range keep their values."""
+        self.energy = units.EnergyDisplay.of(display)
+        with QSignalBlocker(self.range_value):
+            self.range_value.set_unit(self.energy.relative)
+        self._update_legend()
+        if self.current is not None:
+            self._show_descriptors(self.current)
 
     def _add_actor(self) -> None:
         import vtk
@@ -571,31 +590,40 @@ class SurfacePanel(QWidget):
         if not esp:
             self.legend_text.setText("Surface colored uniformly.")
             return
-        vmax = self.color_range()
-        self.legend_lo.setText(f"−{vmax:.1f}")
-        self.legend_hi.setText(f"+{vmax:.1f}")
-        self.legend_text.setText(f"ESP, kcal/mol: {_color_word(rgb[0])} = negative (electron-rich), "
-                                 f"{_color_word(rgb[-1])} = positive (electron-poor); values beyond ±{vmax:.1f} "
+        e = self.energy
+        vmax = e.text(self.color_range(), units.KCAL, "relative", 1)
+        self.legend_lo.setText(f"−{vmax}")
+        self.legend_hi.setText(f"+{vmax}")
+        self.legend_text.setText(f"ESP, {e.label('relative')}: {_color_word(rgb[0])} = negative (electron-rich), "
+                                 f"{_color_word(rgb[-1])} = positive (electron-poor); values beyond ±{vmax} "
                                  "are saturated.")
 
     def _show_descriptors(self, data: SurfaceData) -> None:
+        """The descriptors, ESP values in the display unit (power 1: kcal/mol, 2: (kcal/mol)² in ``descriptors``)."""
         d = data.descriptors
-        rows = [("Area", "surf_area_A2", "Å²", 2), ("Volume", "surf_volume_A3", "Å³", 2)]
+        e = self.energy
+        rows = [("Area", "surf_area_A2", "Å²", 2, 0), ("Volume", "surf_volume_A3", "Å³", 2, 0)]
         if data.esp is not None:
-            rows += [("V<sub>S,min</sub>", "esp_min_kcal", "kcal/mol", 2),
-                     ("V<sub>S,max</sub>", "esp_max_kcal", "kcal/mol", 2),
-                     ("V̄<sub>S</sub>", "esp_mean_kcal", "kcal/mol", 2),
-                     ("V̄<sub>S</sub><sup>+</sup>", "esp_mean_pos_kcal", "kcal/mol", 2),
-                     ("V̄<sub>S</sub><sup>−</sup>", "esp_mean_neg_kcal", "kcal/mol", 2),
-                     ("σ²<sub>+</sub>", "esp_sigma2_pos", "(kcal/mol)²", 1),
-                     ("σ²<sub>−</sub>", "esp_sigma2_neg", "(kcal/mol)²", 1),
-                     ("σ²<sub>tot</sub>", "esp_sigma2_tot", "(kcal/mol)²", 1),
-                     ("ν (balance)", "esp_nu", "", 3),
-                     ("Π (local polarity)", "esp_pi", "kcal/mol", 2),
-                     ("Area V > 0", "esp_area_pos_A2", "Å²", 1),
-                     ("Area V < 0", "esp_area_neg_A2", "Å²", 1)]
-        body = "".join(f"<tr><td>{label}</td><td align='right'>{d[key]:.{nd}f}</td><td>{unit}</td></tr>"
-                       for label, key, unit, nd in rows if key in d)
+            rows += [("V<sub>S,min</sub>", "esp_min_kcal", "", 2, 1),
+                     ("V<sub>S,max</sub>", "esp_max_kcal", "", 2, 1),
+                     ("V̄<sub>S</sub>", "esp_mean_kcal", "", 2, 1),
+                     ("V̄<sub>S</sub><sup>+</sup>", "esp_mean_pos_kcal", "", 2, 1),
+                     ("V̄<sub>S</sub><sup>−</sup>", "esp_mean_neg_kcal", "", 2, 1),
+                     ("σ²<sub>+</sub>", "esp_sigma2_pos", "", 1, 2),
+                     ("σ²<sub>−</sub>", "esp_sigma2_neg", "", 1, 2),
+                     ("σ²<sub>tot</sub>", "esp_sigma2_tot", "", 1, 2),
+                     ("ν (balance)", "esp_nu", "", 3, 0),
+                     ("Π (local polarity)", "esp_pi", "", 2, 1),
+                     ("Area V > 0", "esp_area_pos_A2", "Å²", 1, 0),
+                     ("Area V < 0", "esp_area_neg_A2", "Å²", 1, 0)]
+
+        def cell(key, unit, nd, power):
+            if power:
+                return e.text(d[key], units.KCAL, "relative", nd, power), e.label("relative", power)
+            return f"{d[key]:.{nd}f}", unit
+
+        body = "".join("<tr><td>{}</td><td align='right'>{}</td><td>{}</td></tr>".format(label, *cell(key, unit, nd, p))
+                       for label, key, unit, nd, p in rows if key in d)
         self.readout.setText("<b>Surface descriptors</b> (Murray-Politzer, area-weighted)"
                              f"<table cellspacing='4'>{body}</table>")
 
