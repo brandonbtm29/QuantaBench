@@ -108,7 +108,8 @@ def test_parse_explicit_lists(cores):
 @pytest.mark.parametrize("hw", [report(), report(gpus=1), report(physical=4, logical=8, ram=8), report(1, 2, 7),
                                 report(physical=16, logical=16, ram=4.0, gpus=1)])
 @pytest.mark.parametrize("threads", [0, 1, 3, 12])
-@pytest.mark.parametrize("method,extra", [("mmff", {}), ("gfn1-xtb", {}), ("gfn1-xtb", {"qm_method": "b3lyp/def2-svp"}),
+@pytest.mark.parametrize("method,extra", [("mmff", {}), ("tblite-gfn2", {}), ("gfn1-xtb", {}),
+                                          ("gfn1-xtb", {"qm_method": "b3lyp/def2-svp"}),
                                           ("gfn1-xtb", {"conformer_search": "crest"})])
 def test_auto_never_oversubscribes(monkeypatch, hw, threads, method, extra):
     monkeypatch.setattr(resources, "logical_cores", lambda: hw.logical_cores)
@@ -127,6 +128,12 @@ def test_auto_plans(cores, monkeypatch):
     assert mmff == [Lane(f"cpu{i}", "cpu", 1) for i in range(1, 13)]             # lanes = physical cores
     cpu_xtb = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12, gpu="off"), nova)[0]
     assert cpu_xtb == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
+    # tblite (no torch, CPU only): 1-thread lanes like MMFF
+    assert L.workload(pipeline.BuildConfig(method="tblite-gfn2"))[1] == "native"
+    tb, reason = L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=12), nova)
+    assert tb == [Lane(f"cpu{i}", "cpu", 1) for i in range(1, 13)] and "1 thread each" in reason
+    tb24, reason = L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=24), nova)   # SMT: 12 x 2
+    assert tb24 == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 13)] and "SMT" in reason
     # a GPU-capable engine gets one GPU lane + CPU lanes on the rest
     gpu_ml, reason = L.plan_auto(pipeline.BuildConfig(method="aimnet2", threads=0), nova)
     assert gpu_ml[0] == Lane("gpu0", "cuda:0", 4) and {x.threads for x in gpu_ml[1:]} == {2}

@@ -82,6 +82,13 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
   2 for the same three molecules, and 15.3 s with 1 vs 15.6 s with 2 on the cloud VM. Lanes scale until the
   physical cores are used.
 * MMFF: one 1-thread lane per physical core.
+* tblite (in-process Fortran, no torch): one lane per physical core, with the rest of the thread budget
+  shared out (2 threads each on an SMT machine given all its threads). The full-run protocol (GFN2, ALPB
+  water, 50 conformers, top 5, frequencies), 49 molecules in the full table's cohort mix, 2026-11-05:
+  MacBook (M3 Max, 10 P + 4 E cores, no SMT): 6 x 2 181 s, 7 x 2 171 s, 10 x 1 151 s, 14 x 1 141 s (a second
+  thread inside a molecule bought nothing: summed lane-seconds 891 at 6 x 2, 864 at 10 x 1). NOVA (Ryzen 9
+  7900X, 12 C / 24 T, the fork's reference-BLAS wheel, one core busy with another job): 6 x 2 427 s,
+  12 x 1 363 s, 24 x 1 331 s, 12 x 2 318 s. Energies agree across layouts to 1e-9 eV.
 * in-process torch engines on the CPU (dxtb GFN1/GFN2, AIMNet2): 2-thread lanes on the physical cores (as
   fast as 1-thread lanes on all cores, with half the processes: each holds torch, ~0.5-1 GB).
 * external programs (an engine with ``.external``, CREST conformer search, a QM stage): 2-thread lanes on
@@ -131,7 +138,7 @@ TEST_DELAY_ENV = "QUANTABENCH_TEST_LANE_DELAY"
 #: Elements method "auto" is resolved for when a lane plan is made (H C N O F S: PFAS and most organics)
 TYPICAL_ELEMENTS = (1, 6, 7, 8, 9, 16)
 #: Working set of one lane process in GB, by workload, for the memory cap of the auto plan
-LANE_MEMORY_GB = {"mmff": 0.4, "torch": 1.2, "external": 0.6}
+LANE_MEMORY_GB = {"mmff": 0.4, "native": 0.6, "torch": 1.2, "external": 0.6}
 GPU_LANE_THREADS = 4
 STARTUP_FAILURES = 3          # a lane that dies this often before it is ready is given up
 #: Windows waits on at most 63 handles at once (WaitForMultipleObjects) and the pool waits on two per lane
@@ -246,8 +253,9 @@ def gpu_linalg_available() -> bool:
 
 
 def workload(cfg) -> tuple[str, str, bool]:
-    """(engine, kind, gpu_capable) of a build: kind "mmff" | "torch" (in-process) | "external" (xtb, MOPAC,
-    CREST or Psi4 run as programs). Method "auto" is resolved for typical organic elements."""
+    """(engine, kind, gpu_capable) of a build: kind "mmff" | "native" (in-process compiled code without torch:
+    tblite) | "torch" (in-process PyTorch: dxtb, AIMNet2) | "external" (xtb, MOPAC, CREST or Psi4 run as
+    programs). Method "auto" is resolved for typical organic elements."""
     from ..chem import engines, solvents
 
     cfg = _cfg(cfg)
@@ -260,6 +268,8 @@ def workload(cfg) -> tuple[str, str, bool]:
         kind = "external"
     elif method == "mmff":
         kind = "mmff"
+    elif not info.gpu_capable:
+        kind = "native"
     else:
         kind = "torch"
     return method, kind, bool(info.gpu_capable and method != "mmff")
@@ -388,6 +398,11 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
         if kind == "mmff":
             per, wanted = 1, min(cpu_cores, budget)
             reason = "MMFF: one 1-thread lane per physical core"
+        elif kind == "native":
+            wanted = min(cpu_cores, budget)
+            per = max(1, budget // max(1, wanted))
+            reason = (f"{method}: one lane per physical core, {per} thread{'s' if per > 1 else ''} each"
+                      + (" (all the threads: SMT)" if per > 1 else ""))
         elif kind == "external":
             per, wanted = 2, budget // 2
             reason = "external programs: 2-thread lanes on all threads"
