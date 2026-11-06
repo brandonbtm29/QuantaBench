@@ -39,6 +39,31 @@
 - Version 0.3.0.dev2. A solvent run (other than MMFF) started with an earlier version is not resumed silently: its
   gas-phase `xtb_*` and tblite polarizability columns would mix with solvated ones (`--force` continues anyway).
 
+### Validation against Spartan: structure keys, `sample`, `validate` (VAL-1, 2026-11-05)
+- **The Spartan tables carry structure keys QuantaBench can match**: `inchikey` and `canonical_smiles` of the
+  structure as Spartan drew it (its bonds and bond orders, formal charges from each atom's bond-order sum, R/S
+  and E/Z from the geometry), made by the same function as QuantaBench's species (`chem.validate.
+  species_keys`). Ions no longer depend on rdDetermineBonds: a carboxylate, sulfonate or quaternary ammonium
+  is keyed as drawn, and `to_mol` uses Spartan's bonds for them too.
+- **`charge_check`**: `mismatch` when Spartan calculated another charge than the structure it drew
+  (`structure_charge`); in the staged C3A sample, 12 of 47 ions (cations calculated as -1, phosphate dianions
+  as -1). Those rows join but give no values in a validation.
+- **Ambiguous structures get a wide row**: one per structure, `label_resolved` empty, `label_source` =
+  ambiguous, `cas_candidates` = the CAS numbers it could be. `import` prints how many.
+- `spartan_solvent` is QuantaBench's solvent name (`WASSER` -> `water`); `spartan_solvent_raw` and the level
+  text keep Spartan's keyword.
+- **`quantabench-cli sample`**: a reproducible validation set from the wide table, stratified by cohort (the
+  document prefix, `C1A_`, ...) and charge class, with filters for Spartan values (PM6 / DFT-water), elements
+  (AIMNet2's by default), charge classes and size; DFT-water molecules first within a stratum; writes SMILES +
+  id + cohort for `build --file` and a design JSON.
+- **`quantabench-cli validate`**: compares run folders, merged tables or the paired gas/water table with the
+  wide table: joins by InChIKey, canonical SMILES and the stereo-free InChIKey with a CAS cross-check; gas vs
+  PM6, ALPB water vs DFT in C-PCM water, solvation shifts (flagged: mixed levels); dipole, HOMO/LUMO/gap,
+  polarizability, area/volume and charge extrema (correlation only where the quantities differ); N, MAE,
+  RMSE, mean signed error, Pearson r, Spearman ρ, a linear fit and outliers, overall and per cohort and
+  charge class. Writes `validation.csv`, `join.csv`, `summary.csv`, `report.md` and parity plots (new optional
+  extra `quantabench[validate]` = matplotlib). See docs/VALIDATION.md.
+
 ### Apple GPU: AIMNet2 on MPS (first run on the MacBook, 2026-11-05)
 - AIMNet2's Warp-free path failed on the Apple GPU with "Undefined type Double": `t.to("cpu", torch.float64)` casts on
   the device before the copy, and MPS has no float64. Tensors now move to the CPU first and are cast there (and the

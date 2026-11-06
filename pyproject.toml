@@ -62,8 +62,9 @@ protonate = ["dimorphite-dl>=2.0"]         # pH-dependent protonation states
 ovito = ["ovito>=3.12"]                    # embedded OVITO viewport for big systems / trajectories
 md = ["lammps>=2023.8"]                    # LAMMPS Python module (CPU + OpenMP) for `md smd --run` and checks
 excel = ["openpyxl>=3.1"]                  # .xlsx/.xlsm input (CompTox dashboard exports)
+validate = ["matplotlib>=3.8"]             # parity plots of `quantabench-cli validate` (skipped without it)
 # lammps ships wheels for Windows (win_amd64), Linux and macOS; openpyxl is pure Python
-all = ["quantabench[ml,xtb,protonate,md,excel,interop]"]
+all = ["quantabench[ml,xtb,protonate,md,excel,interop,validate]"]
 # External programs (xtb, CREST, MOPAC, Psi4) are not pip packages: see environment.yml and docs/ENGINES.md
 dev = ["pytest>=8", "pytest-timeout>=2.3", "ruff>=0.6"]
 

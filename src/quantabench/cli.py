@@ -9,6 +9,8 @@
     quantabench-cli freq "OC(=O)C(F)(F)F TFA" --method gfn1-xtb                # frequencies + thermo + IR
     quantabench-cli import psi4_output.dat ORCA.out [--out DIR]                 # other programs' outputs (cclib)
     quantabench-cli import batches/*.spartan --table all.csv [--sdf all.sdf] [--wide qsar.csv]   # Spartan -> one table
+    quantabench-cli sample qsar.csv -o val300.csv [-n 300 --seed 20261105]     # stratified validation set
+    quantabench-cli validate RUN_GAS RUN_WATER --spartan qsar.csv --out DIR     # QuantaBench vs Spartan
     quantabench-cli slab --nx 16 --ny 9 --layers 3 --molecule "OC(=O)C(F)(F)..." -o pfoa_on_graphite.data
                          [--lammps-dir DIR]
     quantabench-cli md smd --system pfoa_graphite.extxyz -o DIR [--gpu] [--run]
@@ -443,7 +445,8 @@ def _import_spartan(args, files: list[str]) -> int:
         print("  labels: " + ", ".join(f"{n} {src}" for src, n in sorted(s.label_sources.items(),
                                                                         key=lambda kv: -kv[1])))
     if wide:
-        print(f"  wide table: {s.wide_rows} labels -> {wide}")
+        print(f"  wide table: {s.wide_rows} rows ({s.wide_rows - s.wide_ambiguous} labels, {s.wide_ambiguous} "
+              f"ambiguous structures) -> {wide}")
         for p, level in s.prefixes.items():
             print(f"    {p}_*: {level or '(level unknown)'}")
     if s.duplicate_labels:
@@ -728,6 +731,120 @@ def add_build_science_args(q: argparse.ArgumentParser) -> None:
     add_freq_args(q)
 
 
+# ----------------------------------------------------------------------------------------- validation (VAL-1)
+def _csv_list(text: str) -> list[str]:
+    return [t.strip() for t in (text or "").split(",") if t.strip()]
+
+
+def _sample(args) -> int:
+    from .chem import validate as val
+
+    try:
+        table = val.read_spartan(args.spartan, log=print)
+        cohorts = val.read_cohorts(args.cohorts) if args.cohorts else None
+        bins = [int(x) for x in _csv_list(args.size_bins)]
+        elements = None if args.elements.lower() == "any" else _csv_list(args.elements)
+        s = val.sample(table, n=args.n, seed=args.seed, require=args.require, elements=elements,
+                       charges=_csv_list(args.charges), min_heavy=args.min_heavy,
+                       max_heavy=args.max_heavy if args.max_heavy > 0 else None, size_bins=bins,
+                       strata=[{"charge": "charge_class"}.get(s, s) for s in _csv_list(args.stratify)],
+                       prefer=args.prefer, cohorts=cohorts, allow_charge_mismatch=args.allow_charge_mismatch,
+                       allow_fragments=args.allow_fragments, include_failed=args.include_failed)
+    except (OSError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    out = Path(args.output).expanduser()
+    val.write_csv(out, val.sample_rows(s, table, bins, cohorts))
+    design = out.with_suffix(".design.json")
+    design.write_text(json.dumps(s.design, indent=2) + "\n", encoding="utf-8")
+    d = s.design
+    print(f"{d['n_selected']} of {d['eligible']} eligible molecules -> {out} (design: {design.name})")
+    print(f"  with PM6 (gas): {d['with_pm6']}, with DFT (water): {d['with_dft_water']}, both: {d['with_both']}")
+    for k, q in d["quotas"].items():
+        print(f"  {k:<28} {q['quota']:>4} of {q['available']}")
+    for why, n in sorted(s.excluded.items(), key=lambda kv: -kv[1]):
+        print(f"  excluded: {n} {why}")
+    return 0 if s.rows else 1
+
+
+def _validate(args) -> int:
+    from .chem import validate as val
+
+    try:
+        table = val.read_spartan(args.spartan, log=print)
+        records = val.read_quantabench(args.runs)
+    except (OSError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    if not records:
+        print("No finished QuantaBench molecules in " + ", ".join(args.runs), file=sys.stderr)
+        return 2
+    res = val.validate(records, table, args.out, top=args.top, include_failed=args.include_failed,
+                       plots=not args.no_plots, log=print)
+    joined = sum(1 for m in res.matches if m.rows)
+    print(f"{joined} of {len(res.matches)} QuantaBench molecules joined to Spartan rows; {len(res.pairs)} property "
+          f"pairs -> {res.out_dir}")
+    for s in res.summary:
+        if s["group_type"] == "all":
+            print(f"  {s['pair']:<60} N={s['n']:<4} MAE={val._g(s['mae'])} r={val._g(s['pearson_r'])} "
+                  f"({s['comparison']})")
+    for w in sorted(set(res.warnings))[:5]:
+        print(f"  warning: {w}", file=sys.stderr)
+    return 0 if joined else 1
+
+
+def register_validation(sub) -> None:
+    """``sample`` (a stratified validation set from Spartan's wide table) and ``validate`` (a QuantaBench run
+    against it); see chem/validate.py and docs/VALIDATION.md."""
+    from .chem import validate as val
+
+    sp = sub.add_parser("sample", help="pick a reproducible, stratified validation set from a Spartan wide table",
+                        description="Reads a Spartan wide QSAR table (import --wide) and writes a CSV of SMILES, id "
+                                    "and cohort that `build --file` reads: about N molecules stratified by cohort "
+                                    "(the document name's prefix, C1A_, C3A_, ...) and charge class, molecules "
+                                    "with DFT-water and PM6 values first, spread over size bins, with a seed.")
+    sp.add_argument("spartan", help="the Spartan wide table (CSV)")
+    sp.add_argument("-o", "--output", required=True, help="the sample CSV to write (+ <name>.design.json)")
+    sp.add_argument("-n", type=int, default=300, help="molecules to pick (default 300)")
+    sp.add_argument("--seed", type=int, default=val.SEED, help=f"random seed (default {val.SEED})")
+    sp.add_argument("--require", choices=val.REQUIRE, default="any",
+                    help="Spartan values a molecule must have: any (PM6 or DFT-water, default), pm6, dft, both, none")
+    sp.add_argument("--prefer", choices=val.PREFER, default="dft",
+                    help="within a stratum, take molecules with DFT-water values first (default), PM6 first, or none")
+    sp.add_argument("--elements", default=",".join(val.AIMNET2_ELEMENTS),
+                    help="allowed elements, comma-separated, or 'any' (default: AIMNet2's)")
+    sp.add_argument("--charges", default=",".join(val.CHARGE_CLASSES), help="charge classes (neutral,anion,cation)")
+    sp.add_argument("--min-heavy", type=int, default=1, help="fewest heavy atoms (default 1)")
+    sp.add_argument("--max-heavy", type=int, default=val.DEFAULT_MAX_HEAVY,
+                    help=f"most heavy atoms, 0 = no limit (default {val.DEFAULT_MAX_HEAVY})")
+    sp.add_argument("--size-bins", default=",".join(map(str, val.DEFAULT_SIZE_BINS)),
+                    help="heavy-atom bin edges (default 10,20,35: <=10, 11-20, 21-35, >35)")
+    sp.add_argument("--stratify", default="cohort,charge",
+                    help="strata: any of cohort, charge, size (default cohort,charge)")
+    sp.add_argument("--cohorts", help="CSV of label -> cohort overriding the cohort from the document names")
+    sp.add_argument("--allow-charge-mismatch", action="store_true",
+                    help="keep rows whose Spartan charge differs from the structure Spartan drew")
+    sp.add_argument("--allow-fragments", action="store_true", help="keep multi-fragment structures (salts)")
+    sp.add_argument("--include-failed", action="store_true", help="count values of failed Spartan jobs")
+    sp.set_defaults(func=_sample)
+
+    vp = sub.add_parser("validate", help="compare a QuantaBench run with a Spartan wide table",
+                        description="Joins QuantaBench molecules (run folders, merged tables or the paired gas/water "
+                                    "table) to the Spartan wide table by InChIKey, canonical SMILES, then the "
+                                    "stereo-free InChIKey, cross-checks the CAS id, and compares dipoles, HOMO/LUMO/"
+                                    "gap, polarizabilities, areas/volumes and charges like with like (gas vs PM6, "
+                                    "water vs DFT in water). Writes validation.csv, join.csv, summary.csv, report.md "
+                                    "and parity plots (matplotlib) into --out.")
+    vp.add_argument("runs", nargs="+", metavar="RUN", help="run folder(s) or table(s) (gas and water runs may be "
+                                                           "given together)")
+    vp.add_argument("--spartan", required=True, help="the Spartan wide table (CSV)")
+    vp.add_argument("--out", required=True, help="output folder")
+    vp.add_argument("--top", type=int, default=10, help="outliers listed per pair (default 10)")
+    vp.add_argument("--include-failed", action="store_true", help="use values of failed Spartan jobs")
+    vp.add_argument("--no-plots", action="store_true", help="skip the parity plots")
+    vp.set_defaults(func=_validate)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="quantabench-cli", description="QuantaBench command line tools")
     p.add_argument("--version", action="version", version=f"QuantaBench {__version__}")
@@ -814,6 +931,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "row per saved conformer")
     im.add_argument("-v", "--verbose", action="store_true", help="one line per Spartan document")
     im.set_defaults(func=_import)
+
+    register_validation(sub)        # sample, validate (chem.validate)
 
     s = sub.add_parser("slab", help="graphite slab, optionally with a molecule placed above it")
     s.add_argument("--nx", type=int, default=16), s.add_argument("--ny", type=int, default=9)

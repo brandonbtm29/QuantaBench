@@ -459,7 +459,12 @@ def test_label_join_by_structure_ambiguous_unresolved(tmp_path, monkeypatch):
     assert s.prefixes == {"pm6": "PM6 OPT", "conf_dlff03": "DLFF03 MS_CONFP2_BW", "conf_mmff": "MMFF MS_CONFP2_BW",
                           "dft": "B3LYP/6-31G* SOPT"}            # two conformer-search levels: never one column
     wide = {r["label_resolved"]: r for r in csv.DictReader((tmp_path / "wide.csv").open(encoding="utf-8"))}
-    assert set(wide) == {"TEST-1", "TEST-2", "TEST-3", "TEST-4"} and s.wide_rows == 4
+    assert set(wide) == {"TEST-1", "TEST-2", "TEST-3", "TEST-4", ""} and s.wide_rows == 5 and s.wide_ambiguous == 1
+    amb = wide[""]                                       # the ambiguous CF2Br-CH3: one row of its own, by structure
+    assert (amb["label_source"], amb["cas_candidates"], amb["pm6_storage"]) == ("ambiguous", "TEST-3;TEST-4", "M0005")
+    assert amb["inchikey"] == wide["TEST-3"]["inchikey"] and amb["canonical_smiles"] == "CC(F)(F)Br"
+    assert amb["structure_key"] == wide["TEST-4"]["structure_key"] and wide["TEST-3"]["cas_candidates"] == ""
+    assert wide["TEST-1"]["label_source"] == "input" and wide["TEST-1"]["charge_check"] == "ok"
     t1 = wide["TEST-1"]
     assert t1["pm6_n_rows"] == "2" and t1["pm6_storage"] == "M0002"          # E_KCAL -205 < -200
     assert float(t1["pm6_homo_ev"]) == pytest.approx(-0.38 * 27.211386245988) and t1["pm6_level"] == "PM6 OPT"
@@ -469,7 +474,55 @@ def test_label_join_by_structure_ambiguous_unresolved(tmp_path, monkeypatch):
     assert (t2["pm6_n_rows"], t2["pm6_n_failed"], t2["pm6_storage"]) == ("2", "1", "M0003")
     assert t2["pm6_spartan_status"] == "completed" and t2["dft_n_rows"] == ""
     assert wide["TEST-3"]["pm6_n_rows"] == "" and wide["TEST-3"]["formula"] == "C2H3BrF2"   # ambiguous: left out
-    assert list(wide["TEST-1"])[:3] == ["label_resolved", "structure_key", "formula"]
+    assert list(wide["TEST-1"])[:6] == ["label_resolved", "label_source", "cas_candidates", "structure_key",
+                                        "inchikey", "canonical_smiles"]
+
+
+TFA_ANION = """ OPT PM6\r
+TFA\r
+{charge} 1\r
+ 6   0.000   0.000   0.000\r
+ 6   1.540   0.000   0.000\r
+ 9  -0.450   1.270   0.000\r
+ 9  -0.450  -0.635   1.100\r
+ 9  -0.450  -0.635  -1.100\r
+ 8   2.150   1.050   0.000\r
+ 8   2.150  -1.050   0.000\r
+ENDCART\r
+HESSIAN\r
+    1    1   16   16   16    7    7\r
+    1    2    1\r
+    1    3    1\r
+    1    4    1\r
+    1    5    1\r
+    2    6    2\r
+    2    7    1\r
+ENDHESS\r
+"""
+
+
+def test_drawn_ions_inchikey_charge_check_and_solvent_names():
+    """Spartan draws a carboxylate as C(=O)-O with a one-bond O: that O is O-, the InChIKey is the anion's
+    (as RDKit gives for QuantaBench's species), and a document charge that does not fit is reported."""
+    from rdkit import Chem
+
+    (m,) = io_spartan.iter_molecules(_doc([(TFA_ANION.replace("{charge}", "-1"), None)]))
+    sp = io_spartan.species(m)
+    ref = Chem.MolFromSmiles("O=C([O-])C(F)(F)F")
+    assert sp["inchikey"] == Chem.MolToInchiKey(ref) and sp["inchikey"].endswith("-M")
+    assert sp["canonical_smiles"] == Chem.MolToSmiles(ref)
+    assert (sp["structure_charge"], sp["charge_check"]) == (-1, "ok")
+    assert io_spartan.to_mol(m).GetProp("qb_bonds") == "spartan"          # Spartan's bonds now describe ions too
+    (bad,) = io_spartan.iter_molecules(_doc([(TFA_ANION.replace("{charge}", "1"), None)]))
+    row = io_spartan.molecule_row(bad)
+    assert (row["structure_charge"], row["charge_check"], row["inchikey"]) == (-1, "mismatch", sp["inchikey"])
+    # Spartan's solvent keyword -> QuantaBench's canonical name; the raw keyword is kept
+    assert io_spartan.solvent_name("WASSER") == "water" and io_spartan.solvent_name("water") == "water"
+    assert io_spartan.solvent_name("") == "" and io_spartan.solvent_name("NONE") == ""
+    assert io_spartan.solvent_name("Methanol") == "methanol" and io_spartan.solvent_name("FOO") == "foo"
+    lev = io_spartan.SpartanLevel(method="B3LYP", task="SOPT", solvent="WASSER")
+    assert lev.row()["spartan_solvent"] == "water" and lev.row()["spartan_solvent_raw"] == "WASSER"
+    assert lev.describe() == "B3LYP SOPT SOLVENT=WASSER"                  # the level text stays raw
 
 
 def test_level_prefixes_never_mix_levels():
@@ -494,7 +547,7 @@ def test_cli_import_wide(tmp_path, monkeypatch):
                    "--wide", str(tmp_path / "w.csv")])
     assert rc == 0
     wide = list(csv.DictReader((tmp_path / "w.csv").open(encoding="utf-8")))
-    assert {r["label_resolved"] for r in wide} == {"TEST-1", "TEST-2", "TEST-3", "TEST-4"}
+    assert {r["label_resolved"] for r in wide} == {"TEST-1", "TEST-2", "TEST-3", "TEST-4", ""}
     assert "pm6_homo_ev" in wide[0] and "conf_dlff03_n_conformers" in wide[0]
 
 
@@ -524,7 +577,16 @@ def test_real_documents(tmp_path):
         if base and r["label_source"] == "unresolved":
             pytest.fail(f"{r['source_file']} {r['storage']}: {r['label_note']}")
     wide = list(csv.DictReader((tmp_path / "wide.csv").open(encoding="utf-8")))
-    assert len(wide) == s.wide_rows == len({r["label_resolved"] for r in rows if r["label_resolved"]})
+    ambiguous = {r["structure_key"] for r in rows if r["label_source"] == "ambiguous" and r["structure_key"]}
+    assert len(wide) == s.wide_rows == len({r["label_resolved"] for r in rows if r["label_resolved"]}) + len(ambiguous)
+    assert s.wide_ambiguous == len(ambiguous) == sum(1 for w in wide if w["label_source"] == "ambiguous")
+    for w in wide:
+        assert w["inchikey"] or w["canonical_smiles"], w["label_resolved"]       # every row has a structure key
+        assert w["charge_check"] in ("ok", "mismatch")
+        if w["label_source"] == "ambiguous":
+            assert not w["label_resolved"] and len(w["cas_candidates"].split(";")) >= 2
+    assert all(r["spartan_solvent"] in ("", "water") for r in rows)          # WASSER -> water
+    assert {r["spartan_solvent_raw"] for r in rows if r["spartan_solvent"]} <= {"WASSER"}
     # labels of a batch agree with the SDF it was built from, when that SDF lies next to it
     for f in files:
         sdf = f.with_suffix(".sdf")

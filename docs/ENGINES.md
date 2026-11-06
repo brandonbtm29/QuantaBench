@@ -421,8 +421,9 @@ quantabench-cli import cohorts/*/*.spartan --table all.csv --wide qsar.csv # + o
   stream, Input not readable, no geometry in Input) and listed; nothing is skipped silently.
 - Every row has `source_file`, `molecule_index` (position in its document), `storage` (`M0001`), `label` and
   `duplicate_label` (1 when the molecule's own label occurs in more than one molecule; nothing is overwritten),
-  then `label_resolved`, `label_source`, `label_note`, `structure_key`, the level of theory (`spartan_version`,
-  `spartan_task`, `spartan_method`, `spartan_basis`, `spartan_solvent`, `spartan_status`), `formula`, `smiles`,
+  then `label_resolved`, `label_source`, `label_note`, `structure_key`, `inchikey`, `canonical_smiles`,
+  `structure_charge`, `charge_check`, the level of theory (`spartan_version`, `spartan_task`, `spartan_method`,
+  `spartan_basis`, `spartan_solvent`, `spartan_solvent_raw`, `spartan_status`), `formula`, `smiles`,
   `n_atoms`, `charge`, `multiplicity`, `n_conformers`, and every scalar Spartan property as `spartan_<name>`.
 - QuantaBench columns, from quantum-chemical calculations only (units checked against Spartan's output, its
   manual and identities between the archive's values): `homo_ev`, `lumo_ev`, `gap_ev` (Spartan: hartree),
@@ -438,12 +439,22 @@ quantabench-cli import cohorts/*/*.spartan --table all.csv --wide qsar.csv # + o
   `label_source` is `input`, `structure`, `ambiguous` (several base labels share the structure, e.g. an anion
   under the CAS numbers of its salts; `label_note` lists them) or `unresolved` (no base document, or the
   structure is not in it). Nothing is guessed.
+- **Structure keys** QuantaBench can match: `inchikey` and `canonical_smiles` of the structure as Spartan drew
+  it (its bonds and bond orders, formal charges from each atom's bond-order sum: a one-bond carboxylate O is
+  O⁻, a quaternary N is N⁺; R/S and E/Z from the geometry), computed by the same function as QuantaBench's own
+  species (`chem.validate.species_keys`). `structure_charge` is the drawing's charge and `charge_check` says
+  whether Spartan calculated with it (`ok`) or not (`mismatch`: e.g. a quaternary ammonium calculated as -1,
+  a phosphate dianion as -1; their Spartan values are not the drawn ion's).
+- `spartan_solvent` is QuantaBench's solvent name (`WASSER` -> `water`); `spartan_solvent_raw` and the level
+  text keep Spartan's keyword.
 - **`--wide`** writes one row per resolved label with each level of theory's best result (completed first,
   then lowest energy) as prefixed columns: `conf_*` (conformer search), `mm_*`, `pm6_*`, `dft_*`, ... plus
   `<prefix>_level`, `<prefix>_n_rows` (e.g. conformers at that level) and `<prefix>_n_failed`. The prefix
   comes from the method and task, not the document name; when a run has two levels with one prefix, each
   gets its level appended (`conf_dlff03`, `conf_mmff`), so a column never mixes levels. The command prints
-  the prefixes it used.
+  the prefixes it used. An **ambiguous structure** gets one row of its own keyed by its structure:
+  `label_resolved` empty, `label_source` = ambiguous, `cas_candidates` = the CAS numbers it could be
+  (`;`-separated). Comparing a QuantaBench run with this table: [VALIDATION.md](VALIDATION.md).
 - Conformer libraries (conformer searches): `n_conformers` and the lowest-energy saved conformer's values
   (`spartan_conf_energy_kcal`, `spartan_conf_boltzmann_weight`, ...; Spartan's kcal/mol).
 - Geometry: the `Input` coordinates. After a Spartan optimization (PM6 `OPT`) these are still the starting
