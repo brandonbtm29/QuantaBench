@@ -237,6 +237,23 @@ def test_paired_delta_sign_warning(tmp_path):
     assert any("gas - water" in w for w in res.warnings)
 
 
+def test_join_where_the_charge_is_drawn_on_another_atom(tmp_path):
+    """A sulfonimide anion drawn N- by Spartan and O- in QuantaBench's input: standard InChI keeps them apart
+    (/q-1 vs /p-1), the charge-location key joins them; another anion of the same size does not."""
+    n_minus = "O=S1(=O)[N-]S(=O)(=O)C(F)(F)C(F)(F)C1(F)F"
+    o_minus = "O=S1(=O)N=S(=O)([O-])C(F)(F)C(F)(F)C1(F)F"
+    assert _ik(n_minus) != _ik(o_minus) and _ik(n_minus)[:14] != _ik(o_minus)[:14]
+    assert val.charge_parent_key(n_minus) == val.charge_parent_key(o_minus) != ""
+    assert val.charge_parent_key("OC(=O)C(F)(F)F") == ""
+    table = val.read_spartan(_write(tmp_path / "w.csv", [
+        _row("189217-62-7", n_minus, "C3F6NO4S2-", -1, cohort="C3A", dft=12.0),
+        _row("OTHER", "O=C([O-])C(F)(F)C(F)(F)C(F)(F)F", "C4F7O2-", -1, cohort="C3A", dft=5.0)], WIDE_HEADER))
+    paired = _write(tmp_path / "p.csv", [{"id": "189217-62-7", "smiles": o_minus, "charge": -1,
+                                          "water_tblite_gfn2_dipole_debye": 11.0}])
+    (m,) = val.match(val.read_quantabench([paired]), table)
+    assert m.join == "charge-location" and [r.label for r in m.rows] == ["189217-62-7"] and m.id_check == "same"
+
+
 def test_ion_dipoles_from_an_older_import_are_flagged(tmp_path):
     """A wide table without *_spartan_dipole_origin_debye has ion dipoles about Spartan's frame origin."""
     paired = _write(tmp_path / "anion.csv", [

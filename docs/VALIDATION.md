@@ -31,7 +31,9 @@ formula's hydrogens or has a charged carbon (perception artefacts of ions; re-im
 
 A QuantaBench molecule joins, in order, by InChIKey, canonical SMILES, the stereo-free InChIKey (first block
 and protonation flag: an acid never matches its anion, a SMILES without R/S matches Spartan's 3D
-configuration), and, for Spartan rows without any key, by id when the formulas agree. The CAS id then
+configuration), by where the charge sits for ions (`charge-location`: the neutralized structure's formula and
+connections plus the total charge; a sulfonimide anion drawn N- and the same anion drawn O- have different
+InChIKeys), and, for Spartan rows without any key, by id when the formulas agree. The CAS id then
 cross-checks each structure join (`id_check`): `same`, `differs` (the id is Spartan's label of another
 structure: another protonation state or a wrong entry, listed in the report), or `not in Spartan`.
 QuantaBench's own `inchikey`/`canonical_smiles` columns are used when a run has them; otherwise they are

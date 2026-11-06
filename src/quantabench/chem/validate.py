@@ -26,7 +26,8 @@ formula: those rows get no key, and re-importing the documents gives them one).
 
 Joins, in this order: the InChIKey; the canonical SMILES; the InChIKey without its stereo block
 (:func:`skeleton`: first block + protonation flag, so an acid and its anion never match but a QuantaBench
-species without R/S matches Spartan's 3D configuration); then, for Spartan rows without any structure key
+species without R/S matches Spartan's 3D configuration); for an ion, :func:`charge_parent_key` (the charge
+drawn on another atom of the same species); then, for Spartan rows without any structure key
 only, the id (``label_resolved``/``cas_candidates`` = QuantaBench's ``id`` or ``name``) when the formulas
 (without charge) agree. The CAS id cross-checks every structure join: ``id_check`` is ``same`` (the id is
 among the matched rows' labels or CAS candidates), ``differs`` (the id is a Spartan label of another
@@ -249,6 +250,36 @@ def keys_from_smiles(smiles: str, charge: int | None = None, formula: str = "", 
     out.update(species_keys(m), structure_charge=q, key_source="smiles",
                charge_check="" if charge is None else ("ok" if q == charge else "mismatch"))
     return out
+
+
+def charge_parent_key(smiles: str) -> str:
+    """A key that ignores where a charge is drawn: the formula and connection layers of the neutralized
+    structure's InChI (RDKit's Uncharger; no H layer, so tautomers agree) plus the total formal charge. Standard
+    InChI keeps a sulfonimide anion drawn as N- (``/q-1``) apart from the same anion drawn as O- (``/p-1``),
+    and even their neutral parents (NH vs S(=N)OH: fixed vs mobile H), so Spartan's drawing and QuantaBench's
+    input of one species can have different InChIKeys. "" for an uncharged structure or one that does not
+    parse. A last-resort join (``charge-location``): it also equates tautomers."""
+    if not smiles or ("+" not in smiles and "-" not in smiles):
+        return ""
+    from rdkit import Chem, rdBase
+    from rdkit.Chem.MolStandardize import rdMolStandardize
+
+    _quiet = rdBase.BlockLogs()
+    try:
+        m = Chem.MolFromSmiles(smiles)
+        if m is None:
+            return ""
+        q = Chem.GetFormalCharge(m)
+        if q == 0:
+            return ""
+        inchi = Chem.MolToInchi(rdMolStandardize.Uncharger().uncharge(m)) or ""
+        main = "/".join(part for part in inchi.split("/")[1:] if part[:1] not in ("h", "q", "p", "b", "t", "m",
+                                                                                 "s", "i", "f", "r"))
+        return f"{main}|{q:+d}" if main else ""
+    except Exception:  # noqa: BLE001 - no key is an answer here
+        return ""
+    finally:
+        del _quiet
 
 
 def skeleton(inchikey: str) -> str:
@@ -883,7 +914,7 @@ def stats(ref: Sequence[float], qb: Sequence[float], ids: Sequence[str] | None =
 class Match:
     rec: QBRecord
     rows: list[SpartanRow]
-    join: str                   # inchikey | smiles | inchikey-nostereo | id+formula | ""
+    join: str                   # inchikey | smiles | inchikey-nostereo | charge-location | id+formula | ""
     id_check: str               # same | differs | not in Spartan | ""
     note: str = ""
     cohort: str = ""
@@ -894,6 +925,7 @@ def match(records: list[QBRecord], table: SpartanTable) -> list[Match]:
     """Join each QuantaBench record to the Spartan rows of its structure (module docstring)."""
     idx = table.index()
     rows = table.rows
+    parents: dict[str, list[int]] | None = None     # charge_parent_key -> rows, built when first needed
     out = []
     for rec in records:
         found: list[int] = []
@@ -905,6 +937,16 @@ def match(records: list[QBRecord], table: SpartanTable) -> list[Match]:
             if hits:
                 found, how = list(hits), kind
                 break
+        pkey = charge_parent_key(rec.canonical_smiles) if not found else ""
+        if pkey:
+            if parents is None:
+                parents = {}
+                for r in rows:
+                    k = charge_parent_key(r.canonical_smiles)
+                    if k:
+                        parents.setdefault(k, []).append(r.index)
+            if parents.get(pkey):
+                found, how = list(parents[pkey]), "charge-location"
         ids = {norm_id(rec.id), norm_id(rec.name)} - {""}
         by_id = sorted({i for k in ids for i in idx["id"].get(k, [])})
         note = ""
