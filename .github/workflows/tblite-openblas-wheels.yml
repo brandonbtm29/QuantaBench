@@ -1,0 +1,221 @@
+# PERF-2: tblite Windows wheels with OpenBLAS, built from brandonbtm29/tblite@qb/windows-wheels-openblas.
+# A copy of that fork's qb-windows-wheels.yml (Actions is disabled on the fork), on a CI branch of
+# QuantaBench only: CPython 3.12, build + clean-venv test, wheels as a workflow artifact, no release.
+
+name: tblite-openblas-wheels
+
+on:
+  push:
+    branches: ['ci/tblite-wheels']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (CPython ${{ matrix.python }})
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12']
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: brandonbtm29/tblite
+          ref: qb/windows-wheels-openblas
+
+      - name: MSYS2 UCRT64 toolchain
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-libgomp
+            mingw-w64-ucrt-x86_64-openblas
+            mingw-w64-ucrt-x86_64-pkgconf
+
+      - name: Python
+        id: py
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Put the UCRT64 toolchain first on PATH
+        shell: pwsh
+        run: |
+          $bin = Join-Path '${{ steps.msys2.outputs.msys2-location }}' 'ucrt64\bin'
+          $pkgconfig = if (Test-Path "$bin\pkg-config.exe") { "$bin\pkg-config.exe" } else { "$bin\pkgconf.exe" }
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+          Add-Content -Path $env:GITHUB_ENV -Value @(
+            "UCRT64_BIN=$bin",
+            "CC=$bin\gcc.exe",
+            "CXX=$bin\g++.exe",
+            "FC=$bin\gfortran.exe",
+            "AR=$bin\ar.exe",
+            "PKG_CONFIG=$pkgconfig",
+            "PY=${{ steps.py.outputs.python-path }}"
+          )
+
+      - name: OpenBLAS for every subproject (blas.pc and lapack.pc point at openblas.pc)
+        shell: msys2 {0}
+        run: |
+          set -e
+          echo "OpenMP runtime behind mingw-w64-ucrt-x86_64-omp:"
+          pacman -Qi mingw-w64-ucrt-x86_64-omp 2>/dev/null | grep -E '^(Name|Version|Provides)' || pacman -Q | grep -Ei 'omp|gomp'
+          pacman -Ql mingw-w64-ucrt-x86_64-openblas | grep -E '\.(dll|pc)$'
+          mkdir -p "$RUNNER_TEMP/qb-pc"
+          pc=/ucrt64/lib/pkgconfig/openblas.pc
+          sed 's/^Name:.*/Name: blas/' "$pc" > "$RUNNER_TEMP/qb-pc/blas.pc"
+          sed 's/^Name:.*/Name: lapack/' "$pc" > "$RUNNER_TEMP/qb-pc/lapack.pc"
+          cat "$RUNNER_TEMP/qb-pc/lapack.pc"
+          echo "PKG_CONFIG_PATH=$(cygpath -w "$RUNNER_TEMP/qb-pc");$(cygpath -w /ucrt64/lib/pkgconfig)" >> "$GITHUB_ENV"
+
+      - name: Build tools
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:PY -m pip install --upgrade pip
+          & $env:PY -m pip install meson-python "meson!=1.8.0" ninja cffi setuptools delvewheel
+          & $env:PY --version
+          & $env:CC --version
+          & $env:FC --version
+          & $env:PY -m mesonbuild.mesonmain --version
+          $PSNativeCommandUseErrorActionPreference = $false
+          & $env:PKG_CONFIG --modversion lapack blas   # informational: meson falls back to find_library
+          exit 0
+
+      - name: Put the tblite sources into python/subprojects/tblite
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $tar = Join-Path $env:RUNNER_TEMP 'tblite-src.tar'
+          git archive --format=tar --prefix=tblite/ -o $tar HEAD
+          & $env:PY -c "import sys, tarfile; tarfile.open(sys.argv[1]).extractall(sys.argv[2], filter='data')" $tar python/subprojects
+          Get-ChildItem python/subprojects/tblite
+
+      - name: Build the wheel
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          # --allow-multiple-definition: as in tblite's earlier MSYS2 CI job (build.yml)
+          & $env:PY -m pip wheel ./python --no-build-isolation --no-deps -w dist -v `
+            "-Cbuild-dir=$env:RUNNER_TEMP\b" `
+            "-Csetup-args=-Dddx:tests=false" `
+            "-Csetup-args=-Dtblite:lapack=openblas" `
+            "-Csetup-args=-Dc_link_args=-Wl,--allow-multiple-definition" `
+            "-Csetup-args=-Dfortran_link_args=-Wl,--allow-multiple-definition"
+          Get-ChildItem dist
+
+      - name: Bundle the DLLs (delvewheel)
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $whl = (Get-ChildItem dist\*.whl).FullName
+          & $env:PY -m delvewheel show --add-path $env:UCRT64_BIN $whl
+          & $env:PY -m delvewheel repair --add-path $env:UCRT64_BIN -w wheelhouse $whl
+
+      - name: MSYS2 package versions for the notices
+        shell: msys2 {0}
+        run: |
+          {
+            cat .github/qb/THIRD-PARTY-NOTICES.txt
+            pacman -Q | grep -E 'x86_64-(gcc|gcc-fortran|libgcc|libgfortran|libquadmath|libgomp|libstdc\+\+|libwinpthread|winpthreads|openblas|omp|llvm-openmp|binutils|crt|headers) '
+          } > THIRD-PARTY-NOTICES.txt
+          tail -n 12 THIRD-PARTY-NOTICES.txt
+
+      - name: Add the licenses to the wheel
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $whl = (Get-ChildItem wheelhouse\*.whl).FullName
+          & $env:PY .github/qb/add_notices.py $whl --add COPYING COPYING.LESSER THIRD-PARTY-NOTICES.txt
+          Copy-Item THIRD-PARTY-NOTICES.txt wheelhouse/
+          Get-ChildItem wheelhouse
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.python }}
+          path: wheelhouse/*
+          retention-days: 30
+
+      - name: Upload the meson log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: meson-log-${{ matrix.python }}
+          path: ${{ runner.temp }}/b/meson-logs/
+          retention-days: 7
+
+  test:
+    name: test (CPython ${{ matrix.python }}, clean venv)
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12']
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: brandonbtm29/tblite
+          ref: qb/windows-wheels-openblas
+          sparse-checkout: .github/qb
+
+      - name: Python
+        id: py
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: wheel-${{ matrix.python }}
+          path: wheelhouse
+
+      - name: Install into a clean venv and run the smoke test
+        shell: pwsh
+        env:
+          OMP_NUM_THREADS: '1'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $venv = Join-Path $env:RUNNER_TEMP 'venv'
+          & '${{ steps.py.outputs.python-path }}' -m venv $venv
+          $py = Join-Path $venv 'Scripts\python.exe'
+          & $py -m pip install --upgrade pip
+          & $py -m pip install (Get-ChildItem wheelhouse\*.whl).FullName
+          & $py -m pip list
+          & $py -I .github/qb/smoke_test.py --check --json "smoke-${{ matrix.python }}.json"
+          "VENV_PY=$py" | Add-Content -Path $env:GITHUB_ENV
+
+      - name: tblite's own Python tests
+        shell: pwsh
+        env:
+          OMP_NUM_THREADS: '1'
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          & $env:VENV_PY -m pip install pytest ase qcelemental
+          Set-Location $env:RUNNER_TEMP
+          Set-Content -Path pytest.ini -Value '[pytest]'
+          # test_gfn2_mindless saves the wavefunction into a NamedTemporaryFile that is still open, which
+          # Windows does not allow; the unguarded OPEN in save_wavefunction then aborts the interpreter.
+          # The same save/load round trip passes with a closed file.
+          & $env:VENV_PY -m pytest --pyargs tblite -q -rfE -p no:cacheprovider -c pytest.ini -k "not test_gfn2_mindless"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: smoke-${{ matrix.python }}
+          path: smoke-${{ matrix.python }}.json
+          retention-days: 30
