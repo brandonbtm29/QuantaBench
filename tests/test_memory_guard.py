@@ -222,3 +222,99 @@ def test_settings_cli_and_gui_get_the_limits():
     c = cli._config(args)
     assert (c.molecule_timeout_s, c.memory_budget_gb) == (0.0, -1.0)
     assert pipeline.memory_budget(c) == 0.0                     # guard off
+
+
+# ------------------------------------------------------------------------------- frequencies stage (Hessian)
+def _fake(n_atoms: int, nao: int) -> list[int]:
+    """A molecule of carbons and hydrogens with ``n_atoms`` atoms and ``nao`` GFN1 basis functions."""
+    heavy = (nao - 2 * n_atoms) // 2
+    return [6] * heavy + [1] * (n_atoms - heavy)
+
+
+@pytest.mark.parametrize(("step", "method", "n_atoms", "nao", "charge", "measured_mb"), [
+    # module docstring, frequencies table
+    ("analytic", "gfn1-xtb", 5, 20, 0, 261), ("analytic", "gfn1-xtb", 7, 28, -1, 353),
+    ("analytic", "gfn1-xtb", 11, 28, 0, 465), ("analytic", "gfn1-xtb", 11, 44, 0, 647),
+    ("analytic", "gfn1-xtb", 13, 38, 0, 675), ("analytic", "gfn1-xtb", 17, 44, 0, 924),
+    ("analytic", "gfn1-xtb", 14, 54, 0, 1042), ("analytic", "gfn1-xtb", 13, 52, -1, 1214),
+    ("analytic", "gfn2-xtb", 7, 28, -1, 700), ("analytic", "gfn2-xtb", 11, 28, 0, 934),
+    ("analytic", "gfn2-xtb", 7, 22, -1, 628),
+    ("dipole", "gfn1-xtb", 25, 100, -1, 146), ("dipole", "gfn1-xtb", 53, 158, 0, 240),
+    ("dipole", "gfn2-xtb", 53, 158, 0, 344),
+])
+def test_frequencies_rule_covers_the_measurements(step, method, n_atoms, nao, charge, measured_mb):
+    numbers = _fake(n_atoms, nao)
+    assert (len(numbers), memory_guard.basis_size(numbers)) == (n_atoms, nao)
+    est = memory_guard.estimate_frequencies_mb(step, method, numbers, charge)
+    assert measured_mb <= est <= 3 * measured_mb
+
+
+@pytest.mark.parametrize(("n_atoms", "nao", "charge", "killed_above_mb"), [
+    (17, 52, 0, 1360), (23, 68, 0, 1360), (16, 64, -1, 1360), (25, 100, -1, 6400)])
+def test_frequencies_rule_catches_the_killed_runs(n_atoms, nao, charge, killed_above_mb):
+    assert memory_guard.estimate_frequencies_mb("analytic", "gfn1-xtb", _fake(n_atoms, nao), charge) > killed_above_mb
+
+
+def test_finite_differences_cost_about_one_force_call():
+    for n_atoms, nao, charge, measured in ((13, 52, -1, 22), (25, 100, -1, 45), (37, 148, -1, 74),
+                                           (53, 158, 0, 135), (103, 308, 0, 271)):
+        est = memory_guard.estimate_frequencies_mb("finite", "gfn1-xtb", _fake(n_atoms, nao), charge)
+        assert measured <= est < 1024
+    with pytest.raises(ValueError, match="no frequencies memory model"):
+        memory_guard.estimate_frequencies_mb("analytic", "aimnet2", [6])
+    with pytest.raises(ValueError, match="step must be"):
+        memory_guard.estimate_frequencies_mb("numeric", "gfn1-xtb", [6])
+
+
+def test_frequencies_plan(monkeypatch):
+    pfoa = PFOA_ANION
+    plan = memory_guard.frequencies_plan("gfn1-xtb", [8, 1, 1], 0, 1, budget_gb=2.0, current_mb=500)
+    assert (plan.hessian, plan.ir, plan.notes) == ("analytic", True, [])
+    plan = memory_guard.frequencies_plan("gfn1-xtb", pfoa, -1, 1, budget_gb=2.0, current_mb=500)
+    assert plan.hessian == "finite" and plan.ir
+    assert plan.notes[0].startswith("Hessian by finite differences instead of analytic (memory guard: analytic "
+                                    "estimated 16.8 GB for 26 atoms")
+    plan = memory_guard.frequencies_plan("gfn1-xtb", pfoa, -1, 1, hessian="analytic", budget_gb=2.0, current_mb=500)
+    assert plan.hessian == "finite"                         # an explicit analytic Hessian too
+    plan = memory_guard.frequencies_plan("gfn1-xtb", pfoa, -1, 1, budget_gb=0.7, current_mb=500)
+    assert plan.hessian == "finite" and not plan.ir and "IR intensities skipped" in plan.notes[-1]
+    plan = memory_guard.frequencies_plan("gfn1-xtb", pfoa, -1, 1, budget_gb=0.6, current_mb=500)
+    assert plan.skipped and plan.notes[0].startswith("frequencies skipped by the memory guard: finite differences")
+    plan = memory_guard.frequencies_plan("gfn1-xtb", pfoa, -1, 1, hessian="finite", budget_gb=2.0, current_mb=500)
+    assert (plan.hessian, plan.notes) == ("finite", [])
+    assert memory_guard.frequencies_plan("gfn1-xtb", pfoa, -1, 1, budget_gb=-1).hessian == "analytic"   # off
+    # vibrations.analyze(max_analytic_memory_gb=): a cap on the analytic estimate alone
+    assert memory_guard.frequencies_plan("gfn1-xtb", [8, 1, 1], budget_gb=-1, analytic_cap_gb=0.0).hessian == "finite"
+    assert memory_guard.frequencies_plan("gfn1-xtb", [8, 1, 1], budget_gb=-1, analytic_cap_gb=4.0).hessian == "analytic"
+
+
+@pytest.fixture
+def limits():
+    yield resources
+    resources.set_molecule_limits()
+
+
+def test_process_budget_from_the_run(limits, monkeypatch):
+    monkeypatch.setattr(memory_guard, "available_gb", lambda: 10.0)
+    assert memory_guard.process_budget_gb() == 10.0                     # nothing recorded: auto, one process
+    limits.set_molecule_limits(memory_budget_gb=2.5, molecule_timeout_s=60)
+    assert memory_guard.process_budget_gb() == 2.5
+    limits.set_molecule_limits(pipeline.BuildConfig(memory_budget_gb=-1.0))        # what a lane does
+    assert memory_guard.process_budget_gb() == 0.0
+    assert limits.molecule_limits().molecule_timeout_s == pipeline.BuildConfig().molecule_timeout_s
+
+
+def test_analyze_takes_finite_differences_over_budget(monkeypatch):
+    pytest.importorskip("dxtb")
+    from ase.build import molecule
+
+    from quantabench.chem import vibrations
+
+    monkeypatch.setattr(memory_guard, "rss_mb", lambda: 0.0)
+    water = molecule("H2O")
+    # water: analytic ~255 MB, finite differences and dipole derivatives ~31 MB each
+    vr = vibrations.analyze(water, "gfn1-xtb", hessian="auto", memory_budget_gb=0.1, symmetry_number=2)
+    assert vr.hessian_method == "finite" and vr.n_modes == 3
+    assert any(w.startswith("Hessian by finite differences instead of analytic (memory guard") for w in vr.warnings)
+    with pytest.raises(memory_guard.MemoryGuardError, match="frequencies skipped by the memory guard"):
+        vibrations.analyze(water, "gfn1-xtb", memory_budget_gb=0.02, symmetry_number=2)

@@ -575,6 +575,8 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
         external.set_program_registry(programs_dir or None)
 
         cfg = pipeline.BuildConfig(**{**cfg_dict, "threads": threads})
+        # this lane's memory share and time limit for the steps not handed cfg (embedding, Hessian)
+        resources.set_molecule_limits(cfg)
         device = lane_device(lane, cfg, memory_fraction)
         crash_ids = {x for x in os.environ.get(TEST_CRASH_ENV, "").split(",") if x}
         delay = _test_delay(lane.name)

@@ -256,6 +256,8 @@ def _build(args) -> int:
             print(exc, file=sys.stderr)
             return 2
 
+    resources.set_molecule_limits(cfg)   # memory budget and time limit of the embedding and the Hessian
+
     resumable = bool(run_dir or chunk or args.retry_failed or len(items) > 1)
     if not resumable:
         results, out = run(items, cfg, progress=_progress, log=print)

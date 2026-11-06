@@ -838,15 +838,15 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
             hessian: HessianMode = "auto", *, calc: Calculator | None = None, mol=None, fd_step: float = 0.01,
             ir: bool = True, qrrho: bool = True, qrrho_cutoff_cm1: float = 100.0, qrrho_alpha: float = 4.0,
             imag_tol_cm1: float = 20.0, preoptimize_fmax: float | None = None,
-            max_analytic_memory_gb: float | None = None,
+            max_analytic_memory_gb: float | None = None, memory_budget_gb: float | None = None,
             should_stop: Callable[[], bool] | None = None,
             progress: Callable[[int, int], None] | None = None,
             log: Callable[[str], None] | None = None) -> VibrationalResult:
     """Frequencies, IR intensities and thermochemistry of ``atoms`` (ideally an optimized minimum).
 
     method:     'mmff' | 'gfn1-xtb' | 'gfn2-xtb' | 'aimnet2' (or any label when ``calc`` is given).
-    hessian:    'auto' = analytic for dxtb methods when it fits in memory (see
-                ``max_analytic_memory_gb``), finite differences otherwise;
+    hessian:    'auto' = analytic for dxtb methods when it fits in memory (``chem.memory_guard``),
+                finite differences otherwise;
                 'analytic' = dxtb (or AIMNet2's autograd Hessian); 'finite' = central differences.
     calc:       use this ASE calculator instead of building one from ``method``.
     mol:        RDKit molecule with the topology for MMFF (bonds are perceived from 3D if omitted).
@@ -856,8 +856,12 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
     symmetry_number: rotational symmetry number σ; 0 or None detects it from the analyzed geometry
                 (``rotational_symmetry_number``), so each molecule of a batch gets its own.
     preoptimize_fmax: tighten the geometry (LBFGS) to this max force (eV/Å) before the Hessian.
-    max_analytic_memory_gb: memory allowed for dxtb's autograd Hessian, whose peak grows ~n_AO³
-                (a PFOA anion needs >7 GB); default half of the free RAM (or GPU memory).
+    memory_budget_gb: the memory guard's budget for the dxtb steps (``memory_guard.frequencies_plan``):
+                over it the analytic Hessian becomes finite differences, and finite differences or the IR
+                dipole derivatives that do not fit are skipped with a note (``MemoryGuardError`` when the
+                frequencies cannot run). None = this process's (``memory_guard.process_budget_gb``), <= 0 = off.
+    max_analytic_memory_gb: instead a cap on the analytic Hessian's own estimate (its peak grows as
+                atoms x nao²: a PFOA anion needs > 7 GB); on a CUDA/ROCm device half its free memory.
     The atoms object is not modified; constraints are ignored.
     """
     from .optimize import optimize
@@ -893,16 +897,6 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
     if hessian == "analytic" and not use_dxtb and method != "aimnet2":
         raise ValueError(f"no analytic Hessian for {method!r}; use hessian='finite'")
     analytic = hessian == "analytic" or (hessian == "auto" and use_dxtb)
-    if use_dxtb:
-        need = estimate_dxtb_hessian_memory_gb(work.numbers, method)
-        budget = (max_analytic_memory_gb if max_analytic_memory_gb is not None
-                  else 0.5 * available_memory_gb(dxtb_run_device(device)))
-        if hessian == "auto" and need > budget:
-            analytic = False
-            say(f"analytic Hessian would need ~{need:.1f} GB (budget {budget:.1f} GB): "
-                "using finite differences of the analytic forces")
-        elif analytic and need > budget:
-            warnings.append(f"analytic Hessian may need ~{need:.1f} GB (budget {budget:.1f} GB)")
 
     calc = calc or _make_calc(method, work, charge, multiplicity, device, mol)
     work.calc = calc
@@ -918,6 +912,18 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
     if fmax > 0.05:
         warnings.append(f"max force {fmax:.3f} eV/Å: not a stationary point, frequencies are approximate "
                         "(tighten the optimization or use preoptimize_fmax)")
+
+    if use_dxtb:   # memory guard: analytic Hessian / dipole derivatives only within the budget (chem.memory_guard)
+        from . import memory_guard
+
+        plan = memory_guard.frequencies_plan(method, work.numbers, charge, multiplicity, hessian, ir,
+                                             memory_budget_gb, max_analytic_memory_gb, dxtb_run_device(device))
+        if plan.skipped:
+            raise memory_guard.MemoryGuardError(plan.notes[0])
+        analytic, ir = plan.hessian == "analytic", plan.ir
+        warnings += plan.notes
+        for note in plan.notes:
+            say(note)
 
     t = time.perf_counter()
     dmu = None

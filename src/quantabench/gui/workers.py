@@ -57,6 +57,9 @@ class BuildWorker(QObject):
         from ..settings import Settings
 
         try:
+            from .. import resources
+
+            resources.set_molecule_limits(self.cfg)   # memory budget and time limit of embedding and Hessian
             inputs = self.inputs() if callable(self.inputs) else self.inputs
             run_dir = self.run_dir
             if run_dir is None and inputs is not None and len(inputs) > 1 and self.cfg.write_files:

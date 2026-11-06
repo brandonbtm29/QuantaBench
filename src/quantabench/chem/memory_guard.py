@@ -42,9 +42,54 @@ whose SCF took minutes in the stress sample) and open-shell systems or transitio
 dxtb's 100 iterations: 6x, from a closed-shell peptide with two electrons removed, which took 5.8x). The rule
 is an estimate, not a bound: it is meant to catch the molecules that would take gigabytes, not to predict
 each one to 10 %.
+
+Frequencies stage (``frequencies_plan``, called by ``vibrations.analyze`` at the start of its Hessian step).
+dxtb's analytic Hessian differentiates the autograd forces once more for each of the 3N coordinates, so its
+peak grows as atoms x nao², far above any other step. Measured 2026-11-05 as above (1 thread, an RSS
+watchdog killed a run at 2 GB resident, i.e. ~1.36 GB above the 0.64 GB baseline; scratch/hessian_memory.py):
+
+    molecule             atoms  nao  charge  GFN1 analytic   GFN2 analytic   GFN1 finite diff.     GFN1 dipole deriv.
+    CF4                      5   20      0     261 MB  2.6 s
+    acetate                  7   22     -1     310 MB  2.9 s
+    TFA anion (C2)           7   28     -1     353 MB  3.1 s   700 MB  8.3 s    21 MB  3.1 s (all)    27 MB  0.4 s
+    C2F6                     8   32      0     413 MB  5.3 s   754 MB  7.0 s
+    propane                 11   28      0     465 MB  4.2 s   934 MB 10.0 s
+    glycine                 10   30      0     445 MB  4.0 s
+    PFPrA anion (C3)        10   40     -1     610 MB  5.2 s
+    C3F8                    11   44      0     647 MB  4.6 s
+    alanine                 13   38      0     675 MB  5.0 s
+    butane / pentane     14/17   36/44   0     653 / 924 MB
+    PFBA (C4)               14   54      0    1042 MB  7.1 s
+    PFBA anion              13   52     -1    1214 MB  7.1 s                    22 MB  ~7 s           49 MB  0.4 s
+    Gly-Gly, Ala-Ala     17/23   52/68   0     > 1360 MB (killed)
+    PFPeA anion (C5)        16   64     -1     > 1360 MB (killed)
+    PFOA anion (C8)         25  100     -1     > 6.4 GB (killed at 7 GB, earlier run)    45 MB  ~21 s    146 MB  0.6 s
+    acetate, GFN2            7   22     -1                     628 MB  6.2 s
+    PFDoA anion (C12)       37  148     -1                                      74 MB  ~40 s
+    Ala5                    53  158      0                                     135 MB  ~69 s         240 MB  0.9 s
+    Ala10                  103  308      0                                     271 MB  ~445 s
+
+(finite differences: 6 of the 3N rows timed, extrapolated; GFN2 finite differences on the PFOA anion: 57 MB,
+~50 s; GFN2 dipole derivatives: PFOA anion 203 MB, Ala5 344 MB). Central differences of the analytic forces cost no more memory than one energy + forces evaluation
+(the allocator's pool grows to ~2x over the 6N calls) and, on one CPU thread, about the same time as the
+analytic Hessian where both run (TFA 3.1 vs 3.1 s, PFBA anion 7.4 vs 7.1 s). The rule:
+
+    analytic   HESSIAN_MB_PER_N_NAO2[method] x scf_factor x atoms x nao² + HESSIAN_FIXED_MB
+    finite     FINITE_FACTOR x MB_PER_NAO2[method] x scf_factor x nao² + FIXED_MB
+    dipole     DIPOLE_MB_PER_NAO2[method] x scf_factor x nao² + FIXED_MB
+
+(the neutral upper envelope; for GFN2 nao is still counted with the GFN1 basis, which over-counts H). Over
+the budget the analytic Hessian becomes finite differences (also with ``hessian="analytic"``, since the
+frequencies agree to ~1 cm-1), finite differences that do not fit skip the frequencies with a note, and
+dipole derivatives that do not fit skip the IR intensities with a note. With a 5 GB lane (NOVA or the
+MacBook with 6-7 lanes) the GFN1 analytic Hessian is kept up to about the C5 PFCA anion (16 atoms) and neutral
+organics of ~20 atoms; larger molecules take finite differences, so the frequencies of the 14,000-molecule
+runs stay at the memory of their refinement.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 #: Peak resident memory per nao² (MB) of one step for a neutral closed-shell molecule (see the table above)
 MB_PER_NAO2 = {
@@ -56,6 +101,13 @@ MB_PER_NAO2 = {
 }
 FIXED_MB = 30.0
 SCF_ANION, SCF_CATION, SCF_DIFFICULT = 2.5, 1.5, 6.0
+#: Frequencies stage (module docstring): peak MB of the analytic Hessian per (atoms x nao²), neutral closed shell
+HESSIAN_MB_PER_N_NAO2 = {"gfn1-xtb": 0.025, "gfn2-xtb": 0.08}
+HESSIAN_FIXED_MB = 250.0
+#: Finite differences: one energy + forces at a time, but the allocator's pool grows over the 6N calls
+FINITE_FACTOR = 2.0
+#: Analytic dipole derivatives (IR intensities): peak MB per nao², neutral closed shell
+DIPOLE_MB_PER_NAO2 = {"gfn1-xtb": 0.009, "gfn2-xtb": 0.014}
 #: The budget of one lane process is never set below this (torch + dxtb alone take ~0.6 GB)
 FLOOR_GB = 1.5
 TRANSITION_METALS = frozenset([*range(21, 31), *range(39, 49), *range(57, 81), *range(89, 113)])
@@ -88,6 +140,23 @@ def estimate_mb(step: str, numbers, charge: int = 0, multiplicity: int = 1, batc
         raise ValueError(f"no memory model for step {step!r}; known: {', '.join(MB_PER_NAO2)}")
     nao = basis_size(numbers)
     return MB_PER_NAO2[step] * scf_factor(numbers, charge, multiplicity) * nao * nao * max(1, int(batch)) + FIXED_MB
+
+
+def estimate_frequencies_mb(step: str, method: str, numbers, charge: int = 0, multiplicity: int = 1) -> float:
+    """Estimated peak memory (MB) of one part of the frequencies stage of a dxtb ``method``: ``step`` "analytic"
+    (autograd Hessian), "finite" (central differences of the forces, one evaluation at a time) or "dipole"
+    (autograd dipole derivatives, for the IR intensities). See the frequencies section of the module docstring."""
+    if method not in HESSIAN_MB_PER_N_NAO2:
+        raise ValueError(f"no frequencies memory model for method {method!r}; known: {', '.join(HESSIAN_MB_PER_N_NAO2)}")
+    numbers = [int(z) for z in numbers]
+    nao, f = basis_size(numbers), scf_factor(numbers, charge, multiplicity)
+    if step == "analytic":
+        return HESSIAN_MB_PER_N_NAO2[method] * f * len(numbers) * nao * nao + HESSIAN_FIXED_MB
+    if step == "finite":
+        return FINITE_FACTOR * MB_PER_NAO2[method] * f * nao * nao + FIXED_MB
+    if step == "dipole":
+        return DIPOLE_MB_PER_NAO2[method] * f * nao * nao + FIXED_MB
+    raise ValueError(f"step must be 'analytic', 'finite' or 'dipole', not {step!r}")
 
 
 def available_gb() -> float:
@@ -126,11 +195,17 @@ def fits(step: str, numbers, charge: int, multiplicity: int, budget_gb: float, b
     """(True, "") when ``step`` fits the budget (or the guard is off: ``budget_gb`` <= 0), else (False, why)."""
     if not budget_gb or budget_gb <= 0:
         return True, ""
-    est = estimate_mb(step, numbers, charge, multiplicity, batch)
+    return _check(estimate_mb(step, numbers, charge, multiplicity, batch), numbers, charge, multiplicity, budget_gb,
+                  batch, current_mb)
+
+
+def _check(est: float, numbers, charge: int, multiplicity: int, budget_gb: float, batch: int = 1,
+           current_mb: float | None = None) -> tuple[bool, str]:
+    numbers = list(numbers)
     now = rss_mb() if current_mb is None else float(current_mb)
     if now + est <= budget_gb * 1024:
         return True, ""
-    return False, (f"estimated {est / 1024:.1f} GB for {len(list(numbers))} atoms ({basis_size(numbers)} basis "
+    return False, (f"estimated {est / 1024:.1f} GB for {len(numbers)} atoms ({basis_size(numbers)} basis "
                    f"functions, charge {int(charge):+d}"
                    + (f", multiplicity {int(multiplicity)}" if int(multiplicity) > 1 else "")
                    + (f", {batch} conformers at once" if batch > 1 else "")
@@ -174,3 +249,82 @@ def max_batch(method: str, numbers, charge: int, multiplicity: int, budget_gb: f
     one = estimate_mb(method, numbers, charge, multiplicity) - FIXED_MB
     room = budget_gb * 1024 - now - FIXED_MB
     return max(0, int(room // max(one, 1e-9)))
+
+
+# ----------------------------------------------------------------------------------- frequencies stage
+def process_budget_gb() -> float:
+    """This process's budget (GB) for the steps that are not handed the run's config (the frequencies'
+    Hessian): what the run recorded with ``resources.set_molecule_limits`` (a lane: its share, resolved by
+    the parent), else auto for one process (available memory, at least ``FLOOR_GB``); 0 = guard off."""
+    from .. import resources
+
+    setting = resources.molecule_limits().memory_budget_gb
+    return resolve_budget_gb(0.0 if setting is None else setting, 1)
+
+
+@dataclass
+class FrequencyPlan:
+    """What the frequencies stage of a dxtb method may do within the budget (``frequencies_plan``)."""
+    hessian: str                    # "analytic" | "finite" | "" (skipped: not even finite differences fit)
+    ir: bool                        # analytic dxtb dipole derivatives (IR intensities) fit (or were not asked)
+    notes: list[str] = field(default_factory=list)   # what was replaced or skipped, and why
+
+    @property
+    def skipped(self) -> bool:
+        return not self.hessian
+
+
+def _gpu_cap_gb(device: str) -> float | None:
+    """Half the free memory of a CUDA/ROCm ``device`` (the dxtb Hessian then lives there, not in RAM)."""
+    if not device.startswith("cuda"):
+        return None
+    try:
+        import torch
+
+        free, _total = torch.cuda.mem_get_info(torch.device(device))
+        return 0.5 * free / 1024**3
+    except Exception:  # noqa: BLE001 - no reading: the host budget decides
+        return None
+
+
+def frequencies_plan(method: str, numbers, charge: int = 0, multiplicity: int = 1, hessian: str = "auto",
+                     ir: bool = True, budget_gb: float | None = None, analytic_cap_gb: float | None = None,
+                     device: str = "cpu", current_mb: float | None = None) -> FrequencyPlan:
+    """The frequencies stage of dxtb ``method`` within the memory budget (module docstring, frequencies).
+
+    ``hessian`` "auto"/"analytic": the autograd Hessian when it fits, else central finite differences of the
+    forces (the same frequencies to ~1 cm-1, at the memory of one energy + forces), else skipped; "finite":
+    finite differences, or skipped. ``ir``: the autograd dipole derivatives, dropped with a note when they do
+    not fit (frequencies and thermochemistry are unaffected).
+
+    ``budget_gb``: the run's resolved budget (``pipeline.memory_budget``); None = ``process_budget_gb()``;
+    <= 0 = guard off. ``analytic_cap_gb`` (``vibrations.analyze(max_analytic_memory_gb=)``): a cap on the
+    analytic step's own estimate instead of the budget check; on a CUDA/ROCm ``device`` half its free memory
+    is the cap (the Hessian is computed there)."""
+    budget = process_budget_gb() if budget_gb is None else (float(budget_gb) if budget_gb > 0 else 0.0)
+    plan = FrequencyPlan(hessian="finite" if hessian == "finite" else "analytic", ir=bool(ir))
+    cap = analytic_cap_gb if analytic_cap_gb is not None else _gpu_cap_gb(device)
+    if plan.hessian == "analytic" and (budget > 0 or cap is not None):
+        est = estimate_frequencies_mb("analytic", method, numbers, charge, multiplicity)
+        if cap is not None:
+            ok, why = (est <= cap * 1024, f"estimated {est / 1024:.1f} GB, at most {cap:.1f} GB allowed")
+        else:
+            ok, why = _check(est, numbers, charge, multiplicity, budget, current_mb=current_mb)
+        if not ok:
+            plan.hessian = "finite"
+            plan.notes.append(f"Hessian by finite differences instead of analytic (memory guard: analytic {why})")
+    if budget <= 0:
+        return plan
+    if plan.hessian == "finite":
+        est = estimate_frequencies_mb("finite", method, numbers, charge, multiplicity)
+        ok, why = _check(est, numbers, charge, multiplicity, budget, current_mb=current_mb)
+        if not ok:
+            return FrequencyPlan("", False, [f"frequencies skipped by the memory guard: finite differences {why}"])
+    if plan.ir:
+        est = estimate_frequencies_mb("dipole", method, numbers, charge, multiplicity)
+        ok, why = _check(est, numbers, charge, multiplicity, budget, current_mb=current_mb)
+        if not ok:
+            plan.ir = False
+            plan.notes.append(f"IR intensities skipped by the memory guard: dipole derivatives {why} "
+                              "(frequencies and thermochemistry are unaffected)")
+    return plan

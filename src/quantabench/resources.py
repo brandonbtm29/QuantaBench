@@ -207,6 +207,37 @@ def apply_thread_limits(threads: int) -> int:
     return n
 
 
+@dataclass
+class MoleculeLimits:
+    """The per-molecule limits of a run (``BuildConfig.memory_budget_gb``/``molecule_timeout_s``) for the steps
+    that are not handed the config: the conformer embedding (``chem.conformers``) and the frequencies' Hessian
+    (``chem.vibrations`` through ``chem.memory_guard``). None = not set by a run: those steps use their own
+    defaults (memory: auto for one process; embedding: no time limit)."""
+    memory_budget_gb: float | None = None
+    molecule_timeout_s: float | None = None
+
+
+_molecule_limits = MoleculeLimits()
+
+
+def set_molecule_limits(cfg=None, *, memory_budget_gb: float | None = None,
+                        molecule_timeout_s: float | None = None) -> MoleculeLimits:
+    """Record this process's per-molecule limits, from ``cfg`` (a ``BuildConfig``) or the keywords; like
+    ``apply_thread_limits``, set by whatever runs molecules (a lane, the CLI build, the GUI, a grid worker)
+    before the first one. ``set_molecule_limits()`` clears them."""
+    global _molecule_limits
+    if cfg is not None:
+        memory_budget_gb = getattr(cfg, "memory_budget_gb", memory_budget_gb)
+        molecule_timeout_s = getattr(cfg, "molecule_timeout_s", molecule_timeout_s)
+    _molecule_limits = MoleculeLimits(None if memory_budget_gb is None else float(memory_budget_gb),
+                                      None if molecule_timeout_s is None else float(molecule_timeout_s))
+    return _molecule_limits
+
+
+def molecule_limits() -> MoleculeLimits:
+    return _molecule_limits
+
+
 HARD_EXIT_ENV = "QUANTABENCH_HARD_EXIT"     # "1" always, "0" never, unset: only where needed (below)
 
 
