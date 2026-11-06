@@ -517,6 +517,16 @@ def test_cli_enrich_csv(tmp_path, monkeypatch, capsys):
     assert _read_csv(out2) == rows
 
 
+def test_cli_lookup(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(pc, "urllib_transport", FakePubChem())
+    monkeypatch.setattr(pc, "_sleep", lambda s: None)
+    assert cli.main(["pubchem", "lookup", "335-67-1", "--experimental", "--cache", str(tmp_path / "pc")]) == 0
+    out = capsys.readouterr().out
+    assert "pubchem_cid" in out and "9554" in out and "SNGREZUHAYWORS-UHFFFAOYSA-N" in out
+    assert "Surface Tension" in out and "[unknown]" in out
+    assert cli.main(["pubchem", "lookup", "notarealchemicalnamexyzzy", "--cache", str(tmp_path / "pc")]) == 1
+
+
 def test_cli_enrich_run_folder(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(pc, "urllib_transport", FakePubChem())
     monkeypatch.setattr(pc, "_sleep", lambda s: None)
