@@ -403,3 +403,29 @@ def test_default_timeout_comes_from_settings(tmp_path):
 def test_ascii_scratch_names():
     assert external.ascii_name("α-pinene oxide") == "pinene_oxide"
     assert external.ascii_name("ααα") == "job"
+
+
+def test_this_machines_path_wins(tmp_path, monkeypatch):
+    """engines.machine_paths of this machine before engines.paths and QUANTABENCH_<NAME>; another machine's
+    entry is never used here."""
+    for d in ("mine", "shared", "other"):
+        (tmp_path / d).mkdir()
+    mine = _fake_program(tmp_path / "mine", "xtb", 'print("* xtb version 6.7.1 (mine)")\n')
+    shared = _fake_program(tmp_path / "shared", "xtb", 'print("* xtb version 6.7.1 (shared)")\n')
+    other = _fake_program(tmp_path / "other", "xtb", 'print("* xtb version 6.7.1 (other)")\n')
+    monkeypatch.setattr(settings_mod, "_this_machine", lambda: "this-box")
+    monkeypatch.delenv("QUANTABENCH_XTB", raising=False)
+    s = settings_mod.Settings()
+    s.engines.paths["xtb"] = str(shared)
+    s.set_engine_path_for("xtb", str(other), "other-box")
+    settings_mod.save(s)
+    info = external.find_program("xtb", refresh=True)
+    assert info.path == str(shared) and info.source == "settings"
+    s.set_engine_path_for("xtb", str(mine))
+    settings_mod.save(s)
+    info = external.find_program("xtb", refresh=True)
+    assert info.path == str(mine) and info.source == "settings (this machine)"
+    s.set_engine_path_for("xtb", "")              # automatic here: the shared path is not used either
+    settings_mod.save(s)
+    monkeypatch.setattr(external, "_search", lambda spec: None)
+    assert external.find_program("xtb", refresh=True) is None

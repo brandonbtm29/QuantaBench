@@ -96,7 +96,12 @@ def test_settings_engines_tab_round_trip_and_detection(tmp_path, monkeypatch):
     d.stacksize.setText("2G")
     d.qm_memory.setValue(8)
     out = d.result_settings()
-    assert out.engines.paths == {"crest": "wsl:/home/u/miniforge3/envs/qb-tools/bin/crest"}
+    # the shared default stays for the other machines; this machine gets its own paths ("" = automatic here)
+    me = sm.this_machine()
+    assert out.engines.paths == {"xtb": "~/bin/xtb"}
+    assert out.engines.machine_paths == {me: {"xtb": "", "crest": "wsl:/home/u/miniforge3/envs/qb-tools/bin/crest"}}
+    assert out.engine_paths_for() == {"crest": ("wsl:/home/u/miniforge3/envs/qb-tools/bin/crest", "this machine")}
+    assert out.engine_paths_for("another-machine") == {"xtb": ("~/bin/xtb", "all machines")}
     assert out.engines.scratch_dir == str(tmp_path / "scratch") and out.engines.keep_scratch
     assert out.engines.omp_stacksize == "2G" and out.engines.qm_memory_gb == 8
 

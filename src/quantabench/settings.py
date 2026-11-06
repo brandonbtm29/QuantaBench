@@ -68,8 +68,16 @@ class BuildDefaults:
 @dataclass
 class EngineSettings:
     """External programs (see ``chem/external.py``). Paths may use ``~``; ``wsl:<command>`` runs a
-    Linux program inside WSL on Windows (e.g. ``wsl:crest``)."""
+    Linux program inside WSL on Windows (e.g. ``wsl:crest``).
+
+    The settings file is shared by every machine (synced folder), but a program's path usually belongs to one
+    machine (NOVA's ``wsl:/home/.../crest``, the Mac's own build): ``machine_paths`` holds each machine's paths
+    (keyed by ``machine_key`` of its name, like ``dist.machine_lanes``), and ``paths`` is the default for every
+    machine. Use ``Settings.engine_paths_for`` / ``set_engine_path_for``."""
     paths: dict[str, str] = field(default_factory=dict)  # {"xtb": ..., "crest": ..., "mopac": ..., "psi4_python": ...}
+    # machine name -> {program: path} of that machine only; wins over ``paths`` there ("" = find it automatically
+    # on that machine, even when ``paths`` names one)
+    machine_paths: dict[str, dict[str, str]] = field(default_factory=dict)
     scratch_dir: str = ""             # "" = <system temp>/QuantaBench
     keep_scratch: bool = False        # keep job folders of successful external runs
     omp_stacksize: str = "4G"         # OMP_STACKSIZE for xtb/CREST/MOPAC/Psi4 child processes
@@ -150,7 +158,7 @@ class Settings:
                 merged = asdict(current)
                 for k, v in value.items():
                     if k in merged:
-                        ok, v = _coerce(merged[k], v)
+                        ok, v = _coerce(merged[k], v, tables=(f.name, k) in NESTED_TABLES)
                         if ok:
                             merged[k] = v
                 setattr(s, f.name, type(current)(**merged))
@@ -180,11 +188,49 @@ class Settings:
         lanes[key] = spec
         self.dist.machine_lanes = lanes
 
+    def engine_paths_for(self, machine: str | None = None) -> dict[str, tuple[str, str]]:
+        """Program -> (path, scope) on ``machine`` (default: this one), scope "this machine" for its
+        ``engines.machine_paths`` entry and "all machines" for ``engines.paths``. A program the machine set to ""
+        (find it automatically) is left out, as is any blank path."""
+        out = {k: (str(v).strip(), "all machines") for k, v in self.engines.paths.items() if isinstance(v, str)}
+        own = self._machine_paths(machine)
+        out.update({k: (str(v).strip(), "this machine") for k, v in own.items() if isinstance(v, str)})
+        return {k: v for k, v in out.items() if v[0]}
+
+    def set_engine_path_for(self, program: str, path: str, machine: str | None = None) -> None:
+        """Set ``program``'s path on ``machine`` (default: this one) only; ``""`` = find it automatically there.
+        A value equal to ``engines.paths`` (the default of every machine) is not stored again for the machine."""
+        key = machine_key(machine if machine is not None else _this_machine())
+        path = str(path or "").strip()
+        entry = dict(self._machine_paths(machine))
+        shared = str(self.engines.paths.get(program, "") or "").strip()
+        if path == shared:
+            entry.pop(program, None)
+        else:
+            entry[program] = path
+        table = {k: v for k, v in self.engines.machine_paths.items() if machine_key(k) != key}
+        if entry:
+            table[key] = entry
+        self.engines.machine_paths = table
+
+    def _machine_paths(self, machine: str | None = None) -> dict[str, str]:
+        key = machine_key(machine if machine is not None else _this_machine())
+        merged: dict[str, str] = {}
+        for name, entry in self.engines.machine_paths.items():
+            if machine_key(name) == key and isinstance(entry, dict):
+                merged.update({str(k): str(v) for k, v in entry.items() if isinstance(v, str)})
+        return merged
+
 
 def machine_key(name: str) -> str:
     """Machine names compared like Tailscale MagicDNS names (lowercase, spaces and underscores as '-'): the
     same rule as ``dist.plan.norm_name``."""
     return "-".join(str(name).strip().lower().replace("_", " ").split())
+
+
+def this_machine() -> str:
+    """This machine's key in the per-machine settings (``machine_key`` of ``dist.profile.machine_name``)."""
+    return machine_key(_this_machine())
 
 
 def _this_machine() -> str:
@@ -193,8 +239,13 @@ def _this_machine() -> str:
     return machine_name()
 
 
-def _coerce(default, value) -> tuple[bool, object]:
-    """(accepted, value) for a JSON value replacing ``default``: same type, or an int where a float goes."""
+#: (section, field) of the settings whose values are tables of strings (machine -> {program: path})
+NESTED_TABLES = {("engines", "machine_paths")}
+
+
+def _coerce(default, value, tables: bool = False) -> tuple[bool, object]:
+    """(accepted, value) for a JSON value replacing ``default``: same type, or an int where a float goes.
+    ``tables``: a dict of string tables (``NESTED_TABLES``) instead of a dict of strings and numbers."""
     if isinstance(default, bool):
         return isinstance(value, bool), value
     if isinstance(default, float):
@@ -205,6 +256,9 @@ def _coerce(default, value) -> tuple[bool, object]:
         return isinstance(value, int) and not isinstance(value, bool), value
     for kind in (str, dict, list):
         if isinstance(default, kind):
+            if kind is dict and isinstance(value, dict) and tables:
+                return True, {str(k): {str(a): b for a, b in v.items() if isinstance(b, str)}
+                              for k, v in value.items() if isinstance(v, dict)}
             if kind is dict and isinstance(value, dict):
                 # string values (paths, lane specs, URLs) and numbers (per-element radii); nothing else
                 return True, {str(k): v for k, v in value.items()

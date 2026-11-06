@@ -453,15 +453,23 @@ class SettingsDialog(QDialog):
         e = self.s.engines
         box = QGroupBox("External programs")
         outer = QVBoxLayout(box)
+        machine = settings_mod.this_machine()
         hint = QLabel("Leave blank to search PATH and the usual conda/mamba environments.<br>"
-                      "On Windows, <code>wsl:/full/path/to/crest</code> runs a Linux build inside WSL.")
+                      "On Windows, <code>wsl:/full/path/to/crest</code> runs a Linux build inside WSL.<br>"
+                      f"Paths are saved for this machine (<code>{machine}</code>) only: the settings file is shared "
+                      "by every machine.")
         outer.addWidget(hint)
         form = QFormLayout()
         outer.addLayout(form)
         self.program_paths: dict[str, QLineEdit] = {}
+        current = self.s.engine_paths_for()            # this machine's paths, else the shared defaults
         for key, label, title in self.PROGRAM_FIELDS:
-            edit = QLineEdit(e.paths.get(key, ""))
+            path, scope = current.get(key, ("", ""))
+            edit = QLineEdit(path)
             edit.setPlaceholderText("automatic")
+            if scope == "all machines":
+                edit.setToolTip("From the default of every machine (engines.paths); a change is saved for this "
+                                "machine only")
             browse = QPushButton("...")
             browse.setFixedWidth(32)
             browse.clicked.connect(lambda _c=False, ed=edit, t=title: self._browse_program(ed, t))
@@ -659,7 +667,8 @@ class SettingsDialog(QDialog):
         d.number_style = self.number_style.currentData()
         s.output_dir = self.output.text().strip()
         e = s.engines
-        e.paths = {k: ed.text().strip() for k, ed in self.program_paths.items() if ed.text().strip()}
+        for key, ed in self.program_paths.items():   # this machine only: other machines keep their own paths
+            s.set_engine_path_for(key, ed.text().strip())
         e.scratch_dir = self.scratch.text().strip()
         e.keep_scratch = self.keep_scratch.isChecked()
         e.omp_stacksize = self.stacksize.text().strip() or "4G"

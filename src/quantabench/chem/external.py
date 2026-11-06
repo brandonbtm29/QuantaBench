@@ -185,9 +185,17 @@ def _probe_version(info: ProgramInfo, spec: ProgramSpec, timeout: float = 15.0) 
     return m.group(1) if m else ""
 
 
-def _configured_paths() -> dict:
-    paths = getattr(_engine_settings(), "paths", None)
-    return paths if isinstance(paths, dict) else {}
+def _configured_paths() -> dict[str, tuple[str, str]]:
+    """Program -> (path, source) from the settings of this machine: its ``engines.machine_paths`` entry
+    ("settings (this machine)"), else ``engines.paths`` ("settings"); see ``Settings.engine_paths_for``."""
+    from .. import settings as settings_mod
+
+    try:
+        paths = settings_mod.load().engine_paths_for()
+    except Exception:
+        return {}
+    return {k: (path, "settings (this machine)" if scope == "this machine" else "settings")
+            for k, (path, scope) in paths.items()}
 
 
 def _locate(spec: ProgramSpec) -> tuple[str, str] | None:
@@ -195,7 +203,8 @@ def _locate(spec: ProgramSpec) -> tuple[str, str] | None:
     (or a ``wsl:`` path on a machine that is not Windows, e.g. settings synced from Windows to Linux) is
     skipped, and the search goes on; the source of what is found then says so."""
     skipped = []
-    for value, source in ((str(_configured_paths().get(spec.name, "") or "").strip(), "settings"),
+    configured, where = _configured_paths().get(spec.name, ("", "settings"))
+    for value, source in ((configured, where),
                           (os.environ.get(f"QUANTABENCH_{spec.name.upper()}", "").strip(), "environment variable")):
         if not value:
             continue
@@ -276,8 +285,9 @@ def find_program(name: str, *, version: bool = True, refresh: bool = False,
                  probe_wsl: bool = False) -> ProgramInfo | None:
     """Locate an external program. ``None`` if it is not installed anywhere QuantaBench looks.
 
-    Order: ``settings.engines.paths[name]`` (may be ``wsl:<command>``), ``QUANTABENCH_<NAME>``,
-    PATH, the running Python environment, conda/mamba environments in the usual places.
+    Order: this machine's path in the settings (``engines.machine_paths``, else ``engines.paths``; may be
+    ``wsl:<command>``), ``QUANTABENCH_<NAME>``, PATH, the running Python environment, conda/mamba environments
+    in the usual places.
     Results are cached per process, and versions on disk by (path, size, mtime); ``refresh=True`` looks
     and probes again (e.g. after the user edits settings). A ``wsl:`` program's version is only probed
     with ``probe_wsl=True`` (starting WSL can take seconds; ``doctor`` and Settings > Detect now do it).
@@ -346,14 +356,15 @@ def version_tuple(version: str) -> tuple[int, ...]:
 def find_python_with(module: str, setting_key: str = "") -> str | None:
     """A Python interpreter that can ``import module`` (checked without importing it here).
 
-    Order: ``settings.engines.paths[setting_key]``, ``QUANTABENCH_<SETTING_KEY>``, this interpreter,
-    then the ``python`` next to the module's own console script (e.g. the ``psi4`` launcher of a conda env).
+    Order: this machine's ``setting_key`` path in the settings (``engines.machine_paths``, else ``engines.paths``),
+    ``QUANTABENCH_<SETTING_KEY>``, this interpreter, then the ``python`` next to the module's own console script
+    (e.g. the ``psi4`` launcher of a conda env).
     """
     import importlib.util
 
     candidates: list[str] = []
     if setting_key:
-        cfg = str(getattr(_engine_settings(), "paths", {}).get(setting_key, "") or "").strip()
+        cfg = _configured_paths().get(setting_key, ("", ""))[0]
         if cfg:
             candidates.append(os.path.expanduser(cfg))
         env = os.environ.get(f"QUANTABENCH_{setting_key.upper()}", "").strip()

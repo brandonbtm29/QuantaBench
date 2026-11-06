@@ -125,3 +125,20 @@ def test_console_streams_never_fail_on_unencodable_characters():
     u = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
     cli.safe_console_streams([u])
     assert u.errors == "strict"
+
+
+def test_settings_engine_path_is_per_machine(capsys, monkeypatch):
+    from quantabench import settings as sm
+
+    monkeypatch.setattr(sm, "_this_machine", lambda: "Brandons-MacBook-Pro")
+    assert cli.main(["settings", "--engine-path", "crest=~/qb/crest-macos-arm64/bin/crest"]) == 0
+    assert cli.main(["settings", "--engine-path", "crest=wsl:/home/b/envs/qb-tools/bin/crest",
+                     "--machine", "BTM-NOVA"]) == 0
+    assert "crest on btm-nova: wsl:" in capsys.readouterr().out
+    s = sm.load()
+    assert s.engines.paths == {}
+    assert s.engine_paths_for()["crest"] == ("~/qb/crest-macos-arm64/bin/crest", "this machine")
+    assert s.engine_paths_for("btm-nova")["crest"][0] == "wsl:/home/b/envs/qb-tools/bin/crest"
+    assert cli.main(["settings", "--engine-path", "crest="]) == 0          # automatic again on this machine
+    assert "crest" not in sm.load().engine_paths_for()
+    assert cli.main(["settings", "--engine-path", "nonsense=/x"]) == 2

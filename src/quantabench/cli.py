@@ -644,6 +644,20 @@ def _settings(args) -> int:
     s = settings_mod.load()
     if args.init and not path.exists():
         settings_mod.save(s)
+    if args.engine_path:
+        from .chem import external
+
+        known = (*external.PROGRAMS, "psi4_python")
+        machine = settings_mod.machine_key(args.machine) if args.machine else settings_mod.this_machine()
+        for item in args.engine_path:
+            name, sep, value = item.partition("=")
+            if not sep or name.strip() not in known:
+                print(f"--engine-path wants NAME=PATH with NAME one of {', '.join(known)} (got {item!r})",
+                      file=sys.stderr)
+                return 2
+            s.set_engine_path_for(name.strip(), value.strip(), machine)
+            print(f"{name.strip()} on {machine}: {value.strip() or 'automatic'}")
+        settings_mod.save(s)
     print(f"# {path}{'' if path.exists() else ' (not created yet: defaults shown)'}")
     print(json.dumps(s.to_dict(), indent=2))
     return 0
@@ -1015,6 +1029,10 @@ def build_parser() -> argparse.ArgumentParser:
     se = sub.add_parser("settings", help="show settings, or move them (e.g. into a synced folder)")
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")
     se.add_argument("--init", action="store_true", help="write settings.json with defaults if missing")
+    se.add_argument("--engine-path", action="append", metavar="NAME=PATH",
+                    help="path of an external program (xtb, crest, mopac, psi4, psi4_python) on this machine only "
+                         "(engines.machine_paths; the settings file is shared); NAME= finds it automatically again")
+    se.add_argument("--machine", help="with --engine-path: set it for this machine name instead of this one")
     se.set_defaults(func=_settings)
     return p
 
