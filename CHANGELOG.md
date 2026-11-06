@@ -2,6 +2,12 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Spartan import: no more hangs in bond perception (full re-import, 2026-11-05)
+- The re-import of all 1,067 documents stalled on one molecule: a tetrasodium dye whose four Na+ Spartan drew at one
+  point, where RDKit's bond-order search never finishes (and its Hueckel mode crashes). Overlapping atoms (< 0.5 Å)
+  now give no perceived bonds (no structure key, with the reason), and molecules with more than three P/S/As/Se atoms
+  or over 150 atoms get connectivity only instead of the search. The stalled document now reads in 1.5 s.
+
 ### macOS: tblite and PyTorch share one OpenMP runtime (MacBook, 2026-11-05)
 - tblite's macOS wheel and PyTorch each bundle `libomp.dylib`; a run that loaded both aborted with "OMP: Error #15"
   (the Mac's benchmark stopped at tblite-gfn2). `install_macos.sh` now links tblite's copy to PyTorch's on every run,

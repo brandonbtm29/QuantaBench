@@ -606,3 +606,32 @@ def _sdf_titles(path: Path):
         if line.strip() == "$$$$":
             first = True
         prev = line
+
+
+def test_bond_perception_guards_do_not_hang(monkeypatch):
+    """A tetrasodium dye with its four Na+ drawn at one point made RDKit's bond-order search run forever (the full
+    import stalled on it) and its Hueckel mode segfault: overlapping atoms give no bonds, and molecules with many
+    P/S atoms get connectivity only instead of the search."""
+    import types
+
+    import numpy as np
+
+    assert io_spartan._overlapping_atoms(np.array([[0.0, 0, 0], [1.0, 0, 0], [0.0, 0, 0.1]])) == (0, 2, 0.1)
+    assert io_spartan._overlapping_atoms(np.array([[0.0, 0, 0], [1.0, 0, 0]])) is None
+    assert "P/S" in io_spartan._bond_order_search_risk([16] * 4 + [6] * 10)
+    assert io_spartan._bond_order_search_risk([16] * 3 + [6] * 10) == ""
+    assert "atoms" in io_spartan._bond_order_search_risk([6] * 200)
+
+    monkeypatch.setattr(io_spartan, "drawn_mol", lambda mol, pos=None: None)
+    na = types.SimpleNamespace(label="NaNa", numbers=np.array([11, 11, 8]), n_atoms=3,
+                               input=types.SimpleNamespace(charge=0, multiplicity=1))
+    with pytest.raises(ValueError, match="overlap"):
+        io_spartan._mol_at(na, np.array([[0.0, 0, 0], [0.0, 0, 0], [2.0, 0, 0]]))
+    # four sulfate-like S: connectivity only, at once
+    z = [16, 8, 8, 8, 8] * 4
+    pos = np.array([[k * 6.0 + dx, dy, dz] for k in range(4)
+                    for dx, dy, dz in ((0, 0, 0), (1.45, 0, 0), (-1.45, 0, 0), (0, 1.45, 0), (0, -1.45, 0))])
+    s4 = types.SimpleNamespace(label="S4", numbers=np.array(z), n_atoms=len(z),
+                               input=types.SimpleNamespace(charge=-8, multiplicity=1))
+    m = io_spartan._mol_at(s4, pos)
+    assert m.GetProp("qb_bonds").startswith("connectivity only (4 P/S")

@@ -1086,7 +1086,19 @@ def _mol_at(mol: SpartanMolecule, pos: np.ndarray):
     raw = Chem.MolFromXYZBlock(xyz)
     if raw is None:
         raise ValueError(f"{mol.label}: RDKit could not read the geometry")
+    overlap = _overlapping_atoms(pos)
+    if overlap:
+        # e.g. four Na+ of a tetrasodium dye drawn at one point: RDKit's bond-order search never ends there
+        # and its Hueckel mode crashes, so no bonds are perceived at all
+        raise ValueError(f"{mol.label}: atoms {overlap[0] + 1} and {overlap[1] + 1} overlap in Spartan's geometry "
+                         f"({overlap[2]:.2f} A); no bonds perceived")
     m = Chem.Mol(raw)
+    why_not = _bond_order_search_risk(mol.numbers)
+    if why_not:
+        rdDetermineBonds.DetermineConnectivity(m)
+        m.UpdatePropertyCache(strict=False)
+        m.SetProp("qb_bonds", f"connectivity only ({why_not})")
+        return m
     try:
         rdDetermineBonds.DetermineBonds(m, charge=charge)
         m.SetProp("qb_bonds", "rdDetermineBonds")
@@ -1096,6 +1108,37 @@ def _mol_at(mol: SpartanMolecule, pos: np.ndarray):
         m.UpdatePropertyCache(strict=False)
         m.SetProp("qb_bonds", "connectivity only")
     return m
+
+
+#: Atoms closer than this (Å) are a broken geometry, not a molecule
+OVERLAP_A = 0.5
+#: RDKit's bond-order search (xyz2mol) enumerates the valences of S/P/Se/As/... atoms and can run for hours on
+#: molecules with several of them (sulfonated dyes); above these the bonds are connectivity only.
+MAX_HYPERVALENT_FOR_SEARCH = 3
+MAX_ATOMS_FOR_SEARCH = 150
+_HYPERVALENT = frozenset({15, 16, 33, 34, 51, 52})   # P S As Se Sb Te
+
+
+def _overlapping_atoms(pos) -> tuple[int, int, float] | None:
+    """The first pair of atoms closer than :data:`OVERLAP_A`, as (i, j, distance), else None."""
+    pos = np.asarray(pos, dtype=float)
+    if len(pos) < 2:
+        return None
+    d = np.sqrt(((pos[:, None, :] - pos[None, :, :]) ** 2).sum(-1))
+    d[np.tril_indices(len(pos))] = np.inf
+    i, j = np.unravel_index(int(np.argmin(d)), d.shape)
+    return (int(i), int(j), float(d[i, j])) if d[i, j] < OVERLAP_A else None
+
+
+def _bond_order_search_risk(numbers) -> str:
+    """Why RDKit's bond-order search should not be tried (it may not finish), "" when it is safe enough."""
+    numbers = [int(z) for z in numbers]
+    n_hyper = sum(z in _HYPERVALENT for z in numbers)
+    if n_hyper > MAX_HYPERVALENT_FOR_SEARCH:
+        return f"{n_hyper} P/S/As/Se atoms: bond orders not searched"
+    if len(numbers) > MAX_ATOMS_FOR_SEARCH:
+        return f"{len(numbers)} atoms: bond orders not searched"
+    return ""
 
 
 def species(mol: SpartanMolecule) -> dict:
@@ -1119,7 +1162,7 @@ def species(mol: SpartanMolecule) -> dict:
             m = _mol_at(mol, mol.input.positions_A)
         except Exception:
             m = None
-        if m is not None and m.GetProp("qb_bonds") == "connectivity only":
+        if m is not None and m.GetProp("qb_bonds").startswith("connectivity only"):
             m = None
     if m is not None:
         with contextlib.suppress(Exception):
