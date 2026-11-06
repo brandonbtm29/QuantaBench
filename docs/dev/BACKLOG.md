@@ -226,7 +226,28 @@ Open (needs-Brandon):
   - At Spartan's own geometries, GFN2/ALPB matches B3LYP/C-PCM water dipoles to 0.41 D for anions
     (r 0.997) and 1.9 D for cations (`scratch/dipole_fixed_geom.py` on NOVA). The remaining 4.2 D MAE comes
     from the conformer each program picks.
+  - 2026-11-06 (branch `feat/conformer-compare`; docs/VALIDATION.md, "VAL-3"): `quantabench-cli conformers compare`
+    matches two programs' conformers. It reads Spartan documents or imports and QuantaBench run folders, uses a
+    symmetric RMSD with the PFAS sibling-group factorization, torsions and stereo, and a GFN2 common level for
+    search vs ranking. Results are in `Runs/conformers-compare-2026-11-06`.
+    - C3A/C3B water ions: the conformer explains 88 % of the 4.35 D gap (GFN2 at Spartan's lowest geometry: 0.52 D).
+      The cause is mostly ranking (38 of 55): GFN2/ALPB puts Spartan's B3LYP-lowest 11th of about 33.
+    - QuantaBench's search is also short at its own level: Spartan's pool has a GFN2-lower conformer in 49 of 61
+      ions, 14.8 kJ/mol lower on average. That conformer's dipole is 6.2 D from Spartan's.
+    - Essential 76 (gas, 63; a new QuantaBench run with `--refine-top 5`): 8 have the same lowest conformer; the
+      cause is mostly search (35 of 55). The 1.28 D gap is 37 % conformer; GFN2 is +0.76 D above ωB97X-D.
 - Open:
+  - Spartan's Est. DFT documents of TFA and PFPrA hold one conformer each, an anti acid (17-19 kJ/mol above syn at
+    GFN2). Recompute them, or leave them out of the VAL-2 pairs; the VAL-2 pilot used these geometries.
+  - Conformers, from `conformers compare`:
+    - Refine more than 5 MMFF94s conformers for ions in water. The gas-phase force field ranks the pool, and the
+      GFN2-lower conformers Spartan has are lost there. Try `--refine-top 20`, CREST in ALPB, and MMFF ranking with
+      a solvent term, then rerun the comparison.
+    - Decide which level ranks the conformers for the QSAR descriptors: GFN2/ALPB and B3LYP/C-PCM disagree by tens
+      of kJ/mol for extended vs folded ions. Options: re-rank the lowest N with the QM stage (PCM), or use Boltzmann
+      averages (`validate --boltzmann`, below).
+    - Run the comparison on the CREST runs (`Runs/crest-2026-11-06`) once CREST works there. In the first MacBook
+      runs, 18 of 20 molecules fell back to RDKit (`crest` exited with code 1).
   - `validate --boltzmann`: compare `dipole_debye_boltz` with a Boltzmann average over Spartan's DFT conformers
     (the `*_DFT_Top5` documents hold 5 per molecule).
   - The same fixed-geometry test for the gas phase against PM6 (r 0.62-0.67; C1B 0.18). It should show whether

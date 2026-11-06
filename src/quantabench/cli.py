@@ -11,6 +11,8 @@
     quantabench-cli import batches/*.spartan --table all.csv [--sdf all.sdf] [--wide qsar.csv]   # Spartan -> one table
     quantabench-cli sample qsar.csv -o val300.csv [-n 300 --seed 20261105]     # stratified validation set
     quantabench-cli validate RUN_GAS RUN_WATER --spartan qsar.csv --out DIR     # QuantaBench vs Spartan
+    quantabench-cli conformers compare --a docs/*.spartan --b RUN --rescore gas,water --relax water --out DIR
+                                                                                # whose conformers, search vs ranking
     quantabench-cli slab --nx 16 --ny 9 --layers 3 --molecule "OC(=O)C(F)(F)..." -o pfoa_on_graphite.data
                          [--lammps-dir DIR]
     quantabench-cli md smd --system pfoa_graphite.extxyz -o DIR [--gpu] [--run]
@@ -996,6 +998,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_pubchem import register as register_pubchem
 
     register_pubchem(sub)       # pubchem enrich, pubchem lookup (quantabench.cli_pubchem)
+    from .cli_conformers import register as register_conformers
+
+    register_conformers(sub)    # conformers compare (quantabench.chem.conformer_compare)
 
     se = sub.add_parser("settings", help="show settings, or move them (e.g. into a synced folder)")
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")

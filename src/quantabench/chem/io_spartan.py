@@ -20,6 +20,7 @@ CONTRACT:
     read_molecule(container, storage, source_file, index) -> SpartanMolecule   # UnreadableMolecule(reason)
     iter_molecules(path_or_container, source_file=None, errors=None, skipped=None) -> Iterator[SpartanMolecule]
     structure_key(mol) -> str; stereo_key(rdkit_mol) -> str   # the join keys
+    constitution_key(numbers, bonds, charge) -> str           # structure_key of any molecule (conformer_compare)
     drawn_mol(mol) -> RDKit Mol | None; species(mol) -> {inchikey, canonical_smiles, structure_charge, charge_check}
     solvent_name("WASSER") -> "water"                         # Spartan solvent -> chem.solvents name
     scf_dipole(mol) -> (debye, "WB97X-D/6-31G(d)") | None     # QM_DIPOLE of an Est. DFT job (no DIPOLE_MAG)
@@ -951,28 +952,53 @@ def structure_key(mol: SpartanMolecule) -> str:
     the conformation do not enter, so every conformer and every re-calculation of a molecule has the same key,
     whatever Kekulé structure or charge placement a program drew. Stereoisomers share it (see
     :func:`stereo_key`). "" when RDKit cannot canonicalize it."""
-    from rdkit import Chem, rdBase
-
     n = mol.n_atoms
     bonds = [(i, j) for i, j, _o in mol.input.bonds if 0 <= i < n and 0 <= j < n and i != j]
+    if not bonds:
+        bonds = perceived_bonds(mol.numbers, mol.input.positions_A)
+        if bonds is None:
+            return ""
+    return constitution_key(mol.numbers, bonds, mol.input.charge)
+
+
+def perceived_bonds(numbers, positions) -> list[tuple[int, int]] | None:
+    """Bonds from the geometry (RDKit's ``DetermineConnectivity``), None when RDKit cannot read it."""
+    from rdkit import Chem, rdBase
+    from rdkit.Chem import rdDetermineBonds
+
     _quiet = rdBase.BlockLogs()
     try:
-        if not bonds:
-            from rdkit.Chem import rdDetermineBonds
+        xyz = f"{len(numbers)}\n\n" + "\n".join(
+            f"{Chem.GetPeriodicTable().GetElementSymbol(int(z))} {x:.6f} {y:.6f} {w:.6f}"
+            for z, (x, y, w) in zip(numbers, positions))
+        raw = Chem.MolFromXYZBlock(xyz)
+        rdDetermineBonds.DetermineConnectivity(raw)
+        return [(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in raw.GetBonds()]
+    except Exception:
+        return None
+    finally:
+        del _quiet
 
-            xyz = f"{n}\n\n" + "\n".join(
-                f"{Chem.GetPeriodicTable().GetElementSymbol(int(z))} {x:.6f} {y:.6f} {w:.6f}"
-                for z, (x, y, w) in zip(mol.numbers, mol.input.positions_A))
-            raw = Chem.MolFromXYZBlock(xyz)
-            rdDetermineBonds.DetermineConnectivity(raw)
-            bonds = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in raw.GetBonds()]
+
+def constitution_key(numbers, bonds, charge: int) -> str:
+    """:func:`structure_key` of any molecule given as atomic numbers, bonds (pairs of 0-based indices; orders
+    ignored) and total charge: the 16-hex-digit digest of the canonical SMILES of its all-explicit-atom
+    single-bond graph plus the charge. ``chem.conformer_compare`` keys QuantaBench's molecules with it, so they
+    join Spartan's by constitution whatever bond orders, charge placement or atom order each program drew.
+    "" when RDKit cannot canonicalize it."""
+    from rdkit import Chem, rdBase
+
+    n = len(numbers)
+    _quiet = rdBase.BlockLogs()
+    try:
         rw = Chem.RWMol()
-        for z in mol.numbers:
+        for z in numbers:
             a = Chem.Atom(int(z))
             a.SetNoImplicit(True)
             rw.AddAtom(a)
-        for i, j in bonds:
-            if rw.GetBondBetweenAtoms(i, j) is None:
+        for b in bonds:
+            i, j = int(b[0]), int(b[1])
+            if 0 <= i < n and 0 <= j < n and i != j and rw.GetBondBetweenAtoms(i, j) is None:
                 rw.AddBond(i, j, Chem.BondType.SINGLE)
         m = rw.GetMol()
         m.UpdatePropertyCache(strict=False)
@@ -981,7 +1007,7 @@ def structure_key(mol: SpartanMolecule) -> str:
         return ""
     finally:
         del _quiet
-    return _digest(f"{smi}|{mol.input.charge}")
+    return _digest(f"{smi}|{int(charge)}")
 
 
 def _cached_structure_key(mol: SpartanMolecule) -> str:

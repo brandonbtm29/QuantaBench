@@ -2,6 +2,46 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Comparing conformer sets: `conformers compare` (2026-11-06)
+- **`quantabench-cli conformers compare --a ... --b ... --out DIR`** (`chem/conformer_compare.py`): which
+  conformers two programs found for the same molecules. Either side can be Spartan documents, a Spartan import
+  (`import --conformers all --table --sdf`) or QuantaBench run folders, so CREST runs compare the same way.
+  - Molecules join by constitution (`io_spartan.constitution_key`).
+  - Two conformers are the same when their symmetric heavy-atom RMSD is at most 0.5 Å, their backbone and polar-H
+    torsions agree within 60° and every stereocentre keeps its configuration. Mirror images count as the same.
+  - PFAS symmetry is factored instead of enumerated. Terminal sibling atoms (the F of CF3/CF2, the O of
+    SO3-/COO-) are assigned per group after aligning a reduced skeleton, so PFOS (4,608 automorphisms) costs
+    1.6 ms per pair. Up to 2,000 automorphisms the full group is enumerated exactly, which equals RDKit's
+    `GetBestRMS`.
+- **Reports** (`molecules.csv`, `levels.csv`, `levels_summary.csv`, `conformers.csv`, `summary.csv`, `report.md`):
+  - how many of A's conformers within 5 and 10 kJ/mol of A's minimum B found, and the reverse;
+  - whether the two lowest are the same, with their RMSD and torsion differences;
+  - per level: B3LYP, MMFF, QuantaBench's and the common one.
+- **Search or ranking** (`--rescore gas,water --relax water`):
+  - Every conformer of both sides gets GFN2-xTB single points (tblite, gas and ALPB) and a GFN2 optimization.
+    The results are cached in `rescore_cache.jsonl`.
+  - An optimization that changes the bonds (a proton moves) is set aside.
+  - Each molecule then gets a cause: same best, ranking (B has A's best, or the common level would not prefer
+    it), or search (B missed a conformer that its own level puts lower).
+  - The dipoles of each side's lowest conformer split the dipole gap into method and conformer.
+- **C3A/C3B water ions of the 2026-11-06 validation** (61; `Runs/conformers-compare-2026-11-06`):
+  - Only 6 of the 61 lowest conformers are the same. QuantaBench has Spartan's lowest (B3LYP/C-PCM over its
+    DFT_Top5) for 10.
+  - The conformer explains 88 % of the 4.35 D dipole gap. GFN2/ALPB at Spartan's lowest geometry is 0.52 D from
+    B3LYP; QuantaBench's own lowest is 4.35 D away.
+  - Cause of the 55 differences: ranking 38, search 16, one tautomerizes at GFN2. GFN2 ranks Spartan's B3LYP-lowest
+    11th of about 33 (median).
+  - QuantaBench's search is still short at its own level: in 49 molecules Spartan's MMFF pool holds a conformer
+    that GFN2 puts lower, on average 14.8 kJ/mol below QuantaBench's lowest.
+  - That conformer has an even lower dipole: 6.2 D MAE from Spartan. A better GFN2 search alone would widen the
+    gap, not close it.
+- **Essential 76 in the gas phase** (63; Spartan's Est. DFT conformers against a new QuantaBench gas run):
+  - 8 of the 63 lowest conformers are the same. Cause: search 35, ranking 20.
+  - QuantaBench's lowest is 6.2 kJ/mol above GFN2's lowest of both sets (mean).
+  - The 1.28 D dipole gap is 37 % conformer; the rest is the method (GFN2 is +0.76 D above ωB97X-D).
+  - Spartan's TFA and PFPrA documents hold one anti-acid conformer each, 17-19 kJ/mol above syn at GFN2.
+- `io_spartan.constitution_key` and `perceived_bonds`; `structure_key` uses them.
+
 ### Work sharing between machines in grid builds (2026-11-06)
 - **A machine that finishes early takes the others' unstarted molecules.** While `grid build` follows a
   grid, it measures each machine's rate and moves molecules a busy machine has not started to an idle one.

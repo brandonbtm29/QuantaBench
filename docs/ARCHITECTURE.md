@@ -50,6 +50,7 @@
 | `chem.vibrations` | Hessian (dxtb autograd or finite differences), Eckart normal modes, IR intensities (km/mol), RRHO/qRRHO thermochemistry (Grimme, *Chem. Eur. J.* 2012, 18, 9955), IR spectra, mode trajectories. |
 | `chem.properties` | GFN1-xTB charges, dipole and polarizability at a fixed geometry. |
 | `chem.descriptors` | Graph descriptors and 3D ensemble descriptors (best and Boltzmann-weighted). |
+| `chem.conformer_compare` | Two programs' conformer sets (Spartan documents or imports, QuantaBench run folders) joined by constitution and matched by a symmetric heavy-atom RMSD that factors out PFAS sibling-group symmetry, plus torsions and stereo; coverage, same-lowest, search vs ranking at a GFN2-xTB common level (tblite), dipole split (`conformers compare`, `cli_conformers`). |
 | `chem.export` | Per-molecule writers and batch CSV tables; `read_molecule` reads a molecule's folder back into a `MoleculeResult` (every conformer from the SDF). |
 | `chem.pipeline` | `BuildConfig`, `MoleculeResult`, `run_molecule`, `run`, `use_batched` (when to batch). |
 | `chem.jobs` | Resumable batch runs: `JobStore` (SQLite, WAL), run lock, config guard, hash-based chunks, `run_resumable`, `open_run`, `rebuild_tables`, `merge_tables`; read helpers for the GUI: `molecule_rows` (light rows via SQLite `json_extract`), `load_result`, `load_inputs`, `stored_config`. |
@@ -65,7 +66,7 @@
 | `gui.spectra_panel`, `gui.surface_panel`, `gui.import_action` | Optional panels installed by `MainWindow._install_panels`; they follow `MainWindow.resultChanged` (and `displayChanged` for energy units). |
 | `gui.surface_dialog`, `gui.settings_dialog`, `gui.workers` | Dialogs and `QThread` workers. |
 | `gui.energy_widgets` | `EnergySpinBox`: an energy input shown in the display unit and stored in a fixed one (the energy window in kcal/mol), returning the stored value exactly until it is edited. |
-| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`). |
+| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`). |
 
 ## Key decisions
 
