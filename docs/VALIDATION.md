@@ -87,6 +87,8 @@ Like with like, in QuantaBench's units:
 | polarizability | Å³ | `<engine>_polarizability_iso_A3`, `xtb_polarizability_iso_A3` | `<p>_spartan_est_polariz` (Spartan's empirical estimate) | correlation |
 | surface area | Å² | `sasa_A2_best` (1.4 Å probe) | `<p>_spartan_cpkarea` (CPK, van der Waals) | correlation |
 | volume | Å³ | `volume_A3_best` (RDKit vdW grid) | `<p>_spartan_cpkvolume` (CPK) | correlation |
+| CPK area | Å² | `cpk_area_A2_best` (Spartan's radii, no probe) | `<p>_spartan_cpkarea` | comparison |
+| CPK volume | Å³ | `cpk_volume_A3_best` (Spartan's radii) | `<p>_spartan_cpkvolume` | comparison |
 | q min / q max | e | min/max of the best conformer's charges | `<p>_spartan_q_minus_mul` / `_q_plus_mul` (most negative/positive Mulliken charge) | correlation |
 
 - Gas-phase QuantaBench values pair with Spartan's gas-phase quantum levels (PM6 at its PM6 geometry); ALPB
@@ -95,6 +97,9 @@ Like with like, in QuantaBench's units:
   solvent-accessible one, and its volume uses other radii; `EST_POLARIZ` is an estimate (≈ 45-60 for molecules
   whose computed polarizability is ≈ 5-15 Å³); charge partitions differ between methods. Errors are listed, but
   read r, ρ and the fit.
+- **`sasa_A2` before 0.3.0.dev3 is wrong.** FreeSASA was given zero atom radii, so the value was the area of bare
+  probe spheres. Tables of the 2026-11-05 validation run have the old value; rebuild, or compare `cpk_*`, which
+  only a new run has.
 - **Solvation shifts** (a molecule with gas and water values): QuantaBench water - gas against Spartan's water
   level minus PM6 gas, flagged `shift (different levels)`: Spartan's difference mixes methods and geometries.
 - Spartan values of failed jobs are left out (`--include-failed` keeps them).

@@ -161,8 +161,8 @@ compound's (a salt).
 The physics: σ is cohesive energy per unit area, roughly ΔH_vap / V_m^(2/3) (Stefan's rule). Its parts are
 dispersion, polarity and hydrogen bonding, minus the low polarizability of fluorinated surfaces. Candidate
 descriptors (gas phase unless noted):
-- **Size and dispersion:** isotropic polarizability α, the vdW volume and SASA (`volume_A3_best`,
-  `sasa_A2_best`), α/V (a Lorentz–Lorenz-like density of polarizability, the strongest single dispersion term),
+- **Size and dispersion:** isotropic polarizability α, the vdW volume and SASA (`vdw_volume_A3_best`,
+  `sasa_A2_best`; `cpk_volume_A3_best` with Spartan's radii), α/V (a Lorentz–Lorenz-like density of polarizability, the strongest single dispersion term),
   and the molar volume from ρ when known.
 - **Polarity:** dipole moment, μ²/V, and the ESP surface descriptors (σ²_tot, ν, Π, positive/negative
   surface areas: the GIPF family, which describes cohesive properties such as heats of vaporization). Add the

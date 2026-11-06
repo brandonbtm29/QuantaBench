@@ -53,3 +53,22 @@ def test_old_settings_get_new_build_defaults(isolated_settings):
     s.build.frequencies, s.build.batched = True, "on"
     cfg = BuildConfig.from_settings(s)
     assert cfg.frequencies and cfg.batched == "on" and cfg.method == "gfn1-xtb"
+
+
+def test_surface_settings_roundtrip_and_reach_the_build_config(isolated_settings):
+    """Radii set, per-element overrides and the probe go through settings.json into BuildConfig."""
+    from quantabench.chem.pipeline import BuildConfig, surface_options
+
+    s = sm.Settings()
+    assert (s.surfaces.radii_set, s.surfaces.sasa_probe_A, s.surfaces.radii_overrides) == ("bondi", 1.4, {})
+    s.surfaces.radii_set = "spartan"
+    s.surfaces.radii_overrides = {"C": 1.8, "F": 1.47}
+    s.surfaces.sasa_probe_A = 1.0
+    sm.save(s)
+    back = sm.load()
+    assert back.surfaces.radii_set == "spartan" and back.surfaces.radii_overrides == {"C": 1.8, "F": 1.47}
+    cfg = BuildConfig.from_settings(back)
+    opts = surface_options(cfg)
+    assert opts.radii_set == "spartan" and dict(opts.overrides) == {6: 1.8, 9: 1.47} and opts.probe_A == 1.0
+    assert sm.Settings.from_dict({"surfaces": {"radii_overrides": {"C": "x", "N": True, "O": 1.5}}}
+                                 ).surfaces.radii_overrides == {"C": "x", "O": 1.5}

@@ -316,6 +316,7 @@ def test_solvent_and_qm_changes_are_config_mismatches(tmp_path, counting):
 def test_aimnet2_runs_from_before_the_neighbor_list_fix_are_not_resumed_silently(tmp_path, monkeypatch):
     """Versions before AIMNET_NBLIST_FIX_VERSION gave wrong AIMNet2 energies for molecules after a smaller one:
     resuming such an aimnet2/auto run is refused (with the reason) unless forced; other methods resume."""
+    monkeypatch.setattr(jobs, "SASA_RADII_FIX_VERSION", "0.0.0")     # this test is about the AIMNet2 guard only
     monkeypatch.setattr(pipeline, "run_molecule",
                         lambda inp, *a, **k: pipeline.MoleculeResult(input=inp, status="ok", method="aimnet2"))
 
@@ -346,6 +347,7 @@ def test_aimnet2_runs_from_before_the_neighbor_list_fix_are_not_resumed_silently
 def test_solvent_runs_from_before_solvated_properties_are_not_resumed_silently(tmp_path, monkeypatch):
     """Before SOLVATED_PROPERTIES_VERSION a water run had gas-phase xtb_* properties: resuming it is refused unless
     forced; gas-phase runs and MMFF in water resume."""
+    monkeypatch.setattr(jobs, "SASA_RADII_FIX_VERSION", "0.0.0")     # this test is about the solvent guard only
     monkeypatch.setattr(pipeline, "run_molecule",
                         lambda inp, *a, **k: pipeline.MoleculeResult(input=inp, status="ok", method="tblite-gfn2"))
 
@@ -364,6 +366,31 @@ def test_solvent_runs_from_before_solvated_properties_are_not_resumed_silently(t
     for kw in ({"method": "tblite-gfn2", "solvent": ""}, {"method": "mmff", "solvent": "water"}):
         jobs.run_resumable(None, cfg(tmp_path, write_files=False, **kw), started_with("0.3.0.dev1", **kw))
     assert jobs.version_key(jobs.SOLVATED_PROPERTIES_VERSION) <= jobs.version_key(jobs.__version__)
+
+
+def test_runs_from_before_the_sasa_fix_are_not_resumed_silently(tmp_path, monkeypatch):
+    """Before SASA_RADII_FIX_VERSION sasa_A2 was the area of bare probe spheres, whatever the method: no such run
+    resumes unless forced. The surface settings are science settings: a resume keeps the stored ones."""
+    monkeypatch.setattr(pipeline, "run_molecule",
+                        lambda inp, *a, **k: pipeline.MoleculeResult(input=inp, status="ok", method="mmff"))
+    old = tmp_path / "old"
+    jobs.run_resumable(inputs(["ethanol"]), cfg(tmp_path, write_files=False), old)
+    with sqlite3.connect(old / jobs.DB_NAME) as con:
+        con.execute("UPDATE run SET version = ?", ("0.3.0.dev2",))
+    with pytest.raises(jobs.ConfigMismatchError) as exc:
+        jobs.run_resumable(None, cfg(tmp_path, write_files=False), old)
+    assert "sasa_A2" in str(exc.value)
+    jobs.run_resumable(None, cfg(tmp_path, write_files=False), old, force=True)
+    assert jobs.version_key(jobs.SASA_RADII_FIX_VERSION) <= jobs.version_key(jobs.__version__)
+
+    new = tmp_path / "new"
+    jobs.run_resumable(inputs(["ethanol"]), cfg(tmp_path, write_files=False, radii_set="spartan", sasa_probe_A=1.0,
+                                                 radii_overrides={"C": 1.8}), new)
+    with pytest.raises(jobs.ConfigMismatchError) as exc:
+        jobs.run_resumable(None, cfg(tmp_path, write_files=False), new)
+    assert {"radii_set", "radii_overrides", "sasa_probe_A"} <= set(exc.value.differences)
+    back = jobs.stored_config(jobs.open_run(new).config)
+    assert (back.radii_set, back.radii_overrides, back.sasa_probe_A) == ("spartan", {"C": 1.8}, 1.0)
 
 
 def test_light_results_for_big_batches(tmp_path):

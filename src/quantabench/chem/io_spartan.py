@@ -172,8 +172,9 @@ Not mapped on purpose: ``E_KCAL``/``OPTENERGY``/``SPENERGY`` (a heat of formatio
 a total energy for DFT: one Spartan name, two quantities; QuantaBench's ``qm_energy_ev`` is a total energy),
 the DLFF03/MMFF conformer energies (force-field scale), ``DIPOLE_MAG`` of a conformer search (the MMFF
 point-charge dipole of the input geometry, not the conformer's), ``CONFORMATIONAL_ENTROPY`` (QuantaBench has
-only the vibrational ``vib_entropy_cal_molK``), ``CPKAREA``/``CPKVOLUME`` (van der Waals (CPK) surfaces, not
-QuantaBench's ``sasa_A2``, solvent accessible with a 1.4 Å probe, or ``volume_A3``), the ESP areas and extrema
+only the vibrational ``vib_entropy_cal_molK``), ``CPKAREA``/``CPKVOLUME`` (van der Waals (CPK) surfaces with Spartan's radii:
+QuantaBench's ``cpk_area_A2``/``cpk_volume_A3`` are the same quantity, its ``sasa_A2`` is solvent accessible
+with a 1.4 Å probe), the ESP areas and extrema
 (on Spartan's density surface, not QuantaBench's 0.002 au one), ``EST_POLARIZ`` (an empirical estimate, not a
 computed polarizability like ``polarizability_iso_A3``), ``C_TOT`` (no Cv column in QuantaBench).
 

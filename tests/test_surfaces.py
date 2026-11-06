@@ -149,6 +149,11 @@ def test_gipf_formulas_on_a_hand_checked_mesh():
     for key, val in expect.items():
         assert d[key] == pytest.approx(val), key
     assert d["esp_mean_kcal"] != pytest.approx(v.mean())     # not the plain vertex average
+    # Spartan-style polar areas: |V| above 75/100/125 kJ/mol (17.9/23.9/29.9 kcal/mol)
+    d = msurf.gipf_descriptors(mesh, np.array([30.0, -20.0, -25.0, 5.0]))
+    assert d["esp_polar_area_75_A2"] == pytest.approx(w[:3].sum())        # 30, 20 and 25 kcal/mol
+    assert d["esp_polar_area_100_A2"] == pytest.approx(w[0] + w[2])       # 30 and 25
+    assert d["esp_polar_area_125_A2"] == pytest.approx(w[0])              # 30 only
 
 
 def test_open_isosurface_is_reported():

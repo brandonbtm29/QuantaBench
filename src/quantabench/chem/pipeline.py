@@ -87,6 +87,11 @@ class BuildConfig:
     # / lanes, resolved when a run starts), < 0 = no guard
     memory_budget_gb: float = 0.0
     molecule_timeout_s: float = 0.0       # wall-clock limit per molecule in a batch (0 = none); see time_limited()
+    # areas and volumes (chem.descriptors.SurfaceOptions): radii set for sasa_A2/vdw_* ("bondi" | "spartan"),
+    # per-element overrides (symbol -> Å) and the SASA probe radius; cpk_* always use Spartan's table
+    radii_set: str = "bondi"
+    radii_overrides: dict = field(default_factory=dict)
+    sasa_probe_A: float = 1.4
 
     @classmethod
     def from_settings(cls, s: Settings, **overrides) -> BuildConfig:
@@ -98,7 +103,9 @@ class BuildConfig:
                   gpu_memory_fraction=r.gpu_memory_fraction, linalg=r.linalg, dxtb_gpu=r.dxtb_gpu,
                   memory_budget_gb=r.memory_budget_gb, molecule_timeout_s=r.molecule_timeout_s,
                   output_dir=str(s.output_path()),
-                  conformer_search=b.conformer_search, solvent=b.solvent, qm_method=b.qm_method)
+                  conformer_search=b.conformer_search, solvent=b.solvent, qm_method=b.qm_method,
+                  radii_set=s.surfaces.radii_set, radii_overrides=dict(s.surfaces.radii_overrides),
+                  sasa_probe_A=s.surfaces.sasa_probe_A)
         return replace(cfg, **overrides)
 
 
@@ -307,6 +314,11 @@ def _properties_plan(numbers, charge: int, multiplicity: int, cfg: BuildConfig) 
 def calculator_options(result: MoleculeResult, cfg: BuildConfig) -> dict:
     """Options every engine factory receives (see ``engines`` module docstring)."""
     return {"solvent": result.solvent, "threads": resources.resolve_threads(cfg.threads)}
+
+
+def surface_options(cfg: BuildConfig) -> desc.SurfaceOptions:
+    """The areas' and volumes' radii and probe of a run (``descriptors.SurfaceOptions``)."""
+    return desc.SurfaceOptions.make(cfg.radii_set, cfg.radii_overrides, cfg.sasa_probe_A)
 
 
 def _engine_dipole(atoms, calc, origin: str | None, charge: int, masses: np.ndarray) -> np.ndarray | None:
@@ -780,7 +792,8 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         stage("descriptors")
         t = time.perf_counter()
         result.descriptors = {**desc.graph_descriptors(cs.mol),
-                              **desc.ensemble_descriptors(cs.mol, [c.conf_id for c in kept], weights)}
+                              **desc.ensemble_descriptors(cs.mol, [c.conf_id for c in kept], weights,
+                                                          surface_options(cfg))}
         if kept[0].dipole_debye is not None:
             result.descriptors["dipole_debye_best"] = kept[0].dipole_debye
             dips = [c.dipole_debye for c in kept]

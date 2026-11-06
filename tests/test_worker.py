@@ -506,6 +506,22 @@ def test_ids_differing_only_in_case():
         worker_mod.validate_inputs([jobs.input_to_json(benzene), jobs.input_to_json(cyclohexane)])
 
 
+def test_surface_options_travel_to_a_worker():
+    """The radii set, the per-element radii and the SASA probe of the client's settings reach the worker's
+    build, so every machine of a grid computes the same areas and volumes."""
+    from dataclasses import asdict
+
+    cfg = asdict(pipeline.BuildConfig(radii_set="spartan", radii_overrides={"C": 1.8, "17": 1.9}, sasa_probe_A=1.0))
+    cfg.pop("output_dir")
+    out = worker_mod.validate_config(cfg)
+    assert (out["radii_set"], out["radii_overrides"], out["sasa_probe_A"]) == ("spartan", {"C": 1.8, "17": 1.9}, 1.0)
+    for bad, match in (({"radii_set": "uff"}, "one of"), ({"radii_overrides": {"Xx": 1.5}}, "not an element"),
+                       ({"radii_overrides": {"C": 0}}, "radius"), ({"radii_overrides": {"C": True}}, "radius"),
+                       ({"radii_overrides": ["C"]}, "object"), ({"sasa_probe_A": -1.0}, "in \\[")):
+        with pytest.raises(worker_mod.RequestError, match=match):
+            worker_mod.validate_config(bad)
+
+
 def test_follow_stops_on_a_lost_job_and_retries_an_unreachable_one(make_worker, tmp_path):
     w = make_worker("w1")
     share = client_mod.Share(machine="w1", url=w.url, n=1, job_id="0123456789ab", state="running")

@@ -2,6 +2,32 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Areas and volumes: a SASA bug fixed, Spartan's radii as an option (2026-11-06)
+- **`sasa_A2` was wrong for every non-protein molecule.** It passed the radii of FreeSASA's ProtOr classifier,
+  and those are 0 for any atom outside a protein residue, so the value was the union of bare 1.4 Å probe
+  spheres on the atom centres. It is now the solvent-accessible area: Bondi radii plus a 1.4 Å probe. Columns
+  from older runs keep the old value.
+- **New columns:**
+  - `vdw_area_A2` and `vdw_volume_A3`: the union of van der Waals spheres, with the run's radii set (Bondi by
+    default).
+  - `cpk_area_A2` and `cpk_volume_A3`: the same, with Spartan's radii table. Spartan's CPKVOLUME is reproduced
+    to 0.1 % and CPKAREA to 0.5 % on the C3A B3LYP documents, at about 5 ms per conformer. `validate` compares
+    them directly with Spartan's CPK values.
+
+  Spartan's carbon radius is 1.92 Å against Bondi's 1.70, which is why its volumes ran about 7 % above
+  QuantaBench's.
+- **Settings `surfaces`:** the radii set (`bondi` or `spartan`), per-element overrides as in Spartan's
+  editable table, and the SASA probe radius. Spartan's "accessible area" uses 1.0 Å. These reach
+  `BuildConfig.radii_set`, `radii_overrides` and `sasa_probe_A`.
+  - In the GUI: **Settings > Surfaces & radii**. It has the radii set, the SASA probe, and a 111-element table:
+    Bondi, Spartan, and your value, with a search box and Reset selected / Reset all.
+  - They are science settings. A resumed run keeps the values it started with, and a grid sends them to every
+    worker, so all machines compute the same columns.
+- **Version 0.3.0.dev3.** A run started before it is not resumed without `--force`, whatever its method,
+  because its `sasa_A2` column would mix the old value with the corrected one.
+- **ESP surfaces** gain `esp_polar_area_75_A2`, `esp_polar_area_100_A2` and `esp_polar_area_125_A2`: the area
+  where |V| exceeds 75, 100 or 125 kJ/mol, as Spartan's polar areas.
+
 ### Dipoles from the validation run (300 molecules, gas and water, 2026-11-05)
 - **Spartan ion dipoles are now about the centre of mass.** Spartan writes an ion's `DIPOLE_VEC` about the
   origin of the document's coordinates (its GUI hides the value, since it depends on where the molecule sits).

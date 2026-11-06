@@ -9,6 +9,7 @@ CONTRACT (implemented by the surfaces builder):
         esp_min_kcal, esp_max_kcal, esp_mean_kcal, esp_mean_pos_kcal, esp_mean_neg_kcal,
         esp_sigma2_pos, esp_sigma2_neg, esp_sigma2_tot, esp_nu (balance), esp_pi (local polarity),
         esp_area_pos_A2, esp_area_neg_A2     (Murray-Politzer GIPF quantities, area-weighted)
+        esp_polar_area_75_A2, _100_, _125_   (area where |V| > 75/100/125 kJ/mol, as Spartan's polar areas)
     charge_esp_surface(numbers, positions_A, charges, kind="vdw", scale=1.0, probe=1.4, spacing=0.25) ->
         (pyvista.PolyData, esp_kcal per vertex)
         Fallback when no QM cube exists: a vdW (or SAS) surface from atom spheres (contour of a smooth union of
@@ -64,9 +65,14 @@ HARTREE_KCAL = 627.5095           # kcal/mol per hartree (ESP cubes are in hartr
 COULOMB_KCAL = 332.0637           # kcal·Å/(mol·e²)
 SMOOTH_K = 10.0                   # 1/Å, sharpness of the smooth sphere union
 PROBE_A = 1.4                     # Å, solvent probe (water) for kind="sas"
+#: |ESP| thresholds (kJ/mol) of the polar areas, as Spartan's QSAR_ELPOT_POLAR_AREA_75/_100/_125 (its Settings
+#: tab: "Polar Area Range 100 kJ/mol"); ``esp_polar_area_<T>_A2`` = area of the surface where |V| > T
+POLAR_ESP_KJMOL = (75, 100, 125)
+KJ_PER_KCAL = 4.184
 DESCRIPTOR_KEYS = ("surf_area_A2", "surf_volume_A3", "esp_min_kcal", "esp_max_kcal", "esp_mean_kcal",
                    "esp_mean_pos_kcal", "esp_mean_neg_kcal", "esp_sigma2_pos", "esp_sigma2_neg", "esp_sigma2_tot",
-                   "esp_nu", "esp_pi", "esp_area_pos_A2", "esp_area_neg_A2")
+                   "esp_nu", "esp_pi", "esp_area_pos_A2", "esp_area_neg_A2",
+                   *(f"esp_polar_area_{t}_A2" for t in POLAR_ESP_KJMOL))
 
 
 class OpenSurfaceError(ValueError):
@@ -201,6 +207,7 @@ def gipf_descriptors(surface, esp_kcal: np.ndarray | None = None) -> dict:
         "esp_nu": float(s2_pos * s2_neg / s2_tot ** 2) if s2_tot > 0 else 0.0,
         "esp_pi": float(np.dot(w, np.abs(v - mean)) / total),
         "esp_area_pos_A2": a_pos, "esp_area_neg_A2": a_neg,
+        **{f"esp_polar_area_{t}_A2": float(w[np.abs(v) > t / KJ_PER_KCAL].sum()) for t in POLAR_ESP_KJMOL},
     })
     return out
 
@@ -215,12 +222,11 @@ def surface_descriptors(density, esp=None, iso: float = 0.002) -> dict:
 
 # ====================================================================== charge-based fallback
 def vdw_radii_A(numbers) -> np.ndarray:
-    """Bondi van der Waals radii (Å), Mantina et al. where Bondi has none, 2.0 Å for anything else."""
-    from ase.data import vdw_radii
+    """Bondi van der Waals radii (Å), Mantina et al. where Bondi has none, 2.0 Å for anything else
+    (``radii.radii(numbers, "bondi")``)."""
+    from .radii import radii
 
-    z = np.asarray(numbers, int)
-    r = np.asarray(vdw_radii, float)[np.clip(z, 0, len(vdw_radii) - 1)]
-    return np.where(np.isfinite(r) & (r > 0), r, 2.0)
+    return radii(np.asarray(numbers, int).reshape(-1), "bondi")
 
 
 def point_charge_esp(points_A, positions_A, charges, chunk: int = 4096) -> np.ndarray:

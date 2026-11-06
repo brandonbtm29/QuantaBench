@@ -110,6 +110,7 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "gpu": ("auto", "on", "off"),
     "linalg": ("auto", "cpu", "device"),
     "dxtb_gpu": ("auto", "on", "off"),
+    "radii_set": ("bondi", "spartan"),
 }
 # Inclusive ranges of numeric BuildConfig fields; other numbers only need to be finite.
 RANGES: dict[str, tuple[float, float]] = {
@@ -117,7 +118,7 @@ RANGES: dict[str, tuple[float, float]] = {
     "energy_window_kcal": (0.0, 1e4), "rmsd_threshold": (0.0, 100.0), "fmax": (1e-6, 100.0),
     "max_steps": (0, 10_000_000), "temperature_k": (1e-3, 1e5), "symmetry_number": (0, 1000),
     "seed": (-(2**31), 2**31 - 1), "qm_top": (0, 10_000), "threads": (0, 4096), "gpu_index": (0, 64),
-    "gpu_memory_fraction": (0.01, 1.0),
+    "gpu_memory_fraction": (0.01, 1.0), "sasa_probe_A": (0.0, 10.0),
 }
 _INPUT_LIMITS = {"id": 120, "smiles": 20_000, "name": 1_000, "source": 2_000, "molblock": 16_000_000}
 
@@ -260,6 +261,22 @@ def _check_number(name: str, value, kind: type):
     return value
 
 
+def _check_radii_overrides(value) -> dict[str, float]:
+    """``config.radii_overrides``: at most 118 elements (symbol or atomic number) -> radius in (0, 10] Å."""
+    from ..chem import radii
+
+    if not isinstance(value, dict) or len(value) > 118:
+        raise RequestError(400, "config.radii_overrides must be an object of at most 118 element: radius pairs")
+    out: dict[str, float] = {}
+    for key, r in value.items():
+        if not isinstance(key, str) or len(key) > 3 or radii.normalize_overrides({key: 1.0}) == {}:
+            raise RequestError(400, f"config.radii_overrides: {str(key)[:20]!r} is not an element")
+        if isinstance(r, bool) or not isinstance(r, (int, float)) or not math.isfinite(r) or not 0 < r <= 10:
+            raise RequestError(400, f"config.radii_overrides[{key!r}] must be a radius in (0, 10] Å")
+        out[key] = float(r)
+    return out
+
+
 def validate_config(data) -> dict:
     """Check a ``BuildConfig`` as sent by a client (``dataclasses.asdict``, usually without ``output_dir``
     and the resource fields). Returns the accepted fields; raises ``RequestError`` (400) otherwise."""
@@ -294,6 +311,9 @@ def validate_config(data) -> dict:
                 raise RequestError(400, f"config.formats: unknown or repeated format(s) {bad or value}; known: "
                                         f"{', '.join(export.FORMATS)}")
             out[name] = list(value)
+            continue
+        if name == "radii_overrides":            # {element symbol or Z: Å}, as chem.radii reads it
+            out[name] = _check_radii_overrides(value)
             continue
         if isinstance(default, (bool, int, float)):
             out[name] = _check_number(name, value, type(default))

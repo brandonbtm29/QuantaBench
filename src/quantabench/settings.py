@@ -93,12 +93,24 @@ class DistSettings:
 
 
 @dataclass
+class SurfaceSettings:
+    """Areas, volumes and surfaces (``chem.radii``, ``chem.descriptors``), as Spartan's Preferences > VDW Radii and
+    the Surface box of its Settings tab."""
+    radii_set: str = "bondi"          # radii for sasa_A2 / vdw_area_A2 / vdw_volume_A3: "bondi" | "spartan"
+    radii_overrides: dict[str, float] = field(default_factory=dict)   # element symbol -> Å (edited table rows)
+    sasa_probe_A: float = 1.4         # solvent probe radius for sasa_A2 (water 1.4 Å; Spartan's accessible area 1.0)
+    # The ESP polar areas (esp_polar_area_{75,100,125}_A2) use Spartan's three fixed |ESP| thresholds, so their
+    # columns are the same in every run; no setting.
+
+
+@dataclass
 class Settings:
     output_dir: str = ""              # "" = Documents/QuantaBench/Runs
     resources: ResourceSettings = field(default_factory=ResourceSettings)
     build: BuildDefaults = field(default_factory=BuildDefaults)
     engines: EngineSettings = field(default_factory=EngineSettings)
     dist: DistSettings = field(default_factory=DistSettings)
+    surfaces: SurfaceSettings = field(default_factory=SurfaceSettings)
     recent_files: list[str] = field(default_factory=list)
 
     # ---------------------------------------------------------------- paths
@@ -182,7 +194,9 @@ def _coerce(default, value) -> tuple[bool, object]:
     for kind in (str, dict, list):
         if isinstance(default, kind):
             if kind is dict and isinstance(value, dict):
-                return True, {str(k): v for k, v in value.items() if isinstance(v, str)}
+                # string values (paths, lane specs, URLs) and numbers (per-element radii); nothing else
+                return True, {str(k): v for k, v in value.items()
+                              if isinstance(v, str) or (isinstance(v, (int, float)) and not isinstance(v, bool))}
             return isinstance(value, kind), value
     return True, value
 

@@ -398,3 +398,16 @@ def test_real_wide_table(tmp_path):
 def _keys(smiles: str) -> tuple[str, str]:
     k = val.keys_from_smiles(smiles)
     return k["inchikey"], k["canonical_smiles"]
+
+
+def test_cpk_area_is_a_comparison_with_spartans_radii(tmp_path):
+    """cpk_area_A2 uses Spartan's own radii, so it is compared with Spartan's CPKAREA, not just correlated."""
+    table = val.read_spartan(_spartan(tmp_path))
+    qb = _write(tmp_path / "s.csv", [{"id": "76-05-1", "smiles": "OC(=O)C(F)(F)F", "formula": "C2HF3O2",
+                                      "cpk_area_A2_best": 121.0, "sasa_A2_best": 250.0}])
+    res = val.validate(val.read_quantabench([qb]), table, tmp_path / "out", plots=False)
+    rows = {r["pair"]: r for r in res.summary if r["group_type"] == "all"}
+    cpk = next(r for k, r in rows.items() if "cpk_area" in k)
+    sasa = next(r for k, r in rows.items() if k.startswith("gas_area"))
+    assert cpk["comparison"] == "comparison" and sasa["comparison"] == "correlation"
+    assert float(cpk["mae"]) == pytest.approx(1.0)

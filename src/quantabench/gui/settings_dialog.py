@@ -1,10 +1,10 @@
-"""Settings dialog: compute resources, build defaults, folders."""
+"""Settings dialog: compute resources, build defaults, surfaces and radii, engines, folders."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -56,6 +58,7 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._resources_tab(report), "Compute")
         tabs.addTab(self._build_tab(), "Build defaults")
+        tabs.addTab(self._surfaces_tab(), "Surfaces && radii")    # "&&": a literal & (not a shortcut)
         tabs.addTab(self._engines_tab(), "Engines")
         tabs.addTab(self._folders_tab(), "Folders")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -230,6 +233,142 @@ class SettingsDialog(QDialog):
         self.fmax.setValue(b.fmax)
         form.addRow("Force convergence", self.fmax)
         return w
+
+    #: columns of the radii table
+    RADII_COLUMNS = ("Element", "Z", "Bondi (Å)", "Spartan (Å)", "Your value (Å)")
+    _OVERRIDE_COL = 4
+
+    def _surfaces_tab(self) -> QWidget:
+        """Radii set and per-element radii (Spartan's Preferences > VDW Radii), and the SASA probe radius."""
+        from ase.data import chemical_symbols
+
+        from ..chem import radii as radii_mod
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        sf = self.s.surfaces
+        box = QGroupBox("Areas and volumes")
+        form = QFormLayout(box)
+        self.radii_set = QComboBox()
+        for key in radii_mod.SETS:
+            self.radii_set.addItem(radii_mod.LABELS[key], key)
+        self.radii_set.setCurrentIndex(max(0, self.radii_set.findData((sf.radii_set or "bondi").lower())))
+        self.radii_set.setToolTip("Radii of the atom spheres for sasa_A2, vdw_area_A2 and vdw_volume_A3.\n"
+                                  "cpk_area_A2 and cpk_volume_A3 always use Spartan's default radii, so they\n"
+                                  "compare with Spartan's CPK area and volume whatever is chosen here.")
+        form.addRow("Radii set", self.radii_set)
+        self.sasa_probe = QDoubleSpinBox()
+        self.sasa_probe.setRange(0.0, 3.0)
+        self.sasa_probe.setDecimals(2)
+        self.sasa_probe.setSingleStep(0.1)
+        self.sasa_probe.setSuffix(" Å")
+        self.sasa_probe.setValue(float(sf.sasa_probe_A))
+        self.sasa_probe.setToolTip("Solvent probe radius rolled over the atom spheres for sasa_A2: 1.4 Å for water.\n"
+                                   "Spartan's accessible area uses 1.0 Å on its density surface, not on spheres.")
+        form.addRow("SASA probe radius", self.sasa_probe)
+        note = QLabel("Changes apply to molecules built from now on; finished runs keep their values. "
+                      "The ESP polar areas use Spartan's fixed thresholds, |V| > 75, 100 and 125 kJ/mol.")
+        note.setWordWrap(True)
+        form.addRow(note)
+        lay.addWidget(box)
+
+        rbox = QGroupBox("Van der Waals radii")
+        rl = QVBoxLayout(rbox)
+        hint = QLabel("Type a radius in <i>Your value</i> to replace the set's radius for that element; "
+                      "leave it blank to use the set's.")
+        hint.setWordWrap(True)
+        rl.addWidget(hint)
+        self.radii_filter = QLineEdit()
+        self.radii_filter.setPlaceholderText("Find an element (symbol or Z)")
+        self.radii_filter.textChanged.connect(self._filter_radii)
+        rl.addWidget(self.radii_filter)
+        bondi, spartan = radii_mod.table("bondi"), radii_mod.table("spartan")
+        over = radii_mod.normalize_overrides(sf.radii_overrides)
+        self.radii_table = QTableWidget(len(bondi), len(self.RADII_COLUMNS))
+        self.radii_table.setHorizontalHeaderLabels(list(self.RADII_COLUMNS))
+        self.radii_table.verticalHeader().setVisible(False)
+        self.radii_table.verticalHeader().setDefaultSectionSize(self.fontMetrics().lineSpacing() + 8)
+        self._radii_loading = True
+        for row, z in enumerate(sorted(bondi)):
+            cells = (chemical_symbols[z], str(z), f"{bondi[z]:.4f}", f"{spartan[z]:.4f}",
+                     f"{over[z]:g}" if z in over else "")
+            for col, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if col != self._OVERRIDE_COL:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.radii_table.setItem(row, col, item)
+        self._radii_loading = False
+        self.radii_table.itemChanged.connect(self._radius_edited)
+        self.radii_table.resizeColumnsToContents()
+        self.radii_table.horizontalHeader().setStretchLastSection(True)
+        rl.addWidget(self.radii_table, 1)
+        row = QHBoxLayout()
+        self.radii_status = QLabel()
+        row.addWidget(self.radii_status, 1)
+        for text, fn in (("Reset selected", self._reset_selected_radii), ("Reset all", self._reset_all_radii)):
+            btn = QPushButton(text)
+            btn.clicked.connect(fn)
+            row.addWidget(btn)
+        rl.addLayout(row)
+        lay.addWidget(rbox, 1)
+        self.radii_set.currentIndexChanged.connect(self._mark_radii_set)
+        self._mark_radii_set()
+        return w
+
+    @staticmethod
+    def _parse_radius(text: str) -> float | None:
+        try:
+            r = float(text.strip().replace(",", "."))
+        except ValueError:
+            return None
+        return r if 0 < r <= 10 else None
+
+    def _radius_edited(self, item) -> None:
+        if self._radii_loading or item.column() != self._OVERRIDE_COL:
+            return
+        text = item.text().strip()
+        bad = bool(text) and self._parse_radius(text) is None
+        item.setForeground(Qt.GlobalColor.red if bad else self.radii_table.palette().text().color())
+        item.setToolTip("Not a radius in Å (0-10): ignored" if bad else "")
+        self._update_radii_status()
+
+    def _mark_radii_set(self, *_args) -> None:
+        """Bold the column of the set in use."""
+        active = 2 if self.radii_set.currentData() == "bondi" else 3
+        for col in (2, 3):
+            head = self.radii_table.horizontalHeaderItem(col)
+            font = head.font()
+            font.setBold(col == active)
+            head.setFont(font)
+        self._update_radii_status()
+
+    def _update_radii_status(self) -> None:
+        n = len(self.radii_overrides())
+        name = self.radii_set.currentText()
+        self.radii_status.setText(f"{name}" + (f", {n} element{'s' if n != 1 else ''} changed" if n else ""))
+
+    def _filter_radii(self, text: str) -> None:
+        t = text.strip().lower()
+        for row in range(self.radii_table.rowCount()):
+            sym, z = self.radii_table.item(row, 0).text().lower(), self.radii_table.item(row, 1).text()
+            self.radii_table.setRowHidden(row, bool(t) and not (sym.startswith(t) or z == t))
+
+    def _reset_selected_radii(self) -> None:
+        for row in sorted({i.row() for i in self.radii_table.selectedIndexes()}):
+            self.radii_table.item(row, self._OVERRIDE_COL).setText("")
+
+    def _reset_all_radii(self) -> None:
+        for row in range(self.radii_table.rowCount()):
+            self.radii_table.item(row, self._OVERRIDE_COL).setText("")
+
+    def radii_overrides(self) -> dict[str, float]:
+        """``{element symbol: Å}`` of the rows with a valid value typed in *Your value*."""
+        out: dict[str, float] = {}
+        for row in range(self.radii_table.rowCount()):
+            r = self._parse_radius(self.radii_table.item(row, self._OVERRIDE_COL).text())
+            if r is not None:
+                out[self.radii_table.item(row, 0).text()] = r
+        return out
 
     #: (settings key, label, file-dialog title) of the external programs QuantaBench can run
     PROGRAM_FIELDS = (("xtb", "xtb", "xtb executable"), ("crest", "CREST", "crest executable"),
@@ -437,6 +576,10 @@ class SettingsDialog(QDialog):
         b.energy_window_kcal = self.window.value()
         b.rmsd_threshold = self.rmsd.value()
         b.fmax = self.fmax.value()
+        sf = s.surfaces
+        sf.radii_set = self.radii_set.currentData() or "bondi"
+        sf.radii_overrides = self.radii_overrides()
+        sf.sasa_probe_A = self.sasa_probe.value()
         s.output_dir = self.output.text().strip()
         e = s.engines
         e.paths = {k: ed.text().strip() for k, ed in self.program_paths.items() if ed.text().strip()}

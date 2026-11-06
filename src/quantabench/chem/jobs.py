@@ -62,7 +62,7 @@ SCIENCE_FIELDS = (
     "refine_top", "energy_window_kcal", "rmsd_threshold", "fmax", "max_steps", "optimizer",
     "temperature_k", "xtb_properties", "seed", "frequencies", "freq_hessian", "symmetry_number", "freq_qrrho",
     "solvent", "conformer_search", "crest_method", "crest_quick", "qm_method", "qm_task", "qm_top",
-    "qm_properties", "qm_frequencies", "qm_cubes", "qm_program",
+    "qm_properties", "qm_frequencies", "qm_cubes", "qm_program", "radii_set", "radii_overrides", "sasa_probe_A",
 )
 
 #: Versions before this one ran the stock AIMNet2 calculator with aimnet 0.2's adaptive neighbor lists
@@ -73,6 +73,10 @@ AIMNET_METHODS = ("aimnet2", "auto")
 #: Versions before this one computed the xTB properties (xtb_*) of a solvent run with dxtb in the gas phase, and
 #: tblite's polarizability in the gas phase: a solvent run started before it is not resumed silently.
 SOLVATED_PROPERTIES_VERSION = "0.3.0.dev2"
+#: Versions before this one gave FreeSASA zero radii for every atom outside a protein residue, so ``sasa_A2`` was
+#: the area of bare 1.4 Å probe spheres; ``vdw_area_A2``, ``vdw_volume_A3`` and ``cpk_*`` did not exist. No run
+#: started before it is resumed silently: its sasa_A2 column would mix the two.
+SASA_RADII_FIX_VERSION = "0.3.0.dev3"
 
 # (i, n): 0-based chunk i of n, by ``chunk_index`` (modulo). (i, n, weights): weighted chunk, by
 # ``dist.plan.weighted_index(id, weights) == i`` with one weight per chunk (``--chunk-weights``).
@@ -144,6 +148,10 @@ def version_differences(stored_version: str, stored_config: dict) -> tuple[dict[
                        f"computed the properties in the solvent: its {solvent} results have gas-phase xtb_* charges, "
                        "dipoles and polarizabilities (and a gas-phase tblite polarizability), which would mix with "
                        "solvated ones.")
+    if version_key(stored_version) < version_key(SASA_RADII_FIX_VERSION):
+        reasons.append(f"It was started with QuantaBench {stored_version or '?'}, before {SASA_RADII_FIX_VERSION} "
+                       "fixed the solvent-accessible area: its sasa_A2 values are the area of bare probe spheres "
+                       "(atom radii of 0), which would mix with corrected ones.")
     if reasons:
         return {"version": (stored_version, __version__)}, reasons
     return {}, []

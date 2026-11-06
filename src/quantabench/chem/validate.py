@@ -54,6 +54,8 @@ eV for HOMO/LUMO; a table with ``spartan_e_homo`` in hartree is converted here):
     polarizability  Å³     <src>_polarizability_iso_A3, <src>_d4_polar...     <p>_spartan_est_polariz: correlation only
     area            Å²     sasa_A2_best (1.4 Å probe SASA)                    <p>_spartan_cpkarea (vdW/CPK): correlation only
     volume          Å³     volume_A3_best (RDKit vdW grid)                    <p>_spartan_cpkvolume (CPK): correlation only
+    cpk_area        Å²     cpk_area_A2_best (Spartan's radii, no probe)       <p>_spartan_cpkarea: comparison
+    cpk_volume      Å³     cpk_volume_A3_best (Spartan's radii)               <p>_spartan_cpkvolume: comparison
     q_min, q_max    e      min/max of the best conformer's charges            <p>_spartan_q_minus_mul / _q_plus_mul (most
                            (<id>/<id>_summary.json)                           negative/positive Mulliken charge): correlation
     ==============  =====  =================================================  ==========================================
@@ -141,6 +143,11 @@ PROPS: dict[str, Prop] = {p.name: p for p in (
          "Spartan's CPK (van der Waals) area vs QuantaBench's solvent-accessible area (1.4 Å probe)"),
     Prop("volume", "A3", "molecular volume", "correlation",
          "Spartan's CPK volume vs RDKit's van der Waals grid volume (other radii)"),
+    Prop("cpk_area", "A2", "CPK (van der Waals) area, Spartan's radii", "comparison",
+         "the same quantity on both sides (Spartan's radii table, no probe); the geometries differ (Spartan's PM6 "
+         "values are at its PM6 geometry)"),
+    Prop("cpk_volume", "A3", "CPK (van der Waals) volume, Spartan's radii", "comparison",
+         "the same quantity on both sides (Spartan's radii table); the geometries differ"),
     Prop("q_min", "e", "most negative atomic charge", "correlation",
          "charge partitions differ (Spartan: Mulliken; QuantaBench: the refinement engine's charges)"),
     Prop("q_max", "e", "most positive atomic charge", "correlation",
@@ -155,6 +162,8 @@ SPARTAN_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "polarizability": (("spartan_est_polariz", "A3"),),
     "area": (("spartan_cpkarea", "A2"),),
     "volume": (("spartan_cpkvolume", "A3"),),
+    "cpk_area": (("spartan_cpkarea", "A2"),),
+    "cpk_volume": (("spartan_cpkvolume", "A3"),),
     "q_min": (("spartan_q_minus_mul", "e"),),
     "q_max": (("spartan_q_plus_mul", "e"),),
 }
@@ -163,6 +172,7 @@ _QB_SUFFIX = {"dipole": "_dipole_debye", "homo": "_homo_ev", "lumo": "_lumo_ev",
               "polarizability": "_polarizability_iso_A3"}
 _QB_FIXED = (("dipole", "dipole_debye_best", "refine"), ("polarizability", "gfn2_d4_polarizability_A3", "gfn2_d4"),
              ("area", "sasa_A2_best", "rdkit"), ("volume", "volume_A3_best", "rdkit"),
+             ("cpk_area", "cpk_area_A2_best", "cpk"), ("cpk_volume", "cpk_volume_A3_best", "cpk"),
              ("q_min", "charge_min_e", "refine"), ("q_max", "charge_max_e", "refine"))
 #: Column prefixes that are never a QuantaBench property source.
 _NOT_SOURCES = ("gas", "water", "delta", "vib", "spartan")
