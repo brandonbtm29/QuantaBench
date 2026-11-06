@@ -225,6 +225,24 @@ def test_pipeline_with_solvent(tb):
     assert "dipole from the calculator" in vib["ir_source"] and max(vib["ir_intensities_km_mol"]) > 10
 
 
+def test_conformer_dipoles_are_the_electronic_dipole_about_the_centre_of_mass(tb):
+    """Each refined conformer carries tblite's own dipole (not the Mulliken point-charge one), moved to the centre
+    of mass, so the best conformer's equals the properties step's and an ion's does not depend on placement."""
+    from quantabench.chem import engines
+    from quantabench.chem.inputs import from_smiles
+    from quantabench.chem.pipeline import BuildConfig, run_molecule
+
+    assert engines.plugin("tblite-gfn2").extra["dipole_origin"] == "origin"
+    cfg = BuildConfig(method="tblite-gfn2", max_conformers=3, refine_top=2, write_files=False, xtb_properties=False,
+                      threads=1, protonate=False)
+    res = run_molecule(from_smiles("CCC(=O)[O-]", id="propanoate"), cfg)
+    assert res.status == "ok", res.error
+    best = res.conformers[0]
+    assert best.dipole_debye == pytest.approx(res.descriptors["tblite_gfn2_dipole_debye"], abs=1e-3)
+    assert res.descriptors["dipole_debye_best"] == pytest.approx(best.dipole_debye)
+    assert "dipole_debye_boltz" in res.descriptors
+
+
 def test_duplicate_openmp_on_macos_is_reported_and_a_link_fixes_it(tmp_path, monkeypatch):
     """tblite's macOS wheel and PyTorch each bundle libomp.dylib; with both loaded a run aborts (OMP Error #15).
     tblite is then unavailable with the fix in the reason; linked to PyTorch's copy it is fine again."""
@@ -249,7 +267,10 @@ def test_duplicate_openmp_on_macos_is_reported_and_a_link_fixes_it(tmp_path, mon
     assert not ok and "OMP Error #15" in why and "ln -s" in why
     ours = tb / ".dylibs" / "libomp.dylib"
     ours.rename(ours.with_name("libomp.dylib.qb-orig"))
-    ours.symlink_to(th / "lib" / "libomp.dylib")
+    try:
+        ours.symlink_to(th / "lib" / "libomp.dylib")
+    except OSError as exc:                                   # Windows without Developer Mode: no symlinks
+        pytest.skip(f"cannot make a symlink here ({exc})")
     assert eng_tblite.duplicate_openmp() is None and eng_tblite.available() == (True, "")
     monkeypatch.setattr(sys, "platform", "linux")            # Linux wheels use GNU libgomp: no check there
     ours.unlink()

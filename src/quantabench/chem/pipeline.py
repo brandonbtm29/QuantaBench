@@ -259,14 +259,14 @@ class TimeLimit:
     def __init__(self, should_stop: Callable[[], bool], limit_s: float):
         self.should_stop = should_stop
         self.limit = max(0.0, float(limit_s or 0.0))
-        self.t0 = time.monotonic()
+        self.t0 = time.perf_counter()
         self.stage = ""
         self.hit = False
 
     def __call__(self) -> bool:
         if self.should_stop():
             return True
-        if self.limit and time.monotonic() - self.t0 > self.limit:
+        if self.limit and time.perf_counter() - self.t0 > self.limit:
             self.hit = True
             return True
         return False
@@ -281,7 +281,7 @@ class TimeLimit:
         """A molecule stopped by the limit (not by a cancel) becomes failed with the time-limit error."""
         if self.hit and res.status == "cancelled" and not self.should_stop():
             res.status, res.error = "failed", time_limit_error(self.limit, self.stage)
-            log(f"  FAILED: {res.error} (stopped at the next checkpoint after {time.monotonic() - self.t0:.0f} s)")
+            log(f"  FAILED: {res.error} (stopped at the next checkpoint after {time.perf_counter() - self.t0:.0f} s)")
         return res
 
 
@@ -309,6 +309,27 @@ def calculator_options(result: MoleculeResult, cfg: BuildConfig) -> dict:
     return {"solvent": result.solvent, "threads": resources.resolve_threads(cfg.threads)}
 
 
+def _engine_dipole(atoms, calc, origin: str | None, charge: int, masses: np.ndarray) -> np.ndarray | None:
+    """The engine's electronic dipole (e·Å) about the centre of mass at ``atoms``' geometry, or None when the
+    engine does not provide one (``origin`` None) or it is missing. ``origin`` is where the engine puts it."""
+    if origin == "com":        # xtb: its last run's result (a native optimizer may not leave calc's state)
+        mu = calc.results.get("dipole")
+    elif origin == "origin":
+        try:                   # cached at the final geometry; recomputed if the atoms moved since
+            mu = atoms.get_dipole_moment()
+        except Exception:      # noqa: BLE001 - not implemented by this calculator: its last result, if any
+            mu = calc.results.get("dipole")
+    else:
+        return None
+    if mu is None:
+        return None
+    mu = np.asarray(mu, float).reshape(3)
+    if origin == "origin" and charge:
+        pos = atoms.get_positions()
+        mu = mu - float(charge) * (pos * masses[:, None]).sum(0) / masses.sum()
+    return mu
+
+
 def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConfig, device: str,
             should_stop: Callable[[], bool], log: Callable[[str], None]) -> list[ConformerResult]:
     mol = conf_set.mol
@@ -323,7 +344,9 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
     native = engines.native_optimizer(result.method) if cfg.optimizer == "native" else None
 
     plug = engines.plugin(result.method)
-    full_dipole = plug is not None and plug.extra.get("dipole_origin") == "com"
+    # "com": calc's dipole is about the centre of mass (xtb); "origin": about the coordinate origin (tblite, ASE's
+    # convention), moved to the centre of mass here; neither: the point-charge dipole of the engine's charges
+    dipole_origin = plug.extra.get("dipole_origin") if plug is not None else None
 
     guard_refinement(result, numbers, cfg)
 
@@ -366,7 +389,7 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
             conf.SetAtomPosition(j, p.tolist())
         charges = calc.results.get("charges")
         charges = None if charges is None else [float(x) for x in np.ravel(charges)]
-        mu = calc.results.get("dipole") if full_dipole else None
+        mu = _engine_dipole(atoms, calc, dipole_origin, result.charge, masses)
         if mu is not None:     # the engine's own (electronic) dipole, about the centre of mass
             dip = float(np.linalg.norm(mu)) * desc.DEBYE_PER_E_ANG
         else:                  # point-charge dipole

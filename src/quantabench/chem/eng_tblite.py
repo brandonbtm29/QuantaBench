@@ -394,4 +394,5 @@ for _key, _label, _method, _prefix, _desc in (
     engines.register(
         engines.EngineInfo(_key, _label, _desc, False, _ELEMENTS, family="tight binding",
                            solvation=SOLVATION_MODELS, external="", prop_prefix=_prefix),
-        available, _factory(_method), _properties(_method, _prefix))
+        available, _factory(_method), _properties(_method, _prefix),
+        dipole_origin="origin")    # calc.results["dipole"] is about the coordinate origin (ASE's convention)
