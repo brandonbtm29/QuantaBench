@@ -366,3 +366,19 @@ def test_cli_build_flag():
     assert p.parse_args(["build", "CCO"]).speed_aware_lanes is None                 # from settings
     assert p.parse_args(["build", "CCO", "--no-speed-aware-lanes"]).speed_aware_lanes is False
     assert p.parse_args(["build", "CCO", "--speed-aware-lanes"]).speed_aware_lanes is True
+
+
+def test_registry_seeds_in_water_and_with_the_mixed_set():
+    p = profile_mod.MachineProfile(name="btm-nova", throughput={"tblite-gfn2@cpu": 7200.0,
+                                                                "tblite-gfn2+water@cpu": 720.0},
+                                   benchmarks={"tblite-gfn2+water@cpu": {"set": "mixed-10"}})
+    lanes = lanes_nova()
+    pfas, mixed = speed.bench_size("pfas"), speed.bench_size("mixed")
+    assert mixed > pfas and speed.bench_size() == pfas
+    gas = speed.registry_seeds(lanes, "tblite-gfn2", profile=p)
+    water = speed.registry_seeds(lanes, "tblite-gfn2", profile=p, solvent="water")
+    assert gas["cpu1"] == pytest.approx(0.5 / pfas) and water["cpu1"] == pytest.approx(5.0 / mixed)
+    assert gas["gpu0"] is None and water["gpu0"] is None
+    # AIMNet2 has no water model: a run in water uses (and only uses) its gas-phase keys
+    q = profile_mod.MachineProfile(name="btm-nova", throughput={"aimnet2@cpu": 720.0, "aimnet2+water@cpu": 1.0})
+    assert speed.registry_seeds(lanes, "aimnet2", profile=q, solvent="water")["cpu1"] == pytest.approx(5.0 / pfas)

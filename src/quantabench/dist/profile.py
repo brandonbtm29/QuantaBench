@@ -6,7 +6,8 @@ CONTRACT (implemented by the profile builder; field names are fixed, more may be
     local_profile(bench: bool = False, methods=None) -> MachineProfile
         hardware from resources.detect(), engines from engines.all_engines()/available(), external
         programs from external.report(); with bench=True, throughput["<method>@<device>"] in molecules per
-        hour on a fixed small PFAS set (see benchmark()).
+        hour on a fixed small PFAS set (see benchmark()); "<method>+<solvent>@<device>" for a benchmark in
+        implicit solvent (``bench_method``), so water and gas phase never share a key.
     save_profile(p) -> Path      settings_dir()/machines/<name>.json (atomic write)
     load_profiles() -> list[MachineProfile]    every machine in the registry, newest first
     machine_name() -> str         stable, lowercase hostname (Tailscale MagicDNS-style)
@@ -20,7 +21,12 @@ per machine name.
 Throughput is measured on ``BENCH_SET`` (five PFAS anions) with a short protocol (``BENCH_PROTOCOL``: 4
 conformers, the 2 best refined, no files, no xTB properties). The numbers are molecules per hour *for that
 protocol*: a production run with 50 conformers is much slower, but the ratio between machines, which is
-all ``dist.plan`` needs, carries over roughly.
+all ``dist.plan`` needs, carries over roughly. ``machines --bench-set mixed`` adds neutral baseline organics
+and one larger molecule (``BENCH_SETS``; the set is recorded in ``benchmarks[key]["set"]``), and
+``machines --solvent water`` benchmarks in implicit water where the engine has a model for it, keyed
+``<method>+water@<device>``. Readers (``throughput_for``, ``best_throughput``, ``dist.speed``,
+``dist.plan.auto_weight``, ``client.resolve_weights``, ``dist.lanes.plan_auto``) are given
+``bench_method(method, solvent)``, so a run in water only ever uses water benchmarks.
 """
 
 from __future__ import annotations
@@ -45,6 +51,19 @@ BENCH_SET: tuple[tuple[str, str], ...] = (
     ("PFOA", "[O-]C(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"),
     ("PFBS", "[O-]S(=O)(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"),
 )
+#: ``machines --bench-set``: "pfas" (the default, ``BENCH_SET``) or "mixed": the PFAS anions plus neutral
+#: baseline organics of the QSAR cohorts' kind (a solvent, an aromatic, a heterocycle, a triazine pesticide)
+#: and one larger, H-rich molecule (cholesterol, 74 atoms), for engines whose speed depends on size and charge
+BENCH_SETS: dict[str, tuple[tuple[str, str], ...]] = {
+    "pfas": BENCH_SET,
+    "mixed": BENCH_SET + (
+        ("ethanol", "CCO"),
+        ("toluene", "Cc1ccccc1"),
+        ("caffeine", "Cn1cnc2c1c(=O)n(C)c(=O)n2C"),
+        ("atrazine", "CCNc1nc(Cl)nc(NC(C)C)n1"),
+        ("cholesterol", "CC(C)CCC[C@@H](C)[C@H]1CC[C@H]2[C@@H]3CC=C4C[C@@H](O)CC[C@]4(C)[C@H]3CC[C@]12C"),
+    ),
+}
 #: BuildConfig overrides for the benchmark (the rest are BuildConfig defaults, not the user's settings).
 BENCH_PROTOCOL = {"max_conformers": 4, "refine_top": 2, "protonate": False, "xtb_properties": False,
                   "write_files": False, "frequencies": False, "conformer_search": "rdkit", "solvent": "",
@@ -286,19 +305,41 @@ def format_age(seconds: float | None) -> str:
 
 
 # --------------------------------------------------------------------------------- throughput
+def bench_method(method: str, solvent: str = "") -> str:
+    """The method part of a throughput key: ``method``, or ``method+<solvent>`` when the run is in implicit
+    solvent and the engine models it (``engines.supports_solvent``; otherwise it runs in gas phase, and so
+    does its key). "auto" stays as it is (the engine is chosen per molecule)."""
+    from ..chem import engines, solvents
+
+    base, _ = split_method(method)
+    solvent = solvents.canonical(solvent) if solvent else ""
+    if not solvent or base == "auto" or base not in engines.all_engines():
+        return base
+    return f"{base}+{solvent}" if engines.supports_solvent(base, solvent) else base
+
+
+def split_method(method: str) -> tuple[str, str]:
+    """("tblite-gfn2", "water") for "tblite-gfn2+water"; (method, "") for a gas-phase key."""
+    base, _, solvent = method.partition("+")
+    return base, solvent
+
+
 def _split_key(key: str) -> tuple[str, str]:
+    """(method part with any +solvent suffix, device) of a throughput key."""
     m, _, dev = key.partition("@")
     return m, dev
 
 
 def best_throughput(p: MachineProfile, method: str) -> tuple[str, float] | None:
-    """(key, molecules/hour) of the fastest measured device for ``method``, or None."""
+    """(key, molecules/hour) of the fastest measured device for ``method`` (a ``bench_method``: gas-phase
+    keys for a bare method, ``+water`` keys for "method+water"), or None."""
     hits = [(k, float(v)) for k, v in p.throughput.items() if _split_key(k)[0] == method and v > 0]
     return max(hits, key=lambda kv: kv[1]) if hits else None
 
 
 def throughput_for(p: MachineProfile, method: str, device: str = "auto") -> float | None:
-    """Measured molecules/hour for ``method`` on ``device``; "auto" = the machine's fastest device."""
+    """Measured molecules/hour for ``method`` (a ``bench_method``) on ``device``; "auto" = the machine's
+    fastest device."""
     if device == "auto":
         hit = best_throughput(p, method)
         return hit[1] if hit else None
@@ -380,7 +421,8 @@ def _configured_address(name: str) -> str:
 def local_profile(bench: bool = False, methods=None, *, devices: Sequence[str] | None = None,
                   probe_wsl: bool = False, keep_previous: bool = True, address: str | None = None,
                   max_seconds: float = DEFAULT_MAX_SECONDS, should_stop: Callable[[], bool] | None = None,
-                  log: Callable[[str], None] | None = None) -> MachineProfile:
+                  log: Callable[[str], None] | None = None, solvent: str = "",
+                  bench_set: str = "pfas") -> MachineProfile:
     """This machine's profile. ``bench``: also measure throughput for ``methods`` (default: the available
     ones of ``DEFAULT_BENCH_METHODS``) on ``devices`` (default: CPU, plus each GPU for GPU-capable engines).
 
@@ -423,7 +465,7 @@ def local_profile(bench: bool = False, methods=None, *, devices: Sequence[str] |
     if bench:
         wanted = list(methods) if methods else [m for m in DEFAULT_BENCH_METHODS if p.engines.get(m)]
         p.throughput = benchmark(wanted, devices, max_seconds=max_seconds, should_stop=should_stop, log=log,
-                                 details=measured, gpus=rep.gpus)
+                                 details=measured, gpus=rep.gpus, solvent=solvent, bench_set=bench_set)
         p.benchmarks = measured
     if keep_previous:
         prev = load_profile(name)
@@ -439,10 +481,28 @@ def local_profile(bench: bool = False, methods=None, *, devices: Sequence[str] |
 
 
 # --------------------------------------------------------------------------------- benchmark
-def bench_molecules():
+def bench_molecules(bench_set: str = "pfas"):
     from ..chem.inputs import from_smiles
 
-    return [from_smiles(smi, id=ident) for ident, smi in BENCH_SET]
+    if bench_set not in BENCH_SETS:
+        raise ValueError(f"unknown benchmark set {bench_set!r} (known: {', '.join(BENCH_SETS)})")
+    return [from_smiles(smi, id=ident) for ident, smi in BENCH_SETS[bench_set]]
+
+
+def set_label(mols) -> str:
+    """'pfas-5', 'mixed-10' or 'custom-N': which molecules a benchmark ran (``benchmarks[key]["set"]``)."""
+    ids = [m.id for m in mols]
+    for name, items in BENCH_SETS.items():
+        if ids == [i for i, _ in items]:
+            return f"{name}-{len(ids)}"
+    return f"custom-{len(ids)}"
+
+
+def set_of_key(p: MachineProfile, key: str) -> str:
+    """The benchmark set (a ``BENCH_SETS`` name) a throughput key was measured on; "pfas" when unknown."""
+    label = str((p.benchmarks.get(key) or {}).get("set", ""))
+    name = label.rpartition("-")[0]
+    return name if name in BENCH_SETS else "pfas"
 
 
 def bench_devices(method: str, gpus=None) -> list[str]:
@@ -478,8 +538,11 @@ def _lanes_key(lanes) -> str:
 def benchmark(methods: Sequence[str], devices: Sequence[str] | None = None, molecules=None, lanes=None, *,
               max_seconds: float = DEFAULT_MAX_SECONDS, threads: int = 0,
               should_stop: Callable[[], bool] | None = None, log: Callable[[str], None] | None = None,
-              details: dict | None = None, gpus=None) -> dict[str, float]:
-    """Molecules per hour for each method and device, keyed "<method>@<device>".
+              details: dict | None = None, gpus=None, solvent: str = "",
+              bench_set: str = "pfas") -> dict[str, float]:
+    """Molecules per hour for each method and device, keyed "<method>@<device>" (gas phase) or
+    "<method>+<solvent>@<device>" (``solvent``, e.g. "water"; ``bench_method``). A method without a model
+    for ``solvent`` gives no number (it would run in gas phase).
 
     Runs ``molecules`` (default ``BENCH_SET``) through ``pipeline.run_molecule`` with ``BENCH_PROTOCOL``,
     after one untimed warm-up molecule (imports, model loading, kernel compilation). A fast engine repeats the
@@ -491,7 +554,8 @@ def benchmark(methods: Sequence[str], devices: Sequence[str] | None = None, mole
 
     ``devices``: torch devices, default per method from ``bench_devices``. ``lanes`` (more than one
     ``dist.lanes.Lane``): time the whole set through ``jobs.run_resumable`` with those lanes instead, keyed
-    "<method>@lanes:<device>:<count>x<threads>,...".
+    "<method>@lanes:<device>:<count>x<threads>,...". ``bench_set``: a ``BENCH_SETS`` name (when
+    ``molecules`` is not given).
     """
     from .. import resources
     from ..chem import engines as engines_mod
@@ -500,7 +564,10 @@ def benchmark(methods: Sequence[str], devices: Sequence[str] | None = None, mole
     log = log or (lambda _msg: None)
     user_stop = should_stop or (lambda: False)
     details = details if details is not None else {}
-    mols = list(molecules) if molecules is not None else bench_molecules()
+    mols = list(molecules) if molecules is not None else bench_molecules(bench_set)
+    from ..chem import solvents
+
+    solvent = solvents.canonical(solvent) if solvent else ""
     if not mols:
         raise ValueError("benchmark needs at least one molecule")
     n_threads = resources.apply_thread_limits(threads)
@@ -517,9 +584,14 @@ def benchmark(methods: Sequence[str], devices: Sequence[str] | None = None, mole
         if not ok:
             log(f"  {method}: unavailable ({why}), skipped")
             continue
+        name = bench_method(method, solvent)
+        if solvent and name == method:
+            log(f"  {method}: no implicit {solvent} model, skipped (it would run in gas phase)")
+            details[f"{method}+{solvent}@?"] = {"error": f"no implicit {solvent} model", "date": _now()}
+            continue
         if lanes and len(lanes) > 1:
-            key = f"{method}@{_lanes_key(lanes)}"
-            rate = _bench_lanes(method, mols, lanes, key, details, user_stop, log)
+            key = f"{name}@{_lanes_key(lanes)}"
+            rate = _bench_lanes(method, mols, lanes, key, details, user_stop, log, solvent)
             if rate:
                 out[key] = rate
             continue
@@ -528,7 +600,7 @@ def benchmark(methods: Sequence[str], devices: Sequence[str] | None = None, mole
                 break
             if device != "cpu" and not engines_mod.all_engines()[method].gpu_capable:
                 continue
-            key = f"{method}@{device}"
+            key = f"{name}@{device}"
             if device != "cpu" and method in DXTB_METHODS:
                 from ..chem import torch_compat
 
@@ -537,7 +609,8 @@ def benchmark(methods: Sequence[str], devices: Sequence[str] | None = None, mole
                     log(f"  {key}: not timed, {why}")
                     details[key] = {"device": device, "date": _now(), "error": "", "skipped": why}
                     continue
-            cfg = pipeline.BuildConfig(method=method, threads=n_threads, **BENCH_PROTOCOL, **_device_policy(device))
+            cfg = pipeline.BuildConfig(method=method, threads=n_threads,
+                                       **{**BENCH_PROTOCOL, "solvent": solvent}, **_device_policy(device))
             rate = _bench_one(pipeline, cfg, mols, device, n_threads, key, max_seconds, details, user_stop, log)
             if rate:
                 out[key] = rate
@@ -548,8 +621,8 @@ def benchmark(methods: Sequence[str], devices: Sequence[str] | None = None, mole
 def _bench_one(pipeline, cfg, mols, device: str, threads: int, key: str, max_seconds: float, details: dict,
                user_stop: Callable[[], bool], log: Callable[[str], None]) -> float | None:
     info = {"molecules": 0, "seconds": 0.0, "threads": threads, "device": device, "date": _now(),
-            "set": f"pfas-{len(mols)}" if [m.id for m in mols] == [i for i, _ in BENCH_SET] else f"custom-{len(mols)}",
-            "bench_version": BENCH_VERSION, "warmup_s": 0.0, "error": ""}
+            "set": set_label(mols), "solvent": cfg.solvent, "bench_version": BENCH_VERSION, "warmup_s": 0.0,
+            "error": ""}
     details[key] = info
     quiet = lambda _msg: None  # noqa: E731
 
@@ -564,6 +637,8 @@ def _bench_one(pipeline, cfg, mols, device: str, threads: int, key: str, max_sec
             return res.error or res.status
         if res.method != cfg.method:
             return f"ran {res.method} instead of {cfg.method}"
+        if (res.solvent or "") != (cfg.solvent or ""):
+            return f"ran in {res.solvent or 'gas phase'} instead of {cfg.solvent or 'gas phase'}"
         if res.device != device:
             why = next((n for n in reversed(res.notes) if "fell back" in n), "")
             return f"fell back to {res.device}" + (f": {why}" if why else "")
@@ -615,14 +690,15 @@ def _bench_one(pipeline, cfg, mols, device: str, threads: int, key: str, max_sec
     return rate
 
 
-def _bench_lanes(method: str, mols, lanes, key: str, details: dict, user_stop, log) -> float | None:
+def _bench_lanes(method: str, mols, lanes, key: str, details: dict, user_stop, log,
+                 solvent: str = "") -> float | None:
     import tempfile
 
     from ..chem import jobs, pipeline
 
-    cfg = pipeline.BuildConfig(method=method, gpu="auto", **BENCH_PROTOCOL)
+    cfg = pipeline.BuildConfig(method=method, gpu="auto", **{**BENCH_PROTOCOL, "solvent": solvent})
     info = {"molecules": 0, "seconds": 0.0, "lanes": [lane.to_dict() for lane in lanes], "date": _now(),
-            "bench_version": BENCH_VERSION, "error": ""}
+            "set": set_label(mols), "solvent": solvent, "bench_version": BENCH_VERSION, "error": ""}
     details[key] = info
     with tempfile.TemporaryDirectory(prefix="qb_bench_") as tmp:
         t = time.perf_counter()
@@ -701,7 +777,8 @@ def _parse_methods(text: str, engines: dict) -> list[str]:
 
 
 def refresh_from_cli(bench: bool, methods=None, devices=None, max_seconds: float = DEFAULT_MAX_SECONDS,
-                     probe_wsl: bool = False, out=None) -> tuple[MachineProfile | None, Path | None]:
+                     probe_wsl: bool = False, out=None, solvent: str = "",
+                     bench_set: str = "pfas") -> tuple[MachineProfile | None, Path | None]:
     """Build (and benchmark) this machine's profile and save it, for ``doctor --bench`` and ``machines``.
     Ctrl+C stops the benchmark after the current molecule and saves nothing; returns (None, None) then."""
     import signal
@@ -721,11 +798,13 @@ def refresh_from_cli(bench: bool, methods=None, devices=None, max_seconds: float
     try:
         if bench:
             names = ", ".join(methods) if methods else "the available default engines"
-            print(f"Benchmarking {names} on {machine_name()} ({len(BENCH_SET)} PFAS anions, up to "
+            what = (f"{len(BENCH_SET)} PFAS anions" if bench_set == "pfas"
+                    else f"the {bench_set} set of {len(BENCH_SETS[bench_set])} molecules")
+            print(f"Benchmarking {names} on {machine_name()} ({what}{', in ' + solvent if solvent else ''}, up to "
                   f"{max_seconds:.0f} s per method and device)", file=out)
         prof = local_profile(bench=bench, methods=methods, devices=devices, probe_wsl=probe_wsl,
                              max_seconds=max_seconds, should_stop=lambda: stop["now"],
-                             log=lambda m: print(m, file=out, flush=True))
+                             log=lambda m: print(m, file=out, flush=True), solvent=solvent, bench_set=bench_set)
     finally:
         if old is not None:
             signal.signal(signal.SIGINT, old)
@@ -756,7 +835,9 @@ def _machines_cli(args) -> int:
                 return 2
         devices = [d.strip() for d in args.devices.split(",") if d.strip()] if args.devices else None
         prof, _ = refresh_from_cli(bool(methods), methods, devices, args.max_seconds, args.wsl,
-                                   out=sys.stderr if args.json else sys.stdout)
+                                   out=sys.stderr if args.json else sys.stdout,
+                                   solvent=getattr(args, "solvent", "") or "",
+                                   bench_set=getattr(args, "bench_set", "pfas") or "pfas")
         if prof is None:
             return 130
     profiles = load_profiles()
@@ -790,6 +871,12 @@ def register_cli(subparsers) -> None:
                                      "GPU for GPU-capable engines)")
     m.add_argument("--max-seconds", type=float, default=DEFAULT_MAX_SECONDS,
                    help=f"with --bench: time budget per method and device (default {DEFAULT_MAX_SECONDS:.0f})")
+    m.add_argument("--bench-set", choices=tuple(BENCH_SETS), default="pfas",
+                   help="with --bench: 'pfas' (5 PFAS anions, the default) or 'mixed' (those plus neutral baseline "
+                        "organics and one larger molecule)")
+    m.add_argument("--solvent", default="",
+                   help="with --bench: benchmark in this implicit solvent (e.g. water), keyed <method>+water@<device> "
+                        "so it never mixes with gas phase; methods without a model for it are skipped")
     m.add_argument("--wsl", action="store_true", help="also probe versions of programs run through WSL (slow)")
     m.add_argument("--json", action="store_true")
     m.set_defaults(func=_machines_cli)

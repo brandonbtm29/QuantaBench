@@ -585,6 +585,7 @@ def resolve_weights(spec: str | None, names: Sequence[str], method: str, refs: d
     - ``"auto"`` (default): each machine's measured throughput for ``method`` from the profile its worker
       reports (else the registry copy), an estimate from its core count without a benchmark, 0 where the
       method is unavailable (``plan.auto_weight``). A target without any profile gets the mean of the others.
+      ``method`` may carry the run's solvent (``profile.bench_method``: "tblite-gfn2+water").
     """
     from . import plan, profile
 
@@ -1026,7 +1027,8 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
             raise GridError(f"{n} cannot run {cfg.method} (engine not available there)")
         if n == profile.machine_name() and LOCAL in names:
             log(f"Note: {n} is this machine and \"local\" is listed too; both shares run here")
-    w = resolve_weights(weights, names, cfg.method, refs, log)
+    # throughputs measured in the run's solvent (e.g. "tblite-gfn2+water@cpu"), never gas-phase ones
+    w = resolve_weights(weights, names, profile.bench_method(cfg.method, cfg.solvent), refs, log)
     ids = [x.id for x in items]
     split = plan.split(ids, w)
     by_id = {x.id: x for x in items}

@@ -1045,6 +1045,9 @@ class JobManager:
             tables = None
             try:
                 cfg = build_config(job.config, self.output_dir)
+                from .. import resources as resources_mod
+
+                resources_mod.set_molecule_limits(cfg)   # memory budget and time limit of embedding and Hessian
                 # the job's own spec or --lanes must fit (an error); this machine's setting falls back to 1 lane
                 lanes, _spec = profile_mod.resolve_lanes(job.lanes or self.lanes, cfg, log=log)
                 chunk = (job.chunk["index"], job.chunk["count"]) if job.chunk and "count" in job.chunk else None

@@ -251,12 +251,15 @@ def _build(args) -> int:
         from .dist import plan, profile
 
         try:
-            chunk, weights, warnings = plan.resolve_chunk(args.chunk_weights, chunk, cfg.method,
+            chunk, weights, warnings = plan.resolve_chunk(args.chunk_weights, chunk,
+                                                         profile.bench_method(cfg.method, cfg.solvent),
                                                          profile.load_profiles(), ids=[x.id for x in items])
             print(plan.chunk_plan(weights, chunk, [x.id for x in items], warnings) + "\n")
         except ValueError as exc:
             print(exc, file=sys.stderr)
             return 2
+
+    resources.set_molecule_limits(cfg)   # memory budget and time limit of the embedding and the Hessian
 
     resumable = bool(run_dir or chunk or args.retry_failed or len(items) > 1)
     if not resumable:

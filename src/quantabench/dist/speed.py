@@ -141,18 +141,20 @@ def molecule_size(inp) -> float:
         return DEFAULT_SIZE
 
 
-def bench_size() -> float:
-    """Mean size of the benchmark set (``profile.BENCH_SET``), to turn molecules/hour into s per size unit."""
+def bench_size(bench_set: str = "pfas") -> float:
+    """Mean size of a benchmark set (``profile.BENCH_SETS``), to turn molecules/hour into s per size unit."""
     from ..chem.inputs import MoleculeInput
-    from .profile import BENCH_SET
+    from .profile import BENCH_SETS
 
-    sizes = [molecule_size(MoleculeInput(id=i, smiles=s)) for i, s in BENCH_SET]
+    items = BENCH_SETS.get(bench_set) or BENCH_SETS["pfas"]
+    sizes = [molecule_size(MoleculeInput(id=i, smiles=s)) for i, s in items]
     return sum(sizes) / len(sizes)
 
 
-def registry_seeds(lanes: Sequence, method: str, profile=None) -> dict[str, float | None]:
+def registry_seeds(lanes: Sequence, method: str, profile=None, solvent: str = "") -> dict[str, float | None]:
     """{lane name: benchmark seconds per size unit} from this machine's registry profile (``machines
-    --refresh --bench <method>``) for the lane's device, None where the method was not measured there."""
+    --refresh --bench <method>``) for the lane's device, None where the method was not measured there.
+    ``solvent``: the run's; a run in water only uses ``<method>+water`` keys (``profile.bench_method``)."""
     from . import profile as profile_mod
 
     out: dict[str, float | None] = {x.name: None for x in lanes}
@@ -160,10 +162,11 @@ def registry_seeds(lanes: Sequence, method: str, profile=None) -> dict[str, floa
         p = profile if profile is not None else profile_mod.load_profile(profile_mod.machine_name())
         if p is None or not method:
             return out
-        unit = bench_size()
+        name = profile_mod.bench_method(method, solvent)
         for x in lanes:
-            rate = profile_mod.throughput_for(p, method, x.device)
+            rate = profile_mod.throughput_for(p, name, x.device)
             if rate and rate > 0:
+                unit = bench_size(profile_mod.set_of_key(p, f"{name}@{x.device}"))
                 out[x.name] = 3600.0 / float(rate) / unit
     except Exception:  # noqa: BLE001 - a missing or unreadable registry means unknown speeds
         return {x.name: None for x in lanes}

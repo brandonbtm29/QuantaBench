@@ -64,6 +64,30 @@
   charge class. Writes `validation.csv`, `join.csv`, `summary.csv`, `report.md` and parity plots (new optional
   extra `quantabench[validate]` = matplotlib). See docs/VALIDATION.md.
 
+### Runtime guards for the 14,223-molecule split (QSAR-2, SCALE-1 follow-ups, 2026-11-05)
+- **Memory guard for the frequencies stage.** dxtb's analytic Hessian is the largest memory consumer of a
+  molecule (measured: atoms x nao², 0.26-1.2 GB for 5-14 atoms, more than 6 GB for the PFOA anion). Over the
+  lane's budget it now becomes central finite differences of the analytic forces (the memory of one energy +
+  forces, about the same time on one thread); finite differences that do not fit skip the frequencies, and dxtb
+  dipole derivatives that do not fit skip the IR intensities, each with a note. Measurements and the rule are
+  in docs/ENGINES.md and `chem/memory_guard.py` (`frequencies_plan`).
+- **Time limit for the conformer embedding.** RDKit ETKDG has no checkpoint, so a 90-heavy-atom peptide or a
+  metal complex could embed for minutes past the per-molecule limit in one process. The embedding now gets a
+  quarter of `resources.molecule_timeout_s` (450 s of the default 1800 s): one conformer is timed first, fewer
+  are asked for when they would not fit, and RDKit's `EmbedParameters.timeout` is the hard stop. A note says
+  when the embedding ran out of time and with how many conformers.
+- **`lanes auto` prefers the faster device.** A GPU lane is planned only where this machine's benchmark says
+  the GPU is the faster lane (`<method>@<gpu>` beats `<method>@cpu`): the MacBook gets CPU lanes only for
+  AIMNet2 (6,387/h CPU vs 2,978/h MPS), NOVA keeps its GPU lane. The reason gives the numbers, or says there is no
+  benchmark (then the GPU lane as before).
+- **Benchmarks in water, and a mixed benchmark set.** `machines --bench M --solvent water` records
+  `M+water@<device>`, never mixed with gas-phase keys; methods without a water model (and runs that fell back to
+  gas phase) give no water number. `--bench-set mixed` adds neutral baseline organics and cholesterol to the
+  five PFAS anions; the set and the solvent are recorded with each number. Speed-aware lanes, `lanes auto`,
+  `grid build --weights auto` and `build --chunk-weights auto` read the keys of the run's solvent.
+- **Settings > Compute** has "Memory per lane" (`resources.memory_budget_gb`; 0 = auto, Off = no guard) and
+  "Time limit per molecule" (`resources.molecule_timeout_s`; Off = none).
+
 ### Apple GPU: AIMNet2 on MPS (first run on the MacBook, 2026-11-05)
 - AIMNet2's Warp-free path failed on the Apple GPU with "Undefined type Double": `t.to("cpu", torch.float64)` casts on
   the device before the copy, and MPS has no float64. Tensors now move to the CPU first and are cast there (and the

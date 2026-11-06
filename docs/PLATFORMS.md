@@ -68,6 +68,25 @@ worker processes that share the CPU threads and the GPU (for example `gpu:1x4,cp
 threads and five 2-thread CPU lanes). The parent process stays the only writer of `jobs.sqlite`. On NOVA,
 MMFF ran 3.7x and GFN1-xTB 3.45x faster than one process with all 12 threads.
 
+`auto` plans a GPU lane for a GPU-capable engine only where this machine's benchmark says the GPU is the faster
+lane: `<method>@<gpu>` beats `<method>@cpu` in the registry (`machines --refresh --bench aimnet2`). Both are
+timed one molecule at a time in one process with the same threads, so this compares one lane with one lane; a
+GPU lane slower than a CPU lane only takes four threads from the CPU lanes. The plan's reason gives the
+numbers:
+- MacBook (AIMNet2 6,387/h on the 14-core CPU, 2,978/h on MPS): CPU lanes only (6 x 2 threads with the
+  default 13 of 14 threads), "no GPU lane: benchmark aimnet2@mps 2,978/h vs @cpu 6,387/h, so a GPU lane would be
+  slower than a CPU lane".
+- NOVA (AIMNet2 about 10x faster on the RX 9060 XT): 1 GPU lane with 4 threads + CPU lanes on the other cores,
+  "(benchmark aimnet2@cuda:0 ... vs @cpu ...)".
+- No benchmark of the method on both devices: the GPU lane as before, "(no benchmark ... on this machine: GPU
+  lane by default)".
+
+A run in water reads only water benchmarks: `machines --bench tblite-gfn2 --solvent water` records
+`tblite-gfn2+water@cpu`, never mixed with the gas-phase `tblite-gfn2@cpu` (methods without a water model are not
+timed in water: their runs are gas phase). `--bench-set mixed` adds ethanol, toluene, caffeine, atrazine and
+cholesterol (74 atoms) to the five PFAS anions; the set is recorded with each number, and the speed-aware
+lanes convert it with that set's mean size.
+
 Lanes of different speed are **speed-aware** at the end of a batch (`dist.speed`, DIST-5): a free lane does
 not start the next molecule when the lanes clearly faster than it (1.5x or more) would finish every molecule
 still queued before it finished that one. With one GPU lane 10x faster than each CPU lane, the CPU lanes leave
@@ -81,10 +100,11 @@ each kind of lane. Switch it off with `build --no-speed-aware-lanes` or Settings
 
 Two limits per lane keep one molecule from stopping a batch (see [ENGINES.md](ENGINES.md#memory-guard-for-dxtb-and-the-per-molecule-time-limit)):
 - **Memory:** each lane's dxtb steps get a share of the memory available at the start (available / lanes, at least
-  1.5 GB; `--memory-budget GB`). A step estimated above it takes a cheaper path (tblite for the polarizability)
-  or is skipped with a note. A refinement that does not fit fails the molecule with the reason, or makes `auto`
+  1.5 GB; `--memory-budget GB`, Settings > Compute > Memory per lane). A step estimated above it takes a cheaper
+  path (tblite for the polarizability, finite differences for the Hessian) or is skipped with a note. A refinement that does not fit fails the molecule with the reason, or makes `auto`
   try its next engine. A lane that is OOM-killed anyway is restarted and its molecule's crash counted, as before.
-- **Time:** a lane still on one molecule after `--molecule-timeout` (default 1800 s) is killed and restarted.
+- **Time:** a lane still on one molecule after `--molecule-timeout` (default 1800 s; Settings > Compute > Time
+  limit per molecule) is killed and restarted. The conformer embedding gets a quarter of it.
   The molecule is recorded failed with `time limit (1800 s) in <stage>`. It is not counted as a crash and not
   retried in the run; `--retry-failed` redoes it.
 

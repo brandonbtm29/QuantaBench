@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import pytest
 from conftest import PFOA
@@ -39,3 +41,46 @@ def test_cyclopentanes_embed(smiles):
 
     if rdBase.rdkitVersion.startswith("2026.09"):
         assert any("small-ring torsions" in n for n in cs.notes)
+
+
+# ----------------------------------------------------------------------------- time limit of the embedding
+#: a 60-heavy-atom cyclic peptide, cyclo(AFLG AFLG SG): ~0.4 s per ETKDG conformer on one core
+CYCLIC_PEPTIDE = ("N1[C@@H](C)C(=O)N[C@@H](Cc2ccccc2)C(=O)N[C@@H](CC(C)C)C(=O)NCC(=O)N[C@@H](C)C(=O)"
+                  "N[C@@H](Cc2ccccc2)C(=O)N[C@@H](CC(C)C)C(=O)NCC(=O)N[C@@H](CO)C(=O)NCC1=O")
+
+
+def test_embed_time_limit_is_a_share_of_the_molecule_limit():
+    from quantabench import resources
+
+    assert confs.embed_time_limit(1800) == confs.EMBED_TIME_FRACTION * 1800
+    assert confs.embed_time_limit(0) == 0.0
+    try:
+        resources.set_molecule_limits(molecule_timeout_s=400)
+        assert confs.embed_time_limit() == confs.EMBED_TIME_FRACTION * 400
+        resources.set_molecule_limits()
+        assert confs.embed_time_limit() == 0.0          # no run recorded a limit: none
+    finally:
+        resources.set_molecule_limits()
+
+
+def test_a_limit_that_is_not_reached_changes_nothing():
+    mol = Chem.AddHs(Chem.MolFromSmiles(PFOA))
+    plain, limited = Chem.Mol(mol), Chem.Mol(mol)
+    notes: list[str] = []
+    a = confs.embed(plain, 10, seed=3)
+    b = confs.embed(limited, 10, seed=3, notes=notes, timeout_s=600)
+    assert a == b and not notes
+    for cid in a:
+        assert np.allclose(plain.GetConformer(cid).GetPositions(), limited.GetConformer(cid).GetPositions())
+
+
+def test_embedding_stops_at_its_time_limit():
+    mol = Chem.AddHs(Chem.MolFromSmiles(CYCLIC_PEPTIDE))
+    notes: list[str] = []
+    t0 = time.monotonic()
+    ids = confs.embed(mol, 50, seed=1, notes=notes, timeout_s=1.5)
+    elapsed = time.monotonic() - t0
+    assert 1 <= len(ids) < 50 and mol.GetNumConformers() == len(ids)
+    assert elapsed < 6.0                                    # without the limit: ~20 s
+    assert any(n.startswith(("conformer embedding limited by the time limit",
+                             "conformer embedding stopped by the time limit")) for n in notes), notes

@@ -87,7 +87,14 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
 * external programs (an engine with ``.external``, CREST conformer search, a QM stage): 2-thread lanes on
   all threads (the programs spend part of their time in I/O and start-up).
 * a GPU-capable engine with a GPU: one GPU lane with 4 threads (RDKit embedding and the host side of the
-  batch run on the CPU) plus CPU lanes on the remaining threads by the rules above. Not for dxtb (GFN1/GFN2):
+  batch run on the CPU) plus CPU lanes on the remaining threads by the rules above, when this machine's
+  benchmark (``machines --bench <method>``, registry keys ``<method>@<device>``, ``+water`` for a run in
+  water) says the GPU is the faster lane: ``<method>@<gpu>`` beats ``<method>@cpu``. Both are timed one
+  molecule at a time in one process with the same threads, so this compares one lane with one lane; a GPU
+  lane slower than a CPU lane only takes threads from the CPU lanes. The MacBook (AIMNet2: 6,387/h on the
+  14-core CPU, 2,978/h on MPS) gets CPU lanes only; NOVA (AIMNet2 about 10x faster on the RX 9060 XT) gets
+  its GPU lane. Without both numbers the GPU lane is planned as before, and the reason says so
+  (``gpu_benchmark_verdict``). Not for dxtb (GFN1/GFN2):
   it computes in float32 on a GPU and float64 on the CPU, and a GPU lane next to CPU lanes would mix both in
   one table, molecule by molecule as timing decides. ``auto`` gives dxtb CPU lanes only, or with dxtb GPU =
   on (``BuildConfig.dxtb_gpu``) one lane on the GPU. It was not faster either: on NOVA's ROCm wheels (no
@@ -276,10 +283,52 @@ def _parallel_molecules_setting() -> int:
         return 0
 
 
-def plan_auto(cfg=None, report=None, parallel_molecules: int = 0) -> tuple[list[Lane], str]:
+_THIS_MACHINE = object()
+
+
+def _this_profile():
+    """This machine's registry profile (``dist.profile``), None when it has none or it cannot be read."""
+    try:
+        from . import profile as profile_mod
+
+        return profile_mod.load_profile(profile_mod.machine_name())
+    except Exception:  # noqa: BLE001 - no registry: no benchmark
+        return None
+
+
+def gpu_benchmark_verdict(method: str, device: str, profile, solvent: str = "") -> tuple[bool | None, str]:
+    """Whether a GPU lane on ``device`` pays for ``method`` by this machine's benchmark (``machines --bench``):
+    True when ``<method>@<gpu>`` beats ``<method>@cpu``, False when it does not, None without both numbers.
+    Both benchmarks run one molecule at a time in one process with the same threads, i.e. as one lane each,
+    so the comparison is per lane: a GPU lane slower than a CPU lane only takes threads from the CPU lanes.
+    Rates come from ``speed.registry_seeds`` (solvent-specific keys, per-set molecule sizes). The text is
+    the clause for the plan's reason."""
+    from . import speed
+    from .profile import bench_method
+
+    if profile is None:
+        return None, f"no benchmark of {method} on this machine: GPU lane by default"
+    name = bench_method(method, solvent)
+    seeds = speed.registry_seeds([Lane("gpu", device), Lane("cpu", "cpu")], name, profile)
+    gpu, cpu = seeds.get("gpu"), seeds.get("cpu")
+    if gpu is None or cpu is None:
+        missing = " and ".join(k for k, v in ((f"{name}@{device}", gpu), (f"{name}@cpu", cpu)) if v is None)
+        return None, f"no benchmark {missing} on this machine: GPU lane by default"
+    from .profile import _fmt_rate, throughput_for
+
+    rg, rc = throughput_for(profile, name, device) or 0.0, throughput_for(profile, name, "cpu") or 0.0
+    numbers = f"benchmark {name}@{device} {_fmt_rate(rg)}/h vs @cpu {_fmt_rate(rc)}/h"
+    if gpu < cpu:                     # seconds per size unit: smaller is faster
+        return True, numbers
+    return False, f"no GPU lane: {numbers}, so a GPU lane would be slower than a CPU lane"
+
+
+def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_MACHINE) -> tuple[list[Lane], str]:
     """The lanes of spec "auto" and a one-line reason. ``report``: a ``resources.HardwareReport`` (or
     ``cpu_report()``, which knows no GPU); None detects the GPU through PyTorch only when the engine can use
-    one. See the module docstring for the rules and the measurements behind them."""
+    one. ``profile``: the registry profile whose benchmark decides whether a GPU lane pays
+    (``gpu_benchmark_verdict``); default this machine's, None = no benchmark. See the module docstring for
+    the rules and the measurements behind them."""
     from .. import resources
 
     cfg = _cfg(cfg)
@@ -311,6 +360,12 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0) -> tuple[list[
             why_gpu = ("no GPU lane: dxtb would compute its molecules in float32 next to float64 CPU lanes; "
                        "one precision per run (dxtb GPU = on runs everything on the GPU)")
         device = "cpu"
+    bench_why = ""
+    if device != "cpu":           # a GPU lane only where this machine's benchmark says it is the faster lane
+        verdict, bench_why = gpu_benchmark_verdict(method, device, _this_profile() if profile is _THIS_MACHINE
+                                                   else profile, getattr(cfg, "solvent", ""))
+        if verdict is False:
+            why_gpu, bench_why, device = bench_why, "", "cpu"
     cap = max_lanes()
     per_lane_gb = LANE_MEMORY_GB[kind] + (_qm_memory_gb() if cfg.qm_method else 0.0)
     by_memory = max(1, int(float(hw.ram_gb or 0) * 0.75 / per_lane_gb)) if hw.ram_gb else total
@@ -352,6 +407,8 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0) -> tuple[list[
             reason = f"{method} on {device}: 1 GPU lane with {lanes[0].threads} threads; " + reason
     if why_gpu:
         reason += f" ({why_gpu})"
+    if bench_why:
+        reason += f" ({bench_why})"
     if len(lanes) == 1:
         return [Lane("main", "auto", total)], reason
     return lanes, reason
@@ -575,6 +632,8 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
         external.set_program_registry(programs_dir or None)
 
         cfg = pipeline.BuildConfig(**{**cfg_dict, "threads": threads})
+        # this lane's memory share and time limit for the steps not handed cfg (embedding, Hessian)
+        resources.set_molecule_limits(cfg)
         device = lane_device(lane, cfg, memory_fraction)
         crash_ids = {x for x in os.environ.get(TEST_CRASH_ENV, "").split(",") if x}
         delay = _test_delay(lane.name)
@@ -817,7 +876,7 @@ def speed_policy(lanes: list[Lane], cfg):
             method = workload(cfg)[0]
         except Exception:  # noqa: BLE001 - no seed then
             method = ""
-    return speed.SpeedPolicy(lanes, speed.registry_seeds(lanes, method))
+    return speed.SpeedPolicy(lanes, speed.registry_seeds(lanes, method, solvent=getattr(cfg, "solvent", "")))
 
 
 def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, done_before: int,
