@@ -89,6 +89,34 @@ def test_compute_tab_gpu_policies_round_trip():
     d.deleteLater()
 
 
+def test_compute_tab_memory_budget_and_time_limit_round_trip():
+    from quantabench import settings as sm
+    from quantabench.chem.pipeline import BuildConfig
+    from quantabench.gui.settings_dialog import SettingsDialog
+
+    _app()
+    s = sm.Settings()
+    d = SettingsDialog(s, None)
+    assert d.memory_budget.value() == 0.0 and d.molecule_timeout.value() == 1800          # auto, 30 min
+    assert "0 = auto" in d.memory_budget.toolTip() and "Off" in d.molecule_timeout.toolTip()
+    d.memory_budget.setValue(3.5)
+    d.molecule_timeout.setValue(600)
+    out = d.result_settings()
+    assert (out.resources.memory_budget_gb, out.resources.molecule_timeout_s) == (3.5, 600.0)
+    cfg = BuildConfig.from_settings(out)
+    assert (cfg.memory_budget_gb, cfg.molecule_timeout_s) == (3.5, 600.0)
+    d.reject()
+    d.deleteLater()
+    # off: below 0 GB is no guard, 0 s is no limit; stored values come back into the dialog
+    s.resources.memory_budget_gb, s.resources.molecule_timeout_s = -1.0, 0.0
+    d = SettingsDialog(s, None)
+    assert d.memory_budget.text() == "Off (no memory guard)" and d.molecule_timeout.text() == "Off (no time limit)"
+    out = d.result_settings()
+    assert (out.resources.memory_budget_gb, out.resources.molecule_timeout_s) == (-1.0, 0.0)
+    d.reject()
+    d.deleteLater()
+
+
 def test_compute_tab_speed_aware_lanes_round_trip():
     from quantabench import settings as sm
     from quantabench.gui.settings_dialog import SettingsDialog

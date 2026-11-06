@@ -155,6 +155,31 @@ class SettingsDialog(QDialog):
                                     "not start one of the last molecules when the faster lanes would finish all of\n"
                                     "them sooner. Off: every free lane takes the next molecule.")
         form.addRow("", self.speed_aware)
+        self.memory_budget = QDoubleSpinBox()
+        self.memory_budget.setRange(-1.0, 1024.0)
+        self.memory_budget.setSingleStep(0.5)
+        self.memory_budget.setDecimals(1)
+        self.memory_budget.setSuffix(" GB")
+        self.memory_budget.setSpecialValueText("Off (no memory guard)")
+        self.memory_budget.setValue(max(-1.0, float(getattr(r, "memory_budget_gb", 0.0) or 0.0)))
+        self.memory_budget.setToolTip("Memory each process (lane) may use for the dxtb steps (GFN1/GFN2-xTB refinement,\n"
+                                      "xTB properties, frequencies). A step estimated to go over it takes a path with\n"
+                                      "less memory (tblite polarizability, finite-difference Hessian) or is skipped with\n"
+                                      "a note, instead of the process being killed for running out of memory.\n"
+                                      "0 = auto (the available memory divided by the lanes, at least 1.5 GB); Off = no guard.")
+        form.addRow("Memory per lane", self.memory_budget)
+        self.molecule_timeout = QSpinBox()
+        self.molecule_timeout.setRange(0, 7 * 86400)
+        self.molecule_timeout.setSingleStep(300)
+        self.molecule_timeout.setSuffix(" s")
+        self.molecule_timeout.setSpecialValueText("Off (no time limit)")
+        self.molecule_timeout.setValue(int(round(float(getattr(r, "molecule_timeout_s", 1800.0) or 0.0))))
+        self.molecule_timeout.setToolTip("Wall-clock limit per molecule in a batch. A lane still on a molecule past it is\n"
+                                         "restarted; one process stops the molecule at its next checkpoint. The molecule\n"
+                                         "is marked failed 'time limit (N s)' and --retry-failed redoes it. The conformer\n"
+                                         "embedding gets a quarter of it and keeps the conformers it has by then.\n"
+                                         "Off = no limit.")
+        form.addRow("Time limit per molecule", self.molecule_timeout)
         if report:
             info = QLabel(report.summary() + ("\n" + "\n".join(report.notes) if report.notes else ""))
             info.setWordWrap(True)
@@ -395,6 +420,9 @@ class SettingsDialog(QDialog):
         s.resources.dxtb_gpu = self.dxtb_gpu.currentText()
         s.resources.linalg = self.linalg.currentText()
         s.resources.speed_aware_lanes = self.speed_aware.isChecked()
+        budget = float(self.memory_budget.value())
+        s.resources.memory_budget_gb = -1.0 if budget < 0 else budget       # below 0 is off
+        s.resources.molecule_timeout_s = float(self.molecule_timeout.value())
         from ..dist import lanes as lanes_mod
 
         lanes = self.lanes.currentText().strip().lower() or "1"
