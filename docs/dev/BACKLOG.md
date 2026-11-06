@@ -232,12 +232,41 @@ Open (needs-Brandon):
     (r 0.80-0.88). Document this as a systematic offset for QSAR: use the values as correlated descriptors,
     not as absolute values.
   - The Psi4 B3LYP subset on QuantaBench geometries (VAL-2) closes the loop on method vs geometry.
+  - Rebuild the 300 (gas and water) with 0.3.0.dev3 and re-run `validate`: the 2026-11-05 tables have the old
+    `sasa_A2` (zero atom radii) and no `cpk_*` columns. needs-Brandon (now, or with the full run).
+- Done 2026-11-06 (areas and volumes, from Brandon's screenshots of Spartan's Preferences):
+  - Spartan's CPK area and volume are the union of spheres with its VDW Radii table (carbon 1.92 Å vs Bondi's
+    1.70). `cpk_area_A2` / `cpk_volume_A3` reproduce CPKAREA to 0.5 % and CPKVOLUME to 0.1 % (60 C3A B3LYP
+    documents); Bondi radii give −6.8 % volume, RDKit's `volume_A3` −4.1 %.
+  - `sasa_A2` used FreeSASA's ProtOr radii, 0 for non-protein atoms: fixed (Bondi + 1.4 Å probe).
 
 ## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · ready (after VAL-1 data)
 - The QM stage reproduces Spartan's level (Spartan used 6-31G*: run `wb97x-d/6-31g*` too). Compare
   dipoles, polarizabilities, 0.002 au volumes/areas and ESP extrema with Spartan's exports; recommend a
   default level for the 4,700-PFAS descriptor run with timings (PFBA anion: ~4.5 min on 2 threads with
   PCM, cubes and finite-field α).
+
+## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · ready (Surfaces & radii done 2026-11-06)
+Review of Spartan '24's eleven tabs: Brandon's Claude Doc "Spartan Preferences review and QuantaBench settings plan".
+Rule: a setting that changes a computed value is a science setting (`jobs.SCIENCE_FIELDS`, sent to grid
+workers by `dist.worker.validate_config`); display settings never rename or rescale exported columns.
+- Done: **Surfaces & radii** (Spartan's Settings > Surface and VDW Radii): radii set, 111-element table with
+  per-element values, SASA probe (`settings.surfaces`).
+- Next, one tab per change, each with a GUI test like `tests/test_gui_settings_surfaces.py`:
+  - **Compute** (Spartan's Jobs): an Expert box hiding the lane spec, GPU linear algebra and dxtb-on-GPU; a
+    "N cores, M logical" line.
+  - **Build defaults** (Settings > Import Filters, Conformer Rules): strip water, HCl and named counter-ions
+    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search.
+  - **Display** (Document): energy units for GUI tables and panels (kcal/mol, kJ/mol, eV, hartree), significant
+    digits, number style. Exports keep `_kcal`, `_eV` columns.
+  - **Lookups** (Databases, URLs): URL templates with `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`
+    (PubChem, NIST WebBook by CAS, nmrshiftdb, EPA CompTox), opened from the molecule list; PubChem cache folder
+    and maximum age; a folder of reference tables with experimental values.
+  - **Machines** (Available Servers, Embedded Server): the `dist` settings (workers, port, bind, token), now
+    only in settings.json.
+- Later: **Molecule display** (default 3D style, atom labels such as charges and exposed area, surface style; the
+  radii set for space-filling and the charge-ESP surfaces, which use Bondi now), **Toolbar** (after UI-1),
+  **Miscellaneous** (CSV decimal separator and line endings for Excel, an HTTP proxy for lookups).
 
 ## Platform and multi-machine track (plan: docs/PLATFORMS.md)
 
