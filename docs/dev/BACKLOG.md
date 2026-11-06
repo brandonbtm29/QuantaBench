@@ -290,6 +290,9 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
 - INSTALL.md's macOS steps on the MacBook: `doctor --bench`, full suite, `pytest -m external` with
   `envs/tools.yml` + `envs/psi4.yml`, GUI by hand (HiDPI picking, trackpad pinch/rotate, dark mode).
   Record chip, cores and RAM in PLATFORMS.md section 2, and anything that breaks as new items.
+- 2026-11-06: full suite and `-m external` done over SSH (PLATFORMS.md section 5: 841 passed; the real failures
+  were fixed on `fix/macos-checks`, except LAMMPS, which needs `pip install mpich` on the MacBook, and MOPAC's
+  polarizability, WIN-2). AIMNet2 on `mps` checked against the CPU. Left for Brandon: the GUI by hand.
 
 ### PLAT-2: macOS in CI · in progress
 - `macos-14` is in the CI matrix as non-blocking (2026-11-04). Make it green, then required. Add a second
@@ -302,6 +305,11 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
   green; on macos-14 two MOPAC checks fail: the PM7 polarizability is 1.347 Å³ for water (1.259 on Linux,
   from MOPAC's own .out) and 3.22 for methanol (3.0 ± 0.2), while heats of formation, dipoles and orbital
   energies match. Compare the osx-arm64 MOPAC build/version and its POLAR output before relaxing the tests.
+- 2026-11-06: GitHub stopped running `macos-14` after 2026-11-05 19:15 UTC (jobs cancelled in 2 s,
+  "configuration 'macos-14-arm64-us-default' is not supported"); both workflows now use `macos-15`. The GUI
+  tests now run on macOS too (they had always been skipped there for want of `$DISPLAY`). MOPAC: the
+  MacBook (OpenBLAS) and NOVA (MKL) both print 1.347, the cloud's Linux build (MKL) 1.259, all 23.2.5 build 0,
+  so BLAS is not the cause: the Linux build differs from the macOS and Windows builds.
 
 ### DIST-1: Machine capability report and weighted chunks · done 2026-11-05
 - `doctor --json` gains engines, external programs (versions), and `--bench` throughput per engine

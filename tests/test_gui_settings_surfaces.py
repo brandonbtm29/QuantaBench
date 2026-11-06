@@ -1,12 +1,11 @@
 """Settings > Surfaces & radii: the radii set, the per-element table (Spartan's Preferences > VDW Radii) and the
 SASA probe reach ``settings.surfaces`` and, from there, the build config."""
 
-import os
-
 import pytest
+from conftest import HAS_DISPLAY
 
 pytest.importorskip("PySide6")
-pytestmark = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
+pytestmark = pytest.mark.skipif(not HAS_DISPLAY,
                                 reason="needs a display (run under xvfb-run on Linux)")
 
 

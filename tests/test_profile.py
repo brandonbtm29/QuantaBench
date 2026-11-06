@@ -75,6 +75,8 @@ def test_registry_tolerates_stale_partial_and_corrupt_files():
 
 
 def test_machine_name(monkeypatch):
+    # the hostname path (Windows, Linux); on a Mac the Bonjour name comes first (test below), so leave it out here
+    monkeypatch.setattr(profile, "_macos_local_hostname", lambda: "")
     monkeypatch.setattr(profile.socket, "gethostname", lambda: "BTM-NOVA.tail1234.ts.net")
     monkeypatch.setattr(resources, "is_wsl", lambda: False)
     assert profile.machine_name() == "btm-nova"

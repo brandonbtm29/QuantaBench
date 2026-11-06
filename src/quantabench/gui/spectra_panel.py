@@ -380,7 +380,7 @@ class SpectraPanel(QWidget):
                 self.table.scrollToItem(self.table.item(self.selected, 0))
             finally:
                 self._syncing = False
-        f = ms.freqs[self.selected]
+        f = float(ms.freqs[self.selected])   # with a NumPy scalar, f > 0 is a numpy.bool: Qt refuses it under NumPy 2
         self.marker.setValue(abs(f) * ms.scale)
         self.marker.setVisible(f > 0)
         bits = [f"Mode {self.selected + 1}: {_fmt_freq(f)} cm⁻¹"]

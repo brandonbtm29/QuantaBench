@@ -3,10 +3,9 @@
 Display coordinates are VTK's: pixels from the bottom-left of the render window.
 """
 
-import os
-
 import numpy as np
 import pytest
+from conftest import HAS_DISPLAY
 
 pytest.importorskip("PySide6")
 pytest.importorskip("pyvistaqt")
@@ -14,7 +13,7 @@ pytest.importorskip("pyvistaqt")
 from quantabench.gui import viewer3d as v3d  # noqa: E402
 from quantabench.gui.selection import SelectionModel, format_measurement, measure  # noqa: E402
 
-needs_display = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
+needs_display = pytest.mark.skipif(not HAS_DISPLAY,
                                    reason="needs a display (run under xvfb-run on Linux)")
 
 PFOA_ANION = "[O-]C(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"

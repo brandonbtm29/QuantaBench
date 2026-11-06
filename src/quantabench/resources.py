@@ -391,6 +391,10 @@ def detect_isolated(timeout: float = 180.0, cancel=None) -> tuple[HardwareReport
     global _ISOLATED
     if _ISOLATED is not None:
         return _ISOLATED
+    if cancel is not None and cancel.is_set():
+        # cancelled before it started: without torch the child can finish inside the first 0.25 s wait, before
+        # the loop below looks at ``cancel`` (CI's core install: the result came back instead of None)
+        return None
     import json
     import subprocess
     from pathlib import Path
@@ -405,8 +409,6 @@ def detect_isolated(timeout: float = 180.0, cancel=None) -> tuple[HardwareReport
     if sys.platform == "win32":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     why = ""
-    if cancel is not None and cancel.is_set():
-        return None                  # cancelled before the child started (a fast child could finish first)
     try:
         proc = subprocess.Popen([str(exe), "-c", code], **kwargs)  # noqa: S603
     except OSError as exc:

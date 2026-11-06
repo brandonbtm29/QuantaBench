@@ -60,7 +60,11 @@ xtb = ["dxtb>=0.4",
 interop = ["cclib>=1.8"]                   # import Gaussian/ORCA/Psi4/xtb/MOPAC/... output files
 protonate = ["dimorphite-dl>=2.0"]         # pH-dependent protonation states
 ovito = ["ovito>=3.12"]                    # embedded OVITO viewport for big systems / trajectories
-md = ["lammps>=2023.8"]                    # LAMMPS Python module (CPU + OpenMP) for `md smd --run` and checks
+# LAMMPS Python module (CPU + OpenMP) for `md smd --run` and checks. PyPI's macOS arm64 wheel links MPICH
+# (@rpath/libmpi.12.dylib) without bundling it, so `import lammps` works but lammps.lammps() fails to dlopen;
+# its "mpi" extra brings PyPI's mpich wheel, whose lib/ is where liblammps looks (@loader_path/../../..).
+md = ["lammps>=2023.8; sys_platform != 'darwin'",
+      "lammps[mpi]>=2023.8; sys_platform == 'darwin'"]
 excel = ["openpyxl>=3.1"]                  # .xlsx/.xlsm input (CompTox dashboard exports)
 validate = ["matplotlib>=3.8"]             # parity plots of `quantabench-cli validate` (skipped without it)
 # lammps ships wheels for Windows (win_amd64), Linux and macOS; openpyxl is pure Python

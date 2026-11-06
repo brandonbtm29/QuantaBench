@@ -1,10 +1,8 @@
 """2D structure viewer: depiction, index mapping, picking, rotation, highlights and export."""
 
-import os
-
 import numpy as np
 import pytest
-from conftest import K_PFOS, PFOA
+from conftest import HAS_DISPLAY, K_PFOS, PFOA
 from rdkit import Chem
 
 from quantabench.chem.conformers import embed
@@ -12,7 +10,7 @@ from quantabench.chem.standardize import prepare
 
 pytest.importorskip("PySide6")
 pytest.importorskip("PySide6.QtSvgWidgets")
-pytestmark = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
+pytestmark = pytest.mark.skipif(not HAS_DISPLAY,
                                 reason="needs a display (run under xvfb-run on Linux)")
 
 FTCA_62 = "OC(=O)CCC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"   # 6:2 fluorotelomer carboxylic acid

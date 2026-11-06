@@ -1,12 +1,12 @@
 """SCALE-1: the virtualized molecule list, results read back from run folders, Open run folder and Resume."""
 
-import os
 from dataclasses import replace
 
 import pytest
+from conftest import HAS_DISPLAY
 
 pytest.importorskip("PySide6")
-needs_display = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
+needs_display = pytest.mark.skipif(not HAS_DISPLAY,
                                    reason="needs a display (run under xvfb-run on Linux)")
 
 TFA = "OC(=O)C(F)(F)F"
