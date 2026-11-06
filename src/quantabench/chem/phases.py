@@ -28,7 +28,8 @@ polar term + SASA-based cavity/dispersion/solvent-structure term + an empirical 
 state, and the total energy they report in solution **already contains** that solvation free energy: E(water) is
 the electronic energy of the solute polarized by the continuum plus G_solv(ALPB). So
 ``dG_solv_kcal`` = E_water(R_water) - E_gas(R_gas): the best refined conformer of each phase at its own geometry,
-which adds the geometry and conformer relaxation in solution to the fixed-geometry value.
+i.e. the vertical value below plus the gas-phase distortion energy E_gas(R_water) - E_gas(R_gas) >= 0 (the
+conformer and geometry relaxation between the phases).
 ``dG_solv_G_kcal`` = G_water - G_gas from the frequency step when both phases ran it (G = E + ZPE + thermal
 enthalpy - T S, RRHO/qRRHO at each phase's own minimum; the Hessian in water includes the continuum).
 ``dG_solv_vertical_kcal`` = the water run's ``<engine>_gsolv_kcal``: E(water) - E(gas) at the water geometry, the

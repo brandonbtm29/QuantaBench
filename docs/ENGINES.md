@@ -37,17 +37,37 @@ What the standardization does with research records (every step is in the molecu
   `removed_fragments` column (`[Na+]`, `2 x [Br-]`, a second copy of the parent, a co-crystallized acid).
   Bonds to alkali and alkaline-earth metals are ionic and are disconnected first (`CC(=O)O[Na]` is
   sodium acetate). Turn off *keep largest fragment* to compute the whole record instead.
-- **Metal complexes.** A removed fragment that holds any other metal fails the molecule with
-  `UnsupportedStructure: metal complex: keeping the largest fragment (...) would remove Co (...)`. A
-  carbonyl complex, a cobalamin or a ferrocene drawn as separate ions would otherwise be computed as CO,
-  a bare corrin or cyclopentadiene. The batch continues.
+- **Metal salts.** A bondless Al³⁺, Zn²⁺, Fe²⁺/Fe³⁺ or Cu²⁺ cation (as well as Na⁺, K⁺, Ca²⁺, Mg²⁺,
+  Ba²⁺, Sr²⁺) is a counter-ion when the rest of the record is an organic ion and counter-ions: fosetyl-Al
+  (`[Al+3]` + 3 ethyl phosphonates) computes one ethyl phosphonate anion, and `removed_fragments` lists
+  `[Al+3]` and the two other anions. "An organic ion" means its charge is not on carbon (carboxylate,
+  phosphonate, sulfonate, phenolate, ammonium); the other fragments may be metal cations, copies of the
+  kept ion, inorganic ions (halide, sulfate, ...), water of hydration or other such organic ions. Al, Fe,
+  Cu and Zn bonds drawn in the record are never broken (`standardize.SALT_METALS`).
+- **Metal complexes.** A removed fragment that holds any other metal, or a salt metal next to fragments
+  that are not counter-ions, fails the molecule with `UnsupportedStructure: metal complex: keeping the
+  largest fragment (...) would remove Co (...)`: a neutral ligand (CO, a phosphine, a corrin), a carbanion
+  (cyclopentadienide, cyanide) or a neutral kept fragment. A carbonyl complex, a cobalamin or a ferrocene
+  drawn as separate ions would otherwise be computed as CO, a bare corrin or cyclopentadiene. The batch
+  continues.
 - **Organometallics drawn with their bonds** (tributyltin chloride, phenylmercury acetate,
   bis(tributyltin) oxide) are computed whole: bonds to metals other than group 1/2 are kept as drawn
   (RDKit's default metal disconnector would turn R-Hg-OAc into R-Hg+ and TBTO into Bu3Sn+). Conformers
   come from ETKDG + UFF; `auto` refines them with GFN2-xTB.
 - **Charge.** With protonation on, the parent is neutralized and protonated for the pH. When the charge
   differs from the record's (`input_charge` column), a note says so: `charge +0 as drawn, -1 computed
-  (counter-ions removed, then neutralized and protonated for pH 7)`.
+  (counter-ions removed, then neutralized and protonated for pH 7)`. Two basic sites within three bonds
+  (piperazine, a 1,2-diamine, a guanidine's two NH₂) get one proton, not two; a 1,3-diamine gets two.
+  With `--no-protonate` the charge of the kept fragment as drawn goes to the engine unchanged (a −2
+  phosphonate is computed at −2, an ammonium at +1; `tests/test_phases.py` checks it from SD records to
+  the calculator).
+- **Structure keys.** Every row of summary.csv and descriptors.csv has `inchikey` and `canonical_smiles`
+  of the computed species (after counter-ion removal and protonation) and `input_inchikey` of the record
+  as drawn (all fragments), standard InChIKeys from RDKit. Charge states differ in the last letter
+  (`-N` neutral, `-M` one proton removed, `-O` one added), so join on the first 14 characters to match
+  an anion to its acid. When InChI cannot represent a species the key is empty and a note says why.
+- **Ids from SD files.** `--id-col CAS_RN` uses that SD property; a record without it takes its title
+  line as the id (then DTXSID/ID, then `<file>_<record>`), and its notes say so.
 - **Spin.** The multiplicity (`multiplicity` column) is 1 for closed shells; radicals drawn in the
   record give the high-spin multiplicity (2 unpaired electrons: triplet) and an odd electron count
   without drawn radicals a doublet, both with a note (radicals in databases are often a missing H or
@@ -173,6 +193,82 @@ tblite, COSMO (ε) in MOPAC, PCM in Psi4. The 16 names are in `chem/solvents.py`
 ethanol, octanol, acetonitrile, acetone, DMSO, DMF, THF, dichloromethane, chloroform, toluene, benzene,
 hexane, diethyl ether, ethyl acetate). Engines without a solvent model run in the gas phase with a note.
 
+Which steps of a run use the solvent (the default model of each engine; summary.csv: `solvent`,
+`solvation_model`, and `phase_notes` with one entry per step, e.g. `refine: ALPB(water); ...;
+frequencies: ALPB(water)`, or the reason a step ran in the gas phase):
+
+| Step | tblite-gfn2/gfn1 | xtb-gfn2/gfn1, gfnff | MOPAC | dxtb (gfn1/gfn2-xtb), AIMNet2, MMFF |
+|---|---|---|---|---|
+| Conformer search | RDKit MMFF94s: gas phase in every run (the same pool per phase); CREST: ALPB | same | same | same |
+| Refinement | ALPB (GBSA, CPCM on request) | ALPB (GBSA) | COSMO | gas phase |
+| Engine properties (dipole, charges, HOMO/LUMO, polarizability, `*_gsolv_kcal`) | ALPB, polarizability included | ALPB (polarizability is D4's α(0)) | COSMO | none |
+| xTB properties (`xtb_*`: GFN1-xTB charges, dipole, polarizability) | tblite GFN1-xTB in ALPB | tblite GFN1-xTB in ALPB | tblite GFN1-xTB in ALPB | dxtb, gas phase |
+| Frequencies, thermochemistry | ALPB (finite differences of the solvated forces) | ALPB | COSMO (approximate) | gas phase |
+| QM stage (Psi4) | PCM where PCMSolver has the solvent | same | same | same |
+
+Without tblite installed, a solvent run takes the xTB properties from dxtb in the gas phase and says so in
+the notes and `phase_notes`. In the gas phase the `xtb_*` columns still come from dxtb; dxtb and tblite agree
+for GFN1-xTB to 5e-5 e (charges), 1e-4 D and 5e-4 Å³, so gas/water differences are the solvent's.
+
+## Phases: the same input in the gas phase and in water
+
+```bash
+quantabench-cli build --file cohorts.sdf --id-col CAS_RN --method tblite-gfn2 --no-protonate \
+    --max-confs 50 --window 6 --refine-top 5 --freq --phases gas,water --run-dir RUN
+quantabench-cli build --phases gas,water --resume RUN      # continue (or add a phase from a sibling's inputs)
+quantabench-cli pair RUN/gas RUN/water --out paired.csv    # or `pair RUN`; works on unfinished runs too
+```
+
+`--phases` takes any list of solvent names (`gas` = none). Each phase is an ordinary run folder
+(`RUN/gas`, `RUN/water`) with its own job table, run one after the other with `--solvent` set to the
+phase, so `--resume`, `--retry-failed`, `--lanes`, `--chunk` and the memory guard work per phase, and
+`grid build --solvent water` can compute one phase on other machines (then `merge` the chunks and
+`pair` them: several folders of one phase are combined). The two phases may also run at the same time
+as two plain builds into `RUN/gas` and `RUN/water` with the same settings. At the end `RUN/paired.csv`
+is written.
+
+**Pairing** joins molecules by id **and** `input_inchikey` (the input SMILES for older runs), never by row
+order. A row whose id matches but whose input structure differs is not paired (`pair_status`: structure
+mismatch). Columns: the identity columns once (`id`, `name`, `input_inchikey`, `inchikey`,
+`canonical_smiles`, `input_smiles`, `smiles`, `input_charge`, `charge`, `multiplicity`,
+`removed_fragments` and the 2D descriptors), `pair_status` (`ok`, or e.g. `water not computed`,
+`gas failed`), `pair_notes`, then `dG_solv_kcal`, `dG_solv_G_kcal`, `dG_solv_vertical_kcal`, then for
+every other column of summary.csv and descriptors.csv `gas_<col>`, `water_<col>` and, for numeric ones
+where a difference means something, `delta_<col>` = water − gas (no delta for counts, timings and flags).
+With three or more phases (or `--reference` other than gas) each phase `p` gets `delta_<p>_<col>` and
+`dG_solv_<p>_kcal`, relative to the reference phase.
+
+**ΔG_solv.** tblite and the xtb program report, in a named solvent, the total energy of the solute in the
+ALPB continuum: the SCF energy of the polarized solute plus the solvation free energy terms (generalized-Born
+polar term, a SASA-based cavity/dispersion/solvent-structure term and an empirical shift), in the `gsolv`
+reference state (tblite's and xtb's default). That energy already **is** a free energy of solvation on top
+of the gas-phase Hamiltonian, so:
+
+- `dG_solv_kcal` = E_water(R_water) − E_gas(R_gas): each phase's best refined conformer at its own geometry
+  (`best_energy_eV`), so it includes the conformer and geometry relaxation between the phases: it is the
+  vertical value below plus the gas-phase distortion energy E_gas(R_water) − E_gas(R_gas) ≥ 0. Empty, with the
+  reason in `pair_notes`, when the methods, charges, multiplicities or computed species differ, when a
+  phase failed, or when the water run fell back to the gas phase.
+- `dG_solv_G_kcal` = G_water − G_gas when both phases ran frequencies (`vib_gibbs_kcal`: E + ZPE + thermal
+  enthalpy − T·S at each phase's own tightly re-optimized minimum; the water Hessian includes the continuum).
+- `dG_solv_vertical_kcal` = the water run's `tblite_gfn2_gsolv_kcal` (or `gfn2_gsolv_kcal` for xtb):
+  E_water − E_gas at the water geometry, both SCFs self-consistent; the number the xtb program prints as
+  Gsolv plus the polarization cost.
+
+All three are for the transfer from 1 mol/L ideal gas to 1 mol/L ideal solution (Ben-Naim's ΔG\*, the
+`gsolv` state). The RRHO translational terms are computed at 1 atm in both phases and cancel. For the
+1 atm gas → 1 mol/L solution convention add RT ln(24.46) = +1.89 kcal/mol at 298.15 K (tblite's
+`bar1mol` state differs from `gsolv` by exactly this, checked numerically). GFN2-xTB/ALPB `dG_solv_kcal`
+(vertical): methanol −4.6 (−4.6; experiment −5.1), acetate −67.4 (−68.0), methylammonium −74.4 (−74.5),
+methylphosphonate(2−) −238.8 (−240.3) kcal/mol.
+
+The **solvated polarizability** is the finite-field response with the field and ALPB in one SCF; tblite
+supports both together, and the dipole-derivative value equals −d²E/dF² of the same calculations to
+1e-4 Å³ (`tests/test_properties_solvent.py`). In water it is 5-20 % above the gas-phase value.
+
+Note that the MMFF94s pre-screen keeps conformers within `--window` + 4 kcal/mol before the `--refine-top`
+lowest are refined, and the refined ensemble is pruned to `--window`.
+
 ## xtb program (`xtb-gfn2`, `xtb-gfn1`, `gfnff`)
 
 - **Install.** Linux/WSL: `conda install -c conda-forge "xtb>=6.7.1"` (or `envs/tools.yml`). Windows:
@@ -227,8 +323,10 @@ hexane, diethyl ether, ethyl acetate). Engines without a solvent model run in th
 - Matches the xtb program to 4e-9 Eh. Solvation: ALPB (default), GBSA (falls back to ALPB where GBSA
   lacks parameters), CPCM (ε).
 - **Polarizability.** `tblite_gfn2_polarizability_iso_A3` is the electronic response from finite fields
-  (6 SCFs). The minimal basis makes it about a third of experiment (water 0.37 vs 1.45 Å³): use it for
-  trends.
+  (6 SCFs), in the run's solvent when it has one (see Phases above). The minimal basis makes it about a
+  third of experiment (water 0.37 vs 1.45 Å³): use it for trends.
+- **Solvation energy.** With a solvent, `tblite_gfn2_gsolv_kcal` = E(solvent) − E(gas) at the best
+  conformer (one more SCF) and `tblite_gfn2_solvation` names the model used (`ALPB(water)`).
 - Threads: OpenMP reads `OMP_NUM_THREADS` when tblite is first imported. QuantaBench sets it at startup.
 
 ## MOPAC (`mopac-pm7`, `mopac-pm6`)

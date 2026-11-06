@@ -2,6 +2,41 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Gas and water phases, paired per molecule (PFAS QSAR run, 2026-11-05)
+- **`build --phases gas,water`** (any list of solvents; `gas` = none) runs the same input once per phase into
+  sibling run folders, `RUN/gas` and `RUN/water`: normal resumable runs with their own job tables, so
+  `--resume`, `--retry-failed`, lanes, chunks and `grid build --solvent` work per phase. Then it writes
+  `RUN/paired.csv`. `build --phases ... --resume RUN` continues every phase and starts a missing one from a
+  sibling's inputs and settings.
+- **`quantabench-cli pair RUN/gas RUN/water [...] --out paired.csv`** rebuilds the paired table from finished or
+  unfinished runs (read from their job tables), joining by molecule id and input InChIKey, never by row order:
+  the identity columns once, `pair_status`/`pair_notes`, `dG_solv_kcal` (E_water − E_gas, each phase's best
+  conformer at its own geometry), `dG_solv_G_kcal` (from G when both ran frequencies), `dG_solv_vertical_kcal`
+  (fixed geometry), then `gas_<col>`, `water_<col>`, `delta_<col>`. The definition (ALPB's energy already holds
+  the solvation free energy; 1 mol/L → 1 mol/L state) is in docs/ENGINES.md, "Phases".
+- **The water phase is solvated in every step that can be.** Before, a `tblite-gfn2` run in water refined,
+  computed its dipole/HOMO/LUMO and its frequencies in ALPB, but its polarizability was computed in the gas
+  phase on purpose, and the GFN1-xTB `xtb_*` properties (charges, dipole, polarizability) came from dxtb in the
+  gas phase without a word. Now the engine's polarizability is the finite-field response in ALPB (verified
+  against −d²E/dF² to 1e-4 Å³), and in a solvent the `xtb_*` properties come from tblite's GFN1-xTB with the
+  same solvation (dxtb and tblite agree to 5e-5 e in the gas phase). New: `tblite_gfn2_gsolv_kcal`,
+  `tblite_gfn2_solvation`.
+- summary.csv records `phase`, `solvent`, `solvation_model` and **`phase_notes`**: per step where it ran
+  (`conformers: gas (MMFF94s has no implicit solvent ...); refine: ALPB(water); properties: ALPB(water);
+  xtb_properties: ALPB(water), tblite GFN1-xTB; frequencies: ALPB(water)`) or why a step fell back to the gas
+  phase.
+- **Structure keys**: every summary.csv and descriptors.csv row has `inchikey` and `canonical_smiles` of the
+  computed species and `input_inchikey` of the record as drawn, for joining to other tables (Spartan) by
+  structure. Empty, with a note, when InChI cannot represent the species.
+- **Metal counter-ions**: bondless Al³⁺, Zn²⁺, Fe²⁺/³⁺ and Cu²⁺ cations next to an organic ion are stripped like
+  Na⁺/K⁺/Ca²⁺/Mg²⁺/Ba²⁺/Sr²⁺ and listed in `removed_fragments` (fosetyl-Al: one ethyl phosphonate anion). A metal
+  next to neutral ligands (CO, phosphines, a corrin) or carbanions (Cp⁻, CN⁻) still fails as a metal complex;
+  covalently drawn organometallics (Sn, Hg) stay whole.
+- **pH 7 rules**: two basic sites within three bonds get one proton (piperazine, 1,2-diamines and guanidine were
+  dications); 1,3-diamines keep two.
+- **`--id-col CAS_RN` on SD files**: a record without the property takes its title as the id (it took DTXSID/ID
+  first), with a note in the molecule's notes.
+
 ### Apple GPU: AIMNet2 on MPS (first run on the MacBook, 2026-11-05)
 - AIMNet2's Warp-free path failed on the Apple GPU with "Undefined type Double": `t.to("cpu", torch.float64)` casts on
   the device before the copy, and MPS has no float64. Tensors now move to the CPU first and are cast there (and the
