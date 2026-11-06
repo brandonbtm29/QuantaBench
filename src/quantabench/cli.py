@@ -37,6 +37,7 @@ interrupted batch continues where it stopped. A single molecule without those op
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import socket
 import sys
@@ -1008,9 +1009,22 @@ def main(argv: list[str] | None = None) -> int:
     return args.func(args)
 
 
+def safe_console_streams(streams=None) -> None:
+    """Never fail on a character the console cannot show. On Windows a redirected stdout uses the ANSI code
+    page (cp1252), so ``build --help`` (σ, Å) or a molecule named β-... raised UnicodeEncodeError; such
+    characters now print as ``?``. UTF-8 streams are left alone."""
+    for s in streams if streams is not None else (sys.stdout, sys.stderr):
+        enc = (getattr(s, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+        if s is None or enc in ("utf8", "utf8sig") or not hasattr(s, "reconfigure"):
+            continue
+        with contextlib.suppress(Exception):
+            s.reconfigure(errors="replace")
+
+
 def entry() -> None:
     """Console-script entry point (``quantabench-cli``): ``main`` plus a hard exit where the GPU runtime
     would hang at shutdown (``resources.hard_exit_if_needed``). Tests call ``main`` directly."""
+    safe_console_streams()
     code = main()
     resources.hard_exit_if_needed(code)
     raise SystemExit(code)

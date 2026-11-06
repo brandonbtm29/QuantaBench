@@ -211,7 +211,26 @@ Open (needs-Brandon):
 - The default sample has 237 molecules with PM6 and 64 with DFT-water but only 1 with both: DFT-water exists
   almost only for the charged cohorts, which have no PM6. Decide whether to add PM6 (or gas DFT) for those, or
   sample `--require dft` separately for the water comparison.
-- Run the 300 in the gas phase and in ALPB water at GFN2-xTB (and AIMNet2), then `validate`.
+- Run the 300 in the gas phase and in ALPB water at GFN2-xTB (and AIMNet2), then `validate`. **Done
+  2026-11-05:** grid NOVA + MacBook, gas 18 min, water 21 min, 298/300 ok in both phases. Findings and fixes are
+  in VAL-3.
+
+## VAL-3: Follow-ups from the 300-molecule validation run · in progress
+- Done:
+  - Ion dipoles about the centre of mass in the Spartan import (Spartan's are about its frame origin; up to
+    10.5 D off).
+  - tblite's electronic dipole stored for every conformer.
+  - At Spartan's own geometries, GFN2/ALPB matches B3LYP/C-PCM water dipoles to 0.41 D for anions
+    (r 0.997) and 1.9 D for cations (`scratch/dipole_fixed_geom.py` on NOVA). The remaining 4.2 D MAE comes
+    from the conformer each program picks.
+- Open:
+  - `validate --boltzmann`: compare `dipole_debye_boltz` with a Boltzmann average over Spartan's DFT conformers
+    (the `*_DFT_Top5` documents hold 5 per molecule).
+  - The same fixed-geometry test for the gas phase against PM6 (r 0.62-0.67; C1B 0.18). It should show whether
+    PM6 or the conformer is the cause.
+  - GFN2's LUMO sits about 5.5 eV above PM6's, and its gap about 4.4 eV above (r 0.80-0.82). Document this
+    as a systematic offset for QSAR: use the values as correlated descriptors, not as absolute values.
+  - The Psi4 B3LYP subset on QuantaBench geometries (VAL-2) closes the loop on method vs geometry.
 
 ## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · ready (after VAL-1 data)
 - The QM stage reproduces Spartan's level (Spartan used 6-31G*: run `wb97x-d/6-31g*` too). Compare
@@ -229,9 +248,13 @@ Open (needs-Brandon):
     instead of 2.546 (`test_real_properties_water_in_water`). Energies and forces passed.
   - MOPAC 23.2.5: PM7 water `pm7_polarizability_iso_A3` 1.347 instead of 1.259, methanol 3.22 instead of
     3.0 ± 0.2 (`test_eng_mopac.py`); heat of formation, dipole, HOMO/LUMO and COSMO area/volume passed.
-- To do: compare the same inputs on Linux and NOVA (xtb `--json` dipole, MOPAC `.out` polarizability block):
-  a build difference (report upstream / pin), or QuantaBench reading a different block of the output.
-  Until then, don't use xtb dipoles or MOPAC polarizabilities from Windows in QSAR tables.
+- xtb: **fixed 2026-11-05.** xtb writes `"program call"` with raw Windows backslashes, so `xtbout.json`
+  was invalid JSON. Dipoles and gaps fell back to the charge-only values. `eng_xtb.read_xtbout` now escapes
+  them, and the xtb tests pass on NOVA.
+- MOPAC: open. On NOVA, MOPAC 23.2.5 prints `ISOTROPIC AVERAGE ALPHA = 9.09001 A.U.` for the test's water,
+  where the reference output has 8.49573: a version difference in TDHF POLAR, not a parsing problem. Record
+  the version that produced the reference and make the test version-aware. Until then, don't mix MOPAC
+  polarizabilities from different versions in one QSAR table.
 
 ### PLAT-1: First run on the MacBook · needs-Brandon
 - INSTALL.md's macOS steps on the MacBook: `doctor --bench`, full suite, `pytest -m external` with
@@ -507,9 +530,39 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   without RDKit's largest-fragment rule.
 - **Condition classes:** check the classifier on the full pull. List every `needs_review` surface-tension
   record, and extend the reference rules (pure-liquid tables vs surfactant literature) from what is there.
+- **Trial findings (validation300, first 50, 2026-11-05):** 40 match, 1 stereo, 6 CAS not in PubChem (found
+  by InChIKey), 3 different. Of the 3:
+  - 93894-66-7: drawn with one F per chain carbon. The name says heptadecafluoro, so it is a structure error
+    in the source.
+  - 165951-17-7: PubChem's record is the dipropylammonium salt of HFPO-DA; the table has only the amine.
+  - 218462-19-2: a mixture with dichloroethylene.
+
+  The last two are now `component_of_mixture`. Feed `different_structure` and smaller-component cases back
+  to the cohort curation before the QSAR fit.
 - **CompTox (CTX API):** the same enrichment by DTXSID (batch POSTs of 1,000; free key): TEST's predicted
   surface tension and the experimental physchem values. Check the property names on the workstation first
   (api-ccte.epa.gov is blocked in the cloud environment).
+
+### DIST-6: Grid weights from measured throughput · ready
+- Validation run (tblite GFN2, 50 conformers, top 5, frequencies), water phase: the MacBook finished its 169
+  molecules in 12.5 min (811/h); NOVA took 20.8 min for its 131 (378/h). `--weights auto` had split them
+  2680:2240 from the single-molecule benchmark. For the full run pass measured weights (about 2:1), and
+  have `grid build` learn: record each machine's molecules/hour per protocol from finished grids, and
+  prefer that over the benchmark in `--weights auto`. Work stealing (a machine that finishes early takes
+  the other's pending molecules) would make this unnecessary.
+- Lane layouts: both machines ran 6 lanes x 2 threads. Timings for 6x2, 7x2, 10x1 and 14x1 on the Mac
+  are in `scratch/lanes_test` (2026-11-05). NOVA's 12x1 and 12x2 are still to do.
+
+### PERF-2: tblite Windows wheel with OpenBLAS · ready
+- One GFN2/ALPB energy+gradient (`scratch/tblite_scf_bench.py`, 1 thread): MacBook 13.5 / 32.5 / 81 ms
+  for 31 / 62 / 110 atoms, NOVA 24.8 / 66.8 / 212 ms. The gap grows with size (1.8x to 2.6x). The macOS
+  wheel links OpenBLAS; the fork's Windows wheel bundles reference BLAS/LAPACK.
+- To rebuild with MSYS2's `mingw-w64-ucrt-x86_64-openblas` (`-Dtblite:lapack=openblas`), check first:
+  - That package depends on LLVM's OpenMP (`-omp`), while tblite links libgomp, so two OpenMP runtimes
+    would sit in one process.
+  - It ships `openblas.pc` but no `lapack.pc`, which dftd4 and multicharge may look for.
+  - Energies must match win1 to 1e-10 Eh.
+- Expected gain: NOVA 1.5-2x on mid-size and large molecules, about 15 % off a two-machine full run.
 
 ### DIST-4: Per-stage routing · later
 - Different stages of one molecule on different machines (CREST + Psi4 on the Mac, GPU refinement +

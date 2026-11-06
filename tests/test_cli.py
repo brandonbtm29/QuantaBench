@@ -108,3 +108,20 @@ def test_merge_and_md_parse_fail_on_missing_folders(tmp_path, capsys):
     assert cli.main(["merge", str(tmp_path / "out"), str(tmp_path / "nope1"), str(tmp_path / "nope2")]) == 1
     assert "no such folder" in capsys.readouterr().err
     assert cli.main(["md", "parse", str(tmp_path / "nope")]) == 2
+
+
+def test_console_streams_never_fail_on_unencodable_characters():
+    """A cp1252 console (Windows, redirected) printing σ or β: replaced, not UnicodeEncodeError."""
+    import io
+
+    from quantabench import cli
+
+    raw = io.BytesIO()
+    s = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
+    cli.safe_console_streams([s])
+    print("σ_CMC β-Tocopherol", file=s)
+    s.flush()
+    assert raw.getvalue().decode("cp1252").startswith("?_CMC ?-Tocopherol")
+    u = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
+    cli.safe_console_streams([u])
+    assert u.errors == "strict"
