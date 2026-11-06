@@ -287,8 +287,12 @@ def pair_rows(tables: Sequence[PhaseTable], reference: str | None = None) -> tup
     for t in tables:
         for row in t.rows.values():
             per_phase += [k for k in row if k not in identity and k not in per_phase]
-    numeric = {k for k in per_phase if k not in NO_DELTA and any(
-        _num(r.get(k)) is not None for t in tables for r in t.rows.values())}
+    def has_numbers(t: PhaseTable, k: str) -> bool:
+        return any(_num(r.get(k)) is not None for r in t.rows.values())
+
+    # a difference needs numbers in the reference and in another phase (tblite_*_gsolv_kcal exists in water only)
+    numeric = {k for k in per_phase if k not in NO_DELTA and has_numbers(ref, k)
+               and any(has_numbers(t, k) for t in others)}
 
     out_rows = []
     for mol_id in ids:

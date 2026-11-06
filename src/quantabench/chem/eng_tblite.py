@@ -27,7 +27,7 @@ trends or recalibrate it. It is **not** the ``Mol. α(0)`` that the xtb program 
 from the D4 dispersion model (charge-scaled atomic reference polarizabilities), not from the SCF. In a
 solvent every property, the polarizability included, is computed with the same solvation as the
 refinement: the field and the continuum act in one SCF, so the polarizability is the solute's response
-inside its reaction field (5-20 % above the gas-phase value in water). tblite supports a field together
+inside its reaction field (GFN2: 15-40 % above the gas-phase value in water). tblite supports a field together
 with ALPB, GBSA or CPCM; the dipole-derivative polarizability equals -d2E/dF2 of the same calculations to
 1e-4 Å^3 in water and in the gas phase (``tests/test_properties_solvent.py``).
 

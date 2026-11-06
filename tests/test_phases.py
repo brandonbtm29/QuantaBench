@@ -86,6 +86,7 @@ def test_pairing_joins_by_id_and_structure_and_says_why_a_pair_has_no_dg():
     j = columns.index("gas_sasa_A2_best")
     assert columns[j:j + 3] == ["gas_sasa_A2_best", "water_sasa_A2_best", "delta_sasa_A2_best"]
     assert "delta_notes" not in columns and "delta_method" not in columns and "gas_id" not in columns
+    assert "water_tblite_gfn2_gsolv_kcal" in columns and "delta_tblite_gfn2_gsolv_kcal" not in columns  # water only
 
 
 def test_pairing_with_three_phases_names_each_difference():

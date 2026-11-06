@@ -264,7 +264,9 @@ methylphosphonate(2−) −238.8 (−240.3) kcal/mol.
 
 The **solvated polarizability** is the finite-field response with the field and ALPB in one SCF; tblite
 supports both together, and the dipole-derivative value equals −d²E/dF² of the same calculations to
-1e-4 Å³ (`tests/test_properties_solvent.py`). In water it is 5-20 % above the gas-phase value.
+1e-4 Å³ (`tests/test_properties_solvent.py`). In water, at the same MMFF geometry, the GFN2 value rises
+15-40 % (PFOA and PFOS anions 15 %, 6:2 FTOH 18 %, ethanol 27 %, piperazine 32 %, benzene 42 %) and the
+GFN1 `xtb_*` value 8-16 %.
 
 Note that the MMFF94s pre-screen keeps conformers within `--window` + 4 kcal/mol before the `--refine-top`
 lowest are refined, and the refined ensemble is pruned to `--window`.
