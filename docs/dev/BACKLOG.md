@@ -235,8 +235,17 @@ Open (needs-Brandon):
     (r 0.80-0.88). Document this as a systematic offset for QSAR: use the values as correlated descriptors,
     not as absolute values.
   - The Psi4 B3LYP subset on QuantaBench geometries (VAL-2) closes the loop on method vs geometry.
-  - Rebuild the 300 (gas and water) with 0.3.0.dev3 and re-run `validate`: the 2026-11-05 tables have the old
-    `sasa_A2` (zero atom radii) and no `cpk_*` columns. needs-Brandon (now, or with the full run).
+- Done 2026-11-06: the 300 rebuilt with 0.3.0.dev3 (`Runs/validation-2026-11-06`, NOVA OpenBLAS tblite 12x1 +
+  MacBook, work sharing on): gas 7.1 min, water 7.2 min (Nov 5: 18 and 21); the machines finished within 1 s and
+  12 s of each other; 298/300 ok in both phases. Validated against the v6 Spartan import (14,150 wide rows; the
+  771 `MoleculeN` rows of v5 are gone):
+  - CPK, like with like: gas vs PM6 area MAE 13.7 Å² (r 0.982), volume 6.7 Å³ (r 0.985); water vs B3LYP/C-PCM
+    (MMFF geometry) area 7.9 Å² (r 0.996), volume 2.0 Å³ (r 1.000, slope 0.998). What is left is geometry.
+  - `sasa_A2` (now the real solvent-accessible area) vs CPK area: correlation r 0.960 gas, 0.978 water (it is a
+    larger surface, MAE ~200 Å² by design).
+  - Dipoles, HOMO/LUMO/gap and polarizabilities are identical to Nov 5 to the reported digits (deterministic across
+    lane layouts and the BLAS change); `dipole_debye_best` is now the GFN2 dipole: gas vs PM6 MAE 1.41 D (r 0.65),
+    water vs B3LYP 4.35 D (r 0.84).
 - Done 2026-11-06 (areas and volumes, from Brandon's screenshots of Spartan's Preferences):
   - Spartan's CPK area and volume are the union of spheres with its VDW Radii table (carbon 1.92 Å vs Bondi's
     1.70). `cpk_area_A2` / `cpk_volume_A3` reproduce CPKAREA to 0.5 % and CPKVOLUME to 0.1 % (60 C3A B3LYP
