@@ -90,6 +90,26 @@ def test_sdf_id_property(tmp_path):
     assert [i.id for i in items] == ["76-05-1", "Acetic_acid"]
     assert items[0].name == "Trifluoroacetic acid" and items[0].meta["CAS_RN"] == "76-05-1"
     assert any("1 record(s) have no cas_rn property" in w for w in seen)
+    assert inputs.ID_NOTE not in items[0].meta
+    assert items[1].meta[inputs.ID_NOTE] == "no cas_rn property in the SD record: id 'Acetic acid' from the SD title"
+
+
+def test_sdf_id_property_falls_back_to_the_title_before_dtxsid(tmp_path):
+    """Records of a mixed file (cohorts with and without CAS_RN) keep their CAS-number titles as ids, and the
+    molecule's notes say where its id came from."""
+    from quantabench.chem.pipeline import BuildConfig, run_molecule
+
+    path = _sdf(tmp_path / "set.sdf", [("375-22-4", "OC(=O)C(F)(F)C(F)(F)C(F)(F)F", {"DTXSID": "DTXSID4059916"}),
+                                       ("Trifluoroacetic acid", "OC(=O)C(F)(F)F", {"CAS_RN": "76-05-1"}),
+                                       ("", "CC(=O)O", {"DTXSID": "DTXSID5024394"}),
+                                       ("", "CCO", {})])
+    items = inputs.read_file(path, id_col="CAS_RN", log=lambda _m: None)
+    assert [i.id for i in items] == ["375-22-4", "76-05-1", "DTXSID5024394", "set_4"]
+    assert "from its DTXSID/ID property" in items[2].meta[inputs.ID_NOTE]
+    assert "from the record number" in items[3].meta[inputs.ID_NOTE]
+    res = run_molecule(items[0], BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False,
+                                             write_files=False))
+    assert res.status == "ok" and any("no CAS_RN property" in n and "SD title" in n for n in res.notes)
 
 
 def test_sdf_with_hydride_fragment_reads_quietly(tmp_path, capfd):

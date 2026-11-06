@@ -401,6 +401,8 @@ def read_table(path: str | Path, smiles_col: str | None = None, id_col: str | No
 
 
 SDF_ID_PROPERTIES = ("DTXSID", "ID")
+#: ``MoleculeInput.meta`` key of a note about where the id came from (``read_sdf`` with ``id_col``)
+ID_NOTE = "qb_id_note"
 
 
 def _sdf_failure(supplier: Chem.SDMolSupplier, index: int) -> tuple[str, str]:
@@ -426,10 +428,11 @@ def read_sdf(path: str | Path, id_col: str | None = None,
     """Read every record of an SD file as a ``MoleculeInput`` (3D coordinates, explicit H and charges kept).
 
     The id is the SD property ``id_col`` when given (matched ignoring case, e.g. ``CAS_RN``), else DTXSID or
-    ID, else the title line, else ``<stem>_<record>``; ``name`` is the title. Records RDKit cannot read are
+    ID, else the title line, else ``<stem>_<record>``; ``name`` is the title. A record without the ``id_col``
+    property takes its title as the id (then DTXSID or ID, then ``<stem>_<record>``), with a note in its
+    ``meta[ID_NOTE]`` that the pipeline copies into the molecule's notes. Records RDKit cannot read are
     skipped and reported through ``log`` with their record number, title and RDKit's reason, and so are
-    records without the ``id_col`` property (they fall back to the title). Ids are made unique
-    (``dedupe_ids``), as for tables."""
+    records without the ``id_col`` property. Ids are made unique (``dedupe_ids``), as for tables."""
     path = Path(path)
     out: list[MoleculeInput] = []
     skipped: list[str] = []
@@ -445,19 +448,22 @@ def read_sdf(path: str | Path, id_col: str | None = None,
         title = mol.GetProp("_Name").strip() if mol.HasProp("_Name") else ""
         props = mol.GetPropsAsDict()
         ident = ""
+        meta = {k: str(v) for k, v in props.items()}
+        fallback = next((str(props[k]).strip() for k in SDF_ID_PROPERTIES if str(props.get(k, "")).strip()), "")
         if id_col:
             lower = {k.lower(): k for k in props}
             key = lower.get(id_col.strip().lower())
             ident = str(props[key]).strip() if key is not None else ""
             if not ident:
                 no_id.append(f"record {i}{' (' + title + ')' if title else ''}")
-        ident = (ident or next((str(props[k]).strip() for k in SDF_ID_PROPERTIES if str(props.get(k, "")).strip()), "")
-                 or title or f"{path.stem}_{i}")
+                ident = title or fallback or f"{path.stem}_{i}"
+                source = "the SD title" if title else "its DTXSID/ID property" if fallback else "the record number"
+                meta[ID_NOTE] = f"no {id_col} property in the SD record: id {ident!r} from {source}"
+        ident = ident or fallback or title or f"{path.stem}_{i}"
         with rdBase.BlockLogs():   # "not removing hydrogen atom without neighbors" for H- fragments
             smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
         out.append(MoleculeInput(id=safe_id(ident, fallback=f"{path.stem}_{i}"), name=title or ident,
-                                 source=f"{path.name}#{i}", mol=mol, smiles=smiles,
-                                 meta={k: str(v) for k, v in props.items()}))
+                                 source=f"{path.name}#{i}", mol=mol, smiles=smiles, meta=meta))
     warnings: list[str] = []
     if skipped:
         warnings.append(f"{path.name}: skipped {len(skipped)} record(s) RDKit cannot read: " + "; ".join(skipped[:10])
