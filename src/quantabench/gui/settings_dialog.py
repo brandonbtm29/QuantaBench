@@ -1,4 +1,4 @@
-"""Settings dialog: compute resources, build defaults, surfaces and radii, engines, folders."""
+"""Settings dialog: compute resources, build defaults, surfaces and radii, display (energy units), engines, folders."""
 
 from __future__ import annotations
 
@@ -29,9 +29,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import resources
+from .. import resources, units
 from .. import settings as settings_mod
 from ..chem import engines
+from .energy_widgets import EnergySpinBox
 
 
 def method_keys() -> list[str]:
@@ -59,6 +60,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._resources_tab(report), "Compute")
         tabs.addTab(self._build_tab(), "Build defaults")
         tabs.addTab(self._surfaces_tab(), "Surfaces && radii")    # "&&": a literal & (not a shortcut)
+        tabs.addTab(self._display_tab(), "Display")
         tabs.addTab(self._engines_tab(), "Engines")
         tabs.addTab(self._folders_tab(), "Folders")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -214,10 +216,11 @@ class SettingsDialog(QDialog):
         self.max_confs.setRange(1, 1000)
         self.max_confs.setValue(b.max_conformers)
         form.addRow("Max conformers", self.max_confs)
-        self.window = QDoubleSpinBox()
-        self.window.setRange(0.5, 50)
-        self.window.setSuffix(" kcal/mol")
-        self.window.setValue(b.energy_window_kcal)
+        # stored in kcal/mol (a science setting), shown in the relative-energy unit of the Display tab
+        self.window = EnergySpinBox(0.5, 50, units.KCAL, units.EnergyDisplay.of(self.s).relative)
+        self.window.set_stored(b.energy_window_kcal)
+        self.window.setToolTip("Conformers more than this above the lowest one are dropped. Shown in the relative-energy\n"
+                               "unit (Settings > Display); runs store it in kcal/mol (energy_window_kcal).")
         form.addRow("Energy window", self.window)
         self.rmsd = QDoubleSpinBox()
         self.rmsd.setRange(0.05, 3.0)
@@ -369,6 +372,75 @@ class SettingsDialog(QDialog):
             if r is not None:
                 out[self.radii_table.item(row, 0).text()] = r
         return out
+
+    def _display_tab(self) -> QWidget:
+        """Energy units and number format for the GUI's tables and panels (Spartan's Preferences > Document)."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        shown = units.EnergyDisplay.of(self.s)
+        box = QGroupBox("Energy units")
+        form = QFormLayout(box)
+        self.energy_unit, self.relative_unit = QComboBox(), QComboBox()
+        for combo, current in ((self.energy_unit, shown.absolute), (self.relative_unit, shown.relative)):
+            for key in units.UNITS:
+                combo.addItem(units.LABELS[key], key)
+            combo.setCurrentIndex(max(0, combo.findData(current)))
+        self.energy_unit.setToolTip("Total energies: the conformer table's E, the best energy in the molecule list,\n"
+                                    "the QM energy, and H and G of the thermochemistry.")
+        self.relative_unit.setToolTip("Energy differences: the conformers' ΔE and the energy window, ZPE, H − E and\n"
+                                      "G − E (entropy follows: J/(mol·K) with kJ/mol), and the electrostatic potential\n"
+                                      "on the Surfaces panel (its colour range, legend and descriptors).")
+        form.addRow("Energies", self.energy_unit)
+        form.addRow("Relative energies", self.relative_unit)
+        lay.addWidget(box)
+
+        nbox = QGroupBox("Numbers")
+        nform = QFormLayout(nbox)
+        self.sig_digits = QSpinBox()
+        self.sig_digits.setRange(0, units.MAX_DIGITS)
+        self.sig_digits.setSpecialValueText("Automatic")
+        self.sig_digits.setValue(shown.digits)
+        self.sig_digits.setToolTip("Automatic: each energy with QuantaBench's usual precision, converted to the unit\n"
+                                   "(0.01 kcal/mol is 0.01 kJ/mol, 0.0001 eV). A number: that many significant digits.")
+        nform.addRow("Significant digits", self.sig_digits)
+        self.number_style = QComboBox()
+        for key in units.STYLES:
+            self.number_style.addItem(units.STYLE_LABELS[key], key)
+        self.number_style.setCurrentIndex(max(0, self.number_style.findData(shown.style)))
+        self.number_style.setToolTip("Decimal: never an exponent. Scientific: always (-2.62550e+06).\n"
+                                     "Automatic: decimal, with an exponent only where the decimal form would hide\n"
+                                     "the value (or, with significant digits, as a spreadsheet's General format).")
+        nform.addRow("Number style", self.number_style)
+        self.display_preview = QLabel()
+        self.display_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        nform.addRow("Example", self.display_preview)
+        lay.addWidget(nbox)
+        note = QLabel("Display only: runs and exported files (CSV, JSON, SDF) keep their columns and units, such as "
+                      "<code>rel_kcal</code> and <code>best_energy_eV</code>.")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        lay.addStretch(1)
+        for combo in (self.energy_unit, self.relative_unit, self.number_style):
+            combo.currentIndexChanged.connect(self._update_display_preview)
+        self.sig_digits.valueChanged.connect(self._update_display_preview)
+        self._update_display_preview()
+        return w
+
+    #: (absolute E in eV, ΔE in kcal/mol) of the Display tab's example: a PFAS-sized total energy
+    PREVIEW_VALUES = (-48276.81234, 1.2345)
+
+    def display_settings(self) -> units.EnergyDisplay:
+        """What the Display tab shows now (not saved yet)."""
+        return units.EnergyDisplay(settings_mod.DisplaySettings(
+            energy_unit=self.energy_unit.currentData(), relative_energy_unit=self.relative_unit.currentData(),
+            significant_digits=self.sig_digits.value(), number_style=self.number_style.currentData()))
+
+    def _update_display_preview(self, *_args) -> None:
+        d = self.display_settings()
+        e_ev, de_kcal = self.PREVIEW_VALUES
+        self.display_preview.setText(f"E = {d.with_unit(e_ev, units.EV, 'absolute', 5)}, "
+                                     f"ΔE = {d.with_unit(de_kcal, units.KCAL, 'relative', 2)}")
+        self.window.set_unit(d.relative)          # Build defaults' energy window follows the relative unit
 
     #: (settings key, label, file-dialog title) of the external programs QuantaBench can run
     PROGRAM_FIELDS = (("xtb", "xtb", "xtb executable"), ("crest", "CREST", "crest executable"),
@@ -573,13 +645,18 @@ class SettingsDialog(QDialog):
         b.protonate = self.protonate.isChecked()
         b.keep_largest_fragment = self.desalt.isChecked()
         b.max_conformers = self.max_confs.value()
-        b.energy_window_kcal = self.window.value()
+        b.energy_window_kcal = self.window.stored()
         b.rmsd_threshold = self.rmsd.value()
         b.fmax = self.fmax.value()
         sf = s.surfaces
         sf.radii_set = self.radii_set.currentData() or "bondi"
         sf.radii_overrides = self.radii_overrides()
         sf.sasa_probe_A = self.sasa_probe.value()
+        d = s.display
+        d.energy_unit = self.energy_unit.currentData()
+        d.relative_energy_unit = self.relative_unit.currentData()
+        d.significant_digits = self.sig_digits.value()
+        d.number_style = self.number_style.currentData()
         s.output_dir = self.output.text().strip()
         e = s.engines
         e.paths = {k: ed.text().strip() for k, ed in self.program_paths.items() if ed.text().strip()}

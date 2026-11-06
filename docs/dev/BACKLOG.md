@@ -246,19 +246,23 @@ Open (needs-Brandon):
   default level for the 4,700-PFAS descriptor run with timings (PFBA anion: ~4.5 min on 2 threads with
   PCM, cubes and finite-field α).
 
-## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · ready (Surfaces & radii done 2026-11-06)
+## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · ready (Surfaces & radii, Display done 2026-11-06)
 Review of Spartan '24's eleven tabs: Brandon's Claude Doc "Spartan Preferences review and QuantaBench settings plan".
 Rule: a setting that changes a computed value is a science setting (`jobs.SCIENCE_FIELDS`, sent to grid
 workers by `dist.worker.validate_config`); display settings never rename or rescale exported columns.
 - Done: **Surfaces & radii** (Spartan's Settings > Surface and VDW Radii): radii set, 111-element table with
   per-element values, SASA probe (`settings.surfaces`).
+- Done: **Display** (Document), 2026-11-06: energy and relative-energy units (kJ/mol by default, kcal/mol, eV,
+  hartree), significant digits and number style (`settings.display`, `quantabench.units`). Applied to the conformer
+  table, the molecule list, the info and thermochemistry text, the energy windows (stored in kcal/mol, exact until
+  edited: `gui.energy_widgets.EnergySpinBox`) and the Surfaces panel. Exports keep `_kcal`, `_eV` columns. Left:
+  reaction-energy units (nothing computes reaction energies yet); the CLI's printouts and the Properties page's
+  raw descriptor list keep the column units; orbital energies stay in eV.
 - Next, one tab per change, each with a GUI test like `tests/test_gui_settings_surfaces.py`:
   - **Compute** (Spartan's Jobs): an Expert box hiding the lane spec, GPU linear algebra and dxtb-on-GPU; a
     "N cores, M logical" line.
   - **Build defaults** (Settings > Import Filters, Conformer Rules): strip water, HCl and named counter-ions
     before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search.
-  - **Display** (Document): energy units for GUI tables and panels (kcal/mol, kJ/mol, eV, hartree), significant
-    digits, number style. Exports keep `_kcal`, `_eV` columns.
   - **Lookups** (Databases, URLs): URL templates with `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`
     (PubChem, NIST WebBook by CAS, nmrshiftdb, EPA CompTox), opened from the molecule list; PubChem cache folder
     and maximum age; a folder of reference tables with experimental values.

@@ -37,6 +37,30 @@
   (which `install_macos.sh` uses when it finds it) and in any environment listed in `~/.conda/environments.txt`.
 - `test_machine_name` no longer depends on the Mac it runs on (the Bonjour name came first there).
 
+### Energies in kJ/mol: Settings > Display (2026-11-06)
+- **The GUI shows energies in kJ/mol by default**, as Brandon's Spartan does. **Settings > Display** (Spartan's
+  Preferences > Document) sets:
+  - **Energies**: totals, such as a conformer's E, the best energy in the molecule list, the QM energy, and H and G.
+  - **Relative energies**: ΔE of conformers, the energy window, ZPE, H − E, G − E, and the electrostatic
+    potential on surfaces. Entropy follows it: J/(mol·K) with kJ/mol.
+  - Units: kJ/mol, kcal/mol, eV or hartree.
+  - **Significant digits**: Automatic keeps the precision QuantaBench showed before, converted (0.01 kcal/mol
+    becomes 0.01 kJ/mol). A number sets that many significant digits.
+  - **Number style**: Automatic, Decimal or Scientific.
+- Where it applies: the conformer table (ΔE and E headers and values), the molecule list's E column, the
+  molecule's info line and the Properties page's thermochemistry, the energy window on the Conformer search page
+  and in Settings > Build defaults, and the Surfaces panel's colour range, legend and ESP descriptors (σ² in
+  (kJ/mol)²). Orbital energies (the HOMO-LUMO gap) stay in eV. The Properties page's list of descriptor
+  columns keeps the column names, whose units are in the name (`esp_min_kcal`).
+- **Display only.** `settings.display` is not a science setting, and grid workers never see it. CSV, JSON and SDF
+  files keep their columns and units (`rel_kcal`, `best_energy_eV`, `esp_min_kcal`, `zpe_kcal`).
+  - The energy window is still stored in kcal/mol (`energy_window_kcal`). Its box shows the display unit and gives
+    back exactly the stored value until it is edited, so 6 kcal/mol shown as 25.10 kJ/mol is still 6.0, and a
+    resumed run never sees a changed setting.
+  - The surface colour range works the same way: the colours do not change with the unit.
+- New `quantabench.units`: conversion factors (the computations' own: 23.060548 kcal/mol per eV,
+  27.211386245988 eV per hartree, 4.184 kJ per kcal) and formatting. New `gui.energy_widgets.EnergySpinBox`.
+
 ### Areas and volumes: a SASA bug fixed, Spartan's radii as an option (2026-11-06)
 - **`sasa_A2` was wrong for every non-protein molecule.** It passed the radii of FreeSASA's ProtOr classifier,
   and those are 0 for any atom outside a protein residue, so the value was the union of bare 1.4 Å probe

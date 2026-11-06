@@ -50,12 +50,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, resources
+from .. import __version__, resources, units
 from .. import settings as settings_mod
 from ..chem import engines, export, jobs, solvents
 from ..chem import inputs as inputs_mod
 from ..chem.pipeline import BuildConfig, MoleculeResult
 from . import molecule_list, workers
+from .energy_widgets import EnergySpinBox
 from .molecule_list import (
     STATUS_FILTERS,
     STATUS_ICON,
@@ -112,6 +113,8 @@ class MainWindow(QMainWindow):
     #: The selected molecule changed, or its results did (MoleculeResult, or None when not built).
     #: Panels (spectra, surfaces) listen to this instead of reaching into the molecule list.
     resultChanged = Signal(object)
+    #: Settings > Display changed (a ``units.EnergyDisplay``): panels showing energies redraw them.
+    displayChanged = Signal(object)
 
     def __init__(self, s: settings_mod.Settings):
         super().__init__()
@@ -119,7 +122,7 @@ class MainWindow(QMainWindow):
         self.report: resources.HardwareReport | None = None
         # The list holds light rows (molecule_list.MoleculeRow); full results are read from their folders on
         # selection and only the last few stay in memory (ResultStore), so 14,000 molecules fit (SCALE-1).
-        self.model = MoleculeTableModel(self)
+        self.model = MoleculeTableModel(self, display=s)
         self.results = ResultStore(self.model)
         self.running: dict[str, str] = {}
         self.worker = None
@@ -382,9 +385,8 @@ class MainWindow(QMainWindow):
             form.addRow(self.w_crest_quick)
             self.w_maxconf = QSpinBox()
             self.w_maxconf.setRange(1, 1000)
-            self.w_window = QDoubleSpinBox()
-            self.w_window.setRange(0.5, 50)
-            self.w_window.setSuffix(" kcal/mol")
+            # stored in kcal/mol (BuildDefaults.energy_window_kcal, a science setting), shown in the display unit
+            self.w_window = EnergySpinBox(0.5, 50, units.KCAL, self.energy_display().relative)
             self.w_rmsd = QDoubleSpinBox()
             self.w_rmsd.setRange(0.05, 3)
             self.w_rmsd.setSingleStep(0.05)
@@ -519,8 +521,7 @@ class MainWindow(QMainWindow):
     def _build_bottom_dock(self) -> None:
         tabs = QTabWidget()
         self.conf_table = QTableWidget(0, 7)
-        self.conf_table.setHorizontalHeaderLabels(["#", "ΔE (kcal/mol)", "Weight (%)", "E (eV)", "Converged", "Steps",
-                                                   "Dipole (D)"])
+        self.conf_table.setHorizontalHeaderLabels(self._conformer_headers(self.energy_display()))
         self.conf_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.conf_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.conf_table.verticalHeader().setVisible(False)
@@ -540,6 +541,33 @@ class MainWindow(QMainWindow):
         dock.setWidget(tabs)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
         self.bottom_dock = dock
+
+    @staticmethod
+    def _conformer_headers(d: units.EnergyDisplay) -> list[str]:
+        return ["#", d.header("ΔE", "relative"), "Weight (%)", d.header("E", "absolute"), "Converged", "Steps",
+                "Dipole (D)"]
+
+    def energy_display(self) -> units.EnergyDisplay:
+        """Units and number format of Settings > Display, for everything in the window that shows an energy."""
+        return units.EnergyDisplay.of(self.s)
+
+    def apply_display(self) -> None:
+        """Redraw energies in the units of Settings > Display: conformer table, molecule list, the molecule's info
+        and properties, the energy window (its stored kcal/mol value is kept), and the panels (``displayChanged``)."""
+        d = self.energy_display()
+        self.conf_table.setHorizontalHeaderLabels(self._conformer_headers(d))
+        self.model.set_display(d)
+        self.w_window.set_unit(d.relative)
+        res = self._shown_res
+        if res is not None:
+            row = self.conf_table.currentRow()
+            self._fill_conformers(res)
+            if 0 <= row < self.conf_table.rowCount():
+                self.conf_table.blockSignals(True)          # same conformer: the views stay as they are
+                self.conf_table.setCurrentCell(row, 0)
+                self.conf_table.blockSignals(False)
+            self._show_info(res)
+        self.displayChanged.emit(d)
 
     def _build_toolbar_and_menus(self) -> None:
         tb = QToolBar("Main")
@@ -673,7 +701,7 @@ class MainWindow(QMainWindow):
         self.w_protonate.setChecked(b.protonate)
         self.w_ph.setValue(b.ph)
         self.w_maxconf.setValue(b.max_conformers)
-        self.w_window.setValue(b.energy_window_kcal)
+        self.w_window.set_stored(b.energy_window_kcal)
         self.w_rmsd.setValue(b.rmsd_threshold)
         self.w_seed.setValue(b.random_seed)
         methods = method_keys()
@@ -709,7 +737,7 @@ class MainWindow(QMainWindow):
         b.protonate = self.w_protonate.isChecked()
         b.ph = self.w_ph.value()
         b.max_conformers = self.w_maxconf.value()
-        b.energy_window_kcal = self.w_window.value()
+        b.energy_window_kcal = self.w_window.stored()
         b.rmsd_threshold = self.w_rmsd.value()
         b.random_seed = self.w_seed.value()
         b.refine_method = self.w_method.currentData()
@@ -1074,6 +1102,7 @@ class MainWindow(QMainWindow):
 
     def _show_info(self, res: MoleculeResult) -> None:
         d = res.descriptors
+        u = self.energy_display()
         info = engines.all_engines().get(res.method)
         bits = [f"<b>{res.input.id}</b> {d.get('formula', '')}, charge {res.charge:+d}",
                 f"{info.label} on {res.device}" if info is not None else res.method,
@@ -1087,29 +1116,38 @@ class MainWindow(QMainWindow):
                                  ("qm_dipole_debye", "Dipole (QM)", "D"),
                                  ("qm_polarizability_iso_A3", "Polarizability (QM)", "Å³"),
                                  ("qm_surf_volume_A3", "Volume, 0.002 au (QM)", "Å³"),
-                                 ("qm_gap_ev", "HOMO-LUMO gap (QM)", "eV")):
+                                 ("qm_gap_ev", "HOMO-LUMO gap (QM)", "eV")):     # an orbital energy: stays in eV
             if isinstance(d.get(key), (int, float)):
                 bits.append(f"{label}: {d[key]:.2f} {unit}")
         if res.qm:
             e = res.qm.get("energy_ev")
             bits.append(f"QM: {res.qm.get('level', '')} ({res.qm.get('program', '')})"
-                        + (f", E = {e:.5f} eV" if isinstance(e, (int, float)) else ""))
+                        + (f", E = {u.with_unit(e, units.EV, 'absolute', 5)}" if isinstance(e, (int, float))
+                           else ""))
         vib = res.vibrations
         thermo = (vib or {}).get("thermo")
         if thermo:
-            bits.append(f"ZPE {thermo['zpe_kcal']:.2f} kcal/mol, S {thermo['entropy_cal_molK']:.1f} cal/(mol·K), "
-                        f"G − E {thermo['g_corr_kcal']:.2f} kcal/mol at {thermo['temperature_k']:.0f} K"
+            bits.append(f"ZPE {u.with_unit(thermo['zpe_kcal'], units.KCAL, 'relative', 2)}, "
+                        f"S {u.entropy_text(thermo['entropy_cal_molK'], 1)}, "
+                        f"G − E {u.with_unit(thermo['g_corr_kcal'], units.KCAL, 'relative', 2)} "
+                        f"at {thermo['temperature_k']:.0f} K"
                         + (f"; <b>{vib['n_imaginary']} imaginary</b>" if vib["n_imaginary"] else ""))
         bits += [f"<i>{n}</i>" for n in res.notes]
         self.mol_info.setText("<br>".join(bits))
         lines = []
         if thermo:
+            def corr(key):            # H − E, G − E: a relative energy, with its unit when it differs from H's
+                text = u.text(thermo[key], units.KCAL, "relative", 3)
+                return text if u.relative == u.absolute else f"{text} {u.label('relative')}"
+
             lines += [f"<b>Thermochemistry</b> ({vib['method']}, {vib['hessian_method']} Hessian, "
                       f"{thermo['temperature_k']:.2f} K, {'qRRHO' if thermo['qrrho'] else 'RRHO'})",
-                      f"ZPE: {thermo['zpe_kcal']:.3f} kcal/mol",
-                      f"H: {thermo['enthalpy_kcal']:.3f} kcal/mol (H − E {thermo['h_corr_kcal']:.3f})",
-                      f"S: {thermo['entropy_cal_molK']:.3f} cal/(mol·K)",
-                      f"G: {thermo['gibbs_kcal']:.3f} kcal/mol (G − E {thermo['g_corr_kcal']:.3f})",
+                      f"ZPE: {u.with_unit(thermo['zpe_kcal'], units.KCAL, 'relative', 3)}",
+                      f"H: {u.with_unit(thermo['enthalpy_kcal'], units.KCAL, 'absolute', 3)} "
+                      f"(H − E {corr('h_corr_kcal')})",
+                      f"S: {u.entropy_text(thermo['entropy_cal_molK'], 3)}",
+                      f"G: {u.with_unit(thermo['gibbs_kcal'], units.KCAL, 'absolute', 3)} "
+                      f"(G − E {corr('g_corr_kcal')})",
                       f"{vib['n_modes']} modes, {vib['n_imaginary']} imaginary, lowest "
                       f"{vib['lowest_freq_cm1']:.1f} cm⁻¹", ""]
         lines += [f"{k}: {v:.4g}" if isinstance(v, float) else f"{k}: {v}" for k, v in d.items()
@@ -1136,8 +1174,10 @@ class MainWindow(QMainWindow):
         self.conf_table.setRowCount(0)
         if res and res.status == "ok":
             self.conf_table.setRowCount(len(res.conformers))
+            u = self.energy_display()
             for r, c in enumerate(res.conformers):
-                vals = [str(c.rank + 1), f"{c.rel_kcal:.2f}", f"{100 * c.weight:.1f}", f"{c.energy_ev:.5f}",
+                vals = [str(c.rank + 1), u.text(c.rel_kcal, units.KCAL, "relative", 2), f"{100 * c.weight:.1f}",
+                        u.text(c.energy_ev, units.EV, "absolute", 5),
                         "yes" if c.converged else "no", str(c.steps),
                         f"{c.dipole_debye:.2f}" if c.dipole_debye is not None else ""]
                 for col, v in enumerate(vals):
@@ -1510,6 +1550,7 @@ class MainWindow(QMainWindow):
         external.clear_cache()            # program paths may have changed
         self._refresh_engine_lists()
         self._load_stage_values()
+        self.apply_display()              # energy units (Settings > Display)
         if self.report:
             self._on_hardware(self.report)
 
