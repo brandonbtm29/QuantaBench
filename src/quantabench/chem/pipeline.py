@@ -67,6 +67,9 @@ class BuildConfig:
     conformer_search: str = "rdkit"       # "rdkit" (ETKDGv3 + MMFF94s) | "crest" (CREST iMTD-GC, external)
     crest_method: str = "gfn2"            # "gfn2" | "gfnff" | "gfn2//gfnff" | "gfn1"
     crest_quick: bool = True              # CREST --quick (fewer metadynamics runs): minutes instead of hours
+    # CREST missing or failed: "rdkit" = RDKit ETKDGv3 + MMFF94s, flagged (note, conformer_fallback, counts at the
+    # end of the batch) | "fail" = the molecule fails
+    crest_fallback: str = "rdkit"
     qm_method: str = ""                   # "functional/basis", e.g. "wb97x-d/def2-svp"; "" = no QM stage
     qm_task: str = "energy"               # "energy" (single point) | "optimize"
     qm_top: int = 1                       # how many of the lowest conformers get the QM stage
@@ -144,7 +147,8 @@ class MoleculeResult:
     vibrations: dict | None = None     # VibrationalResult.to_dict(include_modes=True) when cfg.frequencies
     solvent: str = ""                  # implicit solvent actually used by the refinement ("" = gas phase)
     conformer_search: str = ""         # "rdkit" | "crest" (what actually produced the conformers)
-    qm: dict | None = None             # chem.qm stage results (see qm.QM_RESULT_KEYS)
+    conformer_fallback: str = ""       # why they are not from the search asked for ("CREST failed: ..."), "" = they are
+    qm: dict | None = None            # chem.qm stage results (see qm.QM_RESULT_KEYS)
     input_charge: int | None = None    # total formal charge of the record as drawn (all fragments)
     removed_fragments: list[str] = field(default_factory=list)   # SMILES of fragments standardization removed
     # structure keys, for joining results to other tables (Spartan, a gas/water pair): the computed species
@@ -178,7 +182,7 @@ class MoleculeResult:
             "method": self.method, "forcefield": self.forcefield,
             "device": self.device, "phase": self.phase, "solvent": self.solvent,
             "solvation_model": self.solvation_model, "phase_notes": self.phase_notes(),
-            "conformer_search": self.conformer_search,
+            "conformer_search": self.conformer_search, "conformer_fallback": self.conformer_fallback,
             "n_embedded": self.n_embedded, "n_conformers": len(self.conformers),
             "best_energy_eV": best.energy_ev if best else "", "best_converged": best.converged if best else "",
             "dipole_debye": best.dipole_debye if best and best.dipole_debye is not None else "",
@@ -524,12 +528,39 @@ def _forcefield_fallback(result: MoleculeResult, forcefield: str, method: str, l
     log(f"  {msg}")
 
 
+#: BuildConfig.crest_fallback values: what a molecule gets when CREST is missing or fails
+CREST_FALLBACKS = ("rdkit", "fail")
+
+
+class ConformerSearchError(RuntimeError):
+    """The conformer search asked for failed and the settings say not to fall back (``crest_fallback = "fail"``)."""
+
+
+def fallback_count(results) -> int:
+    """How many of ``results`` got their conformers from another search than the one asked for (CREST failed, RDKit
+    used). A run folder counts them in its job table (``jobs.RunStatus.fallbacks``)."""
+    return sum(bool(getattr(r, "conformer_fallback", "")) for r in results)
+
+
+def fallback_summary(n: int, total: int) -> str:
+    """The end-of-batch line for ``n`` molecules whose CREST search fell back to RDKit ('' when there are none)."""
+    if not n:
+        return ""
+    return (f"WARNING: CREST failed for {n} of {total} molecule(s); their conformers come from RDKit ETKDGv3 + "
+            "MMFF94s (summary.csv: conformer_fallback). Rerun them with --crest-fallback fail to see the errors as "
+            "failures, or check the CREST install (quantabench-cli doctor).")
+
+
 def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConfig, threads: int,
                       should_stop: Callable[[], bool], log: Callable[[str], None]) -> confs.ConformerSet:
-    """RDKit ETKDGv3 + MMFF94s, or CREST (falls back to RDKit with a note if CREST is missing or fails)."""
+    """RDKit ETKDGv3 + MMFF94s, or CREST. If CREST is missing or fails, ``cfg.crest_fallback`` decides: "rdkit" goes
+    on with RDKit's conformers and flags the molecule (a note, ``conformer_fallback``, a warning in the log, a count
+    at the end of the batch), "fail" fails the molecule (``ConformerSearchError``)."""
     if cfg.conformer_search == "crest":
         from . import crest
 
+        if cfg.crest_fallback not in CREST_FALLBACKS:
+            raise ValueError(f"crest_fallback must be one of {', '.join(CREST_FALLBACKS)}, not {cfg.crest_fallback!r}")
         try:
             cs = crest.generate(prepared, cfg, threads=threads, solvent=result.solvent, charge=result.charge,
                                 multiplicity=result.multiplicity, should_stop=should_stop, log=log)
@@ -538,9 +569,14 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
         except Cancelled:
             raise
         except Exception as exc:
-            result.notes.append(f"CREST conformer search failed ({type(exc).__name__}: {str(exc).splitlines()[0]}); "
-                                "used RDKit ETKDGv3 + MMFF94s")
-            log(f"  {result.notes[-1]}")
+            reason = f"{type(exc).__name__}: {crest.failure_reason(str(exc))}"
+            if cfg.crest_fallback == "fail":
+                raise ConformerSearchError(f"CREST conformer search failed ({reason}); crest_fallback = fail, so "
+                                           "the molecule is not built with RDKit's conformers instead") from exc
+            result.conformer_fallback = f"CREST failed: {reason}"
+            result.notes.append(f"CREST conformer search failed ({reason}); used RDKit ETKDGv3 + MMFF94s instead "
+                                "(summary.csv: conformer_fallback; --crest-fallback fail stops the molecule instead)")
+            log(f"  WARNING: {result.notes[-1]}")
     elif cfg.conformer_search not in ("rdkit", ""):
         raise ValueError(f"conformer_search must be 'rdkit' or 'crest', not {cfg.conformer_search!r}")
     result.conformer_search = "rdkit"
@@ -893,4 +929,7 @@ def run(inputs: list[MoleculeInput], cfg: BuildConfig, progress: ProgressFn = _n
     if cfg.write_files and run_dir is not None and results:
         export.write_batch_tables(results, run_dir)
         log(f"Results written to {run_dir}")
+    line = fallback_summary(fallback_count(results), len(results))
+    if line:
+        log(line)
     return results, run_dir

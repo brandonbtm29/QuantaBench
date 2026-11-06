@@ -105,6 +105,7 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "freq_hessian": ("auto", "analytic", "finite"),
     "conformer_search": ("rdkit", "crest"),
     "crest_method": ("gfn2", "gfnff", "gfn2//gfnff", "gfn1"),
+    "crest_fallback": ("rdkit", "fail"),
     "qm_task": ("energy", "optimize"),
     "qm_program": ("psi4",),
     "gpu": ("auto", "on", "off"),

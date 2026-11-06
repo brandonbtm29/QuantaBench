@@ -40,6 +40,7 @@ Implementation notes:
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -57,6 +58,52 @@ METHOD_FLAGS = {"gfn2": "--gfn2", "gfn1": "--gfn1", "gfnff": "--gfnff", "gff": "
 #: CREST 3.0.2 stops with "-gfn2//gfnff option not yet available with new calculator": these methods
 #: need ``--legacy``, which runs the xtb binary for every calculation instead of CREST's built-in tblite
 LEGACY_METHODS = {"gfn2//gfnff"}
+
+
+#: lines of CREST's output that say why it stopped, most telling first (searched in an error's log tail)
+FAILURE_LINES = (
+    re.compile(r"initial geometry optimization failed", re.I),
+    re.compile(r"Fortran runtime error", re.I),
+    re.compile(r"segmentation fault|program received signal|killed|out of memory", re.I),
+    re.compile(r"not yet available|not found|cannot|could not|failed|failure", re.I),
+)
+
+
+def failure_reason(message: str) -> str:
+    """One line about why CREST failed, for a note: the most telling line of CREST's output in ``message`` (an
+    ``ExternalProgramError`` carries the log tail), with the exit code and the kept job folder; else the
+    message's first line. E.g. conda-forge's osx-arm64 CREST 3.0.2: "Initial geometry optimization failed!
+    (exit code 1; job files in /tmp/QuantaBench/crest_x1)"."""
+    lines = [ln.strip() for ln in str(message).splitlines() if ln.strip()]
+    if not lines:
+        return "no message"
+    first = lines[0]
+    extra = []
+    code = re.search(r"exited with code (-?\d+)", first)
+    if code:
+        extra.append(f"exit code {code.group(1)}")
+    kept = next((m.group(1) for ln in lines if (m := re.match(r"\(job files kept in (.+)\)$", ln))), "")
+    if kept:
+        extra.append(f"job files in {kept}")
+    for pattern in FAILURE_LINES:
+        hit = next((ln for ln in lines[1:] if pattern.search(ln) and not ln.startswith("(job files kept")), "")
+        if hit:
+            return hit + (f" ({'; '.join(extra)})" if extra else "")
+    return first + (f" ({extra[-1]})" if kept else "")
+
+
+_OPT_COUNT = re.compile(r"(\d+)\s+of\s+(\d+)\s+structures successfully optimized")
+
+
+def optimizer_problem(text: str) -> str:
+    """'' if CREST's log looks sane, else why not: a stage whose optimizations all failed ("> 0 of 826 structures
+    successfully optimized", crest-lab/crest#412) means the optimizer is broken even when CREST exits 0, and what it
+    returns is not a conformer ensemble."""
+    for done, total in _OPT_COUNT.findall(text or ""):
+        if int(total) >= 2 and int(done) == 0:   # one structure may legitimately fail
+            return (f"CREST's optimizer failed on all {total} structures of a stage ('0 of {total} structures "
+                    "successfully optimized'): a broken CREST build (docs/ENGINES.md, CREST on macOS)")
+    return ""
 
 
 def available() -> tuple[bool, str]:
@@ -198,6 +245,9 @@ def generate(mol: Chem.Mol, cfg, *, threads: int = 1, solvent: str = "", charge:
         write_xyz(d / "input.xyz", numbers, start.GetConformer().GetPositions(), "QuantaBench CREST input")
         run = external.run_program(cmd, d, threads=threads, env=env, timeout=timeout, log_name="crest.log",
                                    should_stop=should_stop, log=log)
+        problem = optimizer_problem(run.text())
+        if problem:
+            raise external.ExternalProgramError(f"{problem}\n{run.tail(30)}")
         out_file = d / "crest_conformers.xyz"
         if not out_file.is_file():
             raise external.ExternalProgramError(f"CREST wrote no crest_conformers.xyz\n{run.tail(30)}")

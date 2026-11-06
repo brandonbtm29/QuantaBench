@@ -191,7 +191,8 @@ def _config(args, base=None, **extra):
         "freq_hessian": getattr(args, "freq_hessian", None), "symmetry_number": getattr(args, "symmetry_number", None),
         "temperature_k": getattr(args, "temperature", None), "solvent": getattr(args, "solvent", None),
         "optimizer": getattr(args, "optimizer", None), "conformer_search": getattr(args, "conformers", None),
-        "crest_method": getattr(args, "crest_method", None), "qm_method": getattr(args, "qm", None),
+        "crest_method": getattr(args, "crest_method", None), "crest_fallback": getattr(args, "crest_fallback", None),
+        "qm_method": getattr(args, "qm", None),
         "qm_task": getattr(args, "qm_task", None), "qm_top": getattr(args, "qm_top", None),
         "memory_budget_gb": getattr(args, "memory_budget", None),
         "molecule_timeout_s": getattr(args, "molecule_timeout", None),
@@ -226,7 +227,7 @@ def _progress(i, n, stage, ident):
 
 
 def _build(args) -> int:
-    from .chem import jobs
+    from .chem import jobs, pipeline
     from .chem.pipeline import BuildConfig, new_run_dir, run
 
     run_dir = args.resume or args.run_dir
@@ -290,7 +291,10 @@ def _build(args) -> int:
             return 2
         print(jobs.open_run(out).summary())
     ok = sum(r.status == "ok" for r in results)
-    print(f"\n{ok}/{len(results)} succeeded in this call." + (f" Output: {out}" if out else ""))
+    fell_back = pipeline.fallback_count(results)
+    print(f"\n{ok}/{len(results)} succeeded in this call"
+          + (f" ({fell_back} with RDKit conformers because CREST failed: summary.csv conformer_fallback)"
+             if fell_back else "") + "." + (f" Output: {out}" if out else ""))
     return 0 if ok == len(results) else 1
 
 
@@ -306,6 +310,8 @@ def _status(args) -> int:
           f"method {st.config.get('method')}")
     for ident, err in st.failures:
         print(f"  failed: {ident}: {err}")
+    for ident, why in st.fallbacks:
+        print(f"  RDKit conformers (asked for CREST): {ident}: {why}")
     return 0
 
 
@@ -719,6 +725,10 @@ def add_build_science_args(q: argparse.ArgumentParser) -> None:
                    help="conformer search: RDKit ETKDGv3 + MMFF94s (default) or CREST iMTD-GC (external)")
     q.add_argument("--crest-method", choices=["gfn2", "gfnff", "gfn2//gfnff", "gfn1"])
     q.add_argument("--crest-full", action="store_true", help="full CREST run instead of --quick (much slower)")
+    q.add_argument("--crest-fallback", choices=["rdkit", "fail"],
+                   help="when CREST is missing or fails for a molecule: 'rdkit' (default) builds it with RDKit's "
+                        "conformers and flags it (note, summary.csv conformer_fallback, a count at the end); 'fail' "
+                        "marks the molecule failed")
     q.add_argument("--qm", metavar="FUNCTIONAL/BASIS",
                    help="QM stage with Psi4 on the lowest conformers, e.g. wb97x-d/def2-svp")
     q.add_argument("--qm-task", choices=["energy", "optimize"], help="QM single point (default) or optimization")

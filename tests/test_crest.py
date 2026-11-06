@@ -71,6 +71,15 @@ if mode == "badorder":
     frames = [frame(sym[::-1], pos[::-1], -11.30)]
 if mode == "allbad":
     frames = [frame(sym, swapped, -11.32)]
+if mode == "macfail":   # conda-forge's osx-arm64 CREST 3.0.2 on 19+ atoms (docs/ENGINES.md)
+    print("> Setting up backup calculator ... done.")
+    print(" Initial Geometry Optimization")
+    print("  Initial geometry optimization failed!")
+    print("  Please check your input and, if present, crestopt.log.")
+    sys.stderr.write("ERROR STOP\n")
+    sys.exit(1)
+if mode == "zeroopt":   # exits 0, but no structure was optimized (crest-lab/crest#412)
+    print("> 0 of 12 structures successfully optimized (0.0% success)")
 Path("crest_conformers.xyz").write_text("\n".join(l for fr in frames for l in fr) + "\n")
 Path("crest_best.xyz").write_text("\n".join(frames[0]) + "\n")
 print(" CREST terminated normally.")
@@ -230,6 +239,89 @@ def test_pipeline_uses_crest_conformers(fake_crest):
     res = run_molecule(from_smiles("CCO", id="ethanol"), cfg)
     assert res.status == "ok", res.error
     assert res.conformer_search == "crest" and res.forcefield == "CREST/gfnff" and res.n_embedded == 3
+
+
+def test_failure_reason_finds_the_crest_line():
+    msg = ("/opt/crest input.xyz --gfn2 exited with code 1\n> Setting up backup calculator ... done.\n"
+           " Initial Geometry Optimization\n  Initial geometry optimization failed!\n"
+           "  Please check your input and, if present, crestopt.log.\nERROR STOP\n"
+           "(job files kept in /tmp/QuantaBench/crest_ab12)")
+    assert crest.failure_reason(msg) == ("Initial geometry optimization failed! "
+                                         "(exit code 1; job files in /tmp/QuantaBench/crest_ab12)")
+    rt = "x exited with code 2\nAt line 187 of file ancopt.f90\nFortran runtime error: Missing comma between descriptors"
+    assert crest.failure_reason(rt) == "Fortran runtime error: Missing comma between descriptors (exit code 2)"
+    assert crest.failure_reason("crest not found. Install it\nmore detail") == "crest not found. Install it"
+    assert crest.failure_reason("") == "no message"
+
+
+def test_optimizer_problem():
+    assert "0 of 826" in crest.optimizer_problem("> 0 of 826 structures successfully optimized (0.0% success)")
+    assert crest.optimizer_problem("> 204 of 204 structures successfully optimized (100.0% success)\n"
+                                   "> 1 of 1 structures successfully optimized") == ""
+    assert crest.optimizer_problem("> 0 of 1 structures successfully optimized") == ""   # one may fail
+    assert crest.optimizer_problem("") == ""
+
+
+def _crest_cfg(**kw):
+    base = {"method": "mmff", "conformer_search": "crest", "crest_method": "gfnff", "max_conformers": 5,
+            "write_files": False, "xtb_properties": False, "threads": 1}
+    return BuildConfig(**{**base, **kw})
+
+
+@pytest.mark.parametrize("mode", ["macfail", "zeroopt"])
+def test_crest_failure_is_flagged(fake_crest, monkeypatch, mode):
+    """CREST fails (or optimizes nothing): RDKit's conformers, flagged in the notes, the log and summary.csv."""
+    from quantabench.chem.inputs import from_smiles
+    from quantabench.chem.pipeline import run_molecule
+
+    monkeypatch.setenv("FAKE_CREST_MODE", mode)
+    lines = []
+    res = run_molecule(from_smiles("CCO", id="ethanol"), _crest_cfg(), log=lines.append)
+    assert res.status == "ok", res.error
+    assert res.conformer_search == "rdkit" and res.forcefield == "MMFF94s"
+    want = "Initial geometry optimization failed!" if mode == "macfail" else "0 of 12 structures"
+    assert res.conformer_fallback.startswith("CREST failed: ExternalProgramError: ") and want in res.conformer_fallback
+    assert res.summary_row()["conformer_fallback"] == res.conformer_fallback
+    assert any(n.startswith("CREST conformer search failed") and want in n and "--crest-fallback fail" in n
+               for n in res.notes)
+    assert any(ln.startswith("  WARNING: CREST conformer search failed") for ln in lines)
+
+
+def test_crest_failure_can_fail_the_molecule(fake_crest, monkeypatch):
+    from quantabench.chem.inputs import from_smiles
+    from quantabench.chem.pipeline import run_molecule
+
+    monkeypatch.setenv("FAKE_CREST_MODE", "macfail")
+    res = run_molecule(from_smiles("CCO", id="ethanol"), _crest_cfg(crest_fallback="fail"))
+    assert res.status == "failed" and res.conformer_fallback == ""
+    assert res.error.startswith("ConformerSearchError: CREST conformer search failed")
+    assert "Initial geometry optimization failed!" in res.error
+    res = run_molecule(from_smiles("CCO", id="ethanol"), _crest_cfg(crest_fallback="nope"))
+    assert res.status == "failed" and "crest_fallback must be one of rdkit, fail" in res.error
+
+
+def test_batch_counts_crest_fallbacks(fake_crest, monkeypatch, tmp_path):
+    """The end of a batch and the run folder's status count the molecules CREST failed on."""
+    from quantabench.chem import jobs
+    from quantabench.chem.inputs import from_smiles
+
+    monkeypatch.setenv("FAKE_CREST_MODE", "macfail")
+    lines = []
+    cfg = _crest_cfg(write_files=True, formats=("xyz",))
+    results, run_dir = jobs.run_resumable([from_smiles("CCO", id="ethanol"), from_smiles("CCC", id="propane")],
+                                          cfg, tmp_path / "run", log=lines.append)
+    assert [r.status for r in results] == ["ok", "ok"]
+    assert any(ln.startswith("WARNING: CREST failed for 2 of 2 molecule(s)") for ln in lines), lines
+    assert any(ln.startswith("  ethanol: CREST failed: ExternalProgramError: Initial geometry") for ln in lines)
+    st = jobs.open_run(run_dir)
+    assert [i for i, _ in st.fallbacks] == ["ethanol", "propane"]
+    assert "2 ok with RDKit conformers because CREST failed" in st.summary()
+    summary = (run_dir / "summary.csv").read_text(encoding="utf-8")
+    assert "conformer_fallback" in summary.splitlines()[0] and "Initial geometry optimization failed!" in summary
+    monkeypatch.delenv("FAKE_CREST_MODE")                  # a working CREST: nothing to report
+    results, run_dir = jobs.run_resumable([from_smiles("CCO", id="ethanol")], cfg, tmp_path / "run2",
+                                          log=lines.append)
+    assert jobs.open_run(run_dir).fallbacks == [] and "CREST failed" not in jobs.open_run(run_dir).summary()
 
 
 # ----------------------------------------------------------------------------- the real program

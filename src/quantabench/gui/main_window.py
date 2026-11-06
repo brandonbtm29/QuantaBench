@@ -54,7 +54,7 @@ from .. import __version__, resources, units
 from .. import settings as settings_mod
 from ..chem import engines, export, jobs, solvents
 from ..chem import inputs as inputs_mod
-from ..chem.pipeline import BuildConfig, MoleculeResult
+from ..chem.pipeline import BuildConfig, MoleculeResult, fallback_count
 from . import molecule_list, workers
 from .energy_widgets import EnergySpinBox
 from .molecule_list import (
@@ -379,10 +379,16 @@ class MainWindow(QMainWindow):
                 self.w_crest_method.addItem(label, k)
             self.w_crest_quick = QCheckBox("Quick mode (--quick)")
             self.w_crest_quick.setChecked(True)
+            self.w_crest_fallback = QCheckBox("If CREST fails, use RDKit's conformers")
+            self.w_crest_fallback.setChecked(True)
+            self.w_crest_fallback.setToolTip(
+                "Checked: a molecule CREST fails on is built with RDKit ETKDGv3 + MMFF94s and flagged (a note, "
+                "summary.csv conformer_fallback, a count at the end of the batch). Unchecked: the molecule fails.")
             self.w_confsearch.currentIndexChanged.connect(self._update_crest_widgets)
             form.addRow("Search", self.w_confsearch)
             form.addRow("CREST level", self.w_crest_method)
             form.addRow(self.w_crest_quick)
+            form.addRow(self.w_crest_fallback)
             self.w_maxconf = QSpinBox()
             self.w_maxconf.setRange(1, 1000)
             # stored in kcal/mol (BuildDefaults.energy_window_kcal, a science setting), shown in the display unit
@@ -765,6 +771,7 @@ class MainWindow(QMainWindow):
         on = self.w_confsearch.currentData() == "crest"
         self.w_crest_method.setEnabled(on)
         self.w_crest_quick.setEnabled(on)
+        self.w_crest_fallback.setEnabled(on)
 
     def _update_qm_widgets(self, _checked=False) -> None:
         on = self.w_qm_on.isChecked()
@@ -783,6 +790,7 @@ class MainWindow(QMainWindow):
             protonation_method=self.w_prot_method.currentData(), xtb_properties=self.w_xtbprops.isChecked(),
             symmetry_number=self.w_symmetry.value(), formats=formats,
             crest_method=self.w_crest_method.currentData(), crest_quick=self.w_crest_quick.isChecked(),
+            crest_fallback="rdkit" if self.w_crest_fallback.isChecked() else "fail",
             qm_task=self.w_qm_task.currentData(), qm_top=self.w_qm_top.value(),
             qm_properties=self.w_qm_props.isChecked(), qm_frequencies=self.w_qm_freq.isChecked(),
             qm_cubes=self.w_qm_cubes.isChecked())
@@ -1377,10 +1385,15 @@ class MainWindow(QMainWindow):
         self._set_running(False)
         self.last_run_dir = run_dir
         ok = sum(r.status == "ok" for r in results)
+        fell_back = fallback_count(results)
+        if fell_back:
+            self.log(f"WARNING: {fell_back} of {len(results)} molecule(s) got RDKit conformers because CREST failed "
+                     "(their notes, summary.csv conformer_fallback)")
         if self._quit_pending:
             return                       # closing: keep "Closing after the current step..." on screen
-        self.statusBar().showMessage(f"Done: {ok}/{len(results)} built" + (f", saved to {run_dir}" if run_dir else ""),
-                                     15000)
+        self.statusBar().showMessage(f"Done: {ok}/{len(results)} built"
+                                     + (f", {fell_back} with RDKit conformers (CREST failed)" if fell_back else "")
+                                     + (f", saved to {run_dir}" if run_dir else ""), 15000)
         if run_dir:
             self.out_label.setText(f"Last run: {run_dir}")
         self.bottom_tabs.setCurrentWidget(self.conf_table)

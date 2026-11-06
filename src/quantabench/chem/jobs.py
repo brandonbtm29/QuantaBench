@@ -512,6 +512,19 @@ class JobStore:
             out[r["status"]] = r["n"]
         return out
 
+    def fallbacks(self) -> list[tuple[str, str]]:
+        """(id, reason) of the finished molecules whose conformers came from another search than the one asked
+        for (``MoleculeResult.conformer_fallback``: CREST failed, RDKit used), in input order."""
+        sql = ("SELECT id, json_extract(summary, '$.row.conformer_fallback') AS why FROM molecules "
+               "WHERE status = 'ok' AND summary IS NOT NULL ORDER BY seq")
+        try:
+            rows = [(r["id"], r["why"]) for r in self.conn.execute(sql)]
+        except sqlite3.OperationalError:     # an SQLite without JSON functions
+            rows = [(r["id"], (json.loads(r["summary"]).get("row") or {}).get("conformer_fallback")) for r in
+                    self.conn.execute("SELECT id, summary FROM molecules WHERE status = 'ok' AND summary IS NOT NULL "
+                                      "ORDER BY seq")]
+        return [(i, str(why)) for i, why in rows if why]
+
     def failures(self) -> list[tuple[str, str]]:
         return [(r["id"], r["error"]) for r in
                 self.conn.execute("SELECT id, error FROM molecules WHERE status = 'failed' ORDER BY seq")]
@@ -828,6 +841,7 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
             results.append(res if keep_results else light_result(res))
             progress(i + 1, total, res.status, mol_id)
         counts = store.counts()
+        fallbacks = store.fallbacks()
     if cfg.write_files:
         try:
             rebuild_tables(run_dir)
@@ -836,6 +850,13 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
     log(f"{counts['ok']} ok, {counts['failed']} failed, "
         f"{counts['pending'] + counts['running'] + counts['cancelled']} remaining"
         + (f", {counts['moved']} moved to another machine" if counts.get("moved") else "") + f". Results in {run_dir}")
+    line = pipeline.fallback_summary(len(fallbacks), counts["ok"] + counts["failed"])
+    if line:          # the whole run folder, not only this call: a resumed run still says so
+        log(line)
+        for mol_id, why in fallbacks[:10]:
+            log(f"  {mol_id}: {why}")
+        if len(fallbacks) > 10:
+            log(f"  ... and {len(fallbacks) - 10} more (summary.csv: conformer_fallback)")
     return results, run_dir
 
 
@@ -851,6 +872,8 @@ class RunStatus:
     active: bool                       # a live process holds the run lock
     interrupted: int = 0               # 'running' rows without a live process, counted as pending
     failures: list[tuple[str, str]] = field(default_factory=list)
+    # ok molecules whose conformers came from another search than asked for: (id, why), e.g. CREST failed -> RDKit
+    fallbacks: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -871,6 +894,8 @@ class RunStatus:
             parts.append(f"{self.interrupted} interrupted")
         if self.counts.get("moved"):
             parts.append(f"{self.counts['moved']} moved to another machine")
+        if self.fallbacks:
+            parts.append(f"{len(self.fallbacks)} ok with RDKit conformers because CREST failed (conformer_fallback)")
         where = f" ({chunk_label(self.chunk)})" if self.chunk else ""
         state = "running" if self.active else "idle"
         return f"{self.finished}/{self.total} done{where}, {state}: " + ", ".join(parts)
@@ -889,6 +914,7 @@ def open_run(run_dir: str | Path) -> RunStatus:
             raise ValueError(f"{run_dir / DB_NAME} has no run record")
         counts = store.counts()
         failures = store.failures()
+        fallbacks = store.fallbacks()
     interrupted = 0
     if active is False and counts["running"]:  # unknown host (None): trust the table as it is
         interrupted = counts["running"]
@@ -896,7 +922,7 @@ def open_run(run_dir: str | Path) -> RunStatus:
         counts["running"] = 0
     return RunStatus(run_dir=run_dir, counts=counts, config=run["config"], version=run["version"],
                      created=run["created"], chunk=run["chunk"], active=bool(active), interrupted=interrupted,
-                     failures=failures)
+                     failures=failures, fallbacks=fallbacks)
 
 
 def merge_tables(run_dirs: Iterable[str | Path], out_dir: str | Path,
