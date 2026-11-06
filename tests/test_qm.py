@@ -236,6 +236,8 @@ if task["cubes"]:
 if task["hessian"]:
     out["frequencies"] = FREQ
 Path("result.json").write_text(json.dumps(out))
+if MODE == "hang":            # Psi4 stuck at exit after a failed SCF left its timers on
+    time.sleep(60)
 '''
 
 
@@ -361,6 +363,60 @@ def test_cancel_kills_driver(tmp_path, monkeypatch):
     threading.Timer(0.5, flag.set).start()
     with pytest.raises(Cancelled):
         qm.run_stage(res, cs, _cfg(), should_stop=flag.is_set)
+
+
+def test_driver_that_does_not_exit_after_its_result(tmp_path, monkeypatch):
+    import time
+
+    _fake_python(tmp_path, monkeypatch, "hang")
+    monkeypatch.setattr(qm, "EXIT_GRACE_S", 0.5)
+    res, cs = _result(n_conf=1)
+    t0 = time.perf_counter()
+    qm.run_stage(res, cs, _cfg())
+    assert time.perf_counter() - t0 < 30                     # not the fake's 60 s
+    assert res.qm["energy_ev"] is not None and any("did not exit" in w for w in res.qm["warnings"])
+    # a real cancellation is still a cancellation
+    flag = threading.Event()
+    threading.Timer(0.3, flag.set).start()
+    _fake_python(tmp_path, monkeypatch, "slow")
+    with pytest.raises(Cancelled):
+        qm.run_stage(res, cs, _cfg(), should_stop=flag.is_set)
+
+
+def test_free_atom_scf_failure_cleans_psi4_scratch():
+    """A failed atomic SCF must not leave its scratch files (DIIS) to the next SCF."""
+    from types import SimpleNamespace
+
+    calls: list[str] = []
+
+    class Wfn:
+        def __init__(self, sym):
+            self.sym = sym
+
+        def molecule(self):
+            return SimpleNamespace(natom=lambda: 2, symbol=lambda i: ("C", "F")[i], Z=lambda i: (6, 9)[i])
+
+        def variable(self, name):
+            return [12.5]
+
+        def set_variable(self, name, value):
+            calls.append(f"set {name}")
+
+    def energy(method, molecule, return_wfn):
+        sym = molecule.elem
+        calls.append(f"energy {sym}")
+        if sym == "F":
+            raise RuntimeError("Could not converge SCF iterations in 200 iterations.")
+        return -1.0, Wfn(sym)
+
+    core = SimpleNamespace(
+        Molecule=SimpleNamespace(from_arrays=lambda elem, **kw: SimpleNamespace(elem=elem[0], update_geometry=lambda: None)),
+        clean=lambda: calls.append("clean"), set_active_molecule=lambda m: None)
+    fake = SimpleNamespace(core=core, energy=energy, oeprop=lambda *a, **k: None, set_options=lambda o: None)
+    t = {"method": "wb97x-d", "multiplicity": 1}
+    with pytest.raises(RuntimeError, match="converge"):
+        psi4_driver.free_atom_volumes(fake, t, Wfn("mol"), pcm=False)
+    assert calls == ["energy C", "clean", "set MBIS FREE ATOM C VOLUME", "energy F", "clean"]
 
 
 def test_missing_psi4(monkeypatch):

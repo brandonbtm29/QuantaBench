@@ -360,8 +360,14 @@ def free_atom_volumes(psi4, t: dict, wfn, pcm: bool) -> dict[str, float]:
                                                   molecular_multiplicity=1 + unpaired, fix_com=True,
                                                   fix_orientation=True, fix_symmetry="c1", name="qbatom")
             atom.update_geometry()
-            _e, awfn = psi4.energy(t["method"], molecule=atom, return_wfn=True)
-            psi4.oeprop(awfn, "MBIS_CHARGES", title=f"{sym} free atom", free_atom=True)
+            try:
+                _e, awfn = psi4.energy(t["method"], molecule=atom, return_wfn=True)
+                psi4.oeprop(awfn, "MBIS_CHARGES", title=f"{sym} free atom", free_atom=True)
+            finally:
+                # an atomic SCF that fails (seen once for triflic acid at wB97X-D/def2-SVP) leaves its DIIS file
+                # behind; the next SCF then fails with "PSIO_ERROR ... HF DIIS vector", then "Timer HF: DIIS is
+                # already on", and the process hangs at exit: remove the atom's scratch files every time
+                psi4.core.clean()
             out[sym] = float(np.ravel(np.asarray(awfn.variable("MBIS RADIAL MOMENTS <R^3>"), float))[0])
             wfn.set_variable(f"MBIS FREE ATOM {sym.upper()} VOLUME", out[sym])
     finally:
@@ -642,6 +648,7 @@ def run(t: dict) -> dict:
                 f"[{time.perf_counter() - tp:.1f} s]")
         except Exception as exc:
             warnings.append(f"cubes failed ({friendly(exc)})")
+            psi4.core.clean()
         timings["cubes"] = time.perf_counter() - tp
     if t["polarizability"]:
         tp = time.perf_counter()
