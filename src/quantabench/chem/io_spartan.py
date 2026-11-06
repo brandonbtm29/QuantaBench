@@ -20,6 +20,8 @@ CONTRACT:
     read_molecule(container, storage, source_file, index) -> SpartanMolecule   # UnreadableMolecule(reason)
     iter_molecules(path_or_container, source_file=None, errors=None, skipped=None) -> Iterator[SpartanMolecule]
     structure_key(mol) -> str; stereo_key(rdkit_mol) -> str   # the join keys
+    drawn_mol(mol) -> RDKit Mol | None; species(mol) -> {inchikey, canonical_smiles, structure_charge, charge_check}
+    solvent_name("WASSER") -> "water"                         # Spartan solvent -> chem.solvents name
     molecule_row(mol) -> dict                                 # one table row (best conformer)
     conformer_rows(mol) -> list[dict]                         # one row per saved conformer
     to_mol(mol, conformer=None) -> RDKit Mol (Spartan's bonds; rdDetermineBonds as a fallback)
@@ -91,7 +93,9 @@ Level of theory
 ---------------
 Every row carries ``spartan_version``, ``spartan_task`` (``OPT``, ``SOPT``, ``MS_CONFP2_BW``), ``spartan_method``
 (``PM6``, ``B3LYP``, ``MMFF94``), ``spartan_basis``, ``spartan_solvent`` (the ``SOLVENT=`` keyword as written:
-``WASSER`` is C-PCM water, dielectric 78.3, in the B3LYP documents' output) and ``spartan_status``
+``WASSER`` is C-PCM water, dielectric 78.3, in the B3LYP documents' output), normalized to QuantaBench's
+canonical solvent names (``chem.solvents``: ``WASSER`` -> ``water``, :func:`solvent_name`), with the keyword as
+written in ``spartan_solvent_raw`` and in the level text (``... SOLVENT=WASSER``), and ``spartan_status``
 (``completed`` | ``failed: <message> (<program>)`` | "" when the molecule was not calculated in this document),
 from ``Commands`` and ``Calculations`` (the Input keywords when those are missing). For a conformer search the
 method is the final stage of ``CONFMULTI_METHODS`` (DLFF03 after MMFF): Spartan's ``# Method`` line shows the
@@ -132,7 +136,8 @@ Every row has ``source_file`` (the path as given), ``molecule_index`` (1-based p
 ``storage`` (``M0001``), ``label``, ``duplicate_label`` (1 when the same own label, see below, occurs in more
 than one molecule of the whole table; all rows are kept), ``conformer`` (1-based, only with
 ``conformers="all"``), the label columns (``label_resolved``, ``label_source``, ``label_note``,
-``structure_key``), the level columns above, then the QuantaBench columns below, then ``spartan_<name>``
+``structure_key``), the structure columns (below), the level columns above, then the QuantaBench columns below,
+then ``spartan_<name>``
 (lower case) for every other scalar ``PROP`` (numbers as floats, strings as text) and the ``spartan_conf_*``
 values of the reported conformer. Arrays (gradients, coordinates, per-atom blocks, frequencies) are not
 written to the table; per-atom blocks of length N go into the SDF as atom property lists
@@ -170,6 +175,21 @@ QuantaBench's ``sasa_A2``, solvent accessible with a 1.4 Å probe, or ``volume_A
 (on Spartan's density surface, not QuantaBench's 0.002 au one), ``EST_POLARIZ`` (an empirical estimate, not a
 computed polarizability like ``polarizability_iso_A3``), ``C_TOT`` (no Cv column in QuantaBench).
 
+Structure columns (the keys the rest of QuantaBench matches)
+-----------------------------------------------------------
+``smiles`` is the reported geometry's perception (:func:`to_mol`, no R/S or E/Z). The structure columns key
+the molecule the way QuantaBench keys its own species, so a QuantaBench run and a Spartan table can be joined
+by structure (``chem.validate``):
+
+- ``inchikey``, ``canonical_smiles``: ``chem.validate.species_keys`` (standard InChIKey; RDKit canonical isomeric
+  SMILES without explicit H) of the structure as Spartan drew it (:func:`drawn_mol`): Spartan's bonds and bond
+  orders with formal charges from each atom's bond-order sum (:data:`VALENCE_CHARGE`: a carboxylate O with one
+  single bond is O-, a quaternary N is N+), R/S and E/Z from the Input geometry. Without usable bonds, the
+  :func:`to_mol` perception with the document's charge; "" when that is connectivity only.
+- ``structure_charge``: the drawing's total formal charge; ``charge_check``: ``ok`` when it is the ``charge``
+  Spartan calculated with, ``mismatch`` when not (an anion drawn as a carboxylate but calculated as +1: its
+  Spartan values are not the anion's), "" when unknown.
+
 Labels and the structure join
 -----------------------------
 Spartan keeps a molecule's label only in the document it was built in. A document of extracted conformers,
@@ -189,8 +209,9 @@ streams hold no labels either), so every row says where its label comes from:
 
 The wide table
 --------------
-``write_table(..., wide=path)`` (``import --wide``) writes one row per resolved label (``label_resolved``,
-``structure_key``, ``formula``, ``smiles``, ``charge``, ``multiplicity``, ``n_atoms``) and, for each level of
+``write_table(..., wide=path)`` (``import --wide``) writes one row per resolved label and one per ambiguous
+structure (:data:`WIDE_COLUMNS`: ``label_resolved``, ``label_source``, ``cas_candidates``, ``structure_key``, the
+structure columns, ``formula``, ``smiles``, ``charge``, ``multiplicity``, ``n_atoms``) and, for each level of
 theory in the run, the best row of that label at that level as ``<prefix>_<column>`` plus ``<prefix>_level``
 (the level in words), ``<prefix>_n_rows`` (rows of the label at that level, e.g. conformers) and
 ``<prefix>_n_failed``. Best = completed before failed, then the lowest energy (the conformer energy in a
@@ -198,7 +219,12 @@ conformer search, else ``E_KCAL``, else ``OPTENERGY``). The prefix comes from th
 document name (:func:`level_prefixes`): ``conf`` (conformer search), ``mm`` (molecular mechanics), the method
 for semi-empirical ones (``pm6``), ``hf``, ``dft``; when the run has two levels with the same prefix, each
 gets its level appended (``conf_dlff03`` and ``conf_mmff``, ``dft_b3lyp_6_311pgss_wasser``), so one column
-never holds two levels. Ambiguous and unresolved rows stay out of the wide table (they are in the long one).
+never holds two levels. An ambiguous structure (one structure under several labels of its base document, e.g.
+an anion entered as the acid's and its salts' CAS numbers) gets one row of its own, keyed by its structure
+(``structure_key``, ``inchikey``, ``canonical_smiles``): ``label_resolved`` "", ``label_source`` ambiguous and
+``cas_candidates`` the labels it could be (``;``-separated); the labels keep their own rows (``label_source``
+input) with the levels that were resolved. Unresolved rows stay out of the wide table (they are in the long
+one).
 """
 
 from __future__ import annotations
@@ -233,8 +259,10 @@ COLUMN_MAP: dict[str, tuple[str, float]] = {
 #: Columns every row starts with, in this order.
 KEY_COLUMNS = ("source_file", "molecule_index", "storage", "label", "duplicate_label")
 LABEL_COLUMNS = ("label_resolved", "label_source", "label_note", "structure_key")
+#: The structure as Spartan drew it, keyed the way QuantaBench keys its own species (``chem.validate.species_keys``).
+STRUCTURE_COLUMNS = ("inchikey", "canonical_smiles", "structure_charge", "charge_check")
 LEVEL_COLUMNS = ("spartan_version", "spartan_task", "spartan_method", "spartan_basis", "spartan_solvent",
-                 "spartan_status")
+                 "spartan_solvent_raw", "spartan_status")
 CORE_COLUMNS = ("formula", "smiles", "n_atoms", "charge", "multiplicity", "n_conformers")
 #: ``label_source`` values.
 LABEL_SOURCES = ("input", "structure", "ambiguous", "unresolved")
@@ -542,7 +570,29 @@ class SpartanLevel:
 
     def row(self) -> dict:
         return {"spartan_version": self.version, "spartan_task": self.task, "spartan_method": self.method,
-                "spartan_basis": self.basis, "spartan_solvent": self.solvent}
+                "spartan_basis": self.basis, "spartan_solvent": solvent_name(self.solvent),
+                "spartan_solvent_raw": self.solvent}
+
+
+#: Spartan's ``SOLVENT=`` keyword (lower case) -> QuantaBench's canonical solvent (``chem.solvents``). ``WASSER`` is
+#: what Spartan '24 writes for its "Water" menu entry (C-PCM, dielectric 78.3 in the B3LYP documents' output).
+#: Other values go through ``solvents.canonical`` (``WATER``, ``METHANOL``, ``H2O``, ...).
+SPARTAN_SOLVENTS = {"wasser": "water"}
+
+
+def solvent_name(raw: str) -> str:
+    """QuantaBench's canonical name for a Spartan ``SOLVENT=`` value (``WASSER`` -> ``water``); "" for the gas
+    phase; a name QuantaBench does not know is returned lower-cased as written (never "", which means gas)."""
+    from . import solvents
+
+    key = (raw or "").strip().lower()
+    if key in ("", "none"):
+        return ""
+    key = SPARTAN_SOLVENTS.get(key, key)
+    try:
+        return solvents.canonical(key)
+    except ValueError:
+        return key
 
 
 def parse_commands(text: str) -> dict[str, str]:
@@ -954,38 +1004,80 @@ def stereo_key(rdkit_mol) -> str:
 _BOND_TYPES = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE"}
 
 
-def to_mol(mol: SpartanMolecule, conformer: int | None = None):
-    """RDKit molecule in Spartan's atom order with the geometry of ``conformer`` (default: the lowest-energy
-    saved conformer, else Input.gz). Bonds come from the HESSIAN block of Input.gz when they give a sane
-    molecule with the document's total charge; otherwise rdDetermineBonds (then connectivity only), as
-    ``io_cclib.to_mol``. The property ``qb_bonds`` says which."""
+#: Formal charge of an atom from the sum of its bond orders in Spartan's drawing (every H is an atom there), by
+#: atomic number: what Spartan's builder draws for ions (a carboxylate or sulfonate O with one single bond, a
+#: quaternary N or P with four, a borate B with four, an iodonium I with two, a free halide with none). Valences
+#: not listed (and elements without rules, e.g. metals) get charge 0 and are left to RDKit's valence check.
+VALENCE_CHARGE: dict[int, dict[int, int]] = {
+    5: {3: 0, 4: -1},
+    7: {3: 0, 4: 1, 2: -1},
+    8: {2: 0, 1: -1, 3: 1},
+    9: {1: 0, 0: -1},
+    15: {3: 0, 5: 0, 4: 1, 6: -1},
+    16: {2: 0, 4: 0, 6: 0, 1: -1, 3: 1},
+    17: {1: 0, 0: -1, 3: 0, 5: 0, 7: 0},
+    33: {3: 0, 5: 0, 4: 1, 6: -1},
+    34: {2: 0, 4: 0, 6: 0, 1: -1, 3: 1},
+    35: {1: 0, 0: -1, 3: 0, 5: 0},
+    53: {1: 0, 0: -1, 2: 1, 3: 0, 5: 0},
+}
+
+
+def drawn_mol(mol: SpartanMolecule, positions: np.ndarray | None = None):
+    """RDKit molecule as Spartan drew it: Spartan's bonds and bond orders (Input HESSIAN block), all H explicit,
+    formal charges from each atom's bond-order sum (:data:`VALENCE_CHARGE`), the geometry ``positions`` (default
+    the Input geometry). None when there are no bonds or the drawing does not sanitize with the multiplicity's
+    radicals. Its total formal charge is what the drawing says; it can differ from the document's charge (the
+    ``charge`` Spartan calculated with), which the ``charge_check`` column reports."""
     from rdkit import Chem, rdBase
     from rdkit.Geometry import Point3D
 
-    pos = mol.positions_A(conformer)
-    charge = mol.input.charge
-    if mol.input.bonds and all(o in _BOND_TYPES for _, _, o in mol.input.bonds):
-        _quiet = rdBase.BlockLogs()          # a failed attempt is expected for ions; it falls through below
+    bonds = mol.input.bonds
+    n = mol.n_atoms
+    if not bonds or not all(o in _BOND_TYPES and 0 <= i < n and 0 <= j < n and i != j for i, j, o in bonds):
+        return None
+    valence = [0] * n
+    for i, j, o in bonds:
+        valence[i] += o
+        valence[j] += o
+    _quiet = rdBase.BlockLogs()
+    try:
         rw = Chem.RWMol()
-        for z in mol.numbers:
+        for z, v in zip(mol.numbers, valence):
             a = Chem.Atom(int(z))
             a.SetNoImplicit(True)
+            a.SetFormalCharge(VALENCE_CHARGE.get(int(z), {}).get(v, 0))
             rw.AddAtom(a)
-        try:
-            for i, j, o in mol.input.bonds:
-                rw.AddBond(i, j, getattr(Chem.BondType, _BOND_TYPES[o]))
-            m = rw.GetMol()
-            _set_conformer(m, pos, Point3D)
-            Chem.SanitizeMol(m)
-            radicals = sum(a.GetNumRadicalElectrons() for a in m.GetAtoms())
-            # no formal charges are set from Spartan's bonds, so they only describe neutral molecules
-            if charge == 0 and radicals == mol.input.multiplicity - 1:
-                m.SetProp("qb_bonds", "spartan")
-                return m
-        except Exception:   # noqa: S110 (Spartan's bonds do not sanitize: perceive them below instead)
-            pass
-        finally:
-            del _quiet
+        for i, j, o in bonds:
+            rw.AddBond(i, j, getattr(Chem.BondType, _BOND_TYPES[o]))
+        m = rw.GetMol()
+        _set_conformer(m, mol.input.positions_A if positions is None else positions, Point3D)
+        Chem.SanitizeMol(m)
+    except Exception:
+        return None
+    finally:
+        del _quiet
+    if sum(a.GetNumRadicalElectrons() for a in m.GetAtoms()) != mol.input.multiplicity - 1:
+        return None
+    return m
+
+
+def to_mol(mol: SpartanMolecule, conformer: int | None = None):
+    """RDKit molecule in Spartan's atom order with the geometry of ``conformer`` (default: the lowest-energy
+    saved conformer, else Input.gz). Bonds come from the HESSIAN block of Input.gz (:func:`drawn_mol`, formal
+    charges from the bond orders) when they give a sane molecule with the document's total charge; otherwise
+    rdDetermineBonds (then connectivity only), as ``io_cclib.to_mol``. The property ``qb_bonds`` says which."""
+    return _mol_at(mol, mol.positions_A(conformer))
+
+
+def _mol_at(mol: SpartanMolecule, pos: np.ndarray):
+    from rdkit import Chem
+
+    charge = mol.input.charge
+    m = drawn_mol(mol, pos)
+    if m is not None and Chem.GetFormalCharge(m) == charge:
+        m.SetProp("qb_bonds", "spartan")
+        return m
     from rdkit.Chem import rdDetermineBonds
 
     xyz = f"{mol.n_atoms}\n\n" + "\n".join(
@@ -1004,6 +1096,40 @@ def to_mol(mol: SpartanMolecule, conformer: int | None = None):
         m.UpdatePropertyCache(strict=False)
         m.SetProp("qb_bonds", "connectivity only")
     return m
+
+
+def species(mol: SpartanMolecule) -> dict:
+    """The :data:`STRUCTURE_COLUMNS` of a molecule: ``inchikey`` and ``canonical_smiles`` (``chem.validate.
+    species_keys``, the function QuantaBench's own species go through) of the structure as Spartan drew it
+    (:func:`drawn_mol`; R/S and E/Z from the Input geometry), else of :func:`to_mol`'s perception with the
+    document's charge; ``structure_charge`` (its total formal charge) and ``charge_check`` (``ok`` when that is
+    the charge Spartan calculated with, else ``mismatch``). Empty when no sanitized molecule can be made (a
+    connectivity-only perception has no reliable bond orders or charges). Cached on the molecule."""
+    cached = getattr(mol, "_species", None)
+    if cached is not None:
+        return cached
+    from rdkit import Chem
+
+    from .validate import species_keys
+
+    out: dict = dict.fromkeys(STRUCTURE_COLUMNS, "")
+    m = drawn_mol(mol)
+    if m is None:
+        try:
+            m = _mol_at(mol, mol.input.positions_A)
+        except Exception:
+            m = None
+        if m is not None and m.GetProp("qb_bonds") == "connectivity only":
+            m = None
+    if m is not None:
+        with contextlib.suppress(Exception):
+            Chem.AssignStereochemistryFrom3D(m)
+        keys = species_keys(m)
+        if keys["inchikey"] or keys["canonical_smiles"]:
+            q = Chem.GetFormalCharge(m)
+            out.update(keys, structure_charge=q, charge_check="ok" if q == mol.input.charge else "mismatch")
+    mol._species = out
+    return out
 
 
 def _set_conformer(m, pos, Point3D) -> None:
@@ -1038,6 +1164,7 @@ def molecule_row(mol: SpartanMolecule, conformer: int | None = None, rdkit_mol=N
     own = has_own_label(mol.label)
     row.update(label_resolved=mol.label if own else "", label_source="input" if own else "unresolved",
                label_note="", structure_key=_cached_structure_key(mol))
+    row.update(species(mol))
     row.update(mol.level.row(), spartan_status=mol.status)
     if conformer is not None:
         row["conformer"] = conformer + 1
@@ -1132,6 +1259,7 @@ class ImportSummary:
     label_sources: dict[str, int] = field(default_factory=dict)    # rows by label_source
     prefixes: dict[str, str] = field(default_factory=dict)         # wide-table prefix -> level
     wide_rows: int = 0
+    wide_ambiguous: int = 0                         # wide rows of ambiguous structures (no label, CAS candidates)
     errors: list[str] = field(default_factory=list)
     table: str = ""
     sdf: str = ""
@@ -1179,6 +1307,11 @@ class LabelIndex:
             return same[0], "structure", f"{base} (by configuration)"
         return "", "ambiguous", (f"{len(labels)} molecules of {base} have this structure: "
                                  + ", ".join(sorted(labels)[:5]) + (" ..." if len(labels) > 5 else ""))
+
+    def candidates(self, source_file: str, key: str) -> list[str]:
+        """All labels of the base document of ``source_file`` with structure ``key`` (sorted)."""
+        base = self.base_for(source_file)
+        return sorted(self.docs[base].get(key, {})) if base and key else []
 
 
 _KIND_ORDER = ("conf", "mm", "semiempirical", "hf", "dft", "other")
@@ -1234,8 +1367,11 @@ def _rank(row: dict, kind: str) -> tuple:
 
 
 #: Columns of the wide table before the per-level ones.
-WIDE_COLUMNS = ("label_resolved", "structure_key", "formula", "smiles", "charge", "multiplicity", "n_atoms")
+WIDE_COLUMNS = ("label_resolved", "label_source", "cas_candidates", "structure_key", "inchikey", "canonical_smiles",
+                "formula", "smiles", "charge", "structure_charge", "charge_check", "multiplicity", "n_atoms")
 _WIDE_SKIP = set(WIDE_COLUMNS) | {"duplicate_label"}
+#: Wide-table key of an ambiguous structure (one row per structure; a label never starts with NUL).
+_AMBIGUOUS = "\x00"
 
 
 def _write_sdf_record(writer, m, row: dict, per_atom: dict[str, np.ndarray]) -> None:
@@ -1265,7 +1401,7 @@ def write_table(paths: Iterable[str | Path], table: str | Path, sdf: str | Path 
     table.parent.mkdir(parents=True, exist_ok=True)
     summary = ImportSummary(table=str(table), sdf=str(sdf) if sdf else "", wide=str(wide) if wide else "")
     columns: dict[str, None] = dict.fromkeys(KEY_COLUMNS + (("conformer",) if conformers == "all" else ())
-                                             + LABEL_COLUMNS + LEVEL_COLUMNS + CORE_COLUMNS)
+                                             + LABEL_COLUMNS + STRUCTURE_COLUMNS + LEVEL_COLUMNS + CORE_COLUMNS)
     label_count: dict[str, int] = {}
     index = LabelIndex()
     levels: dict[str, tuple[str, str]] = {}            # describe() -> (kind, method)
@@ -1348,13 +1484,16 @@ def write_table(paths: Iterable[str | Path], table: str | Path, sdf: str | Path 
                     summary.label_sources[src] = summary.label_sources.get(src, 0) + 1
                     w.writerow(row)
                     lab = row["label_resolved"]
-                    if wide and lab:
+                    # the wide table's row: the resolved label, or one row per ambiguous structure
+                    wkey = lab or (_AMBIGUOUS + row["structure_key"]
+                                   if src == "ambiguous" and row["structure_key"] else "")
+                    if wide and wkey:
                         p = prefixes[row["_level"]]
                         kind = levels[row["_level"]][0]
                         rank = _rank(row, kind)
-                        b = best.get((lab, p))
+                        b = best.get((wkey, p))
                         if b is None:
-                            best[(lab, p)] = [rank, offset, 1, int(rank[0])]
+                            best[(wkey, p)] = [rank, offset, 1, int(rank[0])]
                         else:
                             if rank < b[0]:
                                 b[0], b[1] = rank, offset
@@ -1362,11 +1501,15 @@ def write_table(paths: Iterable[str | Path], table: str | Path, sdf: str | Path 
                             b[3] += int(rank[0])
                         wide_cols.setdefault(p, {}).update(dict.fromkeys(
                             c for c in row if c not in _WIDE_SKIP and not c.startswith("_")))
-                        if lab not in common or (src == "input" and common[lab].get("_src") != "input"):
-                            common[lab] = {c: row.get(c, "") for c in WIDE_COLUMNS} | {"_src": src}
+                        if wkey not in common or (src == "input" and common[wkey].get("_src") != "input"):
+                            common[wkey] = ({c: row.get(c, "") for c in WIDE_COLUMNS}
+                                            | {"_src": src, "_cands": set(), "cas_candidates": ""})
+                        if not lab:
+                            common[wkey]["_cands"].update(index.candidates(row["source_file"], row["structure_key"]))
                     offset += len(line)
             if wide:                                                           # ---- pass 3: the wide table
                 summary.wide_rows = _write_wide(Path(wide), tmp, prefixes, levels, best, wide_cols, common)
+                summary.wide_ambiguous = sum(1 for k in common if k.startswith(_AMBIGUOUS))
         finally:
             tmp.close()
             with contextlib.suppress(OSError):
@@ -1377,9 +1520,10 @@ def write_table(paths: Iterable[str | Path], table: str | Path, sdf: str | Path 
 def _write_wide(path: Path, tmp, prefixes: dict[str, str], levels: dict[str, tuple[str, str]],
                 best: dict[tuple[str, str], list], wide_cols: dict[str, dict[str, None]],
                 common: dict[str, dict]) -> int:
-    """One row per resolved label: :data:`WIDE_COLUMNS`, then per level (prefix ``p``) ``p_level``,
-    ``p_n_rows`` (rows of this label at that level, e.g. conformers), ``p_n_failed`` and the best row's
-    columns as ``p_<column>``."""
+    """One row per resolved label and per ambiguous structure (``label_resolved`` "", ``label_source``
+    ambiguous, ``cas_candidates`` the base documents' labels with that structure, ``;``-separated):
+    :data:`WIDE_COLUMNS`, then per level (prefix ``p``) ``p_level``, ``p_n_rows`` (rows of this label or
+    structure at that level, e.g. conformers), ``p_n_failed`` and the best row's columns as ``p_<column>``."""
     kinds = {p: levels[d][0] for d, p in prefixes.items()}
     level_of = {p: d for d, p in prefixes.items()}
     order = [p for p, _k in sorted(((p, kinds[p]) for p in wide_cols), key=_prefix_order)]
@@ -1396,6 +1540,9 @@ def _write_wide(path: Path, tmp, prefixes: dict[str, str], levels: dict[str, tup
         w.writeheader()
         for lab, entries in by_label.items():
             out = {c: v for c, v in common[lab].items() if not c.startswith("_")}
+            if lab.startswith(_AMBIGUOUS):
+                out.update(label_resolved="", label_source="ambiguous",
+                           cas_candidates=";".join(sorted(common[lab]["_cands"])))
             for p, (_r, off, n_rows, n_failed) in entries:
                 tmp.seek(off)
                 row = json.loads(tmp.readline())
