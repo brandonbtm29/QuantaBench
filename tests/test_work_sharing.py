@@ -276,3 +276,24 @@ def test_grid_moves_unstarted_molecules_to_the_idle_machine(make_worker, qb_sett
     # several shares of one machine: separate download folders, and grid status lists every share
     reloaded = client_mod.GridRun.load(Path(grid.folder) / client_mod.GRID_FILE)
     assert len(reloaded.shares) == len(grid.shares) and any(s.parent for s in reloaded.shares)
+
+
+def test_lanes_hand_over_from_the_end_of_their_queue(tmp_path):
+    """Two lane processes: a release answered by the dispatch loop takes queued molecules, never started ones."""
+    from quantabench.dist.lanes import Lane
+
+    mols, run_dir, h = inputs(), tmp_path / "lanes", jobs.Handoff()
+    cfg = pipeline.BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False,
+                               write_files=False)
+    lanes = [Lane("cpu1", "cpu", 1), Lane("cpu2", "cpu", 1)]
+    out: dict = {}
+    th = threading.Thread(target=lambda: out.setdefault("r", jobs.run_resumable(mols, cfg, run_dir, lanes=lanes,
+                                                                                handoff=h)))
+    th.start()
+    moved = h.request(4, "w2", timeout=60)       # served at the loop's first turn, before lanes are ready
+    th.join(240)
+    assert moved == [m.id for m in mols[-4:]][::-1]
+    results, _ = out["r"]
+    assert {r.input.id for r in results} == {m.id for m in mols[:-4]} and all(r.status == "ok" for r in results)
+    st = jobs.open_run(run_dir)
+    assert st.counts["moved"] == 4 and st.finished == st.total == len(mols) - 4 and h.closed
