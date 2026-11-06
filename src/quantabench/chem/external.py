@@ -127,8 +127,24 @@ def _env_bin_dirs(prefix: Path) -> list[Path]:
     return [prefix / "bin"]
 
 
+#: Homebrew's Miniforge cask (Apple Silicon, Intel). scripts/install_macos.sh uses that conda when it finds it, so
+#: the qb-tools and qb-psi4 environments it creates can live under these folders.
+HOMEBREW_MINIFORGE = ("/opt/homebrew/Caskroom/miniforge/base", "/usr/local/Caskroom/miniforge/base")
+
+
+def _registered_envs(home: Path) -> list[Path]:
+    """Environments listed in ``~/.conda/environments.txt``, where conda records every environment it creates
+    (wherever its installation is)."""
+    try:
+        text = (home / ".conda" / "environments.txt").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return [Path(line.strip()) for line in text.splitlines() if line.strip()]
+
+
 def conda_env_prefixes() -> list[Path]:
-    """Conda/mamba environments in the usual places (the base env first, then ``envs/*``)."""
+    """Conda/mamba environments in the usual places (the base env first, then ``envs/*``), then any other
+    environment conda has registered."""
     home = Path.home()
     roots = []
     for var in ("CONDA_PREFIX", "MAMBA_ROOT_PREFIX", "CONDA_ROOT"):
@@ -141,11 +157,16 @@ def conda_env_prefixes() -> list[Path]:
         for var in ("ProgramData", "LOCALAPPDATA"):
             if os.environ.get(var):
                 roots += [Path(os.environ[var]) / "miniforge3", Path(os.environ[var]) / "miniconda3"]
+    if sys.platform == "darwin":
+        roots += [Path(p) for p in HOMEBREW_MINIFORGE]
     out: list[Path] = []
     for root in roots:
         for p in [root, *sorted((root / "envs").glob("*"))] if (root / "envs").is_dir() else [root]:
             if p.is_dir() and p not in out:
                 out.append(p)
+    for p in _registered_envs(home):
+        if p.is_dir() and p not in out:
+            out.append(p)
     return out
 
 

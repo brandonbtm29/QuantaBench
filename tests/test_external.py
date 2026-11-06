@@ -40,6 +40,27 @@ def _fake_program(tmp_path: Path, name: str, body: str) -> Path:
 
 
 # ----------------------------------------------------------------------------- discovery
+def test_conda_envs_outside_the_usual_folders_are_found(tmp_path, monkeypatch):
+    """Environments made by a conda that lives elsewhere (Homebrew's Miniforge cask on a Mac, which
+    install_macos.sh uses when it finds it; any conda that registered them in ~/.conda/environments.txt)."""
+    home, cask, other = tmp_path / "home", tmp_path / "Caskroom/miniforge/base", tmp_path / "opt/conda/envs/qb-psi4"
+    for p in (home, cask / "envs/qb-tools/bin", other / "bin"):
+        p.mkdir(parents=True)
+    (home / ".conda").mkdir()
+    (home / ".conda/environments.txt").write_text(f"{cask}\n\n{other}\n{tmp_path / 'deleted-env'}\n", encoding="utf-8")
+    for var in ("CONDA_PREFIX", "MAMBA_ROOT_PREFIX", "CONDA_ROOT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(external.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(external, "HOMEBREW_MINIFORGE", (str(cask),))
+    monkeypatch.setattr(external, "IS_WINDOWS", False)            # no %ProgramData% roots on a Windows runner
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert external.conda_env_prefixes() == [cask, cask / "envs/qb-tools", other]
+    monkeypatch.setattr(sys, "platform", "linux")                 # no Caskroom there; the registry still counts
+    assert external.conda_env_prefixes() == [cask, other]
+    (home / ".conda/environments.txt").unlink()
+    assert external.conda_env_prefixes() == []
+
+
 def test_find_program_from_env_var_with_version(tmp_path, monkeypatch):
     exe = _fake_program(tmp_path, "xtb", 'print("      * xtb version 6.7.1 (edcfbbe) compiled by x")\n')
     monkeypatch.setenv("QUANTABENCH_XTB", str(exe))
