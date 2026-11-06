@@ -73,6 +73,12 @@ jobs:
           echo "OpenMP runtime behind mingw-w64-ucrt-x86_64-omp:"
           pacman -Qi mingw-w64-ucrt-x86_64-omp 2>/dev/null | grep -E '^(Name|Version|Provides)' || pacman -Q | grep -Ei 'omp|gomp'
           pacman -Ql mingw-w64-ucrt-x86_64-openblas | grep -E '\.(dll|pc)$'
+          # tblite links libgomp; a second OpenMP runtime (LLVM's libomp) in the same process must be avoided
+          objdump -p /ucrt64/bin/libopenblas.dll | grep 'DLL Name'
+          if objdump -p /ucrt64/bin/libopenblas.dll | grep -qiE 'DLL Name: lib(i?omp|omp5)'; then
+            echo "::error::libopenblas.dll imports LLVM's OpenMP runtime; build OpenBLAS with gcc/libgomp instead"
+            exit 1
+          fi
           mkdir -p "$RUNNER_TEMP/qb-pc"
           pc=/ucrt64/lib/pkgconfig/openblas.pc
           sed 's/^Name:.*/Name: blas/' "$pc" > "$RUNNER_TEMP/qb-pc/blas.pc"
@@ -112,6 +118,9 @@ jobs:
             "-Cbuild-dir=$env:RUNNER_TEMP\b" `
             "-Csetup-args=-Dddx:tests=false" `
             "-Csetup-args=-Dtblite:lapack=openblas" `
+            "-Csetup-args=-Ddftd4:lapack=openblas" `
+            "-Csetup-args=-Dmulticharge:lapack=openblas" `
+            "-Csetup-args=-Dddx:lapack=openblas" `
             "-Csetup-args=-Dc_link_args=-Wl,--allow-multiple-definition" `
             "-Csetup-args=-Dfortran_link_args=-Wl,--allow-multiple-definition"
           Get-ChildItem dist
