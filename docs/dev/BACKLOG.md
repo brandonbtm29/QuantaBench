@@ -146,14 +146,17 @@ Depends on: none (research only; can run any night).
   `dxtb_device()` keeps dxtb on the CPU there by default (Settings > Compute > dxtb on the GPU,
   `QUANTABENCH_DXTB_GPU`). Follow-up (later): profile/upstream the overlap-integral syncs in dxtb.
 
-## PERF-1: Separate CPU and GPU environments on Windows · ready
-- 2026-11-05: `install_windows.ps1 -Gpu rocm` creates `.venv-rocm` next to the CPU `.venv`. With GPU-1 done,
-  AIMNet2 is ~10x faster on the GPU, while dxtb and MMFF want the fast CPU BLAS: measure a full PFAS batch in
-  both environments (lanes `gpu:1x4,cpu:...` in `.venv-rocm` vs `auto` in `.venv`) and pick the default.
-- Until GPU-1/GPU-2 land, the PyPI CPU torch (fast MKL/OpenBLAS kernels) is the better default on Windows.
-  Document a two-venv setup (`.venv` CPU, `.venv-rocm` GPU) in INSTALL.md and make `doctor --bench`
-  report CPU GFLOP/s with a warning when it is far below expectations. Also find why `doctor --bench`
-  ran > 50 min under the ROCm build (likely BLAS thread oversubscription: 23 OpenMP threads × OpenBLAS).
+## PERF-1: Separate CPU and GPU environments on Windows · done 2026-11-06 (keep the CPU torch in `.venv`)
+- Measured on NOVA (24 PFAS, 7-54 heavy atoms; `Runs/perf-2026-11-06/`, `timings.csv`). `.venv`: torch
+  2.15.0+cpu with MKL (GEMM 912 GFLOP/s f32 at 12 threads). `.venv-rocm` (new, kept for GPU experiments):
+  torch 2.9.1+rocm7.2.1 with OpenBLAS (49.5 GFLOP/s), and its threads oversubscribe (a 2-thread lane used
+  ~2.8 cores), which likely explains the slow `doctor --bench` under ROCm.
+- Wall times, CPU build vs ROCm build: MMFF 33.8 vs 39-42 s; dxtb GFN1 on the CPU 322 vs 1854 s (5.7x slower);
+  AIMNet2 `auto` 76 vs 116 s (the GPU lane is 6.4 s per molecule, a CPU-build lane 14.3 s, so one GPU lane
+  with 4 threads does not beat 4 CPU lanes once embedding, MMFF and the dxtb GFN1 polarizability are counted);
+  tblite GFN2 126 vs 133 s; the validation protocol 241 vs 241 s (gas) and ~239 vs 257 s (water).
+- So the "AIMNet2 ~10x on the GPU" of GPU-1 holds for the refinement step alone, not for the pipeline. FORK-11
+  (exit hang) did not reproduce in 10 ROCm runs. Left: `doctor --bench` GFLOP/s with a warning (optional).
 
 ## ENG-1: External engines on native Windows · needs-Brandon
 - Install `envs/tools-windows.yml` and `envs/psi4.yml` on BTM NOVA, run `quantabench-cli doctor`, then
@@ -681,7 +684,19 @@ the code, but three things never arrived through it.
   - `--check --upgrade-packages` could preview the upgrade with `pip install --dry-run --report -`.
   - The worker update (3).
 
-### PERF-2: tblite Windows wheel with OpenBLAS · ready
+### PERF-2: tblite Windows wheel with OpenBLAS · in progress 2026-11-06 (wheel built and verified; release needs a runner)
+- 2026-11-06: built in CI on QuantaBench's branch `ci/tblite-wheels` (run 42181668274; Actions refuses to run
+  on the fork, HTTP 422 "Actions has been disabled", though the permissions API says enabled). Fixes: dftd4,
+  multicharge and ddX need their own `-D<sub>:lapack=openblas` (the top-level `python/` project has no lapack
+  option to yield to). MSYS2's `-omp` is libgomp in UCRT64, so there is one OpenMP runtime; the workflow fails
+  if libopenblas.dll ever imports LLVM's libomp. Fork branch `qb/windows-wheels-openblas` (c6887e8) matches.
+- vs win1: 72 calculations (12 molecules; GFN2/GFN1; gas, ALPB, GBSA) agree to 1.4e-13 Eh, gradients 3.7e-15.
+  Per energy+gradient at 31/62/110 atoms: 1 thread 1.41/1.70/2.20x faster; 12 processes x 1 thread
+  1.43/1.63/1.88x. With OpenBLAS, 2 threads per process are slower than 1: keep tblite lanes at 1 thread.
+  Validation protocol, 24 molecules, 12 lanes: gas 241 -> 150 s (1.61x), water ~239 -> 148 s; results
+  identical but one conformer minimum (largest molecule, optimizer path).
+- Left: a release with 3.11-3.13 wheels (enable Actions on the fork, or add the matrix and a release job on
+  the CI branch), then the rollout below.
 - One GFN2/ALPB energy+gradient (`scratch/tblite_scf_bench.py`, 1 thread): MacBook 13.5 / 32.5 / 81 ms
   for 31 / 62 / 110 atoms, NOVA 24.8 / 66.8 / 212 ms. The gap grows with size (1.8x to 2.6x). The macOS
   wheel links OpenBLAS; the fork's Windows wheel bundles reference BLAS/LAPACK.

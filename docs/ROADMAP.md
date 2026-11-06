@@ -8,6 +8,9 @@ QuantaBench targets Windows 11, WSL2, Linux and macOS (Apple Silicon) equally, a
 Brandon's MacBook and BTM NOVA work on one project together. The details, the platform matrix and
 the fork/upstream plan are in [PLATFORMS.md](PLATFORMS.md).
 
+Status 2026-11-06: P1 and P2 are built. NOVA and the MacBook have run grids together (Nov 5), the MacBook has
+passed the full suite (916 tests; LAMMPS needs MPICH there), and a grid now shares work between machines.
+
 - **P1 (with 0.3):**
   - macOS in CI (PLAT-2) and the first run on the MacBook (PLAT-1)
   - two machines by hand: `--chunk` + SyncThing + `merge` (M0, works today)
@@ -129,7 +132,12 @@ external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENG
 - [x] **cclib import** of other programs' outputs (GUI and `quantabench-cli import`).
 - [x] Conda environment files for the external programs (`envs/`).
 - [ ] First run of all of the above on native Windows (ENG-1) and CREST through WSL (ENG-2).
-- [ ] Validation against the Spartan Essential 76 PFAS ωB97X-D results (VAL-1, now possible in-house).
+- [x] Spartan `.spartan` import (IMPORT-2), validation tooling and the first 300-molecule run (VAL-1).
+- [x] Spartan's van der Waals radii (CPK area/volume to 0.5 %/0.1 %), the corrected solvent-accessible area,
+      ESP polar areas; Settings > Surfaces & radii and Settings > Display (kJ/mol).
+- [ ] Validation against the Spartan Essential 76 PFAS ωB97X-D results (VAL-2: data imported, runs planned).
+- [ ] A settings dialog as detailed as Spartan's Preferences (SETTINGS-1: Compute, import filters, Lookups,
+      Machines left).
 - [ ] Orbital isosurfaces (MO cubes), HOMO/LUMO and local ionization potential maps.
 - [ ] NMR shieldings (Psi4 has none: PySCF GIAO, or ORCA through cclib import).
 - [ ] Coordinate scans, constrained optimization, transition states (Sella), NEB.

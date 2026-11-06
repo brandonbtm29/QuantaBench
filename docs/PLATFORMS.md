@@ -159,7 +159,13 @@ Results so far (2026-11-05):
   stock CPU calculator; 8 PFOA conformers refine in 5.7 s on the GPU vs 59.8 s on the CPU.
 - **FORK-4:** in QuantaBench (`chem/torch_compat.py`). Correct on the GPU, but dxtb 0.4 is 5-8x slower there
   than on NOVA's CPU, so the default keeps dxtb on the CPU.
-- Upstream pull requests for dxtb, tblite and aimnet are drafted; they go out once Brandon approves them.
+- Upstream pull requests for dxtb, tblite and aimnet: approved by Brandon on 2026-11-06, none posted yet.
+  - dxtb: upstream main is 19 commits past v0.4.0 (GFN0-xTB, multipole integrals, CCA ordering) and still on
+    tad-mctc 0.7; the change must be ported onto current main first.
+  - tblite: a clean branch `pr/windows-wheels` (2 files) is pushed to the fork. tblite asks for a DCO sign-off,
+    which only Brandon can give, and the `wheel.yml` change has not run yet.
+  - aimnet: upstream fixed the neighbor-list bug in 0.2.5 (PR #127) and declined ROCm support (issue #3), so the
+    draft is out of date; QuantaBench should move to `aimnet>=0.2.5` (needs torch >= 2.10).
 
 ## 5. Bringing macOS up (PLAT-1, PLAT-2)
 
