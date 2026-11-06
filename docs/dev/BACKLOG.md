@@ -255,10 +255,18 @@ Open (needs-Brandon):
   - Import fixes: `MoleculeN` labels resolved by structure (76 wide rows, not 847); the Est. DFT rows'
     ωB97X-D/6-31G* SCF dipole (`QM_DIPOLE`) as `dipole_debye` + `qm_dipole_level`; their best row by
     `POSTENERGY`; `validate` pairs `qm_dipole_debye` with that level (`gas_dipole_qm_vs_dlxd2xv`).
-  - Pilot at Spartan's geometry (TFA, PFPrA, triflic acid): Psi4 = Spartan to 5e-5 Eh (exact integrals) or
-    1.3e-4 Eh (density fitting) and 0.001 D.
+  - Pilot at Spartan's geometry (TFA, PFPrA, triflic acid, PFHpA): Psi4 = Spartan to 5e-5 Eh (exact integrals)
+    or 4e-4 Eh (density fitting) and 0.001 D. Timings scale as nbf^2.5. In PCM water, the finite-field α is three
+    quarters of the cost.
+  - QM stage fixes found on the way: scratch cleaned after a failed free-atom SCF; `run_driver` stops a driver
+    that hangs after writing its result.
 - Open (needs-Brandon): run the stages in `scratch/val2/run_val2_nova.ps1` (and `run_val2_mac.sh`) when NOVA is
-  free, then pick the default level from the report. Spartan reference values for HOMO/LUMO, ESP and areas at
+  free, then pick the default level from the report.
+- Open (code): an option to compute the QM polarizability in the gas phase (analytic) when the SCF is PCM, or to
+  skip it. Under PCM it is about 70 % of the QM stage, which takes the 4,700 run from about 1-2 weeks on NOVA in
+  water to about the gas-phase cost.
+- Open: the full import's wide table (`spartan-qsar-v5`) has 771 `MoleculeN` rows from the Essential 76
+  conformer documents. Re-import with this branch. Spartan reference values for HOMO/LUMO, ESP and areas at
   a DFT level exist only at B3LYP/6-311+G** C-PCM (the charged cohorts); a Psi4 B3LYP/6-311+G** PCM run at
   Spartan's geometries would compare those (needs ESP/density-surface pairs in `validate`: QSAR_ELPOT_MIN/MAX,
   QSAR_ELPOT_AREA/VOLUME, polar areas vs `qm_surf_*`).

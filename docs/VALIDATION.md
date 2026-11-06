@@ -217,6 +217,40 @@ The other levels at the same geometry for TFA and PFPrA, against ωB97X-D/6-31G*
 PCM water also moves the 0.002 au ESP minimum by -7 kcal/mol and the maximum by +14 kcal/mol; the area does not
 change.
 
+PFHpA (375-85-9, 23 atoms) at the same geometry:
+
+| level | dipole (D) | HOMO / LUMO (eV) | α (Å³) | 0.002 au area / volume | V_min / V_max (kcal/mol) |
+|---|---|---|---|---|---|
+| 6-31G* gas | 1.92 | -10.86 / 0.45 | 11.82 | 223.3 / 210.3 | -28.8 / 79.5 |
+| def2-SVP gas | 2.07 | -11.12 / 0.20 | 11.37 | 223.1 / 213.2 | -28.6 / 79.0 |
+| def2-SVP PCM water | 2.51 | -11.02 / 0.36 | 13.83 | 223.2 / 213.1 | -32.9 / 88.4 |
+
+**Timings.** These are wall times per molecule with 2 threads in the cloud container, a Xeon at 2.1 GHz (the
+"full" protocol: SCF, properties, cubes and polarizability):
+
+| protocol | TFA (107 bf) | PFPrA (152) | PFHpA (332) | steps at PFHpA |
+|---|---|---|---|---|
+| 6-31G* gas | 29 s | 63 s | 533 s | SCF 127, properties 112, cubes 44, analytic α 247 |
+| def2-SVP gas | 29 s | 88 s | 507 s | SCF 101, properties 102, cubes 71, analytic α 229 |
+| def2-SVP PCM water | 128 s | 113 s | 857 s | SCF 130, properties 56, cubes 50, finite-field α 617 |
+
+- The time grows as nbf^2.5. The 63 molecules have a median of 365 basis functions (6-31G*) and a maximum of
+  647.
+- On NOVA (3 lanes x 4 threads, taking a lane as 2-4x a cloud job), the P1, P2a, P2b, P2c and P2d set takes
+  about 9-19 h (P2b's diffuse basis about 4.5 h of that), or half that with the MacBook taking `--part 2/2`.
+  P1E takes about 4-9 h, and `qb` and `qbwater` about 2.5 h each.
+- The 4,700-PFAS list has 3,708 SMILES-defined molecules of at most 60 heavy atoms, with a median of 26 heavy
+  atoms and about 400 basis functions. On NOVA alone, the full protocol takes about 5-10 days in the gas phase
+  (def2-SVP) and 9-17 days in PCM water.
+- In PCM, three quarters of the water cost is the finite-field polarizability: six more PCM SCFs. Computing α
+  in the gas phase (analytic) or not at all brings the water protocol close to the gas one.
+
+**Psi4 pitfalls found here** (ENGINES.md):
+- ESP cubes need density fitting.
+- `scf_type pk` filled 12 GB of disk at 332 basis functions.
+- One free-atom SCF of the MBIS step failed (triflic acid, def2-SVP), and the Psi4 process then hung after
+  writing its result. The driver now cleans up and `run_driver` stops such a process.
+
 ## The runs (`scratch/val2/` on NOVA, not in the repository)
 
 - `val2_import.py`: the import above, plus `spartan_conformers_wb97xd.csv`, `essential76_summary.csv` and the
