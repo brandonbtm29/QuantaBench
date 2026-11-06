@@ -510,6 +510,71 @@ quantabench-cli import cohorts/*/*.spartan --table all.csv --wide qsar.csv # + o
   7 documents, 2,750 molecules, 102 MB: 10 s on 2 cores, under 200 MB).
 - In the GUI, every molecule of a document becomes one result with its saved conformers ranked.
 
+## PubChem (`quantabench-cli pubchem`)
+
+`chem/pubchem.py` is a PUG REST + PUG View client; `pubchem enrich` runs it over a molecule list:
+
+```
+quantabench-cli pubchem enrich cas_list.csv --out enriched.csv                       # CAS and/or SMILES columns
+quantabench-cli pubchem enrich RUN_DIR --validate --experimental --out enriched.csv --records experimental.csv
+quantabench-cli pubchem enrich cas_list.csv --offline --out enriched.csv            # from the cache only
+quantabench-cli pubchem lookup 335-67-1 --experimental                              # one identifier
+```
+
+- **Input:** a CSV/Excel table, an SD file, or a QuantaBench run folder or merged tables (`summary.csv`, or a
+  phases folder's `paired.csv`). A molecule is looked up by its CID column, else its CAS RN (`--id-col`, a CAS
+  column, or an id/name that is a valid CAS RN), else the InChIKey as drawn, the SMILES, the name or DTXSID. A
+  CAS RN with several CIDs keeps the ones that list it as a registry number (xrefs RN).
+- **Output:** one row per molecule, the input's columns then `pubchem_*`:
+  - `pubchem_status` and `pubchem_query`;
+  - `pubchem_cid` and `pubchem_cids`, plus the CID's title;
+  - `pubchem_cas` (the first CAS RN among the synonyms, check digit verified), `pubchem_cas_all`, and
+    `pubchem_cas_in_xrefs`;
+  - formula, molecular weight and exact mass, SMILES and connectivity SMILES, InChI and InChIKey;
+  - XLogP, TPSA, complexity, H-bond donor and acceptor counts, rotatable bonds, charge, heavy atoms.
+
+  PubChem renamed CanonicalSMILES/IsomericSMILES to ConnectivitySMILES/SMILES in 2025, and a request for the
+  old names now returns only the new ones; the client asks for the new names and reads the old ones too.
+- **`--validate`** compares QuantaBench's structure with PubChem's for the molecule's CAS RN by standard InChIKey:
+  - `match`;
+  - `stereo_differs`;
+  - `charge_or_protonation_differs` (same first block, or a salt and its parent);
+  - `different_structure`;
+  - `cas_not_in_pubchem`;
+  - `ambiguous_cas`;
+  - `no_cas` or `no_structure` where there is nothing to compare.
+
+  QuantaBench's structure is the input as drawn (`input_inchikey`) and the computed species (`inchikey`), and
+  the better agreement counts.
+- **`--experimental`** fetches each CID's PUG View "Experimental Properties" (one request) and keeps surface
+  tension, density, boiling and melting points, vapor pressure, viscosity, solubility, logP, pKa, refractive
+  index, heat of vaporization, critical constants and the physical description as records. Each record has:
+  - the raw string and the parsed value (ranges, ±);
+  - the unit and the value in a standard unit (surface tension in mN/m; dyn/cm = mN/m, N/m x 1000);
+  - the temperature, the source and its id, the reference with its DOI, and the URL;
+  - a condition class for the liquid properties: `pure_liquid`, `aqueous_solution` (with the concentration)
+    or `unknown` (+ `needs_review`). The class comes from the text, the reference (CRC Handbook, Jasper, Yaws,
+    DIPPR: pure; surfactant literature: likely aqueous) and the melting point: a compound that is solid at the
+    temperature gives no pure-liquid value there.
+
+  The row gets a summary: the best pure-liquid surface tension near 25 °C, the lowest aqueous one, a liquid
+  density, mp, bp and the parachor M σ^¼/ρ. `--records FILE` writes every record in long form. Why the two
+  kinds of surface tension must be kept apart, and the source survey, are in docs/SURFACE_TENSION.md.
+- **Usage policy:** at most 5 requests/s and 400/min (`--rate`, default 4/s). The client reads
+  `X-Throttling-Control` and spaces requests out when a status is Yellow (x2; x1.5 for the service status) or
+  Red (x4; x2 for the service), and pauses 60 s on Black. It retries 503/504 with backoff (2-32 s). The
+  User-Agent is `QuantaBench/<version> (+https://github.com/brandonbtm29/QuantaBench)`, with no email.
+  Requests are batched where PUG REST allows: properties 100 CIDs a request, synonyms and registry numbers 50.
+- **Cache:** every answer (200, 404, 400) goes into one SQLite file, by default the per-machine cache folder
+  (`QUANTABENCH_CACHE_DIR/pubchem/pubchem_cache.sqlite`; `--cache DIR` elsewhere). An interrupted run (Ctrl+C,
+  network loss: it stops after 10 failures in a row) resumes from where it stopped when run again, and
+  `--offline` never touches the network. Keep the cache out of SyncThing unless only one machine writes it.
+- **Requests for a list of N molecules** with an empty cache: about N lookups + N/100 + 2·N/50 batches, plus N
+  PUG View records with `--experimental`. For 14,000 CAS RNs that is about 14,700 requests (1 h at 4/s) without
+  `--experimental` and 28,700 (2 h) with it, while PubChem reports Green; up to 4x longer under Red.
+- `chem.inputs.lookup_name` (names typed in the GUI or CLI) goes through the same client, so its lookups are
+  rate-limited and cached too.
+
 ## Not available yet
 
 - NMR shieldings (Psi4 has none; planned through PySCF).

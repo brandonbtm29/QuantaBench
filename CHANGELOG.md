@@ -2,6 +2,40 @@
 
 ## 0.3.0.dev (unreleased)
 
+### PubChem: identifiers, a structure check by CAS RN, and experimental values (surface tension groundwork, 2026-11-05)
+- **`quantabench-cli pubchem enrich LIST --out enriched.csv`** looks every molecule of a CSV/Excel table, SD
+  file or run folder up in PubChem. It finds the CID by CAS RN (cross-checked with the CIDs' registry
+  numbers), InChIKey, SMILES or name, and writes `pubchem_*` columns:
+  - the CID(s), title and CAS RNs (check digit verified);
+  - formula, weights, SMILES and connectivity SMILES (PubChem's 2025 names; the old ones are still read),
+    InChI(Key);
+  - XLogP, TPSA, complexity, H-bond counts and charge.
+- **`--validate`** says whether QuantaBench's structure is PubChem's for that CAS RN: `match`,
+  `stereo_differs`, `charge_or_protonation_differs`, `different_structure`, `cas_not_in_pubchem` or
+  `ambiguous_cas`.
+- **`--experimental`** adds PubChem's experimental values (PUG View). Surface tension, density, mp, bp, vapor
+  pressure, viscosity, solubility, logP, pKa and more each become a record:
+  - the raw text, the parsed value and unit, and the value in mN/m (or g/cm3, °C, Pa, ...);
+  - the temperature, the source and the reference;
+  - for liquid properties, a condition class (`pure_liquid`, `aqueous_solution`, `unknown`) from the text, the
+    reference and the melting point.
+
+  `--records` writes them in long form. PFOA's "15.2 dynes/cm" (HSDB, from a review of fluorinated
+  surfactants; PFOA melts at 54 °C) is flagged as probably an aqueous value at the CMC, not the pure liquid's.
+- Within PubChem's usage policy:
+  - at most 5 requests/s and 400/min, slower when its `X-Throttling-Control` header turns Yellow or Red;
+  - 503/504 retried with backoff;
+  - a `QuantaBench/<version>` User-Agent with the repository URL.
+
+  Every answer is cached on disk (SQLite), so a 14,000-molecule pull resumes after an interruption and
+  `--offline` reruns it without the network.
+- `pubchem lookup ID` prints one compound. Name lookups in the GUI and CLI use the same rate-limited, cached
+  client.
+- docs/SURFACE_TENSION.md surveys sources of surface tension and lays out the modeling plan (QSAR-3):
+  - which sources hold pure-liquid and which aqueous γ_CMC values;
+  - the parachor and QuantaBench-descriptor baselines;
+  - splits by cohort and class, and the applicability domain.
+
 ### macOS: one machine name (MacBook, 2026-11-05)
 - On a Mac the hostname follows the network (on Tailscale it became `Brandons-MBP.tail....ts.net`), so the MacBook
   appeared in the registry as both `brandons-macbook-pro` and `brandons-mbp`. Machine names on macOS now come from
