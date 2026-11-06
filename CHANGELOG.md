@@ -2,6 +2,25 @@
 
 ## 0.3.0.dev (unreleased)
 
+### macOS: first full test run on the MacBook (2026-11-06)
+- **Spectra panel under NumPy 2.** Selecting a mode passed a `numpy.bool` to Qt (`marker.setVisible(f > 0)`),
+  which PySide6 refuses with NumPy 2 ("'numpy.bool' object cannot be interpreted as an integer"): every mode
+  selection raised, so the info line stayed empty and no mode could be selected or animated. NOVA's NumPy 1.26
+  hid it. A new test needs no cclib, so the core CI install runs it.
+- **GUI tests run on macOS.** They were skipped wherever `$DISPLAY` was unset, which on a Mac is always: CI's
+  macOS job and the MacBook never ran one. `conftest.HAS_DISPLAY` counts Windows and macOS as having a display.
+- **CI on `macos-15`.** GitHub no longer starts `macos-14` jobs ("The configuration 'macos-14-arm64-us-default'
+  is not supported"); every macOS job since 2026-11-05 20:24 UTC was cancelled in 2 s.
+- **`detect_isolated(cancel=...)` with the event already set** returns None at once. Without torch (CI's core
+  install) the child finished inside the first 0.25 s wait and its report came back instead, which failed
+  `test_detect_isolated_runs_in_a_child_and_can_be_cancelled` on Ubuntu and Windows since 2026-11-05.
+- **LAMMPS on macOS:** the `md` extra installs `lammps[mpi]` there. PyPI's macOS wheel links MPICH's
+  `libmpi.12.dylib` without shipping it, so running LAMMPS failed with "Library not loaded"; the `mpi` extra
+  brings PyPI's `mpich` wheel into the venv's `lib/`, where liblammps looks for it.
+- **Conda environments outside `~/miniforge3`:** external programs are also found in Homebrew's Miniforge cask
+  (which `install_macos.sh` uses when it finds it) and in any environment listed in `~/.conda/environments.txt`.
+- `test_machine_name` no longer depends on the Mac it runs on (the Bonjour name came first there).
+
 ### Areas and volumes: a SASA bug fixed, Spartan's radii as an option (2026-11-06)
 - **`sasa_A2` was wrong for every non-protein molecule.** It passed the radii of FreeSASA's ProtOr classifier,
   and those are 0 for any atom outside a protein residue, so the value was the union of bare 1.4 Å probe

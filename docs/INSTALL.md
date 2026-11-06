@@ -279,8 +279,8 @@ The GUI needs `libxcb-cursor0` on Debian/Ubuntu (`sudo apt install libxcb-cursor
 
 ## macOS, Apple Silicon (being brought up: PLAT-1)
 
-Not tested on a Mac yet. The steps below are expected to work; report what doesn't. See
-[PLATFORMS.md](PLATFORMS.md) for the platform matrix.
+`scripts/install_macos.sh --with-engines` (top of this file) does all of this; the manual steps are below. See
+[PLATFORMS.md](PLATFORMS.md) for the platform matrix and the first full test run on the MacBook (2026-11-06).
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
@@ -296,11 +296,22 @@ What to expect on a Mac (first run on Brandon's MacBook Pro, Apple Silicon, macO
 - The Apple GPU (`mps`) has no float64. AIMNet2 runs there in float32 through QuantaBench's Warp-free path
   (energies match the CPU to ~1e-5 eV), but for PFAS-sized molecules the M-series CPU is faster
   (benchmark: 8,230 vs 5,305 molecules/h), so `lanes auto` gives CPU lanes when the benchmark says so.
+  Refining 6 PFAS (42 conformers) in one process on the M3 Max: 16.0 s on the CPU (the default, one conformer
+  at a time), 9.9 s batched on `mps`, 8.7 s batched on the CPU (`--batched on`).
 - dxtb (GFN1/GFN2) stays on the CPU on MPS by design (no float64, incomplete linear algebra). Its GFN2,
   polarizability and IR intensities work with the dxtb fork and tad-libcint 0.4 (the installer brings both).
 - `tblite-gfn2` (gas and ALPB water) runs in process: 2,860 / 2,547 molecules/h on the benchmark set. The
   installer links tblite's OpenMP runtime to PyTorch's (see below).
-- CREST, xtb, MOPAC and Psi4 run natively from the conda environments (`--with-engines`).
+- CREST, xtb, MOPAC and Psi4 run natively from the conda environments (`--with-engines`). QuantaBench finds
+  them in `~/miniforge3/envs`, Homebrew's Miniforge cask and any environment conda lists in
+  `~/.conda/environments.txt`, without a PATH change.
+- LAMMPS (`md`): PyPI's macOS wheel links MPICH's `libmpi.12.dylib` without shipping it, so `import lammps`
+  works and running LAMMPS fails with `Library not loaded: @rpath/libmpi.12.dylib`. The `md` extra installs
+  `lammps[mpi]` on macOS, which brings PyPI's `mpich` wheel; an older install needs `pip install mpich` (or a
+  rerun of the installer).
+- MOPAC 23.2.5's PM7 polarizability differs from the Linux build's (water 1.347 vs 1.259 Å³, the same on
+  Windows); the heat of formation, dipole and orbital energies agree. Don't mix MOPAC polarizabilities from
+  Linux and macOS/Windows in one table (WIN-2 in the backlog).
 - A worker (`quantabench-cli worker`) should be started from Terminal in your own session (or the LaunchAgent
   in docs/WORKERS.md), not over SSH: a worker started over SSH listened on its Tailscale address but received
   no connections.

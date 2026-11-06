@@ -16,20 +16,20 @@ and the work items are in [dev/BACKLOG.md](dev/BACKLOG.md) (`PLAT-*`, `DIST-*`, 
 
 | Component | Windows 11 native | WSL2 / Linux | macOS (Apple Silicon) |
 |---|---|---|---|
-| GUI: PySide6, PyVista + pyvistaqt 0.12, pyqtgraph | ✅ (pyvistaqt 0.13 crashes on AMD: pinned) | ✅ | 🟡 |
-| RDKit, ASE, pipeline, batches | ✅ | ✅ | 🟡 |
-| PyTorch CPU | ✅ (PyPI CPU build is fast) | ✅ | 🟡 |
-| PyTorch GPU | ✅ ROCm 7.2.1 on the RX 9060 XT; no Cholesky/lstsq on the GPU (no MAGMA): `torch_compat` routes them | 🟡 ROCm on WSL2 fragile for this card | 🟡 MPS: float32 only, no float64 ([1](#sources)) |
-| dxtb GFN1 | ✅ CPU; ✅ GPU with routing (FORK-4), but 5-8x slower than the CPU, so off by default | ✅ CPU | 🟡 CPU; MPS routed like ROCm (untested) |
-| dxtb GFN2, multipoles, IR (libcint) | ✅ with the dxtb fork + tad-libcint 0.4 (FORK-1) | ✅ (`tad-libcint<0.4`, or the fork) | 🟡 the fork's CI passes on macOS 14 |
-| AIMNet2 | ✅ CPU; ✅ GPU through the Warp-free `aimnet_torch` (FORK-3), ~10x the CPU | ✅ CPU · 🟡 CUDA | 🟡 GPU through `aimnet_torch` (Warp is CPU-only on macOS, [2](#sources)); untested |
-| tblite (in-process GFN2) | ✅ wheels from the tblite fork's release (FORK-2) | ✅ | 🟡 PyPI wheel (macOS 15+) |
-| xtb program 6.7.1 | 🟡 conda-forge / release zip | ✅ | 🟡 conda-forge osx-arm64 ([3](#sources)) |
-| CREST 3.0.2 | 🔴 no build: WSL (`wsl:`) or ↗ | ✅ | 🟡 conda-forge osx-arm64 ([4](#sources)) |
-| MOPAC 23.2.5 | 🟡 conda-forge / installer | ✅ | 🟡 conda-forge osx-arm64 |
-| Psi4 1.9.1 (+ PCMSolver, dftd3/4) | 🟡 conda-forge win-64 | ✅ | 🟡 conda-forge osx-arm64 |
+| GUI: PySide6, PyVista + pyvistaqt 0.12, pyqtgraph | ✅ (pyvistaqt 0.13 crashes on AMD: pinned) | ✅ | ✅ test suite (191 GUI tests); by hand 🟡 |
+| RDKit, ASE, pipeline, batches | ✅ | ✅ | ✅ |
+| PyTorch CPU | ✅ (PyPI CPU build is fast) | ✅ | ✅ |
+| PyTorch GPU | ✅ ROCm 7.2.1 on the RX 9060 XT; no Cholesky/lstsq on the GPU (no MAGMA): `torch_compat` routes them | 🟡 ROCm on WSL2 fragile for this card | ✅ MPS: float32 only, no float64 ([1](#sources)) |
+| dxtb GFN1 | ✅ CPU; ✅ GPU with routing (FORK-4), but 5-8x slower than the CPU, so off by default | ✅ CPU | ✅ CPU; MPS routed like ROCm (untested) |
+| dxtb GFN2, multipoles, IR (libcint) | ✅ with the dxtb fork + tad-libcint 0.4 (FORK-1) | ✅ (`tad-libcint<0.4`, or the fork) | ✅ with the dxtb fork + tad-libcint 0.4 |
+| AIMNet2 | ✅ CPU; ✅ GPU through the Warp-free `aimnet_torch` (FORK-3), ~10x the CPU | ✅ CPU · 🟡 CUDA | ✅ CPU; ✅ `mps` through `aimnet_torch` (Warp is CPU-only on macOS, [2](#sources)): within 1.6e-5 eV of the CPU, slower than CPU lanes |
+| tblite (in-process GFN2) | ✅ wheels from the tblite fork's release (FORK-2) | ✅ | ✅ PyPI wheel (macOS 15+); same numbers as Linux and Windows to 1e-12 eV |
+| xtb program 6.7.1 | 🟡 conda-forge / release zip | ✅ | ✅ conda-forge osx-arm64 ([3](#sources)) |
+| CREST 3.0.2 | 🔴 no build: WSL (`wsl:`) or ↗ | ✅ | ✅ conda-forge osx-arm64 ([4](#sources)) |
+| MOPAC 23.2.5 | 🟡 conda-forge / installer | ✅ | ✅ conda-forge osx-arm64; PM7 polarizability ≠ Linux's (WIN-2) |
+| Psi4 1.9.1 (+ PCMSolver, dftd3/4) | 🟡 conda-forge win-64 | ✅ | ✅ conda-forge osx-arm64 |
 | PySCF (future: NMR, GPU DFT) | 🔴 no native support ([5](#sources)): WSL or ↗ | 🟡 | 🟡 |
-| LAMMPS Python wheel (CPU) | ✅ but intermittently non-deterministic (MD-1) | ✅ | 🟡 |
+| LAMMPS Python wheel (CPU) | ✅ but intermittently non-deterministic (MD-1) | ✅ | 🟡 needs PyPI's `mpich` (`lammps[mpi]`, in the `md` extra since 2026-11-06) |
 | LAMMPS GPU | 🟡 OpenCL `lmp.exe` (~9x over 12 cores in earlier tests) | 🟡 | 🟡 OpenCL build, mixed precision → FORK-8 |
 | OpenMM (0.4 MD) | 🟡 OpenCL | 🟡 CUDA/OpenCL | 🟡 OpenCL; Metal plugin is beta ([6](#sources)) |
 
@@ -73,9 +73,9 @@ lane: `<method>@<gpu>` beats `<method>@cpu` in the registry (`machines --refresh
 timed one molecule at a time in one process with the same threads, so this compares one lane with one lane; a
 GPU lane slower than a CPU lane only takes four threads from the CPU lanes. The plan's reason gives the
 numbers:
-- MacBook (AIMNet2 6,387/h on the 14-core CPU, 2,978/h on MPS): CPU lanes only (6 x 2 threads with the
-  default 13 of 14 threads), "no GPU lane: benchmark aimnet2@mps 2,978/h vs @cpu 6,387/h, so a GPU lane would be
-  slower than a CPU lane".
+- MacBook (AIMNet2 8,249/h on the 14-core CPU, 5,305/h on MPS in the registry on 2026-11-06): CPU lanes only
+  (6 x 2 threads with the default 13 of 14 threads), "no GPU lane: benchmark aimnet2@mps 5,305/h vs @cpu
+  8,249/h, so a GPU lane would be slower than a CPU lane".
 - NOVA (AIMNet2 about 10x faster on the RX 9060 XT): 1 GPU lane with 4 threads + CPU lanes on the other cores,
   "(benchmark aimnet2@cuda:0 ... vs @cpu ...)".
 - No benchmark of the method on both devices: the GPU lane as before, "(no benchmark ... on this machine: GPU
@@ -158,14 +158,30 @@ Results so far (2026-11-05):
 
 ## 5. Bringing macOS up (PLAT-1, PLAT-2)
 
-1. **CI.** `macos-14` (Apple Silicon) is in `.github/workflows/ci.yml`, non-blocking until green.
+1. **CI.** `macos-15` (Apple Silicon) is in `.github/workflows/ci.yml`, non-blocking until green.
    `.github/workflows/external-engines.yml` installs `envs/tools.yml` + `envs/psi4.yml` with micromamba on
-   Ubuntu and macOS and runs `pytest -m external` (done 2026-11-05).
-2. **First run on the MacBook** (needs Brandon): `scripts/install_macos.sh --with-engines`, then:
-   - `doctor --bench`, the full suite and `-m external`
-   - GUI checks: HiDPI picking, trackpad gestures (pinch zoom, two-finger rotate), dark mode
+   Ubuntu and macOS and runs `pytest -m external` (done 2026-11-05). Until 2026-11-06 the matrix said
+   `macos-14`, which GitHub stopped running after 2026-11-05 19:15 UTC (every macOS job since was cancelled in
+   2 s: "The configuration 'macos-14-arm64-us-default' is not supported"). Every GUI test was also skipped on
+   macOS, in CI and on the MacBook, because the tests looked for `$DISPLAY`, which a Mac never sets.
+2. **First run on the MacBook** (MacBook Pro M3 Max, 14 cores, 36 GB, macOS 27.2; 2026-11-06, at f7f1cd9):
+   - Full suite with every engine installed: 841 passed, 18 failed, 65 skipped (GUI). 11 of the failures were
+     the test harness (`caffeinate` as pytest's parent looked like a leftover lane process). The real ones:
+     a numpy-bool `TypeError` in the spectra panel (NumPy 2 only), the macOS hostname path in
+     `test_machine_name`, LAMMPS without MPICH, and the two MOPAC polarizability checks (WIN-2). With the GUI
+     tests enabled, 189 of 191 passed (the two were the spectra bug). External programs: CREST, xtb, MOPAC,
+     Psi4 all found in `~/miniforge3/envs`; 15 of 17 `-m external` tests pass.
+   - Numbers against the other machines: tblite GFN2 single points at NOVA's geometries agree with NOVA and
+     Linux to 1e-12 eV (dipoles, orbitals, polarizabilities, ALPB ΔG_solv likewise); NOVA's stored energies
+     differ by up to 1.4e-7 eV only because the optimizer's last SCF started from the previous step's density.
+     A full rerun of the protocol (5 molecules, gas and water) gives the same conformer counts and best
+     energies within 2e-6 eV (gas) and 4e-4 eV (water), dipoles within 0.01 D; Windows and Linux x86 agree
+     to 1e-12 eV on 4 of the 5. Soft modes are the fragile part: one floppy cation's lowest frequency in water
+     was -37 (Linux), -33 (Mac) and -15 cm⁻¹ (NOVA), so its entropy differed by 3.3 %.
+   - Still by hand: GUI checks (HiDPI picking, trackpad pinch zoom and two-finger rotate, dark mode).
 3. **Mac specifics to handle:**
-   - `mps` device selection with float32 only; `PYTORCH_ENABLE_MPS_FALLBACK=1` for missing ops
+   - `mps` device selection with float32 only. AIMNet2 on `mps` ran without any CPU-fallback op
+     (`PYTORCH_ENABLE_MPS_FALLBACK` unset, no warnings)
    - the BLAS used by conda's Psi4 (OpenBLAS vs Apple Accelerate, benchmark both)
    - Gatekeeper/quarantine on conda binaries, if any
    - sleep while running
