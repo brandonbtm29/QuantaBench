@@ -1,9 +1,8 @@
-import os
-
 import pytest
+from conftest import HAS_DISPLAY
 
 pytest.importorskip("PySide6")
-pytestmark = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
+pytestmark = pytest.mark.skipif(not HAS_DISPLAY,
                                 reason="needs a display (run under xvfb-run on Linux)")
 
 

@@ -11,6 +11,7 @@ import time
 
 import psutil
 import pytest
+from conftest import HAS_DISPLAY
 
 from quantabench import resources
 from quantabench.chem import jobs, pipeline
@@ -569,7 +570,7 @@ def test_lane_past_the_time_limit_is_killed_and_restarted(tmp_path, monkeypatch)
     assert jobs.open_run(out).counts["ok"] == 3 and lane_processes() == []
 
 
-needs_display = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
+needs_display = pytest.mark.skipif(not HAS_DISPLAY,
                                    reason="needs a display (xvfb-run)")
 
 

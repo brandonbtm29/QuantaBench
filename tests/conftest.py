@@ -1,6 +1,13 @@
+import os
+import sys
+
 import pytest
 
 _EXIT_STATUS = [0]
+
+#: Qt can open windows: always on Windows and macOS (Cocoa; a Mac never sets $DISPLAY, which used to skip every
+#: GUI test there, on the CI runner and on the MacBook alike), on Linux with an X display (xvfb-run in CI).
+HAS_DISPLAY = os.name == "nt" or sys.platform == "darwin" or bool(os.environ.get("DISPLAY"))
 
 
 def pytest_sessionfinish(session, exitstatus):

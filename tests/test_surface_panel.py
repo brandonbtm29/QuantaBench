@@ -1,13 +1,12 @@
 """Surfaces panel: dock, View toggle, charge-ESP and QM-cube surfaces in the 3D view, molecule/conformer changes."""
 
-import os
-
 import numpy as np
 import pytest
+from conftest import HAS_DISPLAY
 
 pytest.importorskip("PySide6")
 pytest.importorskip("pyvistaqt")
-pytestmark = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
+pytestmark = pytest.mark.skipif(not HAS_DISPLAY,
                                 reason="needs a display (run under xvfb-run on Linux)")
 
 

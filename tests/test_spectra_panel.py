@@ -4,13 +4,13 @@ The imported Psi4 water result (tests/data/psi4_water_opt_freq.out) gives real m
 frequency geometry without running a calculation; one test also runs GFN1-xTB frequencies through the pipeline.
 """
 
-import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from conftest import HAS_DISPLAY
 
 from quantabench.gui import spectra_panel as sp
 
@@ -18,7 +18,7 @@ DATA = Path(__file__).parent / "data"
 PSI4 = DATA / "psi4_water_opt_freq.out"
 XTB = DATA / "xtb_water" / "xtb.out"
 
-needs_display = pytest.mark.skipif(not os.environ.get("DISPLAY") and os.name != "nt",
+needs_display = pytest.mark.skipif(not HAS_DISPLAY,
                                    reason="needs a display (run under xvfb-run on Linux)")
 
 
@@ -49,6 +49,7 @@ def _window(tmp_path):
     from quantabench import settings as sm
     from quantabench.gui.main_window import MainWindow
 
+    pytest.importorskip("pyqtgraph")         # the window leaves the spectra dock out without it (optional panel)
     app = _app()
     w = MainWindow(sm.Settings(output_dir=str(tmp_path)))
     w.show()
@@ -111,6 +112,22 @@ def test_mode_sets():
 
 
 # ------------------------------------------------------------------------------------- GUI
+@needs_display
+def test_selecting_a_mode_with_numpy_frequencies(gui):
+    """Frequencies are NumPy floats, so ``f > 0`` is a numpy.bool, which Qt's setVisible refuses under NumPy 2
+    (TypeError: 'numpy.bool' object cannot be interpreted as an integer; first seen on the MacBook). No cclib
+    needed, so this also runs in the core CI install."""
+    _app_, w = gui
+    panel = w.spectra_panel
+    res = SimpleNamespace(method="gfn1-xtb", qm=None, vibrations={
+        "method": "gfn1-xtb", "frequencies_cm1": [-50.0, 1600.0, 3700.0], "ir_intensities_km_mol": [1.0, 60.0, 20.0]})
+    panel.set_result(res)
+    assert panel.selected == 1 and "1600.0 cm⁻¹" in panel.info.text() and "60.0 km/mol" in panel.info.text()
+    assert panel.marker.isVisible()
+    panel.select_mode(0)                                     # imaginary mode: no marker
+    assert "50.0i cm⁻¹" in panel.info.text() and not panel.marker.isVisible()
+
+
 @needs_display
 def test_dock_menus_plot_table_and_overlay(tmp_path, gui):
     from quantabench.chem import spectra_io
