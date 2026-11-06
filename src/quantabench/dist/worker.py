@@ -1660,7 +1660,10 @@ def _cli_worker(args) -> int:
     def on_term(_signum, _frame) -> None:
         raise KeyboardInterrupt
 
-    for name in ("SIGTERM", "SIGBREAK"):   # launchd unload / `kill`; Ctrl+Break on Windows: stop cleanly
+    # launchd unload / `kill`; Ctrl+Break on Windows; and SIGINT, which a shell leaves ignored for a job it
+    # started in the background (`nohup ... &`, ssh): Python then installs no Ctrl+C handler, so
+    # `pkill -INT -f "quantabench-cli worker"` did nothing and a restart found the port still in use
+    for name in ("SIGTERM", "SIGBREAK", "SIGINT"):
         with contextlib.suppress(ValueError, AttributeError, OSError):
             signal.signal(getattr(signal, name), on_term)
     log(f"QuantaBench {__version__} worker '{worker.name}' at {worker.url}; results in {output}; "

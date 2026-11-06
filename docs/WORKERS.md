@@ -68,7 +68,9 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
   such a pair.
 - `grid build` warns when a worker runs another git commit than this machine (the version number does not
   change with every commit), and records each machine's commit in `grid.json`.
-- Stopping a worker with Ctrl+C, Ctrl+Break or SIGTERM stops its job after the current molecule (it waits up
+- Stopping a worker with Ctrl+C, Ctrl+Break, SIGINT or SIGTERM stops its job after the current molecule. That
+  includes a worker started in the background (`nohup … &`, over ssh), which `pkill -INT -f "quantabench-cli
+  worker"` now stops too (it waits up
   to a minute, then exits); a killed or crashed worker loses only the molecule in progress. Either way the next
   start resumes its unfinished jobs, except those cancelled before it stopped. The job list is written with
   fsync, followed by a backup copy (`jobs.json.bak`), so a power cut cannot lose both.
