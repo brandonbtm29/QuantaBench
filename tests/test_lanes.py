@@ -427,7 +427,7 @@ def seeds(monkeypatch, fast=0.001, slow=0.1):
     """A machine benchmark that says cpu2 is 100x slower than cpu1."""
     from quantabench.dist import speed
 
-    monkeypatch.setattr(speed, "registry_seeds", lambda lanes, method, profile=None: {"cpu1": fast, "cpu2": slow})
+    monkeypatch.setattr(speed, "registry_seeds", lambda lanes, method, profile=None, solvent="": {"cpu1": fast, "cpu2": slow})
 
 
 def record_decisions(monkeypatch) -> list:
@@ -619,3 +619,49 @@ def test_gui_build_worker_with_two_lanes(tmp_path):
     assert any(m.startswith("Lanes: 2 CPU lanes") for m in logs)
     assert jobs.open_run(run_dir).counts["ok"] == 4
     assert lane_processes() == []
+
+
+# ------------------------------------------------------------------- lanes auto from this machine's benchmark
+def test_auto_gpu_lane_only_where_the_benchmark_says_it_is_faster(monkeypatch):
+    from quantabench.dist import profile as profile_mod
+
+    monkeypatch.setattr(L, "gpu_linalg_available", lambda: True)
+    aimnet = pipeline.BuildConfig(method="aimnet2", threads=0)
+    # the MacBook: AIMNet2 6,387/h on the 14-core CPU, 2,978/h on MPS -> CPU lanes only
+    monkeypatch.setattr(resources, "logical_cores", lambda: 15)       # threads 0 = all but one: 14
+    mac = report(physical=14, logical=15, ram=36.0, gpus=1, backend="mps")
+    mac_bench = profile_mod.MachineProfile(name="mac", throughput={"aimnet2@cpu": 6387.0, "aimnet2@mps": 2978.0})
+    lanes, reason = L.plan_auto(aimnet, mac, profile=mac_bench)
+    assert all(x.device == "cpu" for x in lanes) and len(lanes) == 7, lanes      # 7 x 2 on the 14 cores
+    assert "no GPU lane: benchmark aimnet2@mps 2,978/h vs @cpu 6,387/h" in reason, reason
+    # NOVA: AIMNet2 about 10x faster on the RX 9060 XT -> its GPU lane
+    monkeypatch.setattr(resources, "logical_cores", lambda: 24)
+    nova = report(gpus=1)
+    nova_bench = profile_mod.MachineProfile(name="nova", throughput={"aimnet2@cpu": 4100.0,
+                                                                     "aimnet2@cuda:0": 41000.0})
+    lanes, reason = L.plan_auto(aimnet, nova, profile=nova_bench)
+    assert lanes[0] == Lane("gpu0", "cuda:0", 4) and all(x.device == "cpu" for x in lanes[1:])
+    assert "(benchmark aimnet2@cuda:0 41,000/h vs @cpu 4,100/h)" in reason, reason
+    # no benchmark (or only one of the two devices): today's GPU lane, and the reason says why
+    for prof in (None, profile_mod.MachineProfile(name="nova", throughput={"aimnet2@cpu": 4100.0})):
+        lanes, reason = L.plan_auto(aimnet, nova, profile=prof)
+        assert lanes[0].device == "cuda:0" and "GPU lane by default" in reason, reason
+    # water keys are not gas-phase keys: AIMNet2 has no water model, so its runs (and keys) are gas phase
+    water = profile_mod.MachineProfile(name="nova", throughput={"aimnet2+water@cpu": 9.0,
+                                                                "aimnet2+water@cuda:0": 1.0})
+    lanes, reason = L.plan_auto(pipeline.BuildConfig(method="aimnet2", threads=0, solvent="water"), nova,
+                                profile=water)
+    assert lanes[0].device == "cuda:0" and "no benchmark aimnet2@cuda:0 and aimnet2@cpu" in reason, reason
+
+
+def test_auto_reads_this_machines_registry(monkeypatch):
+    from quantabench.dist import profile as profile_mod
+
+    monkeypatch.setattr(resources, "logical_cores", lambda: 15)
+    mac = report(physical=14, logical=15, ram=36.0, gpus=1, backend="mps")
+    profile_mod.save_profile(profile_mod.MachineProfile(
+        name=profile_mod.machine_name(), throughput={"aimnet2@cpu": 6387.0, "aimnet2@mps": 2978.0}))
+    aimnet = pipeline.BuildConfig(method="aimnet2", threads=0)
+    lanes, reason = L.plan_auto(aimnet, mac)
+    assert all(x.device == "cpu" for x in lanes) and "no GPU lane: benchmark" in reason
+    assert "no GPU lane: benchmark aimnet2@mps" in L.plan_text("auto", aimnet, mac, 0)

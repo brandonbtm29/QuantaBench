@@ -239,3 +239,74 @@ def test_machine_names_are_folder_safe_and_short():
     assert profile.safe_machine_name("BTM NOVA") == "btm-nova"
     assert profile.safe_machine_name("Brandon's MacBook Pro") == "brandon-s-macbook-pro"
     assert profile.safe_machine_name("---") == "localhost"
+
+
+# ------------------------------------------------------------------ benchmark sets and solvent-specific keys
+def test_bench_method_keeps_water_and_gas_apart():
+    assert profile.bench_method("tblite-gfn2", "water") == "tblite-gfn2+water"
+    assert profile.bench_method("tblite-gfn2", "h2o") == "tblite-gfn2+water"          # canonical name
+    assert profile.bench_method("aimnet2", "water") == "aimnet2"          # no water model: it runs in gas phase
+    assert profile.bench_method("auto", "water") == "auto"
+    assert profile.split_method("tblite-gfn2+water") == ("tblite-gfn2", "water")
+    p = MachineProfile(name="m", throughput={"tblite-gfn2@cpu": 100.0, "tblite-gfn2+water@cpu": 50.0,
+                                             "tblite-gfn2+water@lanes:cpu:6x2": 400.0})
+    assert profile.throughput_for(p, "tblite-gfn2", "cpu") == 100.0
+    assert profile.throughput_for(p, "tblite-gfn2+water", "cpu") == 50.0
+    assert profile.best_throughput(p, "tblite-gfn2") == ("tblite-gfn2@cpu", 100.0)
+    assert profile.best_throughput(p, "tblite-gfn2+water") == ("tblite-gfn2+water@lanes:cpu:6x2", 400.0)
+    assert profile.throughput_for(p, "tblite-gfn1", "cpu") is None
+    # the readers of the grid split (plan.auto_weight, used by client.resolve_weights and --chunk-weights)
+    from quantabench.dist import plan
+
+    assert plan.auto_weight(p, "tblite-gfn2+water") == (400.0, "benchmark tblite-gfn2+water@lanes:cpu:6x2")
+    assert plan.auto_weight(p, "tblite-gfn2") == (100.0, "benchmark tblite-gfn2@cpu")
+    p.engines = {"tblite-gfn2": False}
+    assert plan.auto_weight(p, "tblite-gfn2+water")[0] == 0.0
+    q = MachineProfile(name="q", physical_cores=8, throughput={"tblite-gfn2@cpu": 100.0})
+    assert plan.auto_weight(q, "tblite-gfn2+water")[1].startswith("estimate")     # gas numbers are not used
+
+
+def test_benchmark_records_solvent_and_set(monkeypatch):
+    from quantabench.chem import engines
+
+    ran = []
+
+    def fake(inp, cfg, device="cpu", threads=1, should_stop=lambda: False, *a, **k):
+        ran.append(inp.id)
+        return pipeline.MoleculeResult(input=inp, status="ok", method=cfg.method, device="cpu", solvent=cfg.solvent)
+
+    monkeypatch.setattr(pipeline, "run_molecule", fake)
+    monkeypatch.setattr(engines, "available", lambda key: (True, ""))
+    monkeypatch.setattr(profile, "MIN_SECONDS", 0.0)
+    details = {}
+    rates = profile.benchmark(["tblite-gfn2", "aimnet2"], ["cpu"], solvent="water", details=details,
+                              bench_set="mixed")
+    assert list(rates) == ["tblite-gfn2+water@cpu"]
+    info = details["tblite-gfn2+water@cpu"]
+    assert (info["solvent"], info["set"]) == ("water", "mixed-10")
+    assert {"cholesterol", "caffeine", "PFOA"} <= set(ran)
+    assert details["aimnet2+water@?"]["error"] == "no implicit water model"     # not recorded as a gas number
+    p = MachineProfile(name="m", throughput=rates, benchmarks=details)
+    assert profile.set_of_key(p, "tblite-gfn2+water@cpu") == "mixed"
+    assert profile.set_of_key(p, "mmff@cpu") == "pfas"
+    # a run that fell back to gas phase gives no water number
+    monkeypatch.setattr(pipeline, "run_molecule", lambda inp, cfg, *a, **k: pipeline.MoleculeResult(
+        input=inp, status="ok", method=cfg.method, device="cpu", solvent=""))
+    details = {}
+    assert profile.benchmark(["tblite-gfn2"], ["cpu"], solvent="water", details=details) == {}
+    assert details["tblite-gfn2+water@cpu"]["error"].endswith("ran in gas phase instead of water")
+    with pytest.raises(ValueError, match="unknown benchmark set"):
+        profile.bench_molecules("big")
+
+
+def test_machines_cli_passes_bench_set_and_solvent(monkeypatch):
+    seen = {}
+
+    def fake_refresh(bench, methods, devices, max_seconds, wsl, out=None, solvent="", bench_set="pfas"):
+        seen.update(solvent=solvent, bench_set=bench_set, methods=methods)
+        return None, None
+
+    monkeypatch.setattr(profile, "refresh_from_cli", fake_refresh)
+    monkeypatch.setattr(profile, "_parse_methods", lambda text, engines: ["tblite-gfn2"])
+    assert cli.main(["machines", "--bench", "tblite-gfn2", "--bench-set", "mixed", "--solvent", "water"]) == 130
+    assert seen == {"solvent": "water", "bench_set": "mixed", "methods": ["tblite-gfn2"]}

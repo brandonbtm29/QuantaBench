@@ -173,6 +173,9 @@ def _parse_number(text: str, what: str) -> float:
 
 
 def _estimate(p, method: str) -> tuple[float, str]:
+    from .profile import split_method
+
+    method = split_method(method)[0]
     cores = int(getattr(p, "physical_cores", 0) or 0) or max(1, int(getattr(p, "logical_cores", 0) or 0) // 2) or 1
     factor = ESTIMATE_PER_CORE.get(method, DEFAULT_PER_CORE)
     return cores * factor, f"estimate: {cores} cores x {factor:g}/h"
@@ -180,12 +183,14 @@ def _estimate(p, method: str) -> tuple[float, str]:
 
 def auto_weight(p, method: str) -> tuple[float, str]:
     """(weight, source) for profile ``p`` and ``method``: its best measured throughput, 0 if the method is
-    unavailable there, else an estimate from the core count."""
-    from .profile import best_throughput
+    unavailable there, else an estimate from the core count. ``method`` may carry a solvent
+    (``profile.bench_method``, "tblite-gfn2+water"): then only benchmarks in that solvent count."""
+    from .profile import best_throughput, split_method
 
     engines = getattr(p, "engines", {}) or {}
-    if method in engines and not engines[method]:
-        return 0.0, f"{method} unavailable"
+    base = split_method(method)[0]
+    if base in engines and not engines[base]:
+        return 0.0, f"{base} unavailable"
     hit = best_throughput(p, method)
     if hit is not None:
         key, value = hit
