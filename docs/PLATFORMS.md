@@ -128,6 +128,11 @@ Policy:
 - Every fork is listed here with its upstream link, so it can be dropped once upstream catches up.
 - Forks live under `brandonbtm29/` and install with `pip install "pkg @ git+https://github.com/...@tag"`.
   Wheels are attached to GitHub releases, because PyPI packages cannot depend on direct URLs.
+- The pins the installers use are in `scripts/fork-packages.json` (per platform: `packages`, `only_binary`,
+  `find_links`). Help > Check for updates (`quantabench-cli update`) reads the file too, and reinstalls a
+  fork whose entry changed in a pull ([INSTALL.md](INSTALL.md#fork-packages-scriptsfork-packagesjson)).
+  A new tag or release goes there, plus the matching install hint in `chem/engines.py` or
+  `chem/eng_tblite.py`.
 
 | ID | Problem | Route | Unblocks | Acceptance |
 |---|---|---|---|---|
@@ -187,7 +192,7 @@ Results so far (2026-11-05):
    - sleep while running
 4. **Packaging** (with the 0.5 installers):
    - a `.app` bundle, notarization later
-   - on every OS, the standing requirements for Brandon's apps: an **Update button** (git pull or pip upgrade, then restart) and a **launcher that hides the terminal window**: `pythonw`/GUI-script `.exe` on Windows, `.app`/`.command` on macOS, `.desktop` on Linux. Done 2026-11-05: Help > Check for updates (`quantabench-cli update`) and the launchers the install scripts create
+   - on every OS, the standing requirements for Brandon's apps: an **Update button** (git pull or pip upgrade, then restart) and a **launcher that hides the terminal window**: `pythonw`/GUI-script `.exe` on Windows, `.app`/`.command` on macOS, `.desktop` on Linux. Done 2026-11-05: Help > Check for updates (`quantabench-cli update`) and the launchers the install scripts create. 2026-11-06: `--upgrade-packages` (pip upgrade, PyTorch and the forks kept) and fork pins that arrive through an update (BACKLOG UPD-1); workers still need a manual restart after an update
 
 ## 6. Order of work
 

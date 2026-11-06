@@ -4,6 +4,7 @@ Dry runs go into a copy of the repository in a folder with a space (like "GitHub
 create anything. Real installs are not run here (they download PyTorch); see docs/INSTALL.md.
 """
 
+import json
 import os
 import re
 import shutil
@@ -109,11 +110,36 @@ def test_dry_run_changes_nothing(tmp_path):
     assert "envs/tools.yml" in out and "envs/psi4.yml" in out
     assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before   # nothing written
     if sys.platform == "linux":
+        assert "pip install -e '.[all,dev]' 'tad-libcint<0.4'" in out          # from scripts/fork-packages.json
         assert "--index-url https://download.pytorch.org/whl/cpu" in out
         assert "would write" in out and "quantabench.desktop" in out
         assert 'Exec="' + str(repo / ".venv" / "bin" / "quantabench") + '"' in out
     else:
         assert "QuantaBench.app" in out
+
+
+@pytest.mark.skipif(sys.platform != "linux" or BASH is None, reason="fakes macOS on Linux")
+def test_macos_dry_run_reads_the_fork_packages(tmp_path):
+    """install_macos.sh on Linux, with uname and sw_vers faked: its pip line comes from scripts/fork-packages.json."""
+    repo = copy_repo(tmp_path)
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "uname").write_text('#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n', encoding="utf-8")
+    (fake / "sw_vers").write_text("#!/bin/sh\necho 15.1\n", encoding="utf-8")
+    for f in fake.iterdir():
+        f.chmod(0o755)
+    cp = run_script([BASH, str(repo / "scripts" / "install_macos.sh"), "--dry-run", "--python", sys.executable,
+                     "--no-app"], tmp_path, PATH=f"{fake}{os.pathsep}{os.environ.get('PATH', '')}",
+                    HOME=str(tmp_path / "home"))
+    out = cp.stdout + cp.stderr
+    assert cp.returncode == 0, out
+    assert ("pip install -e '.[all,dev]' 'dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1' "
+            "'tad-libcint>=0.4' --only-binary tblite") in out
+    (repo / "scripts" / "fork-packages.json").write_text("{broken", encoding="utf-8")
+    cp = run_script([BASH, str(repo / "scripts" / "install_macos.sh"), "--dry-run", "--python", sys.executable,
+                     "--no-app"], tmp_path, PATH=f"{fake}{os.pathsep}{os.environ.get('PATH', '')}",
+                    HOME=str(tmp_path / "home"))
+    assert cp.returncode != 0 and "fork-packages.json is missing or not valid" in cp.stderr
 
 
 @pytest.mark.skipif(_native_bash_script() is None, reason="needs Linux or macOS")
@@ -165,6 +191,52 @@ def test_powershell_dry_run_changes_nothing(tmp_path):
     assert "dry run, nothing is changed" in out and "pip install -e '.[all,dev]'" in out
     assert "checkout path has a space" in out and "settings --set-dir" in out
     assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before
+
+
+# ------------------------------------------------------------------------------ scripts/fork-packages.json
+FORKS = SCRIPTS / "fork-packages.json"
+
+
+def test_fork_packages_file_is_the_one_place_for_the_pins():
+    """Every installer reads the pins from scripts/fork-packages.json (as `quantabench-cli update` does), so none
+    of them spells out a fork URL itself."""
+    raw = FORKS.read_bytes()
+    assert all(b < 128 for b in raw), "non-ASCII character in fork-packages.json (PowerShell 5.1 reads it as ANSI)"
+    data = json.loads(raw)
+    assert {"windows", "macos", "linux"} <= set(data)
+    for script in (PS1, SCRIPTS / "install_macos.sh", SCRIPTS / "install_linux.sh"):
+        code = "\n".join(line for line in script.read_text(encoding="utf-8").splitlines()
+                         if not line.lstrip().startswith("#"))
+        assert "fork-packages.json" in code, script.name
+        for pin in ("brandonbtm29/dxtb@", "expanded_assets", "tad-libcint"):
+            assert pin not in code, f"{script.name} spells out {pin}"
+
+
+def test_fork_packages_today():
+    """The pins the installers used before the file existed (their behaviour must not change with it), and the
+    install hints in the package that name them."""
+    from quantabench import update
+    from quantabench.chem import eng_tblite, engines
+
+    text = FORKS.read_text(encoding="utf-8")
+    win = update.fork_packages(text, "win32")
+    assert win.packages == (engines.DXTB_FORK_REQ, "tad-libcint>=0.4", "tblite")
+    assert win.only_binary == ("tblite",) and win.find_links == (("tblite", eng_tblite.WINDOWS_WHEELS),)
+    assert eng_tblite.WINDOWS_WHEELS.endswith("/releases/expanded_assets/qb-v0.8.0-win1")
+    mac = update.fork_packages(text, "darwin")
+    assert mac.packages == (engines.DXTB_FORK_REQ, "tad-libcint>=0.4") and mac.flags() == ["--only-binary", "tblite"]
+    assert update.fork_packages(text, "linux").packages == ("tad-libcint<0.4",)
+    assert update.fork_packages(text, "linux").flags() == []
+
+
+def test_powershell_reads_the_fork_packages():
+    text = PS1.read_text(encoding="ascii")
+    assert '$ForkFile = Join-Path $PSScriptRoot "fork-packages.json"' in text
+    assert "ConvertFrom-Json).windows" in text
+    # the stamp and the pip line are built as before: forks=<packages joined by ,> <find-links joined by space>
+    assert "forks=$($ForkPkgs -join ',') $($ForkLinks -join ' ')" in text
+    assert 'foreach ($name in $ForkOnlyBinary) { $pipArgs += @("--only-binary", $name) }' in text
+    assert 'foreach ($url in $ForkLinks) { $pipArgs += @("--find-links", $url) }' in text
 
 
 # ------------------------------------------------------------------------------------- docs and URLs

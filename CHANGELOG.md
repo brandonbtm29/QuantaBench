@@ -61,6 +61,31 @@
 - New `quantabench.units`: conversion factors (the computations' own: 23.060548 kcal/mol per eV,
   27.211386245988 eV per hartree, 4.184 kJ per kcal) and formatting. New `gui.energy_widgets.EnergySpinBox`.
 
+### Update: package upgrades, and fork packages that arrive with a pull (2026-11-06)
+- **`quantabench-cli update --upgrade-packages`** (Help > Check for updates: "Also upgrade the installed
+  packages", or "Upgrade packages..." when there is nothing to pull) also upgrades what is installed. Until
+  now an update reinstalled only when `pyproject.toml` changed, and pip left every package that still fit at
+  its version.
+  - It runs `pip install -e ".[<installed extras>]" <fork packages> --upgrade --upgrade-strategy eager`
+    (`--upgrade-strategy only-if-needed` for the narrow one), with PyTorch pinned to the installed build.
+  - The result lists what pip changed (`pip list` before and after). The app shows it and asks before it
+    restarts.
+  - Windows: if a file in use blocks pip, the message says to close the app and rerun from a terminal.
+  - macOS: tblite's `libomp.dylib` is linked to PyTorch's again afterwards, as the installer does.
+- **`scripts/fork-packages.json`** holds the packages the installers add on top of `pyproject.toml`, per
+  platform. On Windows these are the dxtb fork (`qb-v0.4.0.post1`), tad-libcint 0.4 and tblite from the
+  fork's `qb-v0.8.0-win1` release. On macOS, the dxtb fork, tad-libcint 0.4 and `--only-binary tblite`. On
+  Linux, `tad-libcint<0.4`.
+  - `install_windows.ps1`, `install_macos.sh` and `install_linux.sh` read the file instead of their own
+    copies. Their pip lines and install stamps are unchanged, so nothing reinstalls because of this.
+  - `update` reinstalls when this platform's entry changes in a pull. A package from a git tag or a release
+    page whose entry changed is then reinstalled with `--force-reinstall --no-deps`: a new build keeps its
+    version number (the coming OpenBLAS tblite, `qb-v0.8.0-win2`, PERF-2).
+  - Every reinstall and upgrade keeps the fork packages on pip's command line, so a dependency change or an
+    upgrade never swaps the dxtb fork for PyPI's dxtb. Without a readable file, `--upgrade-packages` stops.
+- **Workers** keep running the code they started with; docs/WORKERS.md now says to restart them after an
+  update. Options for updating them automatically are in BACKLOG UPD-1.
+
 ### Areas and volumes: a SASA bug fixed, Spartan's radii as an option (2026-11-06)
 - **`sasa_A2` was wrong for every non-protein molecule.** It passed the radii of FreeSASA's ProtOr classifier,
   and those are 0 for any atom outside a protein residue, so the value was the union of bare 1.4 Å probe

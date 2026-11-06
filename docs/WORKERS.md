@@ -88,6 +88,15 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
   such a pair.
 - `grid build` warns when a worker runs another git commit than this machine (the version number does not
   change with every commit), and records each machine's commit in `grid.json`.
+- **Restart a worker after an update.** A running worker keeps the code it started with. That applies to
+  Help > Check for updates, `quantabench-cli update [--upgrade-packages]` or `git pull`, on its machine.
+  The update changes the files under it, so restart the worker when it is idle (`grid machines` shows its
+  queue): Ctrl+C or `pkill -INT -f "quantabench-cli worker"`, then start it again. On the Mac, launchd
+  starts it again by itself. On Windows, run `Stop-ScheduledTask "QuantaBench worker"`, then
+  `Start-ScheduledTask "QuantaBench worker"`; the stop ends the process at once, so wait until it is idle. `grid machines` then shows the
+  new commit. On Windows, stop the worker before `--upgrade-packages`: Windows keeps the files of a running
+  program locked, and pip cannot replace a package the worker has loaded. Updating workers from the client
+  is planned (BACKLOG UPD-1).
 - Stopping a worker with Ctrl+C, Ctrl+Break, SIGINT or SIGTERM stops its job after the current molecule. That
   includes a worker started in the background (`nohup … &`, over ssh), which `pkill -INT -f "quantabench-cli
   worker"` now stops too (it waits up
@@ -272,8 +281,8 @@ quantabench-cli grid build --file pfas.csv --method gfn2-xtb --machines btm-nova
 quantabench-cli grid status                     # recent grid runs
 ```
 
-Both machines must run the same QuantaBench version (`git pull` on both); a worker refuses jobs from another
-version (`--allow-version-mismatch` on either side overrides).
+Both machines must run the same QuantaBench version (`git pull` on both, then restart the workers); a worker
+refuses jobs from another version (`--allow-version-mismatch` on either side overrides).
 
 ## Limits
 
