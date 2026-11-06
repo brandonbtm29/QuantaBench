@@ -1,0 +1,39 @@
+{
+  "_about": [
+    "Packages the installers add to `pip install -e .[all,dev]` on each platform, because pyproject.toml cannot",
+    "carry them: forks installed from a git tag or a GitHub release (docs/PLATFORMS.md section 4) and platform",
+    "pins. scripts/install_windows.ps1, install_macos.sh and install_linux.sh read this file, and so does",
+    "`quantabench-cli update` (Help > Check for updates...): after a pull that changes an entry it reinstalls that",
+    "package, and --upgrade-packages keeps all of them. packages: requirement strings. only_binary: names passed as",
+    "--only-binary (never build from source). find_links: package name -> URL passed as --find-links; point it at",
+    "a new release and Update reinstalls that package, even when the version number stays the same.",
+    "Keep this file ASCII: Windows PowerShell 5.1 reads it as ANSI."
+  ],
+  "windows": {
+    "_why": "FORK-1: dxtb ported to tad-libcint 0.4 (GFN2, polarizability, IR intensities). FORK-2: tblite wheels (PyPI has none for Windows).",
+    "packages": [
+      "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1",
+      "tad-libcint>=0.4",
+      "tblite"
+    ],
+    "only_binary": ["tblite"],
+    "find_links": {
+      "tblite": "https://github.com/brandonbtm29/tblite/releases/expanded_assets/qb-v0.8.0-win1"
+    }
+  },
+  "macos": {
+    "_why": "FORK-1: PyPI's dxtb cannot use tad-libcint on macOS. tblite: never build from source (its newest wheels need macOS 15).",
+    "packages": [
+      "dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1",
+      "tad-libcint>=0.4"
+    ],
+    "only_binary": ["tblite"],
+    "find_links": {}
+  },
+  "linux": {
+    "_why": "GFN2-xTB in PyPI's dxtb needs tad-libcint below 0.4 (0.4 needs the dxtb fork; docs/INSTALL.md).",
+    "packages": ["tad-libcint<0.4"],
+    "only_binary": [],
+    "find_links": {}
+  }
+}

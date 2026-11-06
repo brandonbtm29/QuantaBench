@@ -56,7 +56,9 @@ PERF-1. Answering `n` keeps the ROCm build in `.venv`.
 
 The Windows and macOS scripts also install the two packages PyPI cannot provide there: the dxtb fork with
 tad-libcint 0.4 (GFN2-xTB, polarizability and IR intensities in dxtb) and, on Windows, tblite from the
-fork's wheels (details below and in [PLATFORMS.md](PLATFORMS.md#4-forks-builds-and-upstream-fixes)).
+fork's wheels (details below and in [PLATFORMS.md](PLATFORMS.md#4-forks-builds-and-upstream-fixes)). The
+pins are in [`scripts/fork-packages.json`](#fork-packages-scriptsfork-packagesjson), so a new one also
+arrives through Help > Check for updates.
 
 ### Linux and WSL2
 
@@ -82,8 +84,10 @@ top of the Windows checkout's `.venv`.
 
    An installed PyTorch of another build is never replaced without asking. Pass `--replace-torch`
    (`-ReplaceTorch`) to replace it without the question.
-4. **`pip install -e ".[all,dev]"`**, with PyTorch pinned to the installed build (Linux adds
-   `tad-libcint<0.4` for GFN2-xTB in dxtb; macOS never builds tblite from source). The scripts skip this
+4. **`pip install -e ".[all,dev]"`**, with PyTorch pinned to the installed build, plus this platform's
+   packages from `scripts/fork-packages.json` (Windows: the dxtb fork, tad-libcint 0.4 and the fork's tblite
+   wheels; macOS: the dxtb fork and tad-libcint 0.4, and tblite never built from source; Linux:
+   `tad-libcint<0.4` for GFN2-xTB in dxtb). The scripts skip this
    step when `pyproject.toml` has not changed since the last run (`--reinstall` forces it).
 5. **`--settings-dir DIR`** runs `quantabench-cli settings --set-dir DIR`
    ([Settings in a synced folder](#settings-in-a-synced-folder)).
@@ -106,12 +110,21 @@ AMD's ROCm PyTorch, and Miniforge must not be installed in a folder with spaces.
 ## Updating
 
 - **In the app:** Help > Check for updates... It shows the new commits and offers **Update and restart**.
+  Tick **Also upgrade the installed packages** to upgrade the packages too. With nothing to pull, the same
+  window offers **Upgrade packages...**.
 - **On the command line:** `quantabench-cli update --check` reports how far the checkout is behind
-  `origin/main`, and `quantabench-cli update` updates it.
+  `origin/main`, and `quantabench-cli update` updates it. `quantabench-cli update --upgrade-packages` also
+  upgrades the packages, with or without new commits.
 
-Both run `git pull --ff-only`. If `pyproject.toml`'s dependencies or entry points changed, they then
-reinstall with `pip install -e`, using the extras that are already installed and keeping the installed
-PyTorch. They refuse, and say why, in three cases:
+Both run `git pull --ff-only`. Then they reinstall with `pip install -e` when one of these changed:
+
+- `pyproject.toml`'s dependencies or entry points
+- this platform's entry in `scripts/fork-packages.json` (below)
+
+The reinstall uses the extras that are already installed, adds the fork packages and keeps the installed
+PyTorch.
+
+They refuse, and say why, in three cases:
 
 - tracked files have local changes (commit or `git stash` them first)
 - the checkout is on another branch
@@ -119,6 +132,67 @@ PyTorch. They refuse, and say why, in three cases:
 
 An install that is not a git checkout gets instructions instead. Running the install script again also
 updates, except for the `git pull`.
+
+**What a plain update does not do.** Packages that are already installed and still satisfy
+`pyproject.toml` stay at their version, because pip only installs what is missing. Upgrading them is the
+opt-in `--upgrade-packages` (the check box in the app). It runs:
+
+```
+pip install -e ".[<installed extras>]" <fork packages> --upgrade --upgrade-strategy eager --constraint <torch==installed>
+```
+
+- `eager` upgrades every dependency to the newest version `pyproject.toml` allows.
+  `--upgrade-strategy only-if-needed` upgrades only QuantaBench and the fork packages, and dependencies only
+  where they must move.
+- **PyTorch** stays the installed build (ROCm, CUDA or CPU), pinned by a constraints file.
+- **The fork packages** stay. They are named on pip's command line, so pip never swaps the dxtb fork for
+  PyPI's dxtb. Those from a git tag or a release page are then reinstalled from it
+  (`--force-reinstall --no-deps`).
+- **The result lists what changed** (`pip list` before and after): `numpy 2.1.0 -> 2.3.4`, new packages and
+  removed ones. The app shows the list and asks before it restarts.
+- **On Windows, close other QuantaBench windows and any `quantabench-cli worker` first.** Windows keeps the
+  files of a running program locked, so pip may fail to replace a package that is in use. If it does, the
+  message says so: close the app and run `quantabench-cli update --upgrade-packages` in a terminal. pip can
+  leave folders named `~...` in `.venv\Lib\site-packages` with the old files of a package that was in use;
+  they can be deleted after a restart.
+- On macOS, tblite's `libomp.dylib` is linked to PyTorch's again after pip, as the installer does
+  ([below](#macos-apple-silicon-being-brought-up-plat-1)).
+
+**Workers.** A running `quantabench-cli worker` keeps the code it started with. Restart it after an update
+([WORKERS.md](WORKERS.md#commands)).
+
+### Fork packages: `scripts/fork-packages.json`
+
+pip cannot get every package from PyPI on every platform, and `pyproject.toml` cannot name a git tag or a
+release page (PyPI refuses packages that depend on direct URLs). The installers therefore add those
+packages, and the list lives in one file that all three installers and `quantabench-cli update` read:
+
+```json
+"windows": {
+  "packages": ["dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1", "tad-libcint>=0.4", "tblite"],
+  "only_binary": ["tblite"],
+  "find_links": {"tblite": "https://github.com/brandonbtm29/tblite/releases/expanded_assets/qb-v0.8.0-win1"}
+}
+```
+
+Each platform entry (`windows`, `macos`, `linux`) has the same three keys:
+
+- `packages`: requirement strings added to `pip install -e`.
+- `only_binary`: names passed as `--only-binary`, so pip never builds them from source.
+- `find_links`: package name -> URL, passed as `--find-links`.
+
+Change an entry, and the next update (in the app or `quantabench-cli update`) reinstalls with it. For a
+package from a git tag or a release page, it runs `pip install --force-reinstall --no-deps` for that package,
+because a new build often keeps its version number. That applies when the package's requirement or
+`find_links` URL changed. pip handles a changed version range by itself. Keep the file ASCII: Windows
+PowerShell 5.1 reads it as ANSI. The install hints in `quantabench-cli doctor`
+(`chem/engines.py` `DXTB_FORK_REQ`, `chem/eng_tblite.py` `WINDOWS_WHEELS`) name the same pins, and
+`tests/test_install_scripts.py` fails when they drift apart.
+
+The installers' pip run does not replace an installed package whose version still fits, so a new tblite
+build under the same version number reaches them only after `pip uninstall tblite`. Give a new build a new
+version (e.g. `0.8.0.post1`) and pin it (`tblite==0.8.0.post1`) so the installers pick it up too. Update
+reinstalls it either way.
 
 ## Manual installation
 

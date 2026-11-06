@@ -26,7 +26,10 @@ REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 VENV="$REPO/.venv"
 VPY="$VENV/bin/python"
 EXTRAS="all,dev"
-EXTRA_PKGS="tad-libcint<0.4"            # GFN2-xTB in dxtb (Linux only; docs/INSTALL.md)
+# Added to `pip install -e` from scripts/fork-packages.json ("linux"), which `quantabench-cli update` reads too:
+# tad-libcint<0.4 for GFN2-xTB in PyPI's dxtb (docs/INSTALL.md). Read in step 4.
+FORK_PKGS=()
+PIP_FLAGS=""
 TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
 TORCH_ROCM_INDEX="https://download.pytorch.org/whl/rocm10.0"   # pytorch.org's ROCm build, Nov 2026
 MINIFORGE_DIR="$HOME/miniforge3"
@@ -79,6 +82,24 @@ write_file() {                            # write_file PATH CONTENT: only when t
 }
 py_version() { "$1" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null; }
 sha256() { "$ANYPY" -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
+fork_values() {                           # fork_values PLATFORM KEY: scripts/fork-packages.json values, one per line
+  "$ANYPY" -c 'import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]].get(sys.argv[3]) or []
+print("\n".join(value.values() if isinstance(value, dict) else value))' "$REPO/scripts/fork-packages.json" "$1" "$2"
+}
+load_forks() {                            # load_forks PLATFORM: sets FORK_PKGS (packages) and PIP_FLAGS (pip options)
+  local key flag values line
+  FORK_PKGS=()
+  PIP_FLAGS=""
+  for key in packages only_binary find_links; do
+    values=$(fork_values "$1" "$key") || die "scripts/fork-packages.json is missing or not valid (error above)"
+    case "$key" in only_binary) flag="--only-binary" ;; find_links) flag="--find-links" ;; *) flag="" ;; esac
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      if [ -z "$flag" ]; then FORK_PKGS+=("$line"); else PIP_FLAGS="${PIP_FLAGS:+$PIP_FLAGS }$flag $line"; fi
+    done <<< "$values"
+  done
+}
 need_value() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value (see --help)"; }
 
 while [ $# -gt 0 ]; do
@@ -230,9 +251,10 @@ fi
 # ---------------------------------------------------------------------------------- 4. QuantaBench
 step "QuantaBench (pip install -e \".[$EXTRAS]\")"
 STAMP="$VENV/.quantabench-install"
+load_forks linux
 want=""
 if [ -x "$VPY" ]; then
-  want="$(sha256 "$REPO/pyproject.toml") extras=$EXTRAS $EXTRA_PKGS"
+  want="$(sha256 "$REPO/pyproject.toml") extras=$EXTRAS ${FORK_PKGS[*]:-}${PIP_FLAGS:+ $PIP_FLAGS}"
 fi
 installed_here() { "$VPY" -c 'import os, sys, quantabench; sys.exit(0 if os.path.realpath(quantabench.__file__).startswith(os.path.realpath(sys.argv[1]) + os.sep) else 1)' "$REPO/src" 2>/dev/null; }
 if [ "$REINSTALL" = 0 ] && [ -n "$want" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$want" ] && installed_here; then
@@ -240,16 +262,17 @@ if [ "$REINSTALL" = 0 ] && [ -n "$want" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP
 else
   CONSTRAINTS="$VENV/.torch-constraint.txt"
   TV=$(torch_version)
+  # shellcheck disable=SC2086  # PIP_FLAGS is a list of words
   if [ -n "$TV" ]; then
     # keep the PyTorch build chosen above: an extra that wants another torch fails loudly instead of swapping it
     write_file "$CONSTRAINTS" "torch==$TV"
-    run "$VPY" -m pip install -e ".[$EXTRAS]" "$EXTRA_PKGS" --constraint "$CONSTRAINTS" ||
+    run "$VPY" -m pip install -e ".[$EXTRAS]" ${FORK_PKGS[@]+"${FORK_PKGS[@]}"} $PIP_FLAGS --constraint "$CONSTRAINTS" ||
       die "pip install failed (output above). If it wants a different torch, see docs/INSTALL.md."
   else
-    run "$VPY" -m pip install -e ".[$EXTRAS]" "$EXTRA_PKGS" || die "pip install failed (output above)"
+    run "$VPY" -m pip install -e ".[$EXTRAS]" ${FORK_PKGS[@]+"${FORK_PKGS[@]}"} $PIP_FLAGS || die "pip install failed (output above)"
   fi
   if [ "$DRY_RUN" = 0 ]; then
-    printf '%s\n' "$(sha256 "$REPO/pyproject.toml") extras=$EXTRAS $EXTRA_PKGS" > "$STAMP"
+    printf '%s\n' "$(sha256 "$REPO/pyproject.toml") extras=$EXTRAS ${FORK_PKGS[*]:-}${PIP_FLAGS:+ $PIP_FLAGS}" > "$STAMP"
   fi
 fi
 

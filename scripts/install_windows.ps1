@@ -46,9 +46,20 @@ $Venv = Join-Path $Repo ".venv"
 $VenvRocm = Join-Path $Repo ".venv-rocm"
 $Extras = "all,dev"
 # Not on PyPI for Windows (docs/PLATFORMS.md section 4): dxtb ported to tad-libcint 0.4 (GFN2, polarizability and IR
-# intensities; FORK-1) and tblite wheels (in-process GFN2 with ALPB; FORK-2), both from Brandon's forks
-$ForkPkgs = @("dxtb @ git+https://github.com/brandonbtm29/dxtb@qb-v0.4.0.post1", "tad-libcint>=0.4", "tblite")
-$TbliteLinks = "https://github.com/brandonbtm29/tblite/releases/expanded_assets/qb-v0.8.0-win1"
+# intensities; FORK-1) and tblite wheels (in-process GFN2 with ALPB; FORK-2), both from Brandon's forks. The pins
+# are in scripts\fork-packages.json ("windows"), which quantabench-cli update reads too: a new pin arrives through
+# Help > Check for updates... as well as through this script.
+$ForkFile = Join-Path $PSScriptRoot "fork-packages.json"
+$Forks = $null
+try { $Forks = (Get-Content -Raw $ForkFile | ConvertFrom-Json).windows } catch { $Forks = $null }
+if ($null -eq $Forks) {
+    Write-Host "ERROR: $ForkFile is missing, is not valid JSON or has no ""windows"" entry" -ForegroundColor Red
+    exit 1
+}
+$ForkPkgs = @($Forks.packages | Where-Object { $_ })
+$ForkOnlyBinary = @($Forks.only_binary | Where-Object { $_ })
+$ForkLinks = @()
+if ($Forks.find_links) { $ForkLinks = @($Forks.find_links.PSObject.Properties | ForEach-Object { $_.Value } | Where-Object { $_ }) }
 if (-not $MiniforgeDir) { $MiniforgeDir = Join-Path $env:USERPROFILE "miniforge3" }
 $MiniforgeUrl = "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe"
 $TorchCudaIndex = "https://download.pytorch.org/whl/cu132"
@@ -271,7 +282,7 @@ Set-Torch $VPy $venvFlavor ".venv"
 function Install-QuantaBench([string]$Dir) {
     $exe = Join-Path $Dir "Scripts\python.exe"
     $stamp = Join-Path $Dir ".quantabench-install"
-    $want = "$(Get-Sha256 (Join-Path $Repo 'pyproject.toml')) extras=$Extras forks=$($ForkPkgs -join ',') $TbliteLinks"
+    $want = "$(Get-Sha256 (Join-Path $Repo 'pyproject.toml')) extras=$Extras forks=$($ForkPkgs -join ',') $($ForkLinks -join ' ')"
     $here = $false
     if (Test-Path $exe) {
         $where = Get-Output $exe @("-c", $WhereCode)
@@ -283,8 +294,9 @@ function Install-QuantaBench([string]$Dir) {
         return
     }
     $tv = Get-TorchVersion $exe
-    $pipArgs = @("-m", "pip", "install", "-e", ".[$Extras]") + $ForkPkgs +
-               @("--only-binary", "tblite", "--find-links", $TbliteLinks)
+    $pipArgs = @("-m", "pip", "install", "-e", ".[$Extras]") + $ForkPkgs
+    foreach ($name in $ForkOnlyBinary) { $pipArgs += @("--only-binary", $name) }
+    foreach ($url in $ForkLinks) { $pipArgs += @("--find-links", $url) }
     if ($tv) {
         # keep the PyTorch build chosen above: an extra that wants another torch fails loudly instead
         $constraints = Join-Path $Dir ".torch-constraint.txt"

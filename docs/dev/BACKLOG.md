@@ -589,6 +589,55 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   49 molecules the Mac is 2.3x NOVA, so pass `--weights brandons-macbook-pro=2.3,local=1` until grids
   learn their weights.
 
+### UPD-1: Update button gaps · in review 2026-11-06 (branch `feat/update-packages`; worker updates: design only)
+Brandon asked whether Help > Check for updates pulls "the latest packages and GitHub version". It pulled
+the code, but three things never arrived through it.
+
+1. **Installed packages were never upgraded.** pip reinstalled only when `pyproject.toml` changed, and kept
+   every package that still fit. Done: `quantabench-cli update --upgrade-packages [--upgrade-strategy
+   eager|only-if-needed]` and, in the app, "Also upgrade the installed packages" or "Upgrade packages...".
+   - It works with or without new commits, keeps the installed PyTorch with a constraints file and keeps the
+     fork packages on pip's command line.
+   - It lists `pip list` before/after, and the app asks before restarting.
+2. **Windows fork pins lived only in `install_windows.ps1`**, so a new tblite build (win2, PERF-2) could
+   never arrive through Update. Done: `scripts/fork-packages.json`.
+   - Per platform: `packages`, `only_binary`, `find_links` as {package: URL}. All three installers read it,
+     with the same pip lines and stamps as before (checked by dry runs, the stamp files, and NOVA's
+     PowerShell 5.1 parser).
+   - `update` reinstalls when this platform's entry changes in a pull. It then force-reinstalls
+     (`--no-deps`) a git-tag or release-page package whose requirement or link changed.
+   - `--upgrade-packages` force-reinstalls those packages too.
+   - Tests: tests/test_update.py, tests/test_install_scripts.py.
+3. **Workers keep the old code.** A running `quantabench-cli worker` imported the code it started with. An
+   update on that machine changes the files under it: new modules can load next to old ones in the middle
+   of a job. A grid then mixes commits; `grid build` already warns about that. Not changed yet:
+   docs/WORKERS.md says to restart workers after an update. Options, roughly in order of preference:
+   - **a. `quantabench-cli worker --update-when-idle` / `POST /v1/update`** (token, Tailscale bind as
+     today). The worker pauses (like `POST /v1/pause`) and lets the running job finish. It runs
+     `update.update()` (fast-forward only; `upgrade_packages` only if the request asks), then restarts
+     itself. POSIX re-execs with the same argv. Windows starts a new detached process and exits, because the
+     Task Scheduler restart is unverified (WORKERS.md). The queue resumes, since jobs are resumable already.
+     It refuses while a job runs unless asked to wait, and reports the new commit in `/v1/info`.
+   - **b. `quantabench-cli grid update [--machines ...] [--upgrade-packages]`** calls (a) on each worker
+     and waits until each reports `origin/main`'s commit. `grid build` could offer it when commits differ,
+     instead of only warning, and the Machines dock could show "N workers run another commit".
+   - **c. Minimal, no API:** `quantabench-cli worker restart` for the local machine. It sends SIGINT
+     (worker already stops after the current molecule), waits for the port to free, and starts the worker
+     again with the arguments saved in its state folder. launchd's KeepAlive already restarts a stopped
+     worker on the Mac.
+   - Either way, `update.update()` should first check for a running worker from the same checkout and
+     venv (via `psutil`, or a pid file in the worker's state folder) and say so. Upgrading packages under a
+     running worker on Windows also hits the locked-file problem below.
+- Left:
+  - **Windows in-app upgrades** run pip while the GUI has PySide6, numpy, VTK and the rest loaded. pip
+    usually manages by moving the files aside, leaving `~...` folders in site-packages, but it can fail on a
+    locked DLL. The message then says to close the app and use the CLI. A sturdier route is to finish the
+    upgrade in a helper process after the GUI exits: a console window shows pip, then the GUI starts again.
+    Try `--upgrade-packages` from the app on NOVA first (needs-Brandon), and clean up `~...` leftovers on
+    the next start if they appear.
+  - `--check --upgrade-packages` could preview the upgrade with `pip install --dry-run --report -`.
+  - The worker update (3).
+
 ### PERF-2: tblite Windows wheel with OpenBLAS · ready
 - One GFN2/ALPB energy+gradient (`scratch/tblite_scf_bench.py`, 1 thread): MacBook 13.5 / 32.5 / 81 ms
   for 31 / 62 / 110 atoms, NOVA 24.8 / 66.8 / 212 ms. The gap grows with size (1.8x to 2.6x). The macOS
@@ -599,6 +648,12 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   - It ships `openblas.pc` but no `lapack.pc`, which dftd4 and multicharge may look for.
   - Energies must match win1 to 1e-10 Eh.
 - Expected gain: NOVA 1.5-2x on mid-size and large molecules, about 15 % off a two-machine full run.
+- Rolling it out (UPD-1): point `windows.find_links.tblite` in `scripts/fork-packages.json` at the
+  `qb-v0.8.0-win2` release, and change `chem/eng_tblite.py` `WINDOWS_WHEELS` to match
+  (`tests/test_install_scripts.py` checks both). Help > Check for updates then reinstalls tblite on NOVA,
+  even under the same version number. Give the wheel a new version (e.g. `0.8.0.post1`, pinned as
+  `tblite==0.8.0.post1`) so rerunning the installer picks it up too. Its pip run does not replace a
+  version that still fits.
 
 ### DIST-4: Per-stage routing · later
 - Different stages of one molecule on different machines (CREST + Psi4 on the Mac, GPU refinement +

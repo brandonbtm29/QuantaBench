@@ -16,7 +16,7 @@
     quantabench-cli md smd --system pfoa_graphite.extxyz -o DIR [--gpu] [--run]
     quantabench-cli md parse DIR
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
-    quantabench-cli update [--check]                                            # git pull + reinstall if needed
+    quantabench-cli update [--check] [--upgrade-packages]                       # git pull + reinstall if needed
 
 Splitting work (``quantabench.dist``):
 
@@ -643,21 +643,26 @@ def _settings(args) -> int:
 
 def _update(args) -> int:
     """``update --check``: fetch and report. ``update``: git pull --ff-only, then pip install -e if the
-    dependencies changed (quantabench.update). 0 = up to date or updated, 1 = refused or failed."""
+    dependencies or the fork packages changed (quantabench.update). ``--upgrade-packages`` also upgrades the
+    installed packages, with or without new commits. 0 = up to date or updated, 1 = refused or failed."""
     from . import update as update_mod
 
+    upgrade = getattr(args, "upgrade_packages", False)
     status = update_mod.check()
     print(status.summary())
     if status.state in ("error", "not-a-checkout"):
         return 1
     if args.check:
         if status.can_update:
-            print("Run `quantabench-cli update` (or Help > Check for updates... in the app) to update.")
+            print("Run `quantabench-cli update` (or Help > Check for updates... in the app) to update; add "
+                  "--upgrade-packages to also upgrade the installed packages.")
         return 0
-    if not status.can_update:
-        return 0 if status.state in ("up-to-date", "ahead") else 1
+    nothing_to_pull = status.state in ("up-to-date", "ahead")
+    if not status.can_update and not (upgrade and nothing_to_pull):
+        return 0 if nothing_to_pull else 1
     print()
-    res = update_mod.update(status=status, log=print)
+    extra = {"upgrade_packages": True, "upgrade_strategy": args.upgrade_strategy} if upgrade else {}
+    res = update_mod.update(status=status, log=print, **extra)
     print(res.message)
     return 0 if res.ok else 1
 
@@ -970,8 +975,16 @@ def build_parser() -> argparse.ArgumentParser:
     mp.set_defaults(func=_md_parse)
 
     up = sub.add_parser("update", help="update this QuantaBench checkout (git pull --ff-only, reinstall if "
-                                       "dependencies changed)")
+                                       "dependencies changed; --upgrade-packages also upgrades the packages)")
     up.add_argument("--check", action="store_true", help="only fetch and report how far behind origin/main it is")
+    up.add_argument("--upgrade-packages", action="store_true",
+                    help="also upgrade the installed packages with pip (also when there is nothing to pull). "
+                         "PyTorch stays the installed build, and the fork packages of scripts/fork-packages.json "
+                         "are kept and reinstalled from their pinned source")
+    up.add_argument("--upgrade-strategy", choices=["eager", "only-if-needed"], default="eager",
+                    help="with --upgrade-packages: eager (default) upgrades every dependency to the newest version "
+                         "pyproject.toml allows; only-if-needed upgrades QuantaBench and the fork packages, and "
+                         "dependencies only where they must move")
     up.set_defaults(func=_update)
 
     from .dist import cli as dist_cli
