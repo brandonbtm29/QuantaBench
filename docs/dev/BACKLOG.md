@@ -122,8 +122,15 @@ Depends on: UI-4 for the MOL/CDXML plumbing; the spike can start any time.
   from SMILES and templates; the hand-off matches canonical SMILES); works offline; screenshots on
   Windows and macOS.
 
-## UI-7: 3D model kit (Spartan-style builder in the 3D view) · ready
+## UI-7: 3D model kit (Spartan-style builder in the 3D view) · core done 2026-11-07; build mode ready
 Depends on: none to start (the 3D view exists); UI-1 places it in Build.
+- **Done (core, branch `feat/model-kit-core`):** `chem/edit.py` (the edit model, commands, `History`) and
+  `chem/fragments.py` (the fragment library). Every operation below is a plain function with tests;
+  PFOA, PFOS, GenX and 6:2 FTS build with kit operations and match MMFF94 within 0.03 Å.
+- **Left:** the GUI build mode (stubs, picking, palette dock, QUndoStack wrapper, Ctrl+Z / Ctrl+Y,
+  screenshot). Start from `docs/dev/MODEL_KIT_GUI.md`. Also left: the InChI and Clipboard buttons (the
+  SMILES path exists: `fragments.from_smiles`), the Peptide / Nucleotide tabs, and sharing the fragment
+  list with the UI-6 sketcher.
 - **Build mode** in the PyVista view (next to select and move): a palette of atom types with their
   hybridization, as in Spartan's Organic tab (C sp3 / sp2 / sp, N sp3 / sp2 / sp, O, S, P, Si, H, F, Cl,
   Br, I, =O, =S, ≡N). Free valences are drawn as short stubs; clicking a stub attaches the chosen atom at

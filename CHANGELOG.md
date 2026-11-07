@@ -2,6 +2,20 @@
 
 ## 0.3.0.dev (unreleased)
 
+### 3D model kit core (UI-7, 2026-11-07)
+- **Edit model** (`chem/edit.py`, no GUI yet): an RDKit molecule with 3D coordinates where every change is an
+  undoable command. Pick an atom type (C sp3 / sp2 / sp, N, O, P, S, Si, H, halogens, =O, =S, ≡N, as in
+  Spartan's Organic tab) or a fragment and attach it at a free valence: it goes at its ideal bond length, and
+  its open valences get hydrogens. Also replace an atom, delete, bond order, formal charge, make/break bond,
+  set distance / angle / dihedral (the smaller side moves; ring bonds are refused), Minimize (MMFF94, UFF
+  when MMFF has no parameters, frozen atoms) and a local relax near the last edit. SMILES and MOL blocks in
+  and out; `to_input()` hands the molecule to the pipeline.
+- **Fragment library** (`chem/fragments.py`): groups, rings (chair cyclohexane), substituents and PFAS
+  pieces (CF3, `(CF2)n` and `CnF2n+1` builders, ether O, fluorotelomer CH2CH2, PFCA/PFSA heads). Chains
+  start extended (anti).
+- Tests build PFOA, PFOS, GenX and 6:2 FTS with kit operations only: the SMILES match, and after Minimize
+  every bond is within 0.03 Å of an MMFF94 reference.
+
 ### CREST on the Mac, loud CREST failures, engine paths per machine (2026-11-06)
 - **Why the Mac's CREST failed.** conda-forge's osx-arm64 `crest 3.0.2` links Apple's Accelerate, whose classic
   BLAS returns a double from `sdot` (f2c convention). ANCOPT's Davidson step (19+ atoms) then fails, so every
