@@ -727,6 +727,15 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
 
   The last two are now `component_of_mixture`. Feed `different_structure` and smaller-component cases back
   to the cohort curation before the QSAR fit.
+- **Full pull (finished 2026-11-06 03:55, `Runs/pubchem-2026-11-05`, 4.7 h, 28,290 requests):** 14,921
+  molecules: 14,044 found, 705 ambiguous, 106 not found, 66 errors; looked up by InChIKey 10,834, CAS RN 3,759,
+  SMILES 185, name 77. Structure check (molecules with a CAS RN): 2,373 match, 836 stereo differs, 436 different
+  structure, 123 CAS RN not in PubChem, 72 ambiguous CAS RN, 1 charge or protonation, 3 errors; 11,077 have no
+  CAS RN. Experimental: 72,635 records for 6,116 molecules; surface tension for 369 (299 pure liquid, 8
+  aqueous, 68 unclassified, to review).
+  - Next: a list of the 436 `different_structure` molecules by cohort for Brandon (curation decision), the 68
+    unclassified surface tensions, and a look at whether the 836 stereo differences matter (most PFAS
+    descriptors here are stereo-blind).
 - **CompTox (CTX API):** the same enrichment by DTXSID (batch POSTs of 1,000; free key): TEST's predicted
   surface tension and the experimental physchem values. Check the property names on the workstation first
   (api-ccte.epa.gov is blocked in the cloud environment).
