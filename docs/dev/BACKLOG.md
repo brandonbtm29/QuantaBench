@@ -805,6 +805,16 @@ the code, but three things never arrived through it.
   - `quantabench-cli update` does not reinstall `programs` entries yet: add that when the first release exists.
   - The conda-forge feedstock fix is one CMake flag (`-DBLA_VENDOR=OpenBLAS`, or `Generic`) plus the format
     commas (or a pin to libgfortran < 15 at run time): worth a feedstock issue/PR when Brandon OKs upstream contact.
+  - The 20-molecule benchmark with the fork build (docs/ENGINES.md, CREST): GFN-FF gas and water 20/20 CREST,
+    searches as close to NOVA's as two CREST runs are. Until engines.machine_paths is merged, the Mac's batch
+    scripts pass `QUANTABENCH_CREST=~/Library/Application Support/QuantaBench/programs/crest-qb-v3.0.2-macos1/crest-macos-arm64/bin/crest`
+    (installed there from the run 42295799792 tarball; nothing else on the Mac points at it yet, so the GUI, the
+    worker and a plain `quantabench-cli` still find conda-forge's crest in qb-tools, which `doctor` now flags).
+  - CREST lanes on the Mac: `--lanes auto` gives 6 x 2 threads on the 14 cores (10 performance, 4 efficiency) and
+    the batch waits for its slowest molecule on 2 threads (51 min of the gas run's 52). Lane timing (1 x 12,
+    3 x 4, 5 x 2 on GFN-FF gas) is queued behind the GFN2 runs in `Runs/crest-2026-11-06/mac-fixed`; then decide
+    the auto plan for CREST on Apple Silicon, and whether the last molecules of a CREST batch should get the idle
+    lanes' threads.
 - **Windows:** `qb/windows` has a native build (docs/WINDOWS.md there), but Brandon decided on WSL (ENG-2).
   Look at it again only if WSL becomes a problem.
 

@@ -404,6 +404,29 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   build itself stops in `--opt` and QCG with the libgfortran 16 format error; QuantaBench's runs use neither.
   The Mac is 5-9x faster than 2 Linux cores in iMTD-GC (12 threads), but slower in legacy mode and
   `--tautomerize`.
+- **The 20-molecule benchmark again, with the fork build** (2026-11-06, `Runs/crest-2026-11-06/mac-fixed`; the
+  first run's flags `--method tblite-gfn2 --window 6 --refine-top 5 --no-protonate`, `--lanes auto` = 6 lanes x 2
+  threads; against NOVA's WSL, conda-forge's linux-64 3.0.2 with 20 lanes x 2 threads):
+
+  | GFN-FF | Mac, fork build | NOVA, WSL |
+  |---|---|---|
+  | gas: molecules with CREST conformers | 20/20 (conda-forge's Mac build: 2/20) | 20/20 |
+  | gas: wall; CREST stage summed; slowest molecule | 3,108 s; 8,961 s; 3,079 s | 1,247 s; 5,038 s; 1,195 s |
+  | water: molecules with CREST conformers; wall | 20/20; 5,222 s (4,337 s awake: the Mac slept 15 min) | 20/20; 5,982 s |
+
+  - The searches agree as well as two CREST runs do: the same lowest conformer for 15 of 20 molecules in the gas
+    phase (`conformers compare`, common level GFN2-xTB opt; the other 5 are sampling, missed both ways), best
+    refined energies within 0.1 kcal/mol for 12 of 20 (median difference -0.005 kcal/mol). In water the large
+    anions differ by -5 to +12 kcal/mol (Mac minus NOVA; sampling, lower on either side).
+  - Wall time on the Mac is set by its slowest molecule on 2 threads (54950-05-9, 54 heavy atoms: 51 min in the
+    gas phase) while the other lanes are idle. CREST per molecule took about 1.8x NOVA's time summed over the 20.
+  - Water dipoles of CREST's lowest conformer against Spartan's (B3LYP/6-311+G** C-PCM at Spartan's lowest;
+    the 10 ions with the largest errors of the 2026-11-06 validation): MAE 8.6 D (Mac) and 7.3 D (NOVA), against
+    13.0 D with RDKit's conformers. Neither run has Spartan's lowest conformer of any of the 10: GFN2/ALPB at
+    Spartan's geometry is 0.40 D from Spartan's dipole, so the conformer is 95 % of the gap. For 7 of the 10
+    GFN2/ALPB itself puts Spartan's conformer above CREST's (the energy model ranks, not the search: VAL-3).
+  - GFN2 runs (Mac: 3 h per molecule; NOVA's 30 min limit stopped all 10 ions in water) and the lane timing
+    (1 lane x 12 threads, 3 x 4, 5 x 2) were still running at the time of writing.
 
 ## tblite (`tblite-gfn2`, `tblite-gfn1`)
 
