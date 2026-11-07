@@ -417,6 +417,9 @@ Open (needs-Brandon):
     - Decide which level ranks the conformers for the QSAR descriptors: GFN2/ALPB and B3LYP/C-PCM disagree by tens
       of kJ/mol for extended vs folded ions. Options: re-rank the lowest N with the QM stage (PCM), or use Boltzmann
       averages (`validate --boltzmann`, below).
+      Brandon (2026-11-07): don't try to match Spartan exactly; many of his Spartan runs used methods without a
+      dispersion correction (plain B3LYP, PM6). So Spartan's ranking is a reference, not the target; the open
+      question is GFN2 ranking vs dispersion-corrected DFT re-ranking (the 3 h DFT test on 10 ions decides it).
     - Run the comparison on the CREST runs (`Runs/crest-2026-11-06`) once CREST works there. In the first MacBook
       runs, 18 of 20 molecules fell back to RDKit (`crest` exited with code 1).
   - `validate --boltzmann`: compare `dipole_debye_boltz` with a Boltzmann average over Spartan's DFT conformers
@@ -981,10 +984,10 @@ the code, but three things never arrived through it.
     crest-lab/crest#412 with the diagnosis. Watch both; when a fixed conda-forge build ships, check it and
     consider going back to it.
   - The 20-molecule benchmark with the fork build (docs/ENGINES.md, CREST): GFN-FF gas and water 20/20 CREST,
-    searches as close to NOVA's as two CREST runs are. Until engines.machine_paths is merged, the Mac's batch
-    scripts pass `QUANTABENCH_CREST=~/Library/Application Support/QuantaBench/programs/crest-qb-v3.0.2-macos1/crest-macos-arm64/bin/crest`
-    (installed there from the run 42295799792 tarball; nothing else on the Mac points at it yet, so the GUI, the
-    worker and a plain `quantabench-cli` still find conda-forge's crest in qb-tools, which `doctor` now flags).
+    searches as close to NOVA's as two CREST runs are. Since 2026-11-07 the MacBook's own CREST path
+    (`engines.machine_paths`, that machine only) is
+    `~/Library/Application Support/QuantaBench/programs/crest-qb-v3.0.2-macos1/crest-macos-arm64/bin/crest`, so the
+    GUI, the worker and the CLI use the fork build there (`doctor`: "settings (this machine)").
   - CREST lanes on the Mac (done 2026-11-07, branch `fix/crest-lanes`; re-time needs the Mac): the old
     `--lanes auto` gave 6 x 2 threads on the 14 cores (10 performance, 4 efficiency), and the batch waited for
     its slowest molecule on 2 threads. Lane timing on GFN-FF gas (2026-11-07, docs/ENGINES.md): 1 x 12 1,727 s,
