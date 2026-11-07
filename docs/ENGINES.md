@@ -425,8 +425,19 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     13.0 D with RDKit's conformers. Neither run has Spartan's lowest conformer of any of the 10: GFN2/ALPB at
     Spartan's geometry is 0.40 D from Spartan's dipole, so the conformer is 95 % of the gap. For 7 of the 10
     GFN2/ALPB itself puts Spartan's conformer above CREST's (the energy model ranks, not the search: VAL-3).
-  - GFN2 runs (Mac: 3 h per molecule; NOVA's 30 min limit stopped all 10 ions in water) and the lane timing
-    (1 lane x 12 threads, 3 x 4, 5 x 2) were still running at the time of writing.
+  - GFN2 on the Mac (CREST `--gfn2`, 6 lanes x 2 threads, 3 h limit per molecule; finished 2026-11-07): gas 16/20 in
+    20,034 s, water 15/20 in 21,603 s. All 9 failures are the time limit, on the largest molecules (92340-26-6,
+    54950-05-9, 67940-02-7, 61119-62-8, and 57589-85-2 in water). NOVA's 30 min limit had stopped all 10 ions in
+    water. Their dipoles and conformers are not compared yet.
+  - Lane timing, GFN-FF gas, same 20 molecules (2026-11-07, M3 Max: 10 performance + 4 efficiency cores):
+
+    | Lanes x threads | 1 x 12 | 3 x 4 | 5 x 2 | 6 x 2 (`--lanes auto`) |
+    |---|---|---|---|---|
+    | wall | 1,727 s | **773 s** | 1,457 s | 3,108 s |
+
+    3 x 4 is 4.0x faster than today's auto plan and faster than NOVA's WSL run (1,247 s, 20 x 2). Two threads
+    per lane leave the largest molecule as the last one running, on 2 threads; 12 threads on one molecule scale
+    poorly. One run each, so the ranking is clear but the exact factors are not.
 
 ## tblite (`tblite-gfn2`, `tblite-gfn1`)
 
