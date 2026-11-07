@@ -28,6 +28,31 @@
 - Tests build PFOA, PFOS, GenX and 6:2 FTS with kit operations only: the SMILES match, and after Minimize
   every bond is within 0.03 Å of an MMFF94 reference.
 
+### Import from many formats, with Spartan-style import options (UI-4, 2026-11-07)
+- **More formats** (`chem/formats.py`, through `inputs.read_file`, so File > Open and `--file` agree): MOL2 (several
+  molecules per file), Marvin MRV, ChemDraw CDXML and binary CDX, CML, InChI lists (`.inchi`), CIF of molecular
+  crystals (molecules made whole across the cell edges, one entry per unique molecule), Gaussian `.gjf`/`.com` and
+  ORCA `.inp` inputs (bonds from the geometry with the file's charge; a radical keeps single bonds; a geometry with
+  several molecules is split). SDF V3000 already worked and now has a test. RDKit 2026.09's Python ChemDraw reader
+  takes every file as CDXML, so binary CDX is turned into CDXML first (`formats.cdx_to_cdxml`).
+- **Open Babel fallback:** another extension is converted to SDF by the user's `obabel` (Settings > Engines, PATH,
+  conda environments) in a temporary folder. Open Babel is GPL-2.0: it is only run, never imported or bundled.
+  Each molecule records its reader (`meta["qb_reader"]`) and the log says it.
+- **The Molecules box** also takes InChI (parsed locally) and InChIKeys (PubChem, like names).
+- **Import options** (`chem/import_options.py`, the Import Options dialog of File > Open, Settings > Import,
+  `Settings.import_`): convert 2D structures to 3D, grow hydrogens, keep the file's 3D coordinates as the first
+  conformers of the build (the pipeline seeds RDKit's conformer search with them), post SD fields and table columns
+  to the molecule list and `summary.csv` (numbers parsed), id and name fields, filters (water, HCl and small
+  inorganic molecules, counter-ions, largest fragment; metal fragments are left for the build), atom order (read or
+  standard), several structures of one constitution as molecules or conformers. What the import removed is in the
+  molecule's notes and in `removed_fragments`. The dialog appears when a file has choices; "Don't ask again"
+  keeps them.
+- **CLI:** `--keep-coords`, `--grow-h/--no-grow-h`, `--convert-2d/--no-convert-2d`, `--filter`, `--label-order`,
+  `--same-structures`, `--post-fields`, `--name-field` and `--import-options key=value,...` for `--file` inputs;
+  the defaults are the stored choices.
+- File > Open hands `.spartan`, `.log` and `.out` files to Import calculation output.
+- SD properties keep their text as written ("007" was read as 7).
+
 ### CREST on the Mac, loud CREST failures, engine paths per machine (2026-11-06)
 - **Why the Mac's CREST failed.** conda-forge's osx-arm64 `crest 3.0.2` links Apple's Accelerate, whose classic
   BLAS returns a double from `sdot` (f2c convention). ANCOPT's Davidson step (19+ atoms) then fails, so every

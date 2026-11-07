@@ -7,7 +7,8 @@ virtualized ``QTableView`` over ``MoleculeTableModel``; only the selected molecu
 keep their full result (RDKit molecule with every conformer, descriptors, vibrations) in memory, read back
 from their folder when selected (``ResultStore``, an LRU cache).
 
-    MoleculeTableModel   rows + batched inserts (one beginInsertRows per batch); sort() in Python by a key
+    MoleculeTableModel   rows + batched inserts (one beginInsertRows per batch); sort() in Python by a key; data
+                         fields posted on import (File > Open's Import Options) as extra columns after the fixed ones
     MoleculeFilter       search (id, name, SMILES, formula) and status filter; sorting goes to the source
     MoleculeListView     the table, with the few QListWidget-style helpers the window and tests use
     ResultStore          ``win.results``: results by id (in memory only for imports; the others from disk)
@@ -60,6 +61,7 @@ class MoleculeRow:
     run_dir: str = ""              # run folder whose job table holds the input (rows of an opened folder)
     seq: int = 0                   # position in the list as added (input order)
     input: object = None           # MoleculeInput, in memory for molecules added here (None: in run_dir)
+    fields: dict | None = None     # data fields posted on import (SD properties, table columns): extra columns
 
     def text(self) -> str:
         """One line, as the old list showed it: icon, id, method and conformer count (stage while running)."""
@@ -71,6 +73,34 @@ class MoleculeRow:
     def matches(self, needle: str) -> bool:
         return (needle in self.id.lower() or needle in self.name.lower() or needle in self.smiles.lower()
                 or needle in self.formula.lower())
+
+
+def posted_fields(inp) -> dict | None:
+    """The data fields an input brought from its file (``import_options.FIELDS``), or None."""
+    from ..chem.import_options import FIELDS
+
+    d = (getattr(inp, "meta", None) or {}).get(FIELDS)
+    return dict(d) if isinstance(d, dict) and d else None
+
+
+def _field_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
+def _field_key(name: str):
+    """Sort key of a data-field column: numbers in order, then text, then rows without the field."""
+    def key(r):
+        v = (r.fields or {}).get(name)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return (0, float(v), "", r.seq)
+        if v is None or v == "":
+            return (2, 0.0, "", r.seq)
+        return (1, 0.0, str(v).lower(), r.seq)
+    return key
 
 
 def result_folder(res) -> str:
@@ -176,6 +206,21 @@ class MoleculeTableModel(QAbstractTableModel):
         self._pos: dict[str, int] = {}
         self._next_seq = 0
         self._energy = units.EnergyDisplay.of(display)
+        self._extra: list[str] = []          # data-field columns (posted on import), after COLUMNS
+
+    def extra_columns(self) -> list[str]:
+        return list(self._extra)
+
+    @staticmethod
+    def _new_fields(rows, known) -> list[str]:
+        seen = set(known)
+        out = []
+        for r in rows:
+            for k in r.fields or ():
+                if k not in seen:
+                    seen.add(k)
+                    out.append(k)
+        return out
 
     def set_display(self, display) -> None:
         """Show the energy column in the units of ``display`` (``Settings``, its ``display`` or an EnergyDisplay)."""
@@ -193,9 +238,15 @@ class MoleculeTableModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent=QModelIndex()) -> int:  # noqa: B008, N802
-        return 0 if parent.isValid() else len(COLUMNS)
+        return 0 if parent.isValid() else len(COLUMNS) + len(self._extra)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
+        if orientation == Qt.Orientation.Horizontal and 0 <= section - len(COLUMNS) < len(self._extra):
+            if role == Qt.ItemDataRole.DisplayRole:
+                return self._extra[section - len(COLUMNS)]
+            if role == Qt.ItemDataRole.ToolTipRole:
+                return f"{self._extra[section - len(COLUMNS)]}: a data field of the imported file"
+            return None
         if orientation == Qt.Orientation.Horizontal and 0 <= section < len(COLUMNS):
             if role == Qt.ItemDataRole.DisplayRole:
                 if COLUMNS[section][0] == "energy":
@@ -210,6 +261,16 @@ class MoleculeTableModel(QAbstractTableModel):
         if not index.isValid():
             return None
         r = self._rows[index.row()]
+        if index.column() >= len(COLUMNS):
+            name = self._extra[index.column() - len(COLUMNS)]
+            value = (r.fields or {}).get(name)
+            if role == Qt.ItemDataRole.DisplayRole:
+                return _field_text(value)
+            if role == SORT_ROLE:
+                return _field_key(name)(r)
+            if role == Qt.ItemDataRole.TextAlignmentRole and isinstance(value, (int, float)):
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            return None
         key = COLUMNS[index.column()][0]
         if role == Qt.ItemDataRole.DisplayRole:
             if key == "seq":
@@ -259,11 +320,14 @@ class MoleculeTableModel(QAbstractTableModel):
     def sort(self, column: int, order=Qt.SortOrder.AscendingOrder) -> None:
         """Sort the rows (Python's sort with a key: ~20 ms for 14,000, instead of Qt calling ``data`` for every
         comparison). Column -1 restores the input order. Persistent indexes (the view's selection) follow."""
-        key = COLUMNS[column][0] if 0 <= column < len(COLUMNS) else "seq"
+        if 0 <= column - len(COLUMNS) < len(self._extra):
+            sort_key = _field_key(self._extra[column - len(COLUMNS)])
+        else:
+            sort_key = self.sort_key(COLUMNS[column][0] if 0 <= column < len(COLUMNS) else "seq")
         self.layoutAboutToBeChanged.emit()
         old = self.persistentIndexList()
         ids = [self._rows[i.row()].id for i in old]
-        self._rows.sort(key=self.sort_key(key), reverse=order == Qt.SortOrder.DescendingOrder and column >= 0)
+        self._rows.sort(key=sort_key, reverse=order == Qt.SortOrder.DescendingOrder and column >= 0)
         self._reindex()
         self.changePersistentIndexList(old, [self.index(self._pos[i], ix.column()) for i, ix in zip(ids, old)])
         self.layoutChanged.emit()
@@ -276,6 +340,7 @@ class MoleculeTableModel(QAbstractTableModel):
         """Replace every row (one model reset)."""
         self.beginResetModel()
         self._rows = list(rows)
+        self._extra = self._new_fields(self._rows, ())
         self._reindex()
         self._next_seq = max((r.seq for r in self._rows), default=-1) + 1
         self.endResetModel()
@@ -287,6 +352,12 @@ class MoleculeTableModel(QAbstractTableModel):
         for r in rows:
             r.seq = self._next_seq
             self._next_seq += 1
+        new = self._new_fields(rows, self._extra)
+        if new:                              # data fields of an imported file: columns after the fixed ones
+            first = len(COLUMNS) + len(self._extra)
+            self.beginInsertColumns(QModelIndex(), first, first + len(new) - 1)
+            self._extra += new
+            self.endInsertColumns()
         n = len(self._rows)
         self.beginInsertRows(QModelIndex(), n, n + len(rows) - 1)
         self._rows.extend(rows)

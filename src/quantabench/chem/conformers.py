@@ -184,22 +184,107 @@ def prune(mol: Chem.Mol, conf_ids: list[int], energies: list[float], window_kcal
 
 
 def generate(mol: Chem.Mol, max_conformers: int = 50, window_kcal: float = 6.0, rmsd_threshold: float = 0.5,
-             seed: int = 42, threads: int = 1, timeout_s: float | None = None) -> ConformerSet:
+             seed: int = 42, threads: int = 1, timeout_s: float | None = None, seeds=()) -> ConformerSet:
     """Conformers of ``mol``: ETKDGv3 embedding (``embed``), force-field optimization, pruning.
     ``timeout_s``: time limit of the embedding (``embed``); None = ``embed_time_limit()`` (a share of the
-    per-molecule limit this process's run recorded), 0 = none."""
+    per-molecule limit this process's run recorded), 0 = none.
+
+    ``seeds``: coordinate arrays (one per conformer, on ``mol``'s atoms with explicit H; ``seed_coordinates``) from
+    the input file. They are the first conformers: optimized with the force field like the others, never pruned,
+    and first in ``conf_ids`` (so the refinement's top N includes them); they count towards ``max_conformers``
+    (``max_conformers=1`` with one seed embeds nothing)."""
     mol = Chem.Mol(mol)
     if mol.GetNumAtoms() == Chem.RemoveHs(mol).GetNumAtoms() and any(a.GetTotalNumHs() for a in mol.GetAtoms()):
         mol = Chem.AddHs(mol)
+    seeds = [np.asarray(s, dtype=float) for s in seeds if np.shape(s) == (mol.GetNumAtoms(), 3)]
     n = suggested_count(mol, max_conformers)
     mol.RemoveAllConformers()
     notes: list[str] = []
     limit = embed_time_limit() if timeout_s is None else max(0.0, float(timeout_s))
-    ids = embed(mol, n, seed=seed, threads=threads, notes=notes, timeout_s=limit)
+    ids: list[int] = []
+    if not seeds:
+        ids = embed(mol, n, seed=seed, threads=threads, notes=notes, timeout_s=limit)
+    elif n > len(seeds):
+        try:
+            ids = embed(mol, n - len(seeds), seed=seed, threads=threads, notes=notes, timeout_s=limit)
+        except RuntimeError as exc:   # the file's coordinates are conformers enough
+            notes.append(f"no new conformers: {exc}; the file's coordinates only")
+    seed_ids: list[int] = []
+    if seeds:                         # the file's coordinates first, then the embedded conformers
+        embedded = [Chem.Conformer(mol.GetConformer(i)) for i in ids]
+        mol.RemoveAllConformers()
+        for pos in seeds:
+            conf = Chem.Conformer(mol.GetNumAtoms())
+            for i, xyz in enumerate(pos):
+                conf.SetAtomPosition(i, [float(v) for v in xyz])
+            conf.Set3D(True)
+            seed_ids.append(mol.AddConformer(conf, assignId=True))
+        ids = [mol.AddConformer(conf, assignId=True) for conf in embedded]
     energies, ff = forcefield_optimize(mol, threads=threads)
-    # forcefield_optimize returns energies in conformer order, which matches ``ids``
-    kept, kept_e = prune(mol, ids, energies, window_kcal, rmsd_threshold)
+    # forcefield_optimize returns energies in conformer order, which matches ``seed_ids + ids``
+    all_ids = seed_ids + ids
+    kept, kept_e = prune(mol, all_ids, energies, window_kcal, rmsd_threshold)
+    if seed_ids:
+        by_id = dict(zip(all_ids, energies))
+        rest = [(k, e) for k, e in zip(kept, kept_e) if k not in seed_ids]
+        kept = seed_ids + [k for k, _e in rest]
+        kept_e = [by_id[k] for k in seed_ids] + [e for _k, e in rest]
     return ConformerSet(mol=mol, conf_ids=kept, energies_kcal=kept_e, forcefield=ff, n_embedded=len(ids), notes=notes)
+
+
+def _graph_only(mol: Chem.Mol) -> Chem.Mol:
+    """The heavy-atom graph of ``mol``: elements and connections only (charges, bond orders, hydrogens and stereo
+    removed), so a structure as read matches its standardized and protonated form."""
+    m = Chem.RWMol(mol)
+    for a in m.GetAtoms():
+        a.SetFormalCharge(0)
+        a.SetIsAromatic(False)
+        a.SetNumExplicitHs(0)
+        a.SetNoImplicit(True)
+        a.SetNumRadicalElectrons(0)
+        a.SetIsotope(0)
+        a.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
+    for b in m.GetBonds():
+        b.SetBondType(Chem.BondType.SINGLE)
+        b.SetIsAromatic(False)
+        b.SetStereo(Chem.BondStereo.STEREONONE)
+    out = m.GetMol()
+    out.UpdatePropertyCache(strict=False)
+    Chem.FastFindRings(out)
+    return out
+
+
+def seed_coordinates(source: Chem.Mol, target: Chem.Mol) -> tuple[list[np.ndarray], str]:
+    """The 3D conformers of ``source`` (a structure as read from a file) as coordinates of ``target`` (its prepared
+    form with explicit H: standardized, protonated, without counter-ions): the heavy atoms where the file has them
+    (matched by element and connection, so charges and bond orders may differ), the hydrogens placed by RDKit.
+    Returns (coordinate arrays, "" or why there are none)."""
+    if source is None or source.GetNumConformers() == 0:
+        return [], "no coordinates"
+    if not any(c.Is3D() for c in source.GetConformers()):
+        return [], "2D coordinates only"
+    with rdBase.BlockLogs():
+        src = Chem.RemoveHs(source, sanitize=False)
+        heavy = Chem.RemoveHs(target, sanitize=False)
+        if Chem.AddHs(heavy).GetNumAtoms() != target.GetNumAtoms():
+            return [], "the prepared structure's hydrogens could not be placed"
+        match = _graph_only(src).GetSubstructMatch(_graph_only(heavy))
+    if len(match) != heavy.GetNumAtoms():
+        return [], "the prepared structure's atoms do not match the file's"
+    out = []
+    for conf in src.GetConformers():
+        if not conf.Is3D():
+            continue
+        m = Chem.Mol(heavy)
+        m.RemoveAllConformers()
+        c = Chem.Conformer(heavy.GetNumAtoms())
+        for i, j in enumerate(match):
+            c.SetAtomPosition(i, conf.GetAtomPosition(j))
+        c.Set3D(True)
+        m.AddConformer(c, assignId=True)
+        with rdBase.BlockLogs():
+            out.append(Chem.AddHs(m, addCoords=True).GetConformer().GetPositions())
+    return out, ""
 
 
 def boltzmann_weights(energies_kcal: list[float], temperature_k: float = 298.15) -> np.ndarray:

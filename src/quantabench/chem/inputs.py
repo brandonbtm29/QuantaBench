@@ -22,7 +22,14 @@ SMILES_COLUMNS = ("smiles", "qsar_ready_smiles", "ms_ready_smiles", "canonical_s
 ID_COLUMNS = ("dtxsid", "id", "name", "compound", "preferred_name", "cas", "casrn")
 NAME_COLUMNS = ("preferred_name", "name", "chemical_name", "compound")
 TABLE_TYPES = {".csv", ".xlsx", ".xlsm", ".xls"}
-FILE_TYPES = {".sdf", ".mol", ".xyz", ".pdb", ".smi", ".smiles", ".txt"} | TABLE_TYPES
+#: read here, or in ``chem.formats`` (MOL2, Marvin, ChemDraw, CML, CIF, Gaussian and ORCA inputs); any other extension
+#: goes to Open Babel when the user has it (``formats.openbabel``)
+STRUCTURE_TYPES = {".sdf", ".sd", ".mol", ".xyz", ".pdb", ".mol2", ".mrv", ".cdx", ".cdxml", ".cml", ".cif", ".gjf",
+                   ".com", ".inp"}
+LIST_TYPES = {".smi", ".smiles", ".txt", ".inchi"}
+FILE_TYPES = STRUCTURE_TYPES | LIST_TYPES | TABLE_TYPES
+#: a standard InChIKey: 14 letters, 8 letters + flag + version, protonation letter
+INCHIKEY_RE = re.compile(r"^[A-Z]{14}-[A-Z]{10}-[A-Z]$")
 
 # Which SMILES column to use when a table has several, in order of preference. A row whose preferred
 # cell is blank (or does not parse in RDKit) falls back to the next column that has a structure.
@@ -114,9 +121,40 @@ def lookup_name(name: str, timeout: float = 15.0) -> MoleculeInput:
                          meta={"pubchem_cid": hit["cid"]})
 
 
+def from_inchi(text: str, id: str | None = None, name: str = "") -> MoleculeInput:
+    """An InChI (``InChI=1S/...``), parsed locally by RDKit. The id is ``id``, else the InChIKey."""
+    from rdkit.Chem import inchi
+
+    text = text.strip()
+    if not inchi.INCHI_AVAILABLE:
+        raise ValueError("RDKit was built without InChI support")
+    with rdBase.BlockLogs():
+        mol = Chem.MolFromInchi(text, sanitize=True, removeHs=True, logLevel=None, treatWarningAsError=False)
+    if mol is None:
+        raise ValueError(f"Not a valid InChI: {text[:80]!r}")
+    smiles = Chem.MolToSmiles(mol)
+    with rdBase.BlockLogs():
+        key = inchi.InchiToInchiKey(text) or ""
+    return MoleculeInput(id=safe_id(id or name or key or smiles), smiles=smiles, name=name or id or "", source="inchi")
+
+
+def lookup_inchikey(key: str, timeout: float = 15.0) -> MoleculeInput:
+    """Resolve an InChIKey through PubChem (``chem.pubchem``, like names)."""
+    from . import pubchem
+
+    key = key.strip()
+    try:
+        hit = pubchem.lookup(key, timeout=timeout, namespace="inchikey")
+    except pubchem.PubChemError as exc:
+        raise ValueError(f"PubChem lookup failed for InChIKey {key}: {exc}") from exc
+    return MoleculeInput(id=safe_id(key), smiles=hit["smiles"], name=hit["title"], source="pubchem",
+                         meta={"pubchem_cid": hit["cid"]})
+
+
 def parse_text(text: str, skip_errors: bool = False, log: Callable[[str], None] | None = None,
                source: str = "") -> list[MoleculeInput]:
-    """Each non-empty line is a SMILES (optionally followed by an id) or a name to look up.
+    """Each non-empty line is a SMILES or an InChI (either optionally followed by an id), an InChIKey or a name
+    to look up (InChIKeys and names through PubChem).
 
     By default the first line that cannot be resolved raises. With ``skip_errors`` (list files), such
     lines are reported through ``log`` and skipped, as the CSV/Excel readers skip bad rows; it still
@@ -128,8 +166,17 @@ def parse_text(text: str, skip_errors: bool = False, log: Callable[[str], None] 
         if not line or line.startswith("#"):
             continue
         first, _, rest = line.partition(" ")
+        word, after = (line.split(None, 1) + [""])[:2]      # InChI / InChIKey, then an optional id (any whitespace)
+        after = after.strip()
         try:
-            if looks_like_smiles(first):
+            if word.startswith("InChI="):
+                out.append(from_inchi(word, id=after or None, name=after))
+            elif INCHIKEY_RE.match(word):
+                hit = lookup_inchikey(word)
+                if after:
+                    hit = replace(hit, id=safe_id(after), name=after)
+                out.append(hit)
+            elif looks_like_smiles(first):
                 out.append(from_smiles(first, id=rest.strip() or None, name=rest.strip()))
             elif any(ch in first for ch in "=#()[]@\\/") and not rest:
                 raise ValueError(f"Not a valid SMILES string: {first!r}")
@@ -415,15 +462,19 @@ def _sdf_failure(supplier: Chem.SDMolSupplier, index: int) -> tuple[str, str]:
 
 
 def read_sdf(path: str | Path, id_col: str | None = None,
-             log: Callable[[str], None] | None = None) -> list[MoleculeInput]:
-    """Read every record of an SD file as a ``MoleculeInput`` (3D coordinates, explicit H and charges kept).
+             log: Callable[[str], None] | None = None, dedupe: bool = True) -> list[MoleculeInput]:
+    """Read every record of an SD file as a ``MoleculeInput`` (3D coordinates, explicit H and charges kept;
+    V2000 and V3000 records alike).
 
     The id is the SD property ``id_col`` when given (matched ignoring case, e.g. ``CAS_RN``), else DTXSID or
     ID, else the title line, else ``<stem>_<record>``; ``name`` is the title. A record without the ``id_col``
     property takes its title as the id (then DTXSID or ID, then ``<stem>_<record>``), with a note in its
     ``meta[ID_NOTE]`` that the pipeline copies into the molecule's notes. Records RDKit cannot read are
     skipped and reported through ``log`` with their record number, title and RDKit's reason, and so are
-    records without the ``id_col`` property. Ids are made unique (``dedupe_ids``), as for tables."""
+    records without the ``id_col`` property. Ids are made unique (``dedupe_ids``), as for tables, unless
+    ``dedupe`` is False (``read_raw``: the import options decide about repeated structures)."""
+    from .formats import COORDS, READER, coord_kind
+
     path = Path(path)
     out: list[MoleculeInput] = []
     skipped: list[str] = []
@@ -437,9 +488,10 @@ def read_sdf(path: str | Path, id_col: str | None = None,
             skipped.append(f"record {i}{' (' + title + ')' if title else ''}: {why}")
             continue
         title = mol.GetProp("_Name").strip() if mol.HasProp("_Name") else ""
-        props = mol.GetPropsAsDict()
+        # the text as written: GetPropsAsDict would turn "007" into 7 and "1e3" into 1000.0
+        props = {k: mol.GetProp(k) for k in mol.GetPropNames()}
         ident = ""
-        meta = {k: str(v) for k, v in props.items()}
+        meta = dict(props)
         fallback = next((str(props[k]).strip() for k in SDF_ID_PROPERTIES if str(props.get(k, "")).strip()), "")
         if id_col:
             lower = {k.lower(): k for k in props}
@@ -451,6 +503,8 @@ def read_sdf(path: str | Path, id_col: str | None = None,
                 source = "the SD title" if title else "its DTXSID/ID property" if fallback else "the record number"
                 meta[ID_NOTE] = f"no {id_col} property in the SD record: id {ident!r} from {source}"
         ident = ident or fallback or title or f"{path.stem}_{i}"
+        meta[READER] = "RDKit (SD file)"
+        meta[COORDS] = coord_kind(mol)
         with rdBase.BlockLogs():   # "not removing hydrogen atom without neighbors" for H- fragments
             smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
         out.append(MoleculeInput(id=safe_id(ident, fallback=f"{path.stem}_{i}"), name=title or ident,
@@ -462,7 +516,8 @@ def read_sdf(path: str | Path, id_col: str | None = None,
     if no_id:
         warnings.append(f"{path.name}: {len(no_id)} record(s) have no {id_col} property; used the title: "
                         + ", ".join(no_id[:10]) + (", ..." if len(no_id) > 10 else ""))
-    out = dedupe_ids(out, warnings)
+    if dedupe:
+        out = dedupe_ids(out, warnings)
     for w in warnings:
         (log or _log.warning)(w)
     if skipped and not out:
@@ -470,33 +525,125 @@ def read_sdf(path: str | Path, id_col: str | None = None,
     return out
 
 
-def read_file(path: str | Path, smiles_col: str | None = None, id_col: str | None = None,
-              charge: int = 0, sheet: str | int | None = None,
-              smiles_preference: str | Sequence[str] | None = None,
-              log: Callable[[str], None] | None = None) -> list[MoleculeInput]:
-    """Read any supported file. For tables, skipped rows and SMILES-column fallbacks are reported
-    through ``log`` (or this module's logger when no callback is given)."""
+def _single(path: Path, mol: Chem.Mol, reader: str) -> list[MoleculeInput]:
+    """One structure from a .mol, .pdb or .xyz file: the file name is its id."""
+    from .formats import COORDS, READER, coord_kind
+
+    with rdBase.BlockLogs():
+        smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+    return [MoleculeInput(id=safe_id(path.stem), name=path.stem, source=path.name, mol=mol, smiles=smiles,
+                          meta={READER: reader, COORDS: coord_kind(mol, path.suffix.lower())})]
+
+
+def _from_records(path: Path, read, id_col: str | None, log: Callable[[str], None] | None) -> list[MoleculeInput]:
+    """``formats.FileRead`` -> inputs. The id is the ``id_col`` property, else DTXSID or ID, else (several records)
+    the title or ``<stem>_<record>``; a file with one structure takes the file name, as a .mol file does."""
+    from .formats import COORDS, READER, coord_kind
+
+    ext = path.suffix.lower()
+    single = len(read.records) == 1
+    out = []
+    for i, rec in enumerate(read.records, 1):
+        props = dict(rec.props)
+        lower = {k.lower(): k for k in props}
+        ident = ""
+        if id_col and lower.get(id_col.strip().lower()):
+            ident = str(props[lower[id_col.strip().lower()]]).strip()
+        ident = ident or next((str(props[k]).strip() for k in SDF_ID_PROPERTIES if str(props.get(k, "")).strip()), "")
+        ident = ident or (path.stem if single else rec.title or f"{path.stem}_{i}")
+        with rdBase.BlockLogs():
+            smiles = Chem.MolToSmiles(Chem.RemoveHs(rec.mol))
+        out.append(MoleculeInput(id=safe_id(ident, fallback=f"{path.stem}_{i}"), name=rec.title or ident,
+                                 source=path.name if single else f"{path.name}#{i}", mol=rec.mol, smiles=smiles,
+                                 multiplicity=rec.multiplicity or 1,
+                                 meta={**props, READER: read.reader, COORDS: coord_kind(rec.mol, ext)}))
+    emit = log or _log.warning
+    for w in read.warnings:
+        emit(w)
+    if read.skipped:
+        emit(f"{path.name}: skipped {len(read.skipped)} record(s): " + "; ".join(read.skipped[:10])
+             + (f" (and {len(read.skipped) - 10} more)" if len(read.skipped) > 10 else ""))
+    if not out:
+        raise ValueError(f"No molecule could be read from {path.name}"
+                         + (": " + "; ".join(read.skipped[:5]) if read.skipped else ""))
+    (log or _log.info)(f"{path.name}: {len(out)} structure(s) read with {read.reader}")
+    return out
+
+
+def read_raw(path: str | Path, smiles_col: str | None = None, id_col: str | None = None,
+             charge: int = 0, sheet: str | int | None = None,
+             smiles_preference: str | Sequence[str] | None = None,
+             log: Callable[[str], None] | None = None) -> list[MoleculeInput]:
+    """Read any supported file as it is, before import options (``chem.import_options.apply``): structure files
+    keep repeated structures (the options decide about them), tables and lists are read as ``read_file`` reads
+    them. ``meta[formats.READER]`` names the reader, ``meta[formats.COORDS]`` says whether the coordinates are 2D or
+    3D. An extension QuantaBench does not read goes to Open Babel when the user has it."""
+    from . import formats
+
     path = Path(path)
     ext = path.suffix.lower()
     if ext in TABLE_TYPES:
         rep = read_table(path, smiles_col, id_col, sheet, smiles_preference)
         rep.emit(log)
         return rep.inputs
-    if ext in (".smi", ".smiles", ".txt"):
+    if ext in LIST_TYPES:
         return parse_text(path.read_text(encoding="utf-8"), skip_errors=True, log=log, source=path.name)
-    if ext == ".sdf":
-        return read_sdf(path, id_col=id_col, log=log)
+    if ext in (".sdf", ".sd"):
+        return read_sdf(path, id_col=id_col, log=log, dedupe=False)
+    if ext in formats.FILE_READERS:
+        return _from_records(path, formats.read(path), id_col, log)
     if ext == ".mol":
-        mol = Chem.MolFromMolFile(str(path), removeHs=False)
+        with rdBase.BlockLogs():
+            mol = Chem.MolFromMolFile(str(path), removeHs=False)
+        reader = "RDKit (MOL file)"
     elif ext == ".pdb":
-        mol = Chem.MolFromPDBFile(str(path), removeHs=False)
+        with rdBase.BlockLogs():
+            mol = Chem.MolFromPDBFile(str(path), removeHs=False)
+        reader = "RDKit (PDB)"
     elif ext == ".xyz":
         mol = Chem.MolFromXYZFile(str(path))
         if mol is not None:
             rdDetermineBonds.DetermineBonds(mol, charge=charge)
+        reader = "RDKit rdDetermineBonds (XYZ)"
+    elif formats.openbabel() is not None:
+        items, reader = formats.with_openbabel(path, lambda sdf: read_sdf(sdf, id_col=id_col, log=log, dedupe=False))
+        for i, it in enumerate(items, 1):
+            it.source = path.name if len(items) == 1 else f"{path.name}#{i}"
+            it.meta[formats.READER] = reader
+        (log or _log.info)(f"{path.name}: {len(items)} structure(s) read with {reader}")
+        return items
     else:
-        raise ValueError(f"Unsupported file type {ext} (supported: {', '.join(sorted(FILE_TYPES))})")
+        raise ValueError(f"Unsupported file type {ext} (supported: {', '.join(sorted(FILE_TYPES))}; "
+                         f"{formats.OPENBABEL_HINT})")
     if mol is None:
         raise ValueError(f"Could not read a molecule from {path.name}")
-    return [MoleculeInput(id=safe_id(path.stem), name=path.stem, source=path.name, mol=mol,
-                          smiles=Chem.MolToSmiles(Chem.RemoveHs(mol)))]
+    return _single(path, mol, reader)
+
+
+def read_file(path: str | Path, smiles_col: str | None = None, id_col: str | None = None,
+              charge: int = 0, sheet: str | int | None = None,
+              smiles_preference: str | Sequence[str] | None = None,
+              log: Callable[[str], None] | None = None, options=None) -> list[MoleculeInput]:
+    """Read any supported file. For tables, skipped rows and SMILES-column fallbacks are reported
+    through ``log`` (or this module's logger when no callback is given).
+
+    ``options`` (``chem.import_options.ImportOptions``): convert 2D to 3D, grow hydrogens, keep coordinates, post
+    fields, filters, atom order, repeated structures as conformers; ``options.id_field`` is the SD property for
+    the id when ``id_col`` is not given. Without options the structures are read as they are (ids made unique)."""
+    from . import import_options
+
+    path = Path(path)
+    if options is not None:
+        items = read_raw(path, smiles_col, id_col or options.id_field or None, charge, sheet, smiles_preference, log)
+        return import_options.apply(items, options, log=log)
+    ext = path.suffix.lower()
+    if ext in (".sdf", ".sd"):
+        return read_sdf(path, id_col=id_col, log=log)
+    items = read_raw(path, smiles_col, id_col, charge, sheet, smiles_preference, log)
+    if ext in TABLE_TYPES or ext in LIST_TYPES:
+        return items
+    warnings: list[str] = []
+    items = dedupe_ids(items, warnings)
+    for w in warnings:
+        (log or _log.warning)(w)
+    return items

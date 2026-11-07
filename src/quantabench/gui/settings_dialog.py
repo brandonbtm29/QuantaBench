@@ -1,4 +1,5 @@
-"""Settings dialog: compute resources, build defaults, surfaces and radii, display (energy units), engines, folders."""
+"""Settings dialog: compute resources, build defaults, import options, surfaces and radii, display (energy units),
+engines, folders."""
 
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -59,6 +61,7 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._resources_tab(report), "Compute")
         tabs.addTab(self._build_tab(), "Build defaults")
+        tabs.addTab(self._import_tab(), "Import")
         tabs.addTab(self._surfaces_tab(), "Surfaces && radii")    # "&&": a literal & (not a shortcut)
         tabs.addTab(self._display_tab(), "Display")
         tabs.addTab(self._engines_tab(), "Engines")
@@ -235,6 +238,32 @@ class SettingsDialog(QDialog):
         self.fmax.setSuffix(" eV/Å")
         self.fmax.setValue(b.fmax)
         form.addRow("Force convergence", self.fmax)
+        return w
+
+    def _import_tab(self) -> QWidget:
+        """The stored choices of File > Open's Import Options dialog (``Settings.import_``), also the defaults of
+        the command line's --file inputs."""
+        from ..chem.import_options import ImportOptions
+        from .import_options import ImportOptionsWidget
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        im = self.s.import_
+        self.import_ask = QCheckBox("Show the Import Options dialog when a file has choices")
+        self.import_ask.setToolTip("2D structures, data fields, several fragments or several structures of one\n"
+                                   "constitution. Off: these choices are used without asking.")
+        self.import_ask.setChecked(im.ask)
+        lay.addWidget(self.import_ask)
+        self.import_form = ImportOptionsWidget(ImportOptions.from_settings(im),
+                                               [f for f in (im.id_field, im.name_field) if f])
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.import_form)
+        lay.addWidget(scroll, 1)
+        note = QLabel("<code>quantabench-cli build --file</code> uses these too; its import flags "
+                      "(<code>--keep-coords</code>, <code>--filter</code>, ...) override them.")
+        note.setWordWrap(True)
+        lay.addWidget(note)
         return w
 
     #: columns of the radii table
@@ -444,7 +473,8 @@ class SettingsDialog(QDialog):
 
     #: (settings key, label, file-dialog title) of the external programs QuantaBench can run
     PROGRAM_FIELDS = (("xtb", "xtb", "xtb executable"), ("crest", "CREST", "crest executable"),
-                      ("mopac", "MOPAC", "MOPAC executable"), ("psi4_python", "Psi4 Python", "Python with psi4"))
+                      ("mopac", "MOPAC", "MOPAC executable"), ("psi4_python", "Psi4 Python", "Python with psi4"),
+                      ("obabel", "Open Babel", "obabel executable (file formats QuantaBench does not read)"))
 
     def _engines_tab(self) -> QWidget:
         """Paths of external programs (blank = find automatically), scratch folder, OpenMP stack, QM memory."""
@@ -529,7 +559,7 @@ class SettingsDialog(QDialog):
 
         def detect():
             rows = []
-            for name in ("xtb", "crest", "mopac"):
+            for name in ("xtb", "crest", "mopac", "obabel"):
                 if typed.get(name):
                     info = external.inspect_path(name, typed[name])
                     rows.append((name, info, "typed path does not exist" if info is None else ""))
@@ -656,6 +686,8 @@ class SettingsDialog(QDialog):
         b.energy_window_kcal = self.window.stored()
         b.rmsd_threshold = self.rmsd.value()
         b.fmax = self.fmax.value()
+        self.import_form.options().to_settings(s)
+        s.import_.ask = self.import_ask.isChecked()
         sf = s.surfaces
         sf.radii_set = self.radii_set.currentData() or "bondi"
         sf.radii_overrides = self.radii_overrides()

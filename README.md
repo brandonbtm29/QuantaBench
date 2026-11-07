@@ -19,7 +19,7 @@ dynamics. Every step is visible in an OVITO-style 3D workspace.
 
 | Stage | What happens |
 |---|---|
-| Input | SMILES, chemical names or CAS (PubChem), SDF/MOL/XYZ/PDB/SMI, CSV and Excel lists (CompTox exports: DTXSID, preferred name, SMILES / QSAR-ready / MS-ready fallback) |
+| Input | SMILES, InChI, InChIKeys, chemical names or CAS (PubChem); SDF/MOL (V2000, V3000), MOL2, PDB, XYZ, ChemDraw CDX/CDXML, Marvin MRV, CML, CIF, Gaussian/ORCA inputs, SMILES and InChI lists, CSV and Excel lists (CompTox exports: DTXSID, preferred name, SMILES / QSAR-ready / MS-ready fallback); other formats through Open Babel when installed. Spartan-style import options (2D to 3D, hydrogens, data fields, filters, atom order) |
 | Standardize & protonate | Largest fragment (strips counter-ions, named in the results; metal complexes drawn as ions are refused, not computed without their metal), neutral parent, dominant charge state at your pH, spin from drawn radicals. PFAS-aware: carboxylates, sulfonates and acidic perfluoroalkane sulfonamides are handled |
 | Conformer search | RDKit ETKDGv3, MMFF94s pre-optimization, energy window, symmetry-aware RMSD de-duplication; or **CREST** (iMTD-GC metadynamics with GFN2-xTB / GFN-FF) |
 | Refinement | **AIMNet2** (ML, ωB97M-D3 quality, neutral and charged), **GFN1/GFN2-xTB** (dxtb, PyTorch; tblite; or the xtb program), **GFN-FF**, **PM7/PM6** (MOPAC), or MMFF94s, optionally in an implicit solvent (ALPB, COSMO). On GPU when available with automatic CPU fallback; on a GPU all conformers of a molecule are optimized in one batch |
@@ -103,6 +103,36 @@ quantabench-cli md parse pfoa_smd       # after the run: detachment work and pea
 `build` uses the resumable job table whenever it builds more than one molecule or gets `--run-dir`,
 `--resume` or `--chunk`; a single molecule runs directly. `--batched auto|on|off` controls batched
 conformer refinement (auto: only on a GPU).
+
+## Importing structures
+
+File > Open and `--file` read SDF/MOL (V2000 and V3000), MOL2, PDB, XYZ, ChemDraw `.cdx` and `.cdxml`,
+Marvin `.mrv`, CML, CIF (molecular crystals: one entry per unique molecule), Gaussian `.gjf`/`.com` and ORCA
+`.inp` inputs, SMILES and InChI lists (`.smi`, `.inchi`: one per line, an optional id after it), CSV and Excel.
+Formats without bonds (XYZ, CIF, Gaussian, ORCA) get them from the geometry, with the charge the file states.
+Any other format goes through Open Babel when you have the `obabel` program (on PATH, or set in Settings >
+Engines). Open Babel is GPL, so QuantaBench only runs your copy and never ships it. The log says which reader
+read each file. The Molecules box also takes `InChI=1S/...` strings and InChIKeys.
+
+When a file has choices, File > Open shows an Import Options dialog like Spartan's SDF Import Options:
+
+- **Fixup:** convert 2D structures to 3D, grow hydrogens, and keep the file's 3D coordinates as the first
+  conformer (the build starts from them; with Max conformers 1 it uses only them).
+- **Additional data:** post the SD fields or table columns to the molecule list and `summary.csv` (numbers are
+  read, units go into the column name), and pick the fields for the id and the name.
+- **Filters:** remove water, HCl and other small inorganic molecules, counter-ions, or everything but the largest
+  fragment. Each molecule's notes say what was removed. The build's *Keep largest fragment* still applies.
+- **Labeling:** atoms in the file's order, or in a standard order (RDKit canonical ranks).
+- **Several structures of one constitution:** separate molecules, or conformers of one molecule.
+
+"Don't ask again" keeps the choices; Settings > Import changes them. The command line uses the same stored
+choices, and these flags override them:
+
+```bash
+quantabench-cli build --file dft_geometries.sdf --keep-coords --no-grow-h --filter water,hcl
+quantabench-cli build --file conformers.sdf --same-structures conformers --label-order standard
+quantabench-cli build --file set.sdf --import-options "post_fields=true,id_field=CAS_RN"
+```
 
 ## Viewer
 

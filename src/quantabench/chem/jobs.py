@@ -265,10 +265,18 @@ def in_chunk(mol_id: str, chunk: Chunk | None) -> bool:
 
 
 # ------------------------------------------------------------------------------ input round trip
+#: ``meta`` key of the coordinates of an input's 2nd, 3rd, ... conformer (the MOL block holds the first): structures
+#: of one constitution read as conformers of one molecule (import option), for the build's *keep coordinates*
+EXTRA_CONFORMERS = "qb_extra_conformers"
+
+
 def input_to_json(inp: MoleculeInput) -> str:
     d = {k: v for k, v in asdict(inp).items() if k != "mol"}
     if inp.mol is not None:  # structure files: keep coordinates, explicit H and formal charges
         d["molblock"] = Chem.MolToMolBlock(inp.mol)
+        if inp.mol.GetNumConformers() > 1:
+            d["meta"] = {**d["meta"], EXTRA_CONFORMERS: [
+                [[round(float(v), 5) for v in xyz] for xyz in c.GetPositions()] for c in list(inp.mol.GetConformers())[1:]]}
     return _dumps(d)
 
 
@@ -277,8 +285,19 @@ def input_from_json(text: str) -> MoleculeInput:
     molblock = d.pop("molblock", None)
     known = {f.name for f in fields(MoleculeInput)}
     inp = MoleculeInput(**{k: v for k, v in d.items() if k in known})
+    extra = inp.meta.pop(EXTRA_CONFORMERS, None) if isinstance(inp.meta, dict) else None
     if molblock:
         inp.mol = Chem.MolFromMolBlock(molblock, removeHs=False)
+        if inp.mol is not None and isinstance(extra, list):
+            n = inp.mol.GetNumAtoms()
+            for positions in extra:
+                if len(positions) != n:
+                    continue
+                conf = Chem.Conformer(n)
+                for i, xyz in enumerate(positions):
+                    conf.SetAtomPosition(i, [float(v) for v in xyz])
+                conf.Set3D(True)
+                inp.mol.AddConformer(conf, assignId=True)
     return inp
 
 
