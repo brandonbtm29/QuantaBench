@@ -124,6 +124,27 @@ class DisplaySettings:
 
 
 @dataclass
+class ImportSettings:
+    """Stored choices of the Import Options dialog (File > Open; ``chem.import_options.ImportOptions`` has the same
+    fields and says what each does), also the defaults of the command line's ``--file`` inputs. ``ask``: show the
+    dialog when a file has choices (its "Don't ask again" box clears it; Settings > Import sets it back)."""
+    ask: bool = True
+    convert_2d: bool = True           # 2D structures (MOL/SDF 2D flag or every z = 0, ChemDraw) get 3D coordinates
+    grow_hydrogens: bool = True       # explicit hydrogens with coordinates
+    keep_coords: bool = False         # the file's 3D coordinates are the first conformer of the build
+    post_fields: bool = False         # SD properties / table columns become molecule-table and summary.csv columns
+    parse_fields: bool = True         # numbers in those fields are parsed (a unit goes into the column name)
+    id_field: str = ""                # SD property / column for the id ("" = automatic: DTXSID, ID, the title)
+    name_field: str = ""              # ... for the name ("" = the title)
+    remove_water: bool = True
+    remove_acids: bool = True         # HCl, HBr, HI and other small neutral inorganic fragments
+    strip_counterions: bool = False   # Na+, K+, Cl-, SO4 2-, ... (the build's keep-largest-fragment does it anyway)
+    keep_largest: bool = False        # only the largest fragment, chosen as the build chooses it
+    label_order: str = "read"         # "read" (the file's atom order) | "standard" (RDKit canonical ranks)
+    same_constitution: str = "molecules"   # several structures of one constitution: "molecules" | "conformers"
+
+
+@dataclass
 class Settings:
     output_dir: str = ""              # "" = Documents/QuantaBench/Runs
     resources: ResourceSettings = field(default_factory=ResourceSettings)
@@ -132,6 +153,7 @@ class Settings:
     dist: DistSettings = field(default_factory=DistSettings)
     surfaces: SurfaceSettings = field(default_factory=SurfaceSettings)
     display: DisplaySettings = field(default_factory=DisplaySettings)
+    import_: ImportSettings = field(default_factory=ImportSettings)     # "import" is a Python keyword
     recent_files: list[str] = field(default_factory=list)
 
     # ---------------------------------------------------------------- paths

@@ -60,6 +60,7 @@ class ProgramSpec:
     version_args: tuple[str, ...] = ("--version",)
     version_regex: str = r"(\d+\.\d+(?:\.\d+)?)"
     install_hint: str = ""
+    engine: bool = True                # a compute engine (machine profiles list these); False for file tools
 
 
 PROGRAMS: dict[str, ProgramSpec] = {
@@ -72,6 +73,11 @@ PROGRAMS: dict[str, ProgramSpec] = {
                          "conda install -c conda-forge mopac, or the installer from https://openmopac.net"),
     "psi4": ProgramSpec("psi4", ("psi4",), ("--version",), r"(\d+\.\d+(?:\.\d+)?)",
                         "conda install -c conda-forge psi4 \"libint=2.9\" \"pint<0.25\" (in its own environment; docs/ENGINES.md)"),
+    # file conversion for formats QuantaBench does not read itself (chem.formats). GPL-2.0: run as the user's own
+    # program, never imported or bundled
+    "obabel": ProgramSpec("obabel", ("obabel",), ("-V",), r"Open Babel (\d+\.\d+(?:\.\d+)?)",
+                          "conda install -c conda-forge openbabel (GPL-2.0: QuantaBench runs it as a separate program)",
+                          engine=False),
 }
 
 

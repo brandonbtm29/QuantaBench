@@ -531,13 +531,15 @@ def default_client() -> PubChemClient:
         return _DEFAULT
 
 
-def lookup(name: str, timeout: float = 15.0, client: PubChemClient | None = None) -> dict:
-    """{"cid", "smiles", "title"} of a name or CAS RN (one request). Raises :class:`PubChemError` when PubChem
-    is unreachable or has no structure for it."""
+def lookup(name: str, timeout: float = 15.0, client: PubChemClient | None = None, namespace: str = "name") -> dict:
+    """{"cid", "smiles", "title"} of a name or CAS RN (one request; ``namespace="inchikey"`` for an InChIKey).
+    Raises :class:`PubChemError` when PubChem is unreachable or has no structure for it."""
+    if namespace not in ("name", "inchikey"):
+        raise ValueError(f"namespace must be 'name' or 'inchikey', not {namespace!r}")
     client = client or default_client()
     client.timeout = timeout
     quoted = urllib.parse.quote(name.strip(), safe="")
-    doc = client.get_json(f"{REST}/compound/name/{quoted}/property/SMILES,ConnectivitySMILES,Title/JSON")
+    doc = client.get_json(f"{REST}/compound/{namespace}/{quoted}/property/SMILES,ConnectivitySMILES,Title/JSON")
     props = _normalize_props(((doc or {}).get("PropertyTable", {}).get("Properties") or [{}])[0])
     smiles = props.get("SMILES") or props.get("ConnectivitySMILES") or ""
     if not smiles:

@@ -34,6 +34,7 @@ from ..settings import Settings
 from . import batch_opt, engines, export, properties
 from . import conformers as confs
 from . import descriptors as desc
+from . import import_options as imp
 from .inputs import ID_NOTE, MoleculeInput
 from .optimize import Cancelled, optimize
 from .standardize import UnsupportedStructure, formal_charge, inchikey, prepare, spin_multiplicity
@@ -188,8 +189,25 @@ class MoleculeResult:
             "dipole_debye": best.dipole_debye if best and best.dipole_debye is not None else "",
             "qm_method": (self.qm or {}).get("level", ""), "qm_energy_eV": (self.qm or {}).get("energy_ev", ""),
             "seconds": round(sum(self.timings.values()), 2), "notes": " | ".join(self.notes),
-        }
+        } | self._posted_fields()
 
+    def _posted_fields(self) -> dict:
+        """The input's fields posted on import (``import_options.FIELDS``: SD properties, table columns) as extra
+        summary columns; a name that is already a summary column gets a ``file_`` prefix."""
+        posted = (self.input.meta or {}).get(imp.FIELDS) or {}
+        out: dict = {}
+        for k, v in posted.items() if isinstance(posted, dict) else ():
+            key = f"file_{k}" if k in SUMMARY_COLUMNS else str(k)
+            out[key] = v
+        return out
+
+
+#: the standard summary.csv columns (posted import fields with one of these names get a ``file_`` prefix)
+SUMMARY_COLUMNS = frozenset(
+    ("id name status error input_smiles smiles inchikey canonical_smiles input_inchikey input_charge charge "
+     "multiplicity removed_fragments method forcefield device phase solvent solvation_model phase_notes "
+     "conformer_search conformer_fallback n_embedded n_conformers best_energy_eV best_converged dipole_debye "
+     "qm_method qm_energy_eV seconds notes").split())
 
 ProgressFn = Callable[[int, int, str, str], None]   # (molecule index, total, stage, message)
 BATCHED_MODES = ("auto", "on", "off")
@@ -552,10 +570,14 @@ def fallback_summary(n: int, total: int) -> str:
 
 
 def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConfig, threads: int,
-                      should_stop: Callable[[], bool], log: Callable[[str], None]) -> confs.ConformerSet:
+                      should_stop: Callable[[], bool], log: Callable[[str], None],
+                      seeds: list | tuple = ()) -> confs.ConformerSet:
     """RDKit ETKDGv3 + MMFF94s, or CREST. If CREST is missing or fails, ``cfg.crest_fallback`` decides: "rdkit" goes
     on with RDKit's conformers and flags the molecule (a note, ``conformer_fallback``, a warning in the log, a count
-    at the end of the batch), "fail" fails the molecule (``ConformerSearchError``)."""
+    at the end of the batch), "fail" fails the molecule (``ConformerSearchError``). ``seeds``: coordinates from the
+    input file (import option *keep coordinates*), the first conformers of RDKit's set; CREST makes its own start."""
+    if cfg.conformer_search == "crest" and seeds:
+        result.notes.append("CREST makes its own start geometry: the file's coordinates were not used")
     if cfg.conformer_search == "crest":
         from . import crest
 
@@ -582,7 +604,7 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
     result.conformer_search = "rdkit"
     # Keep a wider force-field window: the refined ranking can differ from MMFF's.
     return confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,
-                          cfg.seed, threads)
+                          cfg.seed, threads, seeds=seeds)
 
 
 def _engine_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,
@@ -697,6 +719,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         info: dict = {}
         if inp.meta.get(ID_NOTE):
             result.notes.append(str(inp.meta[ID_NOTE]))
+        result.notes += [str(n) for n in inp.meta.get(imp.NOTES) or []]     # what the import did (filters, 2D -> 3D)
         from . import solvents
 
         result.phase = solvents.canonical(cfg.solvent) or "gas"
@@ -706,8 +729,9 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             result.notes.append(f"no input InChIKey: {why}")
         prepared, notes = prepare(drawn, cfg.ph if cfg.protonate else None, cfg.keep_largest_fragment,
                                   cfg.protonation_method, info=info)
-        result.input_charge = info.get("input_charge")
-        result.removed_fragments = list(info.get("removed_fragments") or [])
+        # fragments the import filters removed count as removed, and the charge as drawn is the file's
+        result.input_charge = inp.meta.get(imp.FILE_CHARGE, info.get("input_charge"))
+        result.removed_fragments = list(inp.meta.get(imp.REMOVED) or []) + list(info.get("removed_fragments") or [])
         result.smiles = Chem.MolToSmiles(Chem.RemoveHs(prepared))
         result.canonical_smiles = result.smiles
         result.inchikey, why = inchikey(prepared)
@@ -754,7 +778,13 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         stage("conformers")
         t = time.perf_counter()
         conformer_solvent = result.solvent        # what CREST was given (RDKit's MMFF94s has no solvent)
-        cs = _conformer_search(prepared, result, cfg, threads, should_stop, log)
+        seeds: list = []
+        if inp.meta.get(imp.KEEP_COORDS):
+            seeds, why = confs.seed_coordinates(drawn, prepared)
+            result.notes.append(f"the file's coordinates are the first {len(seeds)} conformer(s) (MMFF94s-optimized "
+                                "like the others)" if seeds else f"the file's coordinates were not used ({why})")
+            log(f"  {result.notes[-1]}")
+        cs = _conformer_search(prepared, result, cfg, threads, should_stop, log, seeds=seeds)
         result.forcefield, result.n_embedded = cs.forcefield, cs.n_embedded
         result.timings["conformers"] = time.perf_counter() - t
         log(f"  {cs.n_embedded} embedded, {len(cs.conf_ids)} unique after {cs.forcefield} + pruning")

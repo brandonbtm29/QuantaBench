@@ -410,7 +410,7 @@ def _programs(probe_wsl: bool) -> tuple[dict[str, str], list[str]]:
 
     progs: dict[str, str] = {}
     via_wsl: list[str] = []
-    for name in external.PROGRAMS:
+    for name in (n for n, spec in external.PROGRAMS.items() if spec.engine):   # not file tools (obabel)
         try:
             info = external.find_program(name, probe_wsl=probe_wsl)
         except Exception:  # a broken settings path must not break the profile

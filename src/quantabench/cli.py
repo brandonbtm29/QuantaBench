@@ -172,13 +172,30 @@ def method_choices() -> list[str]:
     return engines.method_keys()
 
 
+def import_options(args):
+    """``ImportOptions`` of the ``--file`` inputs: the stored choices (Settings > Import, the GUI's Import Options
+    dialog), then ``--import-options``, then the single flags."""
+    from .chem.import_options import ImportOptions
+
+    opts = ImportOptions.from_settings(settings_mod.load())
+    opts = opts.with_text(getattr(args, "import_options", None) or "")
+    if getattr(args, "filter", None) is not None:
+        opts = opts.with_filters(args.filter)
+    flags = {"keep_coords": getattr(args, "keep_coords", None), "grow_hydrogens": getattr(args, "grow_h", None),
+             "convert_2d": getattr(args, "convert_2d", None), "label_order": getattr(args, "label_order", None),
+             "same_constitution": getattr(args, "same_structures", None),
+             "post_fields": getattr(args, "post_fields", None), "name_field": getattr(args, "name_field", None)}
+    return replace(opts, **{k: v for k, v in flags.items() if v is not None})
+
+
 def _read_inputs(args) -> list:
     from .chem import inputs as inp_mod
 
     items = []
+    opts = import_options(args) if args.file else None
     for f in args.file or []:
         items += inp_mod.read_file(f, args.smiles_col, args.id_col, sheet=getattr(args, "sheet", None),
-                                   smiles_preference=getattr(args, "smiles_pref", None), log=print)
+                                   smiles_preference=getattr(args, "smiles_pref", None), log=print, options=opts)
     for text in args.molecules:
         items += inp_mod.parse_text(text)
     return items
@@ -703,15 +720,40 @@ def export_formats() -> list[str]:
 
 def add_input_args(q: argparse.ArgumentParser) -> None:
     """Molecule inputs (positional SMILES/names, --file and its column options); read by ``read_inputs``."""
-    q.add_argument("molecules", nargs="*", help="SMILES (optionally 'SMILES id') or names to look up in PubChem")
+    q.add_argument("molecules", nargs="*", help="SMILES or InChI (optionally followed by an id), InChIKeys or names "
+                                                "(InChIKeys and names are looked up in PubChem)")
     q.add_argument("--file", action="append",
-                   help="SDF, MOL, XYZ, PDB, SMI, CSV or Excel (.xlsx/.xlsm) file (repeatable)")
+                   help="SDF/MOL (V2000, V3000), MOL2, PDB, XYZ, ChemDraw CDX/CDXML, Marvin MRV, CML, CIF, Gaussian "
+                        "(.gjf/.com) or ORCA (.inp) input, SMILES or InChI list, CSV or Excel file (repeatable); other "
+                        "formats through Open Babel when it is installed")
     q.add_argument("--smiles-col", help="tables: the SMILES column (default: smiles, qsar_ready_smiles, ...)")
     q.add_argument("--id-col", help="tables: the id column; SD files: the SD property to use as id, e.g. CAS_RN "
                                     "(default: DTXSID, ID, then the title line)")
     q.add_argument("--sheet", help="Excel sheet name or 0-based index (default: the first sheet)")
     q.add_argument("--smiles-pref", choices=["smiles", "qsar", "ms"],
                    help="which SMILES column of a CompTox export to prefer (falls back row by row)")
+    imp = q.add_argument_group("import options for --file (defaults: Settings > Import)")
+    imp.add_argument("--keep-coords", action=argparse.BooleanOptionalAction, default=None,
+                     help="use the file's 3D coordinates as the first conformer(s) of the build")
+    imp.add_argument("--grow-h", action=argparse.BooleanOptionalAction, default=None,
+                     help="add explicit hydrogens with coordinates (--no-grow-h keeps the file's)")
+    imp.add_argument("--convert-2d", action=argparse.BooleanOptionalAction, default=None,
+                     help="give 2D structures (2D MOL/SDF, ChemDraw) 3D coordinates on import")
+    imp.add_argument("--filter", metavar="LIST",
+                     help="fragments removed on import: water, acids (or hcl: HCl, HBr, HI, small inorganic "
+                          "molecules), counterions, largest (keep only the largest fragment), comma-separated; "
+                          "'none' for no filter")
+    imp.add_argument("--label-order", choices=["read", "standard"],
+                     help="atom order: as in the file, or standard (RDKit canonical ranks)")
+    imp.add_argument("--same-structures", choices=["molecules", "conformers"],
+                     help="several structures of one constitution in a file: separate molecules, or conformers "
+                          "of one molecule")
+    imp.add_argument("--post-fields", action=argparse.BooleanOptionalAction, default=None,
+                     help="SD properties / table columns as extra summary.csv columns (numbers parsed)")
+    imp.add_argument("--name-field", help="SD property / column for the molecule names")
+    imp.add_argument("--import-options", metavar="KEY=VAL,...",
+                     help="any import option as key=value pairs or a JSON object, e.g. "
+                          "keep_coords=true,label_order=standard,filter=water+acids")
 
 
 def add_engine_args(q: argparse.ArgumentParser, *, method_help: str | None = None, threads_help: str | None = None,
