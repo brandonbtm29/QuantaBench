@@ -902,11 +902,18 @@ the code, but three things never arrived through it.
     scripts pass `QUANTABENCH_CREST=~/Library/Application Support/QuantaBench/programs/crest-qb-v3.0.2-macos1/crest-macos-arm64/bin/crest`
     (installed there from the run 42295799792 tarball; nothing else on the Mac points at it yet, so the GUI, the
     worker and a plain `quantabench-cli` still find conda-forge's crest in qb-tools, which `doctor` now flags).
-  - CREST lanes on the Mac (· ready): `--lanes auto` gives 6 x 2 threads on the 14 cores (10 performance, 4
-    efficiency) and the batch waits for its slowest molecule on 2 threads. Lane timing on GFN-FF gas (2026-11-07,
-    docs/ENGINES.md): 1 x 12 1,727 s, **3 x 4 773 s**, 5 x 2 1,457 s, auto 6 x 2 3,108 s. Make the CREST auto
-    plan on Apple Silicon about 4 threads per lane on the performance cores (3 x 4 on the M3 Max), check it on
-    NOVA's WSL (20 x 2 today), and consider giving the last molecules of a batch the idle lanes' threads.
+  - CREST lanes on the Mac (done 2026-11-07, branch `fix/crest-lanes`; re-time needs the Mac): the old
+    `--lanes auto` gave 6 x 2 threads on the 14 cores (10 performance, 4 efficiency), and the batch waited for
+    its slowest molecule on 2 threads. Lane timing on GFN-FF gas (2026-11-07, docs/ENGINES.md): 1 x 12 1,727 s,
+    **3 x 4 773 s**, 5 x 2 1,457 s, auto 6 x 2 3,108 s.
+    - Done: on Apple Silicon the CREST auto plan is 4 threads per lane, one lane per 4 performance cores
+      (`hw.perflevel0.physicalcpu`), so 3 x 4 on the M3 Max. Other machines keep 2-thread lanes on all threads:
+      on NOVA's 24 threads the code plans 11 x 2. The docs' "20 x 2" for NOVA's 2026-11-06 run does not match
+      that; check that run's log. Every parallel run now starts its largest molecules first.
+    - Not done: a running CREST cannot take more threads when other lanes go idle; largest-first is the cheap
+      version of that.
+    - Left: after the merge, re-time the GFN-FF gas run on the Mac with `--lanes auto` (expect 3 x 4, about
+      773 s, and the 54-heavy-atom molecule started first), then one GFN2 batch.
   - GFN2 CREST on the Mac finished 2026-11-07: gas 16/20, water 15/20; the 9 failures are all the 3 h limit on
     the largest molecules. Compare their dipoles and conformers with the GFN-FF runs and Spartan (VAL-3).
 - **Windows:** `qb/windows` has a native build (docs/WINDOWS.md there), but Brandon decided on WSL (ENG-2).
