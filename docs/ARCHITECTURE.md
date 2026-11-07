@@ -34,6 +34,7 @@
 | `quantabench.settings` | `Settings` dataclasses, JSON load/save, and the settings-folder pointer (env var, then repo-local pointer, then per-user config). |
 | `quantabench.units` | Energy units and number format for the GUI (`Settings.display`): conversion factors (the computations' own), `EnergyDisplay` (unit per kind, text, headers). Display only: results and exports keep their units. |
 | `chem.inputs` | `MoleculeInput` records from SMILES, PubChem names, structure files, CSV and Excel (CompTox-aware: DTXSID, preferred name, SMILES-column fallback per row, `ReadReport` of skipped rows). |
+| `chem.interchange` | Structures as text and bytes, for the clipboard and drops: `parse_structure_text` (MOL V2000/V3000, SD, CDXML, Marvin MRV, else `inputs.parse_text`), `parse_cdx_bytes` (binary ChemDraw: `cdx_to_cdxml` translates it for RDKit's CDXML reader, since RDKit 2026.09's Python wrapper reads only CDXML), MDLCT, and `to_smiles` / `to_molblock` / `to_sdf` / `to_cdxml` (2D). |
 | `chem.pubchem`, `chem.pubchem_enrich` | PubChem PUG REST + PUG View client within the usage policy (rate limit, `X-Throttling-Control` backoff, SQLite response cache, offline mode); CAS RN check digit; experimental records with units, temperature and condition class; `enrich` (CIDs, `pubchem_*` columns, structure check by CAS RN) behind `pubchem enrich`. |
 | `chem.standardize` | RDKit cleanup, largest fragment, neutralize, and the pH protonation rule table (or Dimorphite-DL). |
 | `chem.conformers` | ETKDGv3 embedding, MMFF94s/UFF, energy-window plus RMSD pruning, Boltzmann weights. |
@@ -64,6 +65,7 @@
 | `gui.viewer2d` | `MoleculeViewer2D`: RDKit SVG depiction in a `QGraphicsView`, full-index atom map, in-plane rotation, export. |
 | `gui.selection` | `SelectionModel` (ordered atom indices, `changed` signal), measurements, the shared accent color. |
 | `gui.spectra_panel`, `gui.surface_panel`, `gui.import_action` | Optional panels installed by `MainWindow._install_panels`; they follow `MainWindow.resultChanged` (and `displayChanged` for energy units). |
+| `gui.clipboard` | Edit > Paste (ChemDraw CDX, CDXML, MOL, MDLCT, text, in that order; the macOS pasteboard is also read directly for ChemDraw's type) and Copy as SMILES / MOL / CDXML; drops on the window (files, folders, text). |
 | `gui.surface_dialog`, `gui.settings_dialog`, `gui.workers` | Dialogs and `QThread` workers. |
 | `gui.energy_widgets` | `EnergySpinBox`: an energy input shown in the display unit and stored in a fixed one (the energy window in kcal/mol), returning the stored value exactly until it is edited. |
 | `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`). |

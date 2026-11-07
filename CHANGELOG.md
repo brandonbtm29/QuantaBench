@@ -2,6 +2,30 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Paste from ChemDraw, Copy as SMILES / MOL / CDXML, drag and drop (UI-4, 2026-11-07)
+- **Edit > Paste (Ctrl+V)** adds the structures on the clipboard to the Molecules list (`gui.clipboard`). It
+  tries ChemDraw's own format (binary CDX: Windows "ChemDraw Interchange Format", macOS
+  `com.cambridgesoft.chemdraw.cdx`), then CDXML, an MDL molfile (`chemical/x-mdl-molfile`, Windows "MDLCT"),
+  copied files, and text. The log says which format it used. In a text field, Ctrl+V pastes text as before;
+  in the Molecules box it adds molecules only for a structure format or several lines of text.
+- **Text formats** (`chem.interchange.parse_structure_text`): MOL blocks (V2000, V3000), SD text with several
+  records, CDXML, Marvin MRV, else lines of SMILES, names and CAS numbers (`inputs.parse_text`). Parsing runs
+  off the GUI thread, since names go to PubChem.
+- **Binary CDX** (`parse_cdx_bytes`): RDKit 2026.09's Python wrapper reads CDX only as CDXML, so
+  `cdx_to_cdxml` translates the CDX objects that describe molecules (fragments, nodes, bonds, labels,
+  nicknames such as CF3) and RDKit's CDXML reader does the chemistry. A newer RDKit that reads CDX bytes is
+  used first. Checked on ChemDraw-written files from RDKit's test data (same SMILES and stereo as their
+  CDXML). The file header is optional, since clipboard data may lack it.
+- **ChemDraw salts:** when a drawing's charged fragments add up to zero (K+ and PFOS-), they become one
+  molecule; neutral fragments stay separate molecules.
+- **Edit > Copy as SMILES / MOL / CDXML** puts the selected molecules (as entered) on the clipboard: SMILES
+  lines, a 2D MOL block (V3000 only when needed; SD text for several) or CDXML. Plain text is always there,
+  for ChemDraw's Edit > Paste Special.
+- **Drag and drop:** structure files and tables open as with File > Open; calculation outputs and Spartan
+  documents go through Import calculation output; a folder opens as a run folder; dropped text is read like
+  a paste.
+- Needs a hand check: copying from real ChemDraw on Windows and macOS (only Brandon has ChemDraw).
+
 ### CREST on the Mac, loud CREST failures, engine paths per machine (2026-11-06)
 - **Why the Mac's CREST failed.** conda-forge's osx-arm64 `crest 3.0.2` links Apple's Accelerate, whose classic
   BLAS returns a double from `sdot` (f2c convention). ANCOPT's Davidson step (19+ atoms) then fails, so every
