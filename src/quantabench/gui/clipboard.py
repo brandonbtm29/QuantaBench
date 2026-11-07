@@ -98,7 +98,9 @@ def candidates(mime: QMimeData) -> list[tuple[str, str, object]]:
 
 
 def local_files(mime: QMimeData) -> list[str]:
-    return [u.toLocalFile() for u in mime.urls() if u.isLocalFile() and u.toLocalFile()] if mime.hasUrls() else []
+    # Path(): native separators (QUrl gives C:/... on Windows)
+    return [str(Path(u.toLocalFile())) for u in mime.urls() if u.isLocalFile() and u.toLocalFile()] \
+        if mime.hasUrls() else []
 
 
 def readable(mime: QMimeData | None) -> bool:

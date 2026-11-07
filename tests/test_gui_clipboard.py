@@ -58,6 +58,18 @@ def _close(app, w):
     assert _wait(app, lambda: w.closed)
 
 
+def _skip_without_system_clipboard(app):
+    """Some sessions have no usable system clipboard (a Windows process started outside the desktop's window
+    station reads back nothing); the QMimeData tests above cover the logic, these need the real one."""
+    from PySide6.QtGui import QGuiApplication
+
+    clip = QGuiApplication.clipboard()
+    clip.setText("qb-clipboard-probe")
+    _wait(app, lambda: clip.text() == "qb-clipboard-probe", timeout=2.0)
+    if clip.text() != "qb-clipboard-probe":
+        pytest.skip("the system clipboard does not keep what this process puts on it")
+
+
 def _window(tmp_path):
     from quantabench import settings as sm
     from quantabench.gui.main_window import MainWindow
@@ -155,6 +167,7 @@ def test_edit_menu_paste_and_copy_round_trips(tmp_path):
     from PySide6.QtGui import QGuiApplication
 
     app = _app()
+    _skip_without_system_clipboard(app)
     w = _window(tmp_path)
     titles = [a.text().replace("&", "") for a in w.menuBar().actions()]
     assert titles[:3] == ["File", "Edit", "Build"]
@@ -188,6 +201,7 @@ def test_paste_into_a_text_field_and_the_molecules_box(tmp_path, monkeypatch):
     from quantabench.gui import clipboard as cb
 
     app = _app()
+    _skip_without_system_clipboard(app)
     w = _window(tmp_path)
     clip = QGuiApplication.clipboard()
 
