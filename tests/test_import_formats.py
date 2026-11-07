@@ -328,15 +328,15 @@ def test_orca_input_and_a_complex(tmp_path):
         inputs.read_file(tmp_path / "bad.inp")
 
 
-@pytest.mark.skipif(os.name == "nt", reason="the fake obabel is a Python script with a #! line")
+@pytest.mark.skipif(os.name == "nt", reason="the fake obabel is a shell script")
 def test_open_babel_fallback(tmp_path, monkeypatch):
     """An extension QuantaBench does not read goes to the user's obabel (found as engines are: here through
     QUANTABENCH_OBABEL), converted to SDF in a temporary folder; the reader is reported."""
     from quantabench.chem import external
 
     fake = tmp_path / "obabel"
-    fake.write_text(f"""#!{sys.executable}
-import sys
+    impl = tmp_path / "obabel_impl.py"
+    impl.write_text("""import sys
 from rdkit import Chem
 args = sys.argv[1:]
 if args == ["-V"]:
@@ -352,6 +352,8 @@ for line in open(src):
 w.close()
 print(f"2 molecules converted", file=sys.stderr)
 """)
+    # a shell wrapper, not a #! line: the interpreter's path may contain spaces (a venv under "GitHub Projects")
+    fake.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "$@"\n')
     fake.chmod(0o755)
     data = tmp_path / "set.xyzfoo"
     data.write_text(f"{TFA} TFA\n{ETHANOL} ethanol\n")
