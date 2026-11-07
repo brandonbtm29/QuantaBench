@@ -138,6 +138,8 @@ external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENG
 - [ ] Validation against the Spartan Essential 76 PFAS ωB97X-D results (VAL-2: data imported, runs planned).
 - [ ] A settings dialog as detailed as Spartan's Preferences (SETTINGS-1: Compute, import filters, Lookups,
       Machines left).
+- [ ] Structure input like Spartan's: import from many formats with an Import Options dialog and ChemDraw
+      clipboard (UI-4), an embedded 2D sketcher (UI-6), a 3D model kit (UI-7). Plan in UI_PLAN.md.
 - [ ] Orbital isosurfaces (MO cubes), HOMO/LUMO and local ionization potential maps.
 - [ ] NMR shieldings (Psi4 has none: PySCF GIAO, or ORCA through cclib import).
 - [ ] Coordinate scans, constrained optimization, transition states (Sella), NEB.

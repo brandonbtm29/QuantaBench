@@ -19,9 +19,11 @@ How QuantaBench's interface is organized and where it is going. The backlog that
 A left activity bar switches workspaces. All of them share the 2D/3D viewport, the
 molecule/system navigator, the playback bar and the job monitor.
 
-1. **Build:** sketch/edit (2D with live 3D), fragment palette (including PFAS fragments), import
-   (SMILES, names, CompTox, files, PDB), isomer/tautomer generation, surfaces/slabs/boxes/packing,
-   undo/redo.
+1. **Build:** import (SMILES, InChI, names, CAS, CompTox tables, and files in many formats, with
+   Spartan-style import options: UI-4), a 2D sketcher (an embedded open-source editor, Ketcher or
+   Schrödinger's Sketcher: UI-6), a Spartan-style 3D model kit (atoms by hybridization, groups, rings,
+   PFAS fragments, geometry tools, minimize: UI-7), one undo/redo history for 2D and 3D, isomer/tautomer
+   generation, surfaces/slabs/boxes/packing.
 2. **Calculate (molecular):** one job dialog built around a *level of theory* and a *task* (see below).
    Presets plus an Advanced section. Conformer distributions, frequencies, constraints/scans,
    transition states.
@@ -50,6 +52,25 @@ Library workspace and the project document (UI-2) build on this.
 - A properties inspector: click an atom or bond to see its details.
 - One **Appearance** panel for style, labels, colors, hydrogens, H-bonds and R/S labels.
 
+## Structure input (plan 2026-11-07)
+
+Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and the GUI agree:
+
+- **Text and files (UI-4).** The Molecules box takes SMILES, InChI, InChIKey, names and CAS. File > Open
+  reads SDF/MOL, MOL2, PDB, XYZ, SMILES and InChI lists, tables, ChemDraw CDX/CDXML, Marvin MRV, CML, CIF
+  and Gaussian/ORCA inputs, and anything else Open Babel reads when the user has it installed. An Import
+  Options dialog modeled on Spartan's (2D → 3D, grow hydrogens, post SD fields to the table, filters for
+  water, HCl and counter-ions, atom label order) is shown when a file has choices. Ctrl+V pastes from
+  ChemDraw and other editors; Copy as SMILES / MOL / CDXML goes back.
+- **2D sketcher (UI-6).** A mature open-source editor embedded in a dock (QtWebEngine), chosen by a
+  short spike between Ketcher (Apache-2.0) and Schrödinger's Sketcher (BSD-3, RDKit-based). It hands a
+  MOL block to the pipeline; the 3D view follows. Writing a ChemDraw-class editor from scratch is years
+  of work and not the goal.
+- **3D model kit (UI-7).** Built into the PyVista view, like Spartan's: pick an atom type with its
+  hybridization (or a group, ring or PFAS fragment) and click a free valence to attach it; set bond
+  lengths, angles and dihedrals; minimize with MMFF. Every edit is an undoable command on one edit model
+  shared with the sketcher.
+
 ## Job model: level of theory × task × resources
 
 - **Level of theory**, by family:
@@ -72,7 +93,8 @@ Library workspace and the project document (UI-2) build on this.
 ## Priorities
 
 - **Tier 1:** app shell (UI-1), project document (UI-2), spreadsheet/plots/formulas (UI-3), structure
-  editor + fragments + undo (UI-4), job dialog + monitor (UI-5), Simulate design (RES-1) then v1.
+  input: import formats and options (UI-4), 2D sketcher (UI-6) and 3D model kit (UI-7), job dialog +
+  monitor (UI-5), Simulate design (RES-1) then v1.
 - **Tier 2:** properties inspector, align/overlay, trajectory player synced with telemetry plots.
   (Done 2026-11-01: the Surfaces panel with ESP-mapped density and vdW/SAS surfaces, and the Spectra
   panel with experimental overlay and mode animation; both are docks that UI-1 will place into the

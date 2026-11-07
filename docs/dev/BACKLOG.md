@@ -48,15 +48,98 @@ Depends on: UI-1 (UI-2 nice to have).
 - Acceptance: tests for the evaluator (rejects attribute access/imports), fitting recovers known
   coefficients on synthetic data, GUI smoke screenshot.
 
-## UI-4: Structure editor with PFAS fragment palette and undo/redo · ready
-Depends on: UI-1.
-- Build workspace: 2D editing on the existing RDKit 2D view: change element, add/delete atom,
-  bond order cycle, formal charge ±, make/break bond, clean 2D; live 3D update with quick MMFF minimize.
-- **Fragment palette**: CF3, (CF2)n chain builder, ether O, carboxylate/carboxylic acid, sulfonate,
-  sulfonamide, fluorotelomer CH2CH2 linker, phosphate, common rings; attach at the selected atom.
-- **Undo/redo** (QUndoStack) for all edits, Ctrl+Z / Ctrl+Y.
-- Acceptance: tests that build PFOA, PFOS, GenX and 6:2 FTS from fragments and match canonical SMILES;
-  undo/redo round-trips; screenshot.
+## Structure input track (UI-4, UI-6, UI-7): plan 2026-11-07
+Brandon asked (2026-11-07) for a ChemDraw-like editor, or at least text → 3D, and Spartan-style import
+from many formats (his reference: Spartan's Model Kit and its SDF Import Options dialog). What exists
+today: the Molecules box takes SMILES, names and CAS (names and CAS through PubChem) and builds 3D in
+the pipeline; File > Open reads SDF/MOL, XYZ, PDB, SMILES lists and CSV/XLSX tables; File > Import
+calculation output reads cclib outputs and `.spartan` documents; the 2D view (RDKit SVG) and the 3D view
+(PyVista/VTK, select and move modes) display and pick but do not edit.
+- **Order:** UI-4 first (small, no GUI-shell dependency, most of the day-to-day value), then the UI-6
+  spike, then UI-6 and UI-7 in parallel. A full ChemDraw (publication drawing, reactions, text,
+  name ↔ structure, NMR prediction) is not the goal: the goal is getting structures into calculations.
+- **Facts checked 2026-11-07:** RDKit 2026.09 reads ChemDraw `.cdx` and `.cdxml` and writes CDXML
+  (`rdkit.Chem.rdChemDraw`), reads MOL2 and Marvin MRV, and InChI. Ketcher (EPAM, Apache-2.0, v3.18.0,
+  Sep 2026) has a standalone mode that runs in a browser with no server. Schrödinger's Sketcher
+  (BSD-3-Clause, built on RDKit and Qt 6, release v2026-4 on 2026-10-30) has a WebAssembly build.
+  Kekule.js is MIT. Open Babel is GPL-2.0, so it is only ever run as a separate program the user
+  installed, never bundled or imported. The embedded editors need QtWebEngine, which is in
+  `PySide6-Addons`, not the `PySide6-Essentials` QuantaBench depends on: an optional `[editor]` extra.
+
+## UI-4: Import from many formats, with Spartan-style import options · ready
+Depends on: none (goes into today's File menu and Molecules box; UI-1 later moves it into Build).
+- **Formats** (all through `chem.inputs.read_file`, so the CLI gets them too): SDF/MOL V2000 and V3000,
+  MOL2, PDB, XYZ (bonds by `rdDetermineBonds`), SMILES lists, CSV/XLSX, InChI lists (`.inchi`, one per
+  line), ChemDraw `.cdx` / `.cdxml` (RDKit), Marvin `.mrv`, CML (small reader, or Open Babel), CIF of
+  molecular crystals and Gaussian/ORCA inputs (`.gjf`, `.com`, `.inp`, through ASE, already a dependency;
+  molecules split by connectivity). The cclib outputs and `.spartan` reader stay under Import calculation
+  output, but File > Open should accept them too.
+- **Open Babel fallback:** when `obabel` is on PATH (or set in Settings > Engines), any other format it
+  reads is converted to SDF in a temporary file first. Report which reader was used.
+- **Import Options dialog** (shown when a file has choices; "Don't ask again" stores the choices in a new
+  `Settings.import_` section, editable in Settings):
+  - Fixup: *Convert 2D structures to 3D* (all z = 0, or a 2D flag in the MOL header → embed);
+    *Grow hydrogens* (add explicit H with coordinates); *Keep the file's 3D coordinates* as the first
+    conformer instead of re-embedding.
+  - Additional data: *Post SD / table fields to the molecule table* as columns (numbers parsed, units
+    kept in the header); choose the ID and name fields.
+  - Filters: remove water, remove HCl / HBr / small inorganic fragments, strip counter-ions (today's salt
+    stripping, now visible), keep the largest fragment; each removal reported per molecule.
+  - Labeling: atoms in read order (default, matches the file) or in a standard order (RDKit canonical
+    ranks), so atom numbers line up with another program's when needed.
+  - Several structures of one constitution in a file: separate molecules, or conformers of one molecule
+    (Spartan's documents work this way).
+- **Text box:** also accept InChI (`InChI=1S/...`, parsed locally) and InChIKey (PubChem).
+- **Clipboard and drag-and-drop:** Ctrl+V in the Molecules dock reads SMILES, InChI, MOL blocks and
+  CDXML text, and ChemDraw's own clipboard format (binary CDX; Windows "ChemDraw Interchange Format",
+  macOS `com.cambridgesoft.chemdraw.cdx`), so a structure copied in ChemDraw pastes as a molecule.
+  Edit > Copy as SMILES / MOL / CDXML goes the other way. Dropping files on the window opens them.
+- Acceptance: one small fixture per format (made by RDKit or written by hand, never from Brandon's data)
+  round-trips to the same canonical SMILES; the options each have a test (2D → 3D gives non-zero z,
+  filters drop water and HCl, SD fields become columns, standard vs read order); clipboard parsing
+  tested on recorded CDX/CDXML bytes; screenshot of the dialog. Mac and Windows clipboard checked by
+  hand (needs-Brandon for the ChemDraw copy, since only he has ChemDraw).
+
+## UI-6: 2D sketcher (embedded open-source editor) · ready (spike first)
+Depends on: UI-4 for the MOL/CDXML plumbing; the spike can start any time.
+- **Spike (1 to 2 days):** load Ketcher (standalone) and Schrödinger's Sketcher (WASM) in a
+  `QWebEngineView` dock and compare: MOL V3000 round trip through RDKit (charges, stereo, isotopes,
+  explicit H), PFAS drawing speed (long CF2 chains, sulfonates), templates (custom PFAS fragments),
+  start-up time, download size, offline use, Windows / macOS / Linux. Write up the result and the
+  choice in `docs/dev/` and the plan doc. Fallback if neither works: our own editor on the RDKit 2D
+  view (QGraphicsScene: change element, add/delete atom, bond order cycle, charge ±, clean 2D).
+- **Integration:** a Sketch dock in Build. "New" opens a blank canvas; "Edit" loads the selected
+  molecule. *Add to list* and *Replace selected* hand a MOL V3000 block to `chem.inputs`, which builds 3D
+  as usual; the 3D view updates, keeping the coordinates of unchanged atoms where it can (RDKit
+  `coordMap` embedding). Structure problems (valence, unknown atoms) are reported before the hand-off.
+- **PFAS fragment templates:** CF3, (CF2)n chain builder, ether O, carboxylic acid / carboxylate,
+  sulfonic acid / sulfonate, sulfonamide, fluorotelomer CH2CH2 linker, phosphate, common rings.
+- **Packaging:** the editor's files are downloaded on first use into the programs folder, pinned by
+  sha256 (like the CREST and tblite builds), with their licence and NOTICE files; nothing large goes in
+  the repository. `pip install quantabench[editor]` adds PySide6-Addons; without it the dock says what to
+  install and everything else still works.
+- Acceptance: tests that drive the editor through its JavaScript API (draw PFOA, PFOS, GenX and 6:2 FTS
+  from SMILES and templates; the hand-off matches canonical SMILES); works offline; screenshots on
+  Windows and macOS.
+
+## UI-7: 3D model kit (Spartan-style builder in the 3D view) · ready
+Depends on: none to start (the 3D view exists); UI-1 places it in Build.
+- **Build mode** in the PyVista view (next to select and move): a palette of atom types with their
+  hybridization, as in Spartan's Organic tab (C sp3 / sp2 / sp, N sp3 / sp2 / sp, O, S, P, Si, H, F, Cl,
+  Br, I, =O, =S, ≡N). Free valences are drawn as short stubs; clicking a stub attaches the chosen atom at
+  its ideal bond length and direction (VSEPR geometry from the hybridization). Clicking an atom with a
+  type selected replaces it.
+- **Groups and rings:** carboxylic acid / carboxylate, sulfonate, sulfonamide, CF3, ester, amide,
+  nitro, phosphate; benzene, cyclohexane (chair), pyridine, five-membered rings; the PFAS fragments from
+  UI-6 (shared definitions). Buttons for *SMILES*, *InChI* and *Clipboard* add a fragment from text.
+- **Edit tools:** delete atom/fragment, change bond order, formal charge ±, make/break bond, measure and
+  set distance / angle / dihedral (dragging a dihedral rotates the smaller side), and *Minimize* (MMFF94,
+  UFF fallback, with chosen atoms frozen). A quick local relax runs after each edit.
+- **One edit model** for 2D and 3D: `chem/edit.py`, an RDKit RWMol plus coordinates where every change
+  is an undoable command; QUndoStack, Ctrl+Z / Ctrl+Y.
+- Acceptance: tests that build PFOA, PFOS, GenX and 6:2 FTS with model-kit operations (no GUI clicks
+  needed: the commands are plain functions) and match canonical SMILES; bond lengths within 0.05 Å of
+  MMFF after Minimize; undo/redo round-trips; screenshot.
 
 ## UI-5: Job dialog (level of theory × task × resources) and job monitor · ready
 Depends on: UI-1.
