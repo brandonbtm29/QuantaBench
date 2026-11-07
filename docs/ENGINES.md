@@ -456,9 +456,58 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   - Other machines keep 2-thread lanes on all threads: NOVA (24 threads, 23 used) gets 11 x 2. There the layout
     mattered little: 4 large ions took 756 s as 1 x 23 and 769 s as 4 x 5.
   - Lanes are planned once per run, not per stage. The refinement and properties after CREST (tblite, xtb)
-    run in the same lanes, with the same threads.
+    run in the same lanes, with the same threads. Only the CREST call itself can run wider (next bullet).
   - Every parallel run starts its largest molecules first (atoms with hydrogens), so no lane is left alone
     with a large molecule at the end. Molecules that crashed a lane still go last.
+- **Dynamic CREST threads (since 2026-11-07, on by default).** A CREST search may also use the threads of idle
+  lanes (`dist/threads.py`). Turn it off with `build --no-dynamic-threads` or Settings > Compute "Dynamic CREST
+  threads".
+  - How: a running CREST cannot change its thread count, but each CREST call is a new program. The parent of
+    the run owns the CPU lanes' threads. When it hands a lane a molecule it also sets that molecule's CREST
+    `-T`: the lane's own threads, or whole lanes' worth more from idle lanes. The borrowed threads go back
+    when the search ends; the refinement and properties after it run on the lane's own threads. A lane starts
+    a molecule only when its own threads are free, so the threads in use never exceed the plan's. A run with
+    fewer molecules than lanes lends the threads of the unused lanes; a run of one molecule gives its search
+    all of them. The log says what happened: `[cpu1] 54950-05-9: CREST with 8 threads (borrowed 4 from idle
+    lanes)`, and at the end how many searches borrowed threads.
+  - Rule: a molecule is widened only when it would set the end of the batch on its own. Its predicted CREST
+    time on its lane must be more than twice the rest of the work spread over the other threads. Then it takes
+    the width that predicts the earliest end, in whole lanes, and a wider width only if it predicts an end at
+    least 10 % earlier. The factor 2 covers the size model's scatter: without it, a molecule that only looks
+    large could take lanes from the real straggler (up to 1.3x slower in the simulation).
+  - Cost model, fitted to the Mac's five GFN-FF gas runs of the 20 PFAS (2, 4 and 13 threads): CREST time grows
+    as atoms^3.9 (atoms with hydrogens; GFN2: atoms^4.5, from the molecules that finished), with a scatter of
+    x1.8 per molecule (sampling and flexibility). Speedup per molecule: 2 -> 4 threads 1.86x, 4 -> 13 threads
+    1.74x. NOVA (WSL), 54950-05-9: 2 -> 5 threads 1.67x, 5 -> 23 threads 1.89x. The rule uses atoms^4 and a
+    speedup of (threads / lane threads)^0.6.
+  - Simulated (a discrete-event model of the batch, with the measured CREST and refinement times):
+
+    | Batch | Mac, 3 x 4 | NOVA, 11 x 2 |
+    |---|---|---|
+    | 20 PFAS, GFN-FF gas | 942 s, unchanged | 1,244 -> 819 s |
+    | 20 PFAS, GFN2 gas (3 h limits extrapolated) | unchanged | not simulated |
+    | 54950-05-9 + 61119-62-8 | 822 -> 622 s | not simulated |
+    | the 4 large ions | not simulated | 1,244 -> 520 s |
+    | 2,000 or 13,711 molecules with the PFAS list's sizes | unchanged | unchanged |
+
+    In a large batch every lane is busy until the queue is nearly empty, so nothing is widened. With the CREST
+    times scattered x1.8 around the size model, no simulated batch was slower than with fixed lanes.
+  - Measured on the Mac (2026-11-07, GFN-FF gas, `--lanes auto` = 3 x 4, `mac-fixed/crest-gfnff-dyn-*` and
+    `-fixed-2mol*`; Mail, Excel and a browser open, load average 8-20):
+
+    | Batch | dynamic threads | fixed lanes |
+    |---|---|---|
+    | 20 PFAS | 842 s, nothing widened | 942 s (earlier run) |
+    | 54950-05-9 + 61119-62-8, run 1 | 585 s | 1,309 s |
+    | the same, run 2 | 555 s | 1,096 s |
+
+    In the pairs, 54950-05-9's CREST took 466 and 325 s on 8 threads and 1,283 and 1,060 s on 4; with dynamic
+    threads 61119-62-8 (on 4 threads, 519-551 s) set the end instead. Part of the 2x is sampling: CREST's own work for 54950-05-9
+    varies run to run (2,200-4,600 CPU-seconds over six runs; on 4 threads it took 634 s and 775 s in the 3 x 4
+    batches). Per unit of work, 8 threads kept 6.7 cores busy against 3.6 for 4 threads, a 1.86x speedup
+    (the rule assumes 1.5x). The 20 PFAS differ from the earlier run by sampling and load only.
+  - Not widened: in-process steps (tblite refinement stays on the lane's threads), the xtb program and Psi4
+    (their thread count would be chosen in the middle of a molecule).
 
 ## tblite (`tblite-gfn2`, `tblite-gfn1`)
 

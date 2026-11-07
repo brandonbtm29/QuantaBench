@@ -996,8 +996,16 @@ the code, but three things never arrived through it.
       (`hw.perflevel0.physicalcpu`), so 3 x 4 on the M3 Max. Other machines keep 2-thread lanes on all threads:
       on NOVA's 24 threads the code plans 11 x 2. The docs' "20 x 2" for NOVA's 2026-11-06 run does not match
       that; check that run's log. Every parallel run now starts its largest molecules first.
-    - Not done: a running CREST cannot take more threads when other lanes go idle; largest-first is the cheap
-      version of that.
+    - Done 2026-11-07 (branch `feat/dynamic-threads`): dynamic CREST threads. A running CREST cannot take more
+      threads, but each CREST call's `-T` is set when it starts: a molecule that would set the end of the batch
+      on its own gets whole lanes' worth of idle threads, and a run with fewer molecules than lanes lends the
+      unused lanes' threads (docs/ENGINES.md, CREST). Simulated: no change for the Mac's 3 x 4 on the 20 PFAS or
+      for large batches; NOVA's 11 x 2 on the 20 PFAS 1,244 -> 819 s. Measured on the Mac: the 20 PFAS 842 s
+      (nothing widened); two large PFAS 585 and 555 s vs 1,309 and 1,096 s (part of it CREST's sampling).
+    - Left: time it on NOVA (11 x 2, where the simulation predicts the gain; NOVA was busy with DFT on
+      2026-11-07). Widening for the time limit (the GFN2 failures: 54950-05-9 needs about 3.7 h on 4 threads)
+      needs the cost model in seconds before the first CREST call ends. The xtb program and Psi4 could borrow
+      threads the same way, but their thread count is set mid-molecule, so the lane would have to ask the parent.
     - Re-timed 2026-11-07 after the merge: `--lanes auto` gave 3 x 4 and started 54950-05-9 first; GFN-FF gas
       took 942 s (20/20), 3.3x faster than the old auto plan (the earlier hand-set 3 x 4 run: 773 s; sampling
       and the Mac's other load vary). Left: one GFN2 batch with the new plan.
