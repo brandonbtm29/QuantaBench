@@ -412,7 +412,7 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   `--tautomerize`.
 - **The 20-molecule benchmark again, with the fork build** (2026-11-06, `Runs/crest-2026-11-06/mac-fixed`; the
   first run's flags `--method tblite-gfn2 --window 6 --refine-top 5 --no-protonate`, `--lanes auto` = 6 lanes x 2
-  threads; against NOVA's WSL, conda-forge's linux-64 3.0.2 with 20 lanes x 2 threads):
+  threads; against NOVA's WSL, conda-forge's linux-64 3.0.2 with 11 lanes x 2 threads):
 
   | GFN-FF | Mac, fork build | NOVA, WSL |
   |---|---|---|
@@ -441,7 +441,7 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     |---|---|---|---|---|
     | wall | 1,727 s | **773 s** | 1,457 s | 3,108 s |
 
-    3 x 4 is 4.0x faster than the auto plan of the time and faster than NOVA's WSL run (1,247 s, 20 x 2). Two
+    3 x 4 is 4.0x faster than the auto plan of the time and faster than NOVA's WSL run (1,247 s, 11 x 2). Two
     threads per lane leave the largest molecule as the last one running, on 2 threads; 12 threads on one molecule
     scale poorly. One run each, so the ranking is clear but the exact factors are not.
   - Re-timed with the new auto plan (3 x 4, largest first; 2026-11-07 afternoon, `crest-gfnff-auto-new`):

@@ -994,8 +994,9 @@ the code, but three things never arrived through it.
     **3 x 4 773 s**, 5 x 2 1,457 s, auto 6 x 2 3,108 s.
     - Done: on Apple Silicon the CREST auto plan is 4 threads per lane, one lane per 4 performance cores
       (`hw.perflevel0.physicalcpu`), so 3 x 4 on the M3 Max. Other machines keep 2-thread lanes on all threads:
-      on NOVA's 24 threads the code plans 11 x 2. The docs' "20 x 2" for NOVA's 2026-11-06 run does not match
-      that; check that run's log. Every parallel run now starts its largest molecules first.
+      on NOVA's 24 threads the code plans 11 x 2. NOVA's 2026-11-06 run was 11 x 2 too (its job table: 11
+      molecules started at once), not "20 x 2" as the docs said; fixed. Every parallel run now starts its largest
+      molecules first.
     - Done 2026-11-07 (branch `feat/dynamic-threads`): dynamic CREST threads. A running CREST cannot take more
       threads, but each CREST call's `-T` is set when it starts: a molecule that would set the end of the batch
       on its own gets whole lanes' worth of idle threads, and a run with fewer molecules than lanes lends the
