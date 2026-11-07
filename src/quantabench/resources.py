@@ -53,14 +53,20 @@ class HardwareReport:
     gpus: list[GPUInfo] = field(default_factory=list)
     optional_packages: dict[str, bool] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    performance_cores: int = 0    # Apple Silicon's performance cores (``performance_cores()``); 0 = none known
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     def summary(self) -> str:
         gpu = ", ".join(f"{g.name} ({g.total_memory_gb:.0f} GB, {g.backend.upper()})" for g in self.gpus) or "none usable"
-        return (f"{self.cpu_name}: {self.physical_cores} cores / {self.logical_cores} threads, "
+        return (f"{self.cpu_name}: {self.cores_text()} / {self.logical_cores} threads, "
                 f"{self.ram_gb:.0f} GB RAM | GPU: {gpu}")
+
+    def cores_text(self) -> str:
+        """'14 cores (10 performance)' on Apple Silicon, '12 cores' elsewhere."""
+        perf = int(self.performance_cores or 0)
+        return f"{self.physical_cores} cores" + (f" ({perf} performance)" if 0 < perf < self.physical_cores else "")
 
 
 OPTIONAL_PACKAGES = ("torch", "aimnet", "dxtb", "tad_libcint", "dimorphite_dl", "ovito", "openmm", "torch_sim",
@@ -168,6 +174,47 @@ def logical_cores() -> int:
 
 def physical_cores() -> int:
     return psutil.cpu_count(logical=False) or max(1, logical_cores() // 2)
+
+
+def _os_arch() -> tuple[str, str]:
+    """(sys.platform, platform.machine()); a function so tests can fake another machine."""
+    return sys.platform, platform.machine().lower()
+
+
+def _sysctl_int(name: str) -> int | None:
+    """An integer sysctl value on macOS (``sysctl -n NAME``), None when it cannot be read."""
+    import shutil
+    import subprocess
+
+    exe = shutil.which("sysctl") or "/usr/sbin/sysctl"
+    try:
+        out = subprocess.run([exe, "-n", name], capture_output=True, text=True, timeout=5, check=False)  # noqa: S603
+        return int(out.stdout.strip()) if out.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+_perf_cores: int | None = None     # performance_cores(), detected once
+
+
+def performance_cores() -> int:
+    """Performance cores of a CPU that has performance and efficiency cores; 0 where none are known.
+
+    Apple Silicon: ``hw.perflevel0.physicalcpu`` (the M3 Max: 10, next to ``hw.perflevel1.physicalcpu`` = 4
+    efficiency cores), or the physical cores when that cannot be read. Intel Macs have no perflevel sysctls.
+    Elsewhere 0: plans then use the physical cores. Only the CREST lane plan uses it (``dist.lanes.plan_auto``);
+    hybrid Intel CPUs (P and E cores) are not told apart yet."""
+    global _perf_cores
+    if _perf_cores is not None:
+        return _perf_cores
+    system, machine = _os_arch()
+    n = 0
+    if system == "darwin":
+        n = _sysctl_int("hw.perflevel0.physicalcpu") or 0     # works under Rosetta too
+        if n <= 0 and machine in ("arm64", "aarch64"):
+            n = physical_cores()
+    _perf_cores = max(0, int(n))
+    return _perf_cores
 
 
 def resolve_threads(requested: int) -> int:
@@ -323,6 +370,7 @@ def detect() -> HardwareReport:
         torch_backend=backend,
         gpus=gpus,
         optional_packages={p: has_package(p) for p in OPTIONAL_PACKAGES},
+        performance_cores=performance_cores(),
     )
     if backend == "none":
         rep.notes.append("PyTorch is not installed: ML potentials and xTB are unavailable; MMFF still works. "
@@ -351,7 +399,7 @@ def detect_light(note: str = "") -> HardwareReport:
         os=f"{platform.system()} {platform.release()}", python=platform.python_version(), cpu_name=cpu_name(),
         physical_cores=physical_cores(), logical_cores=logical_cores(), ram_gb=psutil.virtual_memory().total / 1024**3,
         wsl=is_wsl(), torch_version=version, torch_backend="unknown" if version else "none",
-        optional_packages={p: has_package(p) for p in OPTIONAL_PACKAGES})
+        optional_packages={p: has_package(p) for p in OPTIONAL_PACKAGES}, performance_cores=performance_cores())
     if note:
         rep.notes.append(note)
     return rep

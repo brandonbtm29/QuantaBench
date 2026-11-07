@@ -36,11 +36,25 @@ def inputs(mols=MOLS):
     return [from_smiles(s, id=i) for i, s in mols]
 
 
-def report(physical=12, logical=24, ram=64.0, gpus=0, backend="rocm"):
+def report(physical=12, logical=24, ram=64.0, gpus=0, backend="rocm", perf=0):
     gpu_list = [resources.GPUInfo(i, "Radeon RX 9060 XT", backend, 16.0) for i in range(gpus)]
     return resources.HardwareReport(os="test", python="3.12", cpu_name="test", physical_cores=physical,
                                     logical_cores=logical, ram_gb=ram, wsl=False, torch_version="2.9",
-                                    torch_backend=backend if gpus else "cpu", gpus=gpu_list)
+                                    torch_backend=backend if gpus else "cpu", gpus=gpu_list, performance_cores=perf)
+
+
+#: The MacBook: M3 Max, 10 performance + 4 efficiency cores, no SMT
+M3_MAX = dict(physical=14, logical=14, ram=36.0, perf=10)
+
+
+def fake_mac(monkeypatch, perf_level0=10, physical=14, machine="arm64"):
+    """This machine is a Mac (sysctl answers hw.perflevel0.physicalcpu with ``perf_level0``, None = unreadable)."""
+    monkeypatch.setattr(resources, "_perf_cores", None)              # detected again, restored after the test
+    monkeypatch.setattr(resources, "_os_arch", lambda: ("darwin", machine))
+    monkeypatch.setattr(resources, "_sysctl_int",
+                        lambda name: perf_level0 if name == "hw.perflevel0.physicalcpu" else None)
+    monkeypatch.setattr(resources, "logical_cores", lambda: physical)
+    monkeypatch.setattr(resources, "physical_cores", lambda: physical)
 
 
 @pytest.fixture
@@ -107,7 +121,8 @@ def test_parse_explicit_lists(cores):
 
 
 @pytest.mark.parametrize("hw", [report(), report(gpus=1), report(physical=4, logical=8, ram=8), report(1, 2, 7),
-                                report(physical=16, logical=16, ram=4.0, gpus=1)])
+                                report(physical=16, logical=16, ram=4.0, gpus=1), report(**M3_MAX),
+                                report(**M3_MAX, gpus=1, backend="mps"), report(8, 8, 16.0, perf=4)])
 @pytest.mark.parametrize("threads", [0, 1, 3, 12])
 @pytest.mark.parametrize("method,extra", [("mmff", {}), ("tblite-gfn2", {}), ("gfn1-xtb", {}),
                                           ("gfn1-xtb", {"qm_method": "b3lyp/def2-svp"}),
@@ -169,6 +184,78 @@ def test_auto_plans(cores, monkeypatch):
     assert "6 CPU lanes" in L.plan_text("6", pipeline.BuildConfig(threads=12))
 
 
+def crest_cfg(**kw):
+    return pipeline.BuildConfig(**{"method": "tblite-gfn2", "threads": 0, "conformer_search": "crest", **kw})
+
+
+def test_crest_auto_plan_on_apple_silicon(monkeypatch):
+    """CREST on the M3 Max (10 performance + 4 efficiency cores): 3 lanes x 4 threads (measured 4x faster than
+    the 6 x 2 of the 2-thread rule). The rule follows the thread setting and leaves other engines alone."""
+    monkeypatch.setattr(resources, "logical_cores", lambda: 14)       # resolve_threads(0) = 13
+    mac = report(**M3_MAX)
+    lanes, reason = L.plan_auto(crest_cfg(), mac)
+    assert lanes == [Lane(f"cpu{i}", "cpu", 4) for i in (1, 2, 3)], reason
+    assert "4-thread lanes" in reason and "10 performance cores" in reason
+    assert L.plan_auto(crest_cfg(threads=8), mac)[0] == [Lane("cpu1", "cpu", 4), Lane("cpu2", "cpu", 4)]
+    assert L.plan_auto(crest_cfg(threads=3), mac)[0] == [Lane("main", "auto", 3)]        # room for one lane
+    # 4 performance cores (M1): one lane, all the threads
+    assert L.plan_auto(crest_cfg(threads=7), report(8, 8, 16.0, perf=4))[0] == [Lane("main", "auto", 7)]
+    # an xtb engine with CREST conformers is planned for CREST too; without CREST nothing changes
+    assert L.plan_auto(crest_cfg(method="xtb-gfn2"), mac)[0] == lanes
+    tb = L.plan_auto(crest_cfg(conformer_search="rdkit"), mac)[0]
+    assert tb == [Lane(f"cpu{i}", "cpu", 1) for i in range(1, 14)]                   # one lane per core
+    assert L.plan_auto(pipeline.BuildConfig(method="xtb-gfn2", threads=0), mac)[0] == \
+        [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]                              # external: 2-thread rule
+    # parallel_molecules (Compute settings) still fixes the number of lanes
+    assert len(L.plan_auto(crest_cfg(), mac, parallel_molecules=6)[0]) == 6
+
+
+def test_crest_auto_plan_elsewhere_keeps_the_two_thread_rule(monkeypatch):
+    """A 12-core/24-thread x86 machine (NOVA) knows no performance cores: CREST keeps 2-thread lanes on all
+    threads (23 threads: 11 x 2). On NOVA's WSL the layout mattered little (1 x 23 756 s, 4 x 5 769 s)."""
+    monkeypatch.setattr(resources, "logical_cores", lambda: 24)
+    lanes, reason = L.plan_auto(crest_cfg(), report())
+    assert lanes == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
+    assert reason.startswith("CREST: 2-thread lanes on all threads")
+    assert L.plan_auto(crest_cfg(threads=12), report())[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
+
+
+def test_crest_auto_plan_from_this_machines_cores(monkeypatch):
+    """plan_auto without a report reads this machine: sysctl's hw.perflevel0.physicalcpu on a Mac, the physical
+    cores when an Apple Silicon Mac cannot say, none on an Intel Mac or a PC (no sysctl call there)."""
+    fake_mac(monkeypatch)
+    assert resources.performance_cores() == 10 and L.cpu_report().performance_cores == 10
+    assert L.plan_auto(crest_cfg())[0] == [Lane(f"cpu{i}", "cpu", 4) for i in (1, 2, 3)]
+    assert L.parse_lanes("auto", crest_cfg()) == [Lane(f"cpu{i}", "cpu", 4) for i in (1, 2, 3)]
+    assert "3 CPU lanes (4 threads each) = 12 threads of 13" in L.plan_text("auto", crest_cfg())
+    # unknown performance cores: the physical cores (8 here, 8 threads: 2 x 4)
+    fake_mac(monkeypatch, perf_level0=None, physical=8)
+    assert resources.performance_cores() == 8
+    assert L.plan_auto(crest_cfg(threads=8))[0] == [Lane("cpu1", "cpu", 4), Lane("cpu2", "cpu", 4)]
+    fake_mac(monkeypatch, perf_level0=None, machine="x86_64")                       # Intel Mac
+    assert resources.performance_cores() == 0
+    monkeypatch.setattr(resources, "_perf_cores", None)
+    monkeypatch.setattr(resources, "_os_arch", lambda: ("linux", "x86_64"))
+
+    def no_sysctl(name):
+        raise AssertionError("sysctl asked on Linux")
+
+    monkeypatch.setattr(resources, "_sysctl_int", no_sysctl)
+    assert resources.performance_cores() == 0
+    monkeypatch.setattr(resources, "logical_cores", lambda: 24)
+    monkeypatch.setattr(resources, "physical_cores", lambda: 12)
+    lanes, reason = L.plan_auto(crest_cfg())       # this machine's RAM may cap the 11 lanes
+    assert {x.threads for x in lanes} == {2} and reason.startswith("CREST: 2-thread lanes on all threads")
+
+
+def test_dispatch_order_is_largest_first():
+    todo = [(i, None) for i in ("a", "b", "c", "d", "e")]
+    size = {"a": 5, "b": 30, "c": 12, "d": 30, "e": 40}
+    assert L.dispatch_order(todo, size.get) == [4, 1, 3, 2, 0]                 # e, then b and d in input order
+    assert L.dispatch_order(todo, size.get, {"e": 1, "a": 2}) == [1, 3, 2, 4, 0]   # crashed ones last
+    assert L.dispatch_order([], size.get) == []
+
+
 def test_windows_caps_lanes_at_31(monkeypatch):
     """Windows waits on at most 63 handles and a pool waits on two per lane: 32+ lanes would fail every wait."""
     monkeypatch.setattr(resources, "logical_cores", lambda: 64)
@@ -209,6 +296,19 @@ def test_two_lanes_give_the_same_results_as_one(tmp_path):
     assert sorted(p.name for p in (out / "TFE").iterdir()) == sorted(p.name for p in (tmp_path / "one" / "TFE").iterdir())
     assert not (out / jobs.LOCK_NAME).exists()
     assert jobs.open_run(out).counts["ok"] == 4
+    assert lane_processes() == []
+
+
+def test_lanes_start_the_largest_molecules_first(tmp_path):
+    """PFAS listed smallest first: the lanes get them largest first (the end of the batch is the short ones);
+    the results still come back in input order and progress counts up in dispatch order."""
+    c = cfg(tmp_path)
+    started = []
+    results, _ = jobs.run_resumable(inputs(PFAS), c, tmp_path / "run", lanes=L.parse_lanes("2", c),
+                                    progress=lambda i, n, stage, ident: stage == "start" and started.append((i, ident)))
+    assert [ident for _, ident in started] == ["PFHpA", "PFHxA", "PFPeA", "PFBA"]
+    assert [i for i, _ in started] == [0, 1, 2, 3]
+    assert [r.input.id for r in results] == [i for i, _ in PFAS] and all(r.status == "ok" for r in results)
     assert lane_processes() == []
 
 
