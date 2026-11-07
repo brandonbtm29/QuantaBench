@@ -10,6 +10,17 @@ _EXIT_STATUS = [0]
 HAS_DISPLAY = os.name == "nt" or sys.platform == "darwin" or bool(os.environ.get("DISPLAY"))
 
 
+def pytest_configure(config):
+    """The real-sketcher test (tests/test_gui_sketcher.py, QB_TEST_SKETCHER=1) runs in a child pytest with
+    QB_TEST_SKETCHER_CHILD=1: Qt WebEngine accepts the sketcher's URL scheme only before the first QApplication,
+    and its Chromium helper processes live as long as the process (the lane tests check that no child processes
+    are left). Every other run never loads Qt WebEngine."""
+    if os.environ.get("QB_TEST_SKETCHER_CHILD") == "1" and HAS_DISPLAY:
+        from quantabench.gui import sketcher_web
+
+        sketcher_web.prepare_before_app()
+
+
 def pytest_sessionfinish(session, exitstatus):
     _EXIT_STATUS[0] = int(exitstatus)
 

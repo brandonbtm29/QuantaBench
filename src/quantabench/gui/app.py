@@ -22,6 +22,10 @@ def main() -> int:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QMessageBox
 
+    from . import sketcher_web
+
+    # The Sketch dock's URL scheme (Qt WebEngine, optional) can only be registered before the QApplication exists
+    sketcher_web.prepare_before_app()
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("QuantaBench")
