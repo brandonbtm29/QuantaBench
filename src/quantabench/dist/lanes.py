@@ -42,6 +42,15 @@ How a parallel run works (``run_parallel``):
   unknown (no holding back). Only ready lanes (or lanes still starting for the first time) are counted on,
   so a fast lane that dies releases the held molecules at once; one that stalls, after about one slow-lane
   molecule. The first time lanes hold back, one log line says which and why.
+* dynamic CREST threads (``dist.threads``, on unless ``settings.resources.dynamic_threads`` or
+  ``build --no-dynamic-threads`` turns it off; CREST conformer searches on CPU lanes only): the parent owns the CPU
+  lanes' threads (with those of lanes left out because the run has fewer molecules than lanes) and, handing a
+  molecule to a lane, says how many threads its CREST call may use: its own, or whole lanes' worth more taken
+  from idle lanes when that is predicted to end the batch sooner ("[cpu1] 54950-05-9: CREST with 8 threads
+  (borrowed 4 from idle lanes)"). The borrowed threads go back at the molecule's next stage, all of them when the
+  molecule ends or its lane dies or is killed; a lane starts a molecule only when its own threads are free, so
+  the threads in use never exceed the budget. A run of one molecule on a plan of several lanes gives its CREST
+  search all of the plan's threads.
 * ``should_stop`` is polled by the parent and copied into a shared stop flag (``StopEvent``: Event semantics,
   no lock) that every lane's ``should_stop`` reads, so a cancel reaches the molecule running in each lane.
 * a lane that dies (segfault, OOM kill, ``os._exit``) is restarted. Its molecule's crash count goes up,
@@ -104,7 +113,8 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
   waits for its largest molecule (54 heavy atoms) on 2 threads while the other lanes are idle; one molecule on
   12 threads scales poorly. Elsewhere CREST keeps the 2-thread rule above: on NOVA (WSL CREST) the layout
   mattered little (4 large ions: 1 x 23 756 s, 4 x 5 769 s). Lanes are planned per run, not per stage: the
-  refinement and properties after CREST (tblite, xtb, ...) run in the same lanes with the same threads.
+  refinement and properties after CREST (tblite, xtb, ...) run in the same lanes with the same threads; only the
+  CREST call itself can run wider (dynamic threads, above).
 * a GPU-capable engine with a GPU: one GPU lane with 4 threads (RDKit embedding and the host side of the
   batch run on the CPU) plus CPU lanes on the remaining threads by the rules above, when this machine's
   benchmark (``machines --bench <method>``, registry keys ``<method>@<device>``, ``+water`` for a run in
@@ -658,6 +668,8 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
         conn.send((lane.name, *msg))
 
     try:
+        from dataclasses import replace
+
         from .. import resources
 
         threads = resources.apply_thread_limits(lane.threads)     # before the pipeline (and torch) loads
@@ -688,12 +700,15 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
             return
         if task is None:
             return
-        k, mol_id, text = task
+        k, mol_id, text, *more = task
+        # more[0]: threads the parent lends this molecule's CREST call (dist.threads); 0 = the lane's own
+        crest_threads = int(more[0]) if more and more[0] else 0
+        cfg_mol = replace(cfg, crest_threads=crest_threads) if crest_threads else cfg
         try:
             inp = jobs.input_from_json(text)
             if mol_id in crash_ids:
                 os._exit(TEST_CRASH_EXIT)
-            res = pipeline.run_molecule(inp, cfg, device, threads, stop_event.is_set,
+            res = pipeline.run_molecule(inp, cfg_mol, device, threads, stop_event.is_set,
                                         log=lambda m: send("log", m),
                                         stage=lambda s, k=k, mol_id=mol_id: send("stage", k, mol_id, s))
             t_end = time.monotonic() + delay
@@ -928,9 +943,27 @@ def dispatch_order(todo, size_of, crashes: dict[str, int] | None = None) -> list
     return sorted(range(len(todo)), key=lambda j: (crashes.get(todo[j][0], 0), -size_of(todo[j][0])))
 
 
+def dynamic_threads_for(cfg, lanes: list[Lane], enabled: bool | None = None, budget: int = 0) -> int:
+    """The thread budget of dynamic CREST threads (``dist.threads``) for a run of ``cfg`` on ``lanes``, 0 when they
+    are off: only for CREST conformer searches, on CPU lanes, when ``enabled`` (None: the setting) and the budget
+    (``budget``, at least the CPU lanes' threads) has room for two lanes' worth of the narrowest lane."""
+    from . import threads as threads_mod
+
+    cpu = [x.threads for x in lanes if x.device == "cpu"]
+    if not cpu or getattr(cfg, "conformer_search", "") != "crest":
+        return 0
+    if enabled is None:
+        enabled = threads_mod.setting()
+    if not enabled:
+        return 0
+    total = max(int(budget or 0), sum(cpu))
+    return total if total >= 2 * min(cpu) else 0
+
+
 def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, done_before: int,
                  progress, should_stop, log, on_result, keep_results: bool = True,
-                 speed_aware: bool | None = None, handoff=None) -> list:
+                 speed_aware: bool | None = None, handoff=None, dynamic_threads: bool | None = None,
+                 thread_budget: int = 0) -> list:
     """Run ``todo`` ([(id, MoleculeInput)], from ``JobStore.todo``) in ``lanes`` worker processes. The
     calling thread is the only one that writes ``store`` and calls the callbacks. Returns the results in
     ``todo`` order (molecules not started because of a cancel are absent).
@@ -938,6 +971,10 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     ``speed_aware`` (None: ``settings.resources.speed_aware_lanes``): near the end of the batch, a lane
     leaves the last molecules to clearly faster lanes when they would finish them first (``dist.speed``).
     Off, every free lane takes the next molecule.
+
+    ``dynamic_threads`` (None: ``settings.resources.dynamic_threads``): a CREST search may also use the threads of
+    idle CPU lanes (``dist.threads``), within ``thread_budget`` (the planned CPU lanes' threads, at least those
+    of ``lanes``).
 
     ``handoff`` (``jobs.Handoff``): molecules not started yet can be handed to another machine; they are
     taken from the end of the queue between dispatches and marked 'moved'."""
@@ -947,6 +984,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     from ..chem import pipeline as pipeline_mod
     from ..chem.pipeline import MoleculeResult
     from . import speed
+    from . import threads as threads_mod
 
     limit = max(0.0, float(getattr(cfg, "molecule_timeout_s", 0) or 0))
     cap = max_lanes()
@@ -987,6 +1025,18 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
 
     def typical_size() -> float:
         return sum(sizes.values()) / len(sizes) if sizes else speed.DEFAULT_SIZE
+
+    # dynamic CREST threads (dist.threads): this process owns the CPU lanes' thread budget
+    budget = dynamic_threads_for(cfg, lanes, dynamic_threads, thread_budget)
+    dyn = threads_mod.DynamicThreads(budget, lambda m: threads_mod.crest_cost(size_of(m))) if budget else None
+    if dyn is not None:
+        log(f"Dynamic threads: a CREST search may also use idle lanes' threads, in whole lanes, {budget} threads in "
+            "all (build --no-dynamic-threads turns it off)")
+
+    def threads_back(w: _LaneProcess) -> None:
+        """Every thread lane ``w``'s molecule held goes back to the budget (its molecule ended or was lost)."""
+        if dyn is not None:
+            dyn.finish(w.lane.name)
 
     # k: the dispatch position (progress counts in it), largest molecules first
     queue = deque((k, todo[j][0], todo[j][1]) for k, j in enumerate(dispatch_order(todo, size_of,
@@ -1036,6 +1086,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         left = pool.kill_programs(w)        # xtb/CREST/Psi4 runs in its own session and outlives the lane
         if left:
             log(f"[{w.lane.name}] stopped {left} external program(s) the lane left running")
+        threads_back(w)                     # its programs are gone: the threads it held are free again
         if w.busy is not None:
             k, mol_id, inp = w.busy
             w.busy = None
@@ -1081,6 +1132,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                 w.proc.close()
         w.proc = None
         left = pool.kill_programs(w)
+        threads_back(w)
         log(f"[{w.lane.name}] {mol_id}: {err} after {elapsed:.0f} s; lane killed"
             + (f" with {left} external program(s)" if left else "")
             + ("; restarting it" if queue and not stopping else "") + " (--retry-failed redoes the molecule)")
@@ -1111,10 +1163,19 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             _, _, k, mol_id, stage = msg
             if w.busy is not None and w.busy[1] == mol_id:
                 w.stage = stage
+                if dyn is not None:
+                    if stage == "conformers":
+                        dyn.crest_started(w.lane.name)
+                    elif stage not in ("start", "prepare"):       # past the conformer search: CREST has ended
+                        back, seconds = dyn.crest_done(w.lane.name)
+                        if back:
+                            log(f"[{w.lane.name}] {mol_id}: conformer search done in {seconds:.0f} s; "
+                                f"{back} borrowed thread(s) back")
             progress(done_before + k, total, stage, mol_id)
         elif kind == "result":
             _, _, k, mol_id, res, result_dir = msg
             w.busy = None
+            threads_back(w)
             if policy is not None:
                 policy.finished(w.lane.name, ok=res.status == "ok")
             finish(w, k, mol_id, res, result_dir)
@@ -1122,6 +1183,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             _, _, k, mol_id, tb = msg
             inp = inputs[mol_id]
             w.busy = None
+            threads_back(w)
             if policy is not None:
                 policy.finished(w.lane.name, ok=False)
             err = tb.strip().splitlines()[-1]
@@ -1153,6 +1215,9 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                 states, held = None, []
                 for w in pool.workers:
                     if queue and w.ready and w.busy is None and w.conn is not None and w.alive:
+                        shared = dyn is not None and w.lane.device == "cpu"
+                        if shared and not dyn.can_start(w.lane.threads):
+                            continue            # its threads are lent to a CREST search: wait until they are back
                         if policy is not None:
                             if states is None:
                                 states = {x.lane.name: lane_state(x) for x in pool.workers}
@@ -1160,13 +1225,20 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                                 held.append(w.lane.name)   # faster lanes finish the rest first: ask again later
                                 continue
                         k, mol_id, inp = queue.popleft()
+                        width = (dyn.width(w.lane.threads, mol_id, (m for _, m, _ in queue)) if shared
+                                 else w.lane.threads)
                         try:
-                            w.conn.send((k, mol_id, texts[mol_id]))
+                            w.conn.send((k, mol_id, texts[mol_id], width if width > w.lane.threads else 0))
                         except (OSError, ValueError):
                             # the lane died while idle (its end is handled below): the molecule never
                             # reached it, so it goes back to the front of the queue without a crash
                             queue.appendleft((k, mol_id, inp))
                             continue
+                        if shared:
+                            dyn.start(w.lane.name, w.lane.threads, width, mol_id)
+                            if width > w.lane.threads:
+                                log(f"[{w.lane.name}] {mol_id}: CREST with {width} threads (borrowed "
+                                    f"{width - w.lane.threads} from idle lanes)")
                         w.busy = (k, mol_id, inp)
                         w.busy_since, w.stage = time.monotonic(), ""
                         if policy is not None:
@@ -1177,6 +1249,9 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                     held_logged = True
                     log(policy.hold_message(held, len(queue), typical_size(), states))
             busy = any(w.busy is not None for w in pool.workers)
+            if dyn is not None and not busy and dyn.pool.in_use():
+                for name in list(dyn.pool.held):    # only a busy lane holds threads; never leave the others waiting
+                    dyn.finish(name)
             if not busy and (stopping or not queue):
                 break
             if not stopping and queue and all(w.retired for w in pool.workers):
@@ -1215,6 +1290,8 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         log("Molecules per lane: " + ", ".join(f"{name} {n}" for name, n in done.items()))
     if policy is not None and policy.done:
         log(policy.summary(typical_size()))
+    if dyn is not None:
+        log(dyn.summary())
     return [results[k] for k in sorted(results)]
 
 
@@ -1251,8 +1328,10 @@ def _cli(args) -> int:
         print(exc, file=sys.stderr)
         return 2
     aware = bool(getattr(s.resources, "speed_aware_lanes", True))
+    wide = dynamic_threads_for(cfg, lanes, bool(getattr(s.resources, "dynamic_threads", True)))
     if args.json:
-        print(json.dumps({"spec": spec, "lanes": [x.to_dict() for x in lanes], "speed_aware": aware}, indent=2))
+        print(json.dumps({"spec": spec, "lanes": [x.to_dict() for x in lanes], "speed_aware": aware,
+                          "dynamic_threads": wide}, indent=2))
     else:
         print(f"{spec}: {plan_text(spec, cfg, report, s.resources.parallel_molecules)}")
         for x in lanes:
@@ -1261,4 +1340,7 @@ def _cli(args) -> int:
             print("  end of a batch: " + ("slower lanes leave the last molecules to faster ones (speed-aware; "
                                           "build --no-speed-aware-lanes turns it off)" if aware else
                                           "every free lane takes the next molecule (speed-aware lanes off)"))
+        if wide:
+            print(f"  CREST: a search started while lanes are idle may use their threads, {wide} in all (dynamic "
+                  "threads; build --no-dynamic-threads turns it off)")
     return 0

@@ -314,7 +314,8 @@ def _build(args) -> int:
             results, out = jobs.run_resumable(items or None, cfg, run_dir, progress=_progress, log=print,
                                               retry_failed=args.retry_failed, chunk=chunk, force=args.force,
                                               lanes=lanes, keep_results=False,
-                                              speed_aware=args.speed_aware_lanes)
+                                              speed_aware=args.speed_aware_lanes,
+                                              dynamic_threads=args.dynamic_threads)
         except (jobs.ConfigMismatchError, jobs.RunInUseError) as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -956,6 +957,10 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--speed-aware-lanes", action=argparse.BooleanOptionalAction, default=None,
                    help="near the end of a batch, slower lanes leave the last molecules to clearly faster ones "
                         "(a GPU lane) when those finish them first; default from settings (on)")
+    b.add_argument("--dynamic-threads", action=argparse.BooleanOptionalAction, default=None,
+                   help="with --conformers crest and lanes: a CREST search may also use the threads of idle lanes "
+                        "(a large molecule at the end of a batch, a batch with fewer molecules than lanes); "
+                        "default from settings (on)")
     b.add_argument("--chunk-weights", metavar="SPEC",
                    help="weighted split: 3,1 (with --chunk K/N), name=weight pairs in any order (chunks are "
                         "the names sorted; this machine's is found by name), or auto (the machine registry's "

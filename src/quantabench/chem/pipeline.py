@@ -71,7 +71,10 @@ class BuildConfig:
     # CREST missing or failed: "rdkit" = RDKit ETKDGv3 + MMFF94s, flagged (note, conformer_fallback, counts at the
     # end of the batch) | "fail" = the molecule fails
     crest_fallback: str = "rdkit"
-    qm_method: str = ""                   # "functional/basis", e.g. "wb97x-d/def2-svp"; "" = no QM stage
+    # threads of this molecule's CREST call, 0 = the molecule's threads. Set per molecule by a parallel run that
+    # lends it the threads of idle lanes (dist.threads); not a setting
+    crest_threads: int = 0
+    qm_method: str = ""                 # "functional/basis", e.g. "wb97x-d/def2-svp"; "" = no QM stage
     qm_task: str = "energy"               # "energy" (single point) | "optimize"
     qm_top: int = 1                       # how many of the lowest conformers get the QM stage
     qm_properties: bool = True            # dipole, quadrupole, Mulliken/Lowdin/MBIS charges, orbital energies
@@ -584,7 +587,9 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
         if cfg.crest_fallback not in CREST_FALLBACKS:
             raise ValueError(f"crest_fallback must be one of {', '.join(CREST_FALLBACKS)}, not {cfg.crest_fallback!r}")
         try:
-            cs = crest.generate(prepared, cfg, threads=threads, solvent=result.solvent, charge=result.charge,
+            # cfg.crest_threads: the threads a parallel run lends this CREST call (dist.threads)
+            crest_threads = int(cfg.crest_threads) if int(cfg.crest_threads or 0) > 0 else threads
+            cs = crest.generate(prepared, cfg, threads=crest_threads, solvent=result.solvent, charge=result.charge,
                                 multiplicity=result.multiplicity, should_stop=should_stop, log=log)
             result.conformer_search = "crest"
             return cs
