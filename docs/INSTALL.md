@@ -456,7 +456,8 @@ program are in [ENGINES.md](ENGINES.md).
 | `ovito` | `ovito` | Embedded OVITO viewport |
 | `md` | `lammps` | LAMMPS Python module: `md smd --run` and quick checks of SMD setups |
 | `excel` | `openpyxl` | `.xlsx`/`.xlsm` input (CompTox dashboard exports) |
-| `all` | ml, xtb, protonate, md, excel, interop | |
+| `editor` | `PySide6` (its Qt WebEngine) | The Sketch dock: Schrödinger's 2D Sketcher, downloaded on first use (below) |
+| `all` | ml, xtb, protonate, md, excel, interop | (not `editor`: Qt WebEngine is a large download) |
 
 Notes on the new extras:
 
@@ -467,6 +468,24 @@ Notes on the new extras:
   QuantaBench only writes the input files and parses the outputs, so the extra is optional.
 - **`excel`.** openpyxl is pure Python. Legacy `.xls` files additionally need `xlrd`; otherwise save
   them as `.xlsx` or `.csv`.
+- **`editor`.** The Sketch dock (Build > Sketch a molecule...) runs
+  [Schrödinger's Sketcher](https://github.com/schrodinger/sketcher) (BSD-3-Clause) in Qt WebEngine.
+  QuantaBench needs only `PySide6-Essentials`; Qt WebEngine is in `PySide6-Addons` up to PySide6 6.11
+  and in `PySide6-WebEngine` from 6.12, and the `PySide6` package brings whichever its version has:
+
+  ```bash
+  pip install -e ".[editor]"            # in the checkout's .venv
+  quantabench-cli sketcher --install    # optional: fetch the editor now instead of on first use
+  ```
+
+  The editor itself (17.5 MB zip, release v2026-4) is downloaded the first time the dock opens, checked
+  against its pinned sha256 and unpacked into the programs folder (`~/Library/Application
+  Support/QuantaBench/programs` on macOS, `%LOCALAPPDATA%\QuantaBench\programs` on Windows,
+  `~/.local/share/QuantaBench/programs` on Linux), with Schrödinger's licence next to it. Offline, download
+  the zip by hand (the dock and `quantabench-cli sketcher` print the URL) and run
+  `quantabench-cli sketcher --install --from-zip FILE`, or put the zip into the programs folder.
+  `quantabench-cli sketcher --use DIR` (or `QUANTABENCH_SKETCHER_DIR`) points this machine at a self-built
+  version instead. `QUANTABENCH_NO_SKETCHER=1` keeps Qt WebEngine from loading at all.
 
 ## Settings in a synced folder
 

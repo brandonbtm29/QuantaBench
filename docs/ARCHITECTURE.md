@@ -64,9 +64,10 @@
 | `gui.viewer2d` | `MoleculeViewer2D`: RDKit SVG depiction in a `QGraphicsView`, full-index atom map, in-plane rotation, export. |
 | `gui.selection` | `SelectionModel` (ordered atom indices, `changed` signal), measurements, the shared accent color. |
 | `gui.spectra_panel`, `gui.surface_panel`, `gui.import_action` | Optional panels installed by `MainWindow._install_panels`; they follow `MainWindow.resultChanged` (and `displayChanged` for energy units). |
+| `gui.sketcher_dock`, `gui.sketcher_view`, `gui.sketcher_web` | The Sketch dock (UI-6): Schrödinger's Sketcher (WebAssembly) in a `QWebEngineView`, served from a `qb-sketcher://` URL scheme registered before the QApplication; buttons hand MOL V3000 to `chem.sketch` (RDKit checks, `MoleculeInput`). Qt WebEngine is optional and loaded only when the dock opens. `sketcher_assets` fetches the editor's files (pinned sha256) into the programs folder. |
 | `gui.surface_dialog`, `gui.settings_dialog`, `gui.workers` | Dialogs and `QThread` workers. |
 | `gui.energy_widgets` | `EnergySpinBox`: an energy input shown in the display unit and stored in a fixed one (the energy window in kcal/mol), returning the stored value exactly until it is edited. |
-| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`). |
+| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`); `sketcher` (`cli_sketcher`). |
 
 ## Key decisions
 

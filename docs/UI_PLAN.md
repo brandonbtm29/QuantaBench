@@ -62,10 +62,10 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
   Options dialog modeled on Spartan's (2D → 3D, grow hydrogens, post SD fields to the table, filters for
   water, HCl and counter-ions, atom label order) is shown when a file has choices. Ctrl+V pastes from
   ChemDraw and other editors; Copy as SMILES / MOL / CDXML goes back.
-- **2D sketcher (UI-6).** A mature open-source editor embedded in a dock (QtWebEngine), chosen by a
-  short spike between Ketcher (Apache-2.0) and Schrödinger's Sketcher (BSD-3, RDKit-based). It hands a
-  MOL block to the pipeline; the 3D view follows. Writing a ChemDraw-class editor from scratch is years
-  of work and not the goal.
+- **2D sketcher (UI-6).** A mature open-source editor embedded in a dock (QtWebEngine): Schrödinger's
+  Sketcher (BSD-3, RDKit-based), Brandon's choice on 2026-11-07 (Ketcher was the other candidate). It
+  hands a MOL block to the pipeline; the 3D view follows. Writing a ChemDraw-class editor from scratch is
+  years of work and not the goal.
 - **3D model kit (UI-7).** Built into the PyVista view, like Spartan's: pick an atom type with its
   hybridization (or a group, ring or PFAS fragment) and click a free valence to attach it; set bond
   lengths, angles and dihedrals; minimize with MMFF. Every edit is an undoable command on one edit model
