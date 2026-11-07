@@ -179,6 +179,14 @@ right-drag rotates the drawing in-plane, wheel zooms, double-click or F fits, `[
 `+` `-` zoom. Hydrogens are implicit by default (View > Hydrogens in 2D). Screenshot... saves the 3D
 view as PNG or the 2D structure as SVG/PNG.
 
+**Sketch dock** (Build > Sketch a molecule..., optional): draw a structure in
+[Schrödinger's 2D Sketcher](https://github.com/schrodinger/sketcher). **Add to list** adds it like a typed
+SMILES; **Replace selected** gives the selected molecule the new structure; **Edit selected** loads the
+selected molecule into the sketcher; **Insert fragment** adds a PFAS piece (CF3, a (CF2)n chain, acid head
+groups) that you join with a bond. Valence and other structure problems are reported before anything is
+added. It needs `pip install -e ".[editor]"`; the editor (17.5 MB) downloads the first time the dock opens
+([INSTALL.md](docs/INSTALL.md#optional-extras)).
+
 **Surface builder:** Build & Preview shows the slab in the 3D view; "Move adsorbate" switches to Move
 mode so you can orient the molecule by hand. Save and "Export LAMMPS SMD setup..." write the moved
 coordinates.
@@ -233,8 +241,8 @@ multi-machine plan, and the packages that need upstream fixes or forks.
 [dxtb](https://github.com/grimme-lab/dxtb) · [AIMNet2](https://github.com/isayevlab/aimnetcentral) ·
 [xtb](https://github.com/grimme-lab/xtb) · [CREST](https://github.com/crest-lab/crest) · [tblite](https://github.com/tblite/tblite) ·
 [MOPAC](https://github.com/openmopac/mopac) · [Psi4](https://psicode.org) · [cclib](https://cclib.github.io) · [pyqtgraph](https://www.pyqtgraph.org) ·
-[PySide6](https://doc.qt.io/qtforpython-6/) · [PyVista](https://pyvista.org) · optional [OVITO](https://www.ovito.org) and
-[LAMMPS](https://www.lammps.org)
+[PySide6](https://doc.qt.io/qtforpython-6/) · [PyVista](https://pyvista.org) · optional [OVITO](https://www.ovito.org),
+[LAMMPS](https://www.lammps.org) and [Schrödinger's Sketcher](https://github.com/schrodinger/sketcher)
 
 Please cite the underlying methods and programs (GFN-xTB, GFN-FF, CREST, PM7, Psi4, AIMNet2, ETKDG,
 MMFF94) when you publish results.
@@ -242,3 +250,8 @@ MMFF94) when you publish results.
 ## License
 
 MIT. See [LICENSE](LICENSE). Model weights downloaded at run time carry their own licenses.
+
+Third-party code downloaded at run time keeps its own license too: the optional Sketch dock's editor,
+Schrödinger's Sketcher, is BSD-3-Clause ("Copyright (c) 2024, Schrodinger, LLC"; copy in
+[src/quantabench/licenses](src/quantabench/licenses/schrodinger-sketcher-LICENSE.txt), and written next to the
+downloaded files). Its download also holds Qt for WebAssembly files under Qt's licenses and RDKit (BSD-3).

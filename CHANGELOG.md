@@ -77,6 +77,23 @@
   a paste.
 - Needs a hand check: copying from real ChemDraw on Windows and macOS (only Brandon has ChemDraw).
 
+### 2D sketcher: Schrödinger's Sketcher in a Sketch dock (UI-6, 2026-11-07)
+- **Sketch dock** (Build > Sketch a molecule..., View > Sketch): Schrödinger's 2D Sketcher (BSD-3-Clause,
+  WebAssembly build of release v2026-4) in Qt WebEngine. New, Edit selected, Add to list, Replace selected
+  (keeps the id, name and place in the list) and Insert fragment (CF3, (CF2)n, COOH, COO-, SO3H, SO3-, SO2NH2,
+  CH2CH2, ether O, phosphate). The drawing goes over as MOL V3000 and is checked with RDKit first
+  (`chem/sketch.py`): valence, aromatic rings that cannot be kekulized and query atoms are reported in words.
+- **Optional:** `pip install -e ".[editor]"` adds Qt WebEngine (the `PySide6` package). Without it the dock says
+  what to install and nothing else changes. `QUANTABENCH_NO_SKETCHER=1` keeps Qt WebEngine from loading.
+- **The editor's files are downloaded on first use** (17.5 MB, `sketcher_assets.py`) into the programs folder,
+  checked against a pinned sha256, unpacked, with Schrödinger's licence next to them; nothing large is in the
+  repository. `quantabench-cli sketcher --install [--from-zip FILE]` fetches them ahead of time or offline;
+  `--use DIR` or `QUANTABENCH_SKETCHER_DIR` points at a self-built version. `doctor` shows the state.
+- **How the page is served** (`gui/sketcher_web.py`, `gui/sketcher_view.py`): a custom `qb-sketcher://` scheme
+  registered before the QApplication (`gui/app.py`), no local server. The view draws with Qt Quick's software
+  renderer, because Qt's GPU composition and VTK's OpenGL 3D view spoiled each other under Linux/Mesa
+  (`QUANTABENCH_SKETCHER_GPU=1` turns it back on to try).
+
 ### CREST on the Mac, loud CREST failures, engine paths per machine (2026-11-06)
 - **Why the Mac's CREST failed.** conda-forge's osx-arm64 `crest 3.0.2` links Apple's Accelerate, whose classic
   BLAS returns a double from `sdot` (f2c convention). ANCOPT's Davidson step (19+ atoms) then fails, so every

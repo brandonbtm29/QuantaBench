@@ -129,14 +129,49 @@ Depends on: none (goes into today's File menu and Molecules box; UI-1 later move
   tested on recorded CDX/CDXML bytes; screenshot of the dialog. Mac and Windows clipboard checked by
   hand (needs-Brandon for the ChemDraw copy, since only he has ChemDraw).
 
-## UI-6: 2D sketcher (embedded open-source editor) · ready (spike first)
+## UI-6: 2D sketcher (embedded open-source editor) · done on Linux; Windows/macOS check needs-Brandon
 Depends on: UI-4 for the MOL/CDXML plumbing; the spike can start any time.
-- **Spike (1 to 2 days):** load Ketcher (standalone) and Schrödinger's Sketcher (WASM) in a
-  `QWebEngineView` dock and compare: MOL V3000 round trip through RDKit (charges, stereo, isotopes,
-  explicit H), PFAS drawing speed (long CF2 chains, sulfonates), templates (custom PFAS fragments),
-  start-up time, download size, offline use, Windows / macOS / Linux. Write up the result and the
-  choice in `docs/dev/` and the plan doc. Fallback if neither works: our own editor on the RDKit 2D
-  view (QGraphicsScene: change element, add/delete atom, bond order cycle, charge ±, clean 2D).
+- **Choice (Brandon, 2026-11-07): Schrödinger's Sketcher**, so no Ketcher spike. WebAssembly build of
+  release `v2026-4` (BSD-3-Clause, built on RDKit and Qt 6), in a `QWebEngineView`.
+- **Done (branch `feat/sketcher`, 2026-11-07):**
+  - Files: `sketcher_assets.py` downloads `sketcher-2026-4-wasm.zip` (17.5 MB) on first use into the programs
+    folder (`.../QuantaBench/programs/schrodinger-sketcher-2026-4-wasm/`), checks the pinned sha256, unpacks
+    it and writes Schrödinger's licence next to it (copy in `src/quantabench/licenses/`). Offline: the error
+    gives the URL and `quantabench-cli sketcher --install --from-zip FILE`. Overrides for a self-built
+    version: `QUANTABENCH_SKETCHER_DIR`, or `quantabench-cli sketcher --use DIR` (this machine only).
+  - Serving (`gui/sketcher_web.py`, `gui/sketcher_view.py`): a custom scheme `qb-sketcher://app/`
+    registered before the QApplication (`gui/app.py`), not a local HTTP server. It needs the
+    `FetchApiAllowed` flag (Emscripten fetches the wasm). No COOP/COEP: the build has no threads.
+    `.wasm` goes out as `application/wasm`. The view uses Qt Quick's software renderer: with Qt's
+    default GPU composition the web view and VTK's OpenGL 3D view spoiled each other under Linux/Mesa
+    (black sketcher, clipped 3D view); `QUANTABENCH_SKETCHER_GPU=1` turns it back on to try.
+    PySide6 6.12 returns JavaScript objects from `runJavaScript` as `''`, so the scripts answer in JSON.
+  - Dock (`gui/sketcher_dock.py`, Build > Sketch a molecule..., View > Sketch): New, Edit selected (the
+    input as MOL V3000 with 2D coordinates), Add to list, Replace selected (keeps id, name and place), and
+    Insert fragment (CF3, (CF2)n, COOH, COO-, SO3H, SO3-, SO2NH2, CH2CH2, ether O, phosphate; added next to
+    the drawing, joined by drawing a bond). The hand-off (`chem/sketch.py`) reads the MOL V3000 export
+    with RDKit and reports valence, kekulization and query-atom problems in words before anything is
+    added. Without Qt WebEngine the dock says `pip install "quantabench[editor]"`.
+  - Tests: `tests/test_sketcher_assets.py`, `tests/test_sketch.py`, `tests/test_gui_sketcher.py`; with
+    `QB_TEST_SKETCHER=1` the last one drives the real sketcher (PFOA, PFOS, GenX and 6:2 FTS round trip
+    to the same canonical SMILES, an error message, a fragment, Edit selected, Add to list). It passed under
+    xvfb on Linux (sketcher ready in about 3 s).
+- **Left:**
+  - Brandon: open the dock on Windows (NOVA, AMD) and the MacBook, with `pip install -e ".[editor]"` and
+    `quantabench-cli sketcher --install`; check drawing, the 3D view next to it, and screenshots. Check
+    whether `QUANTABENCH_SKETCHER_GPU=1` draws correctly there (faster, if it does).
+  - Keep the coordinates of unchanged atoms on Replace selected (RDKit `coordMap` embedding), with UI-7's
+    shared edit model.
+  - Fragments joined at the selected atom, not added as a separate piece (needs the sketcher's selection,
+    which its JavaScript API does not expose). Unify the list with `chem/fragments.py` (UI-7).
+  - Copy as / paste from the sketcher's other formats (CDXML, MRV) once UI-4's clipboard plumbing is in.
+  - The installers could run `quantabench-cli sketcher --install` with `--with-engines`.
+- **Original spike plan (not needed after the choice):** load Ketcher (standalone) and Schrödinger's
+  Sketcher (WASM) in a `QWebEngineView` dock and compare: MOL V3000 round trip through RDKit (charges,
+  stereo, isotopes, explicit H), PFAS drawing speed (long CF2 chains, sulfonates), templates (custom PFAS
+  fragments), start-up time, download size, offline use, Windows / macOS / Linux. Fallback if neither
+  works: our own editor on the RDKit 2D view (QGraphicsScene: change element, add/delete atom, bond order
+  cycle, charge ±, clean 2D).
 - **Integration:** a Sketch dock in Build. "New" opens a blank canvas; "Edit" loads the selected
   molecule. *Add to list* and *Replace selected* hand a MOL V3000 block to `chem.inputs`, which builds 3D
   as usual; the 3D view updates, keeping the coordinates of unchanged atoms where it can (RDKit
@@ -145,7 +180,8 @@ Depends on: UI-4 for the MOL/CDXML plumbing; the spike can start any time.
   sulfonic acid / sulfonate, sulfonamide, fluorotelomer CH2CH2 linker, phosphate, common rings.
 - **Packaging:** the editor's files are downloaded on first use into the programs folder, pinned by
   sha256 (like the CREST and tblite builds), with their licence and NOTICE files; nothing large goes in
-  the repository. `pip install quantabench[editor]` adds PySide6-Addons; without it the dock says what to
+  the repository. `pip install quantabench[editor]` adds Qt WebEngine (the `PySide6` package: its WebEngine
+  is in PySide6-Addons up to 6.11 and in PySide6-WebEngine from 6.12); without it the dock says what to
   install and everything else still works.
 - Acceptance: tests that drive the editor through its JavaScript API (draw PFOA, PFOS, GenX and 6:2 FTS
   from SMILES and templates; the hand-off matches canonical SMILES); works offline; screenshots on
