@@ -4,7 +4,7 @@
 MOL2 (``.mol2``)           RDKit, one record per ``@<TRIPOS>MOLECULE`` block
 Marvin (``.mrv``)          RDKit
 ChemDraw (``.cdxml``)      RDKit's ChemDraw reader
-ChemDraw (``.cdx``)        binary CDX turned into CDXML here (``cdx_to_cdxml``), then RDKit's reader: RDKit 2026.09's
+ChemDraw (``.cdx``)        binary CDX turned into CDXML (``interchange.cdx_to_cdxml``), then RDKit's reader: RDKit 2026.09's
                            Python reader takes every file as CDXML, so it cannot read binary CDX itself
 CML (``.cml``)             a small reader for atoms, bonds, charges and hydrogen counts (CML 2 and the array form)
 InChI lists (``.inchi``)   one InChI per line, optionally followed by an id (``inputs.parse_text``)
@@ -24,14 +24,12 @@ which reader was used (``reader``, kept in ``MoleculeInput.meta[READER]`` and lo
 from __future__ import annotations
 
 import re
-import struct
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from xml.sax.saxutils import quoteattr
 
 from rdkit import Chem, rdBase
 from rdkit.Chem import rdDetermineBonds
@@ -178,7 +176,8 @@ def read_cdx_bytes(data: bytes, name: str = "CDX data") -> FileRead:
     """Binary ChemDraw CDX (a file, or ChemDraw's clipboard format) -> records, through ``cdx_to_cdxml``."""
     from rdkit.Chem import rdChemDraw
 
-    xml = cdx_to_cdxml(data)
+    data = bytes(data)
+    xml = data.decode("utf-8", "replace") if data.lstrip()[:1] == b"<" else cdx_to_cdxml(data)
     with rdBase.BlockLogs():
         try:
             mols = rdChemDraw.MolsFromChemDrawBlock(xml, removeHs=False)
@@ -187,119 +186,12 @@ def read_cdx_bytes(data: bytes, name: str = "CDX data") -> FileRead:
     return _chemdraw_records(mols, READERS[".cdx"], name)
 
 
-CDX_HEADER = b"VjCD0100"
-#: CDX object tags -> CDXML element names (objects not listed are skipped, with everything inside them)
-_CDX_OBJECTS = {0x8000: "CDXML", 0x8001: "page", 0x8002: "group", 0x8003: "fragment", 0x8004: "n", 0x8005: "b"}
-_NODE_TYPES = ("Unspecified", "Element", "ElementList", "ElementListNickname", "Nickname", "Fragment", "Formula",
-               "GenericNickname", "AnonymousAlternativeGroup", "NamedAlternativeGroup", "MultiAttachment",
-               "VariableAttachment", "ExternalConnectionPoint", "LinkNode")
-_BOND_DISPLAY = ("Solid", "Dash", "Hash", "WedgedHashBegin", "WedgedHashEnd", "Bold", "WedgeBegin", "WedgeEnd",
-                 "Wavy", "HollowWedgeBegin", "HollowWedgeEnd", "WavyWedgeBegin", "WavyWedgeEnd", "Dot", "DashDot")
-_BOND_ORDERS = {0x0001: "1", 0x0002: "2", 0x0004: "3", 0x0008: "4", 0x0010: "5", 0x0020: "6", 0x0040: "0.5",
-                0x0080: "1.5", 0x0100: "2.5", 0x0200: "3.5", 0x0400: "4.5", 0x0800: "5.5", 0x1000: "dative",
-                0x2000: "ionic", 0x4000: "hydrogen", 0x8000: "threecenter"}
-_RADICALS = ("None", "Singlet", "Doublet", "Triplet")
-
-
-def _cdx_coord(raw: bytes, offset: int) -> float:
-    return struct.unpack_from("<i", raw, offset)[0] / 65536.0
-
-
-def _cdx_property(tag: int, data: bytes) -> tuple[str, str] | None:
-    """(CDXML attribute, value) of the CDX properties the structure needs; None for the others."""
-    try:
-        if tag == 0x0200 and len(data) >= 8:            # 2D position: y, x in 1/65536 points
-            return "p", f"{_cdx_coord(data, 4):.4f} {_cdx_coord(data, 0):.4f}"
-        if tag == 0x0201 and len(data) >= 12:           # 3D position: x, y, z
-            return "xyz", " ".join(f"{_cdx_coord(data, 4 * i):.4f}" for i in range(3))
-        if tag == 0x0402:                               # element (atomic number)
-            return "Element", str(struct.unpack_from("<h", data)[0])
-        if tag == 0x0400:
-            kind = struct.unpack_from("<h", data)[0]
-            return ("NodeType", _NODE_TYPES[kind]) if 0 <= kind < len(_NODE_TYPES) else None
-        if tag == 0x0420:
-            return "Isotope", str(struct.unpack_from("<h", data)[0])
-        if tag == 0x0421:                               # charge: INT8 (INT32 in newer files)
-            value = struct.unpack_from("<b" if len(data) == 1 else "<i", data)[0]
-            return "Charge", str(value)
-        if tag == 0x0422:
-            kind = data[0]
-            return ("Radical", _RADICALS[kind]) if kind < len(_RADICALS) else None
-        if tag == 0x042B:
-            return "NumHydrogens", str(struct.unpack_from("<H", data)[0])
-        if tag == 0x0600:
-            order = struct.unpack_from("<H", data)[0]
-            return ("Order", _BOND_ORDERS[order]) if order in _BOND_ORDERS else None
-        if tag == 0x0601:
-            kind = struct.unpack_from("<h", data)[0]
-            return ("Display", _BOND_DISPLAY[kind]) if 0 <= kind < len(_BOND_DISPLAY) else None
-        if tag == 0x0604:
-            return "B", str(struct.unpack_from("<I", data)[0])
-        if tag == 0x0605:
-            return "E", str(struct.unpack_from("<I", data)[0])
-    except (struct.error, IndexError):
-        return None
-    return None
-
-
 def cdx_to_cdxml(data: bytes) -> str:
-    """Binary CDX -> the CDXML text of its pages, fragments, atoms (``n``) and bonds (``b``).
+    """Binary CDX -> CDXML text for RDKit's reader. One converter serves files and the clipboard:
+    ``chem.interchange.cdx_to_cdxml`` (checked against ChemDraw-written files; the header is optional)."""
+    from .interchange import cdx_to_cdxml as convert
 
-    CDX is a tree of objects (tag >= 0x8000, a 32-bit id, then properties and child objects, closed by tag 0)
-    and properties (tag, 16-bit length, data; length 0xFFFF is followed by a 32-bit length). Only what a structure
-    needs is kept: positions, elements, charges, isotopes, radicals, hydrogen counts, node types (nicknames keep
-    their inner fragment), bond orders and wedges. Text, graphics, styles and other objects are dropped."""
-    if not data.startswith(CDX_HEADER):
-        raise ValueError("not a ChemDraw CDX file (no VjCD0100 header)")
-    pos, n = 28, len(data)       # header: "VjCD0100", 4-byte magic, 16 reserved bytes
-    root: list = []              # nodes: [tag, id, [(attribute, value)], [children]]
-    stack: list[list] = [root]   # children list of each open object (a skipped object gets a throwaway list)
-    kept: list[bool] = []        # whether each open object is kept
-    while pos + 2 <= n:
-        tag = struct.unpack_from("<H", data, pos)[0]
-        pos += 2
-        if tag == 0:                                   # end of the current object
-            if not kept:
-                break
-            kept.pop()
-            stack.pop()
-            continue
-        if tag & 0x8000:                               # an object: its id, then its properties and children
-            if pos + 4 > n:
-                break
-            oid = struct.unpack_from("<I", data, pos)[0]
-            pos += 4
-            keep = all(kept) and tag in _CDX_OBJECTS
-            node = [tag, oid, [], []]
-            if keep:
-                stack[-1].append(node)
-            stack.append(node[3])
-            kept.append(keep)
-            continue
-        if pos + 2 > n:
-            break
-        length = struct.unpack_from("<H", data, pos)[0]
-        pos += 2
-        if length == 0xFFFF and pos + 4 <= n:
-            length = struct.unpack_from("<I", data, pos)[0]
-            pos += 4
-        value = data[pos:pos + length]
-        pos += length
-        if kept and kept[-1]:
-            prop = _cdx_property(tag, value)
-            if prop is not None:
-                stack[-2][-1][2].append(prop)          # the open object is the last child of its parent
-
-    def render(node) -> str:
-        tag, oid, attrs, children = node
-        name = _CDX_OBJECTS[tag]
-        text = "".join(f" {k}={quoteattr(v)}" for k, v in attrs)
-        return f'<{name} id="{oid}"{text}>' + "".join(render(c) for c in children) + f"</{name}>"
-
-    docs = [node for node in root if node[0] == 0x8000]
-    if not docs:
-        raise ValueError("no document object in the CDX data")
-    return '<?xml version="1.0" encoding="UTF-8" ?>\n' + render(docs[0])
+    return convert(data)
 
 
 # ------------------------------------------------------------------------------------------------ CML

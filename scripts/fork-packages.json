@@ -32,13 +32,11 @@
     "programs": {
       "crest": {
         "_why": "FORK-5: conda-forge's osx-arm64 crest 3.0.2 links Apple's Accelerate and fails every optimization of 19+ atoms (docs/ENGINES.md). This is the fork's macOS build (brandonbtm29/crest, branch qb/macos, workflow qb-macos). install_macos.sh --with-engines downloads url, checks sha256, unpacks it under ~/Library/Application Support/QuantaBench/programs and sets exe as this machine's CREST path.",
-        "url": "",
-        "proposed_url": "https://github.com/brandonbtm29/crest/releases/download/qb-v3.0.2-macos1/crest-macos-arm64.tar.gz",
+        "url": "https://github.com/brandonbtm29/crest/releases/download/qb-v3.0.2-macos1/crest-macos-arm64.tar.gz",
         "release": "qb-v3.0.2-macos1",
-        "built_by": "brandonbtm29/crest Actions run 42295799792 (qb-macos, fork commit 12eb61d), artifact crest-macos-arm64; release that tarball unchanged, or put the new one's sha256 here",
+        "built_by": "brandonbtm29/crest Actions run 42295799792 (qb-macos, fork commit 12eb61d), artifact crest-macos-arm64, released unchanged as qb-v3.0.2-macos1 on 2026-11-07",
         "sha256": "47ba788333b7d89f63c54565330683fd7f558500ec482e7033ad34d064047a33",
-        "exe": "crest-macos-arm64/bin/crest",
-        "until_released": "Until then the conda crest of qb-tools is used, which fails on molecules of 19+ atoms: QuantaBench flags each one (conformer_fallback) and counts them at the end of a batch."
+        "exe": "crest-macos-arm64/bin/crest"
       }
     }
   },

@@ -2,6 +2,14 @@
 
 ## 0.3.0.dev (unreleased)
 
+### After the merge (2026-11-07)
+- **One CDX reader.** `.cdx` files and ChemDraw's clipboard data go through the same converter
+  (`chem.interchange.cdx_to_cdxml`), which was checked against files ChemDraw wrote. The file reader's own copy
+  expected a 28-byte header before the document object, so it would have failed on real ChemDraw files.
+- **The Mac's CREST build is released:** `brandonbtm29/crest` release `qb-v3.0.2-macos1` (the CI tarball,
+  unchanged). `scripts/fork-packages.json` points at it, so `install_macos.sh --with-engines` installs it.
+  The Accelerate bug is reported to conda-forge (crest-feedstock#22) and on crest-lab/crest#412.
+
 ### CREST lanes on Apple Silicon, largest molecules first (2026-11-07)
 - **CREST lanes on Apple Silicon** (`dist/lanes.py`, `resources.py`): `--lanes auto` for a CREST run gives
   4 threads per lane, one lane per 4 performance cores (`sysctl hw.perflevel0.physicalcpu`; the physical cores

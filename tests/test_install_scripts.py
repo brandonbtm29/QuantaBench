@@ -156,22 +156,24 @@ def test_macos_dry_run_installs_released_fork_programs(tmp_path):
     cmd = [BASH, str(repo / "scripts" / "install_macos.sh"), "--dry-run", "--python", sys.executable, "--no-app",
            "--with-engines", "--conda", shutil.which("true")]
     env = {"PATH": f"{fake}{os.pathsep}{os.environ.get('PATH', '')}", "HOME": str(tmp_path / "home")}
-    cp = run_script(cmd, tmp_path, **env)
-    out = cp.stdout + cp.stderr
-    assert cp.returncode == 0, out
-    assert "crest: no fork build released yet" in out and "conformer_fallback" in out   # today: not released
-    assert "--engine-path" not in out
-    forks = json.loads((repo / "scripts" / "fork-packages.json").read_text(encoding="utf-8"))
-    entry = forks["macos"]["programs"]["crest"]
-    entry["url"], entry["sha256"] = entry["proposed_url"], "0" * 64
-    (repo / "scripts" / "fork-packages.json").write_text(json.dumps(forks), encoding="utf-8")
+    forks_file = repo / "scripts" / "fork-packages.json"
+    entry = json.loads(forks_file.read_text(encoding="utf-8"))["macos"]["programs"]["crest"]
+    assert entry["url"].endswith("/qb-v3.0.2-macos1/crest-macos-arm64.tar.gz")      # released 2026-11-07
     cp = run_script(cmd, tmp_path, **env)
     out = cp.stdout + cp.stderr
     assert cp.returncode == 0, out
     dest = f"{tmp_path / 'home'}/Library/Application Support/QuantaBench/programs/crest-qb-v3.0.2-macos1"
-    assert "curl -fsSL --retry 3 -o" in out and entry["proposed_url"] in out
+    assert "curl -fsSL --retry 3 -o" in out and entry["url"] in out
     assert "tar -xzf" in out and "settings --engine-path" in out
     assert f"'crest={dest}/crest-macos-arm64/bin/crest'" in out
+    # an entry without a release yet (a future program) is skipped with a message
+    forks = json.loads(forks_file.read_text(encoding="utf-8"))
+    forks["macos"]["programs"]["crest"]["url"] = ""
+    forks_file.write_text(json.dumps(forks), encoding="utf-8")
+    cp = run_script(cmd, tmp_path, **env)
+    out = cp.stdout + cp.stderr
+    assert cp.returncode == 0, out
+    assert "crest: no fork build released yet" in out and "--engine-path" not in out
     assert not (tmp_path / "home" / "Library").exists()                                # a dry run writes nothing
 
 

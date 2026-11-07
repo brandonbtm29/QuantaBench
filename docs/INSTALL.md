@@ -382,7 +382,8 @@ What to expect on a Mac (first run on Brandon's MacBook Pro, Apple Silicon, macO
 - CREST: conda-forge's osx-arm64 build (in `qb-tools`) links Apple's Accelerate and fails every optimization of
   19 atoms or more; QuantaBench flags each such molecule and `doctor` names the build. Use the fork's macOS
   build and set it as this Mac's path: `quantabench-cli settings --engine-path crest=<folder>/crest-macos-arm64/bin/crest`
-  (docs/ENGINES.md, CREST; the installer does it once the build is released, FORK-5).
+  (docs/ENGINES.md, CREST). `install_macos.sh --with-engines` downloads it (release `qb-v3.0.2-macos1`) and sets
+  the path by itself.
 - LAMMPS (`md`): PyPI's macOS wheel links MPICH's `libmpi.12.dylib` without shipping it, so `import lammps`
   works and running LAMMPS fails with `Library not loaded: @rpath/libmpi.12.dylib`. The `md` extra installs
   `lammps[mpi]` on macOS, which brings PyPI's `mpich` wheel; an older install needs `pip install mpich` (or a

@@ -76,7 +76,7 @@ def cdx_bytes(smi: str) -> bytes:
     Chem.Kekulize(mol, clearAromaticFlags=True)
     rdDepictor.Compute2DCoords(mol)
     conf = mol.GetConformer()
-    out = bytearray(b"VjCD0100" + bytes([4, 3, 2, 1]) + bytes(16))
+    out = bytearray(b"VjCD0100" + bytes([4, 3, 2, 1]) + bytes(10))   # as ChemDraw writes it
     next_id = [1]
 
     def obj(tag: int) -> int:
@@ -181,8 +181,8 @@ def test_chemdraw_cdx_binary(tmp_path, smi):
     items = inputs.read_file(p)
     assert sorted(smiles_of(items)) == sorted(canon(s) for s in [canon(smi)])
     assert items[0].meta[formats.READER].endswith("(ChemDraw CDX)")
-    with pytest.raises(ValueError, match="VjCD0100"):
-        formats.cdx_to_cdxml(b"<CDXML/>")
+    with pytest.raises(ValueError):
+        formats.read_cdx_bytes(b"\x01\x02 not CDX")
 
 
 def test_cml_rdkit_written_and_array_form(tmp_path):

@@ -960,15 +960,15 @@ the code, but three things never arrived through it.
   artifact `crest-macos-arm64.tar.gz`, sha256 `47ba7883...4a33`; smoke cases match the Linux build of the
   same commit to 1e-10 Eh (single points, optimizations), and the MacBook's PFAS run modes match conda-forge's
   Linux 3.0.2 to 1e-8 to 2e-5 Eh.
-  - needs-Brandon: publish it as a fork release (proposed tag `qb-v3.0.2-macos1`, the tarball unchanged:
-    `gh run download 42295799792 -R brandonbtm29/crest -n crest-macos-arm64` (the artifact expires 2026-12-06),
-    then `gh release create qb-v3.0.2-macos1 crest-macos-arm64.tar.gz -R brandonbtm29/crest --target
-    12eb61d12b9dbb506c087902cc92bbe739a9c4b2`), then
-    copy `proposed_url` into `url` in `scripts/fork-packages.json` (`macos` > `programs` > `crest`).
-    `install_macos.sh --with-engines` then installs it and sets the Mac's CREST path.
+  - Released 2026-11-07 (Brandon's OK): [`qb-v3.0.2-macos1`](https://github.com/brandonbtm29/crest/releases/tag/qb-v3.0.2-macos1),
+    the run 42295799792 tarball unchanged (the downloaded asset has the pinned sha256). `scripts/fork-packages.json`
+    points at it, so `install_macos.sh --with-engines` installs it and sets the Mac's CREST path. The MacBook
+    already runs the same build, set as its path for that machine only (2026-11-07).
   - `quantabench-cli update` does not reinstall `programs` entries yet: add that when the first release exists.
-  - The conda-forge feedstock fix is one CMake flag (`-DBLA_VENDOR=OpenBLAS`, or `Generic`) plus the format
-    commas (or a pin to libgfortran < 15 at run time): worth a feedstock issue/PR when Brandon OKs upstream contact.
+  - Reported 2026-11-07 (Brandon's OK): conda-forge/crest-feedstock#22 (the fix is one CMake flag,
+    `-DBLA_VENDOR=Generic`, plus the format commas or a libgfortran < 15 pin), and a comment on
+    crest-lab/crest#412 with the diagnosis. Watch both; when a fixed conda-forge build ships, check it and
+    consider going back to it.
   - The 20-molecule benchmark with the fork build (docs/ENGINES.md, CREST): GFN-FF gas and water 20/20 CREST,
     searches as close to NOVA's as two CREST runs are. Until engines.machine_paths is merged, the Mac's batch
     scripts pass `QUANTABENCH_CREST=~/Library/Application Support/QuantaBench/programs/crest-qb-v3.0.2-macos1/crest-macos-arm64/bin/crest`

@@ -359,10 +359,11 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     because WSL starts it without conda's PATH.
   - macOS (Apple Silicon): **not conda-forge's crest.** Its osx-arm64 3.0.2 cannot optimize molecules of 19
     atoms or more (below). Use the fork's macOS build: `crest-macos-arm64.tar.gz` from `brandonbtm29/crest`
-    (branch `qb/macos`, workflow `qb-macos`). Unpack it anywhere, keep `bin/` and `lib/` together, and set it
-    as the Mac's path: `quantabench-cli settings --engine-path crest=<folder>/crest-macos-arm64/bin/crest`.
-    `scripts/install_macos.sh --with-engines` does this by itself once the build is released
-    (`scripts/fork-packages.json`, `macos` > `programs` > `crest`; FORK-5). Keep conda-forge's xtb in
+    (release [`qb-v3.0.2-macos1`](https://github.com/brandonbtm29/crest/releases/tag/qb-v3.0.2-macos1), branch
+    `qb/macos`). Unpack it anywhere, keep `bin/` and `lib/` together, and set it as the Mac's path:
+    `quantabench-cli settings --engine-path crest=<folder>/crest-macos-arm64/bin/crest`.
+    `scripts/install_macos.sh --with-engines` does this by itself (`scripts/fork-packages.json`, `macos` >
+    `programs` > `crest`; FORK-5). Keep conda-forge's xtb in
     qb-tools: `gfn2//gfnff` runs it.
 - **Levels.** `--crest-method gfn2 | gfnff | gfn2//gfnff | gfn1`; `--quick` is the default
   (`--crest-full` for a full run). gfn2, gfn1 and gfnff run inside CREST 3. `gfn2//gfnff` needs
