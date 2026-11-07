@@ -12,6 +12,7 @@ status bar.
 
 from __future__ import annotations
 
+import html
 import os
 import threading
 from pathlib import Path
@@ -54,6 +55,7 @@ from .. import __version__, resources, units
 from .. import settings as settings_mod
 from ..chem import engines, export, jobs, solvents
 from ..chem import inputs as inputs_mod
+from ..chem import method_guide as guide
 from ..chem.pipeline import BuildConfig, MoleculeResult, fallback_count
 from . import molecule_list, workers
 from .energy_widgets import EnergySpinBox
@@ -93,6 +95,9 @@ QM_BASES = ("def2-svp", "def2-svpd", "def2-tzvp", "6-31g*", "6-31+g*", "6-311+g*
 LOG_LINES = 5000          # Log view's line cap (see _build_bottom_dock)
 CREST_METHODS = (("gfn2", "GFN2-xTB"), ("gfnff", "GFN-FF (fast, large molecules)"),
                  ("gfn2//gfnff", "GFN2-xTB // GFN-FF (needs xtb)"), ("gfn1", "GFN1-xTB"))
+OPTIMIZERS = (("lbfgs", "L-BFGS (ASE)"), ("fire", "FIRE (ASE)"),
+              ("native", "Engine's own optimizer (xtb, MOPAC; else L-BFGS)"))
+CONFORMER_SEARCHES = (("rdkit", "RDKit ETKDGv3 + MMFF94s"), ("crest", "CREST iMTD-GC"))
 
 
 def _window_settings() -> QSettings:
@@ -102,6 +107,14 @@ def _window_settings() -> QSettings:
     if ini:
         return QSettings(ini, QSettings.Format.IniFormat)
     return QSettings("QuantaBench", "QuantaBench")
+
+
+def _solvent_tooltip(sv: solvents.Solvent) -> str:
+    """What each engine family uses for this solvent (the Solvent box's item tooltip)."""
+    parts = [f"ALPB/GBSA (xtb, tblite, CREST): {sv.alpb}" if sv.alpb else "ALPB/GBSA: no parameters (gas phase)",
+             f"COSMO (MOPAC) and CPCM (tblite): ε = {sv.epsilon:g}",
+             f"PCM (Psi4): {sv.pcm}" if sv.pcm else "PCM (Psi4): not in PCMSolver, the QM stage runs in the gas phase"]
+    return f"{sv.label}: " + "; ".join(parts) + ". dxtb, AIMNet2 and MMFF94s run in the gas phase."
 
 
 def _built(res) -> bool:
@@ -378,24 +391,34 @@ class MainWindow(QMainWindow):
             from ..chem import crest
 
             self.w_confsearch = QComboBox()
-            self.w_confsearch.addItem("RDKit ETKDGv3 + MMFF94s", "rdkit")
             ok, why = crest.available()
-            self.w_confsearch.addItem("CREST iMTD-GC" + ("" if ok else " (not installed)"), "crest")
-            self.w_confsearch.setItemData(1, "CREST metadynamics conformer search (Grimme). Minutes per molecule; "
-                                          "Linux/WSL/macOS" + ("" if ok else f". {why}"), Qt.ItemDataRole.ToolTipRole)
+            for k, label in CONFORMER_SEARCHES:
+                self.w_confsearch.addItem(label + ("" if ok or k != "crest" else " (not installed)"), k)
+            self._guide_tooltips(self.w_confsearch, guide.CONFORMER_SEARCH_ENTRIES)
+            i = self.w_confsearch.findData("crest")
+            self.w_confsearch.setItemData(i, self.w_confsearch.itemData(i, Qt.ItemDataRole.ToolTipRole)
+                                          + "\nLinux/WSL/macOS" + ("" if ok else f". {why}"), Qt.ItemDataRole.ToolTipRole)
             self.w_crest_method = QComboBox()
             for k, label in CREST_METHODS:
                 self.w_crest_method.addItem(label, k)
+            self._guide_tooltips(self.w_crest_method, guide.CREST_LEVEL_ENTRIES)
             self.w_crest_quick = QCheckBox("Quick mode (--quick)")
             self.w_crest_quick.setChecked(True)
+            self.w_crest_quick.setToolTip("CREST's iMTD-GC search with reduced settings, for a cruder ensemble. "
+                                          "Unchecked: CREST's full settings (slower).")
             self.w_crest_fallback = QCheckBox("If CREST fails, use RDKit's conformers")
             self.w_crest_fallback.setChecked(True)
             self.w_crest_fallback.setToolTip(
                 "Checked: a molecule CREST fails on is built with RDKit ETKDGv3 + MMFF94s and flagged (a note, "
                 "summary.csv conformer_fallback, a count at the end of the batch). Unchecked: the molecule fails.")
+            self.search_info = self._guide_label()
+            self.crest_info = self._guide_label()
             self.w_confsearch.currentIndexChanged.connect(self._update_crest_widgets)
+            self.w_crest_method.currentIndexChanged.connect(self._update_conformer_info)
             form.addRow("Search", self.w_confsearch)
+            form.addRow(self.search_info)
             form.addRow("CREST level", self.w_crest_method)
+            form.addRow(self.crest_info)
             form.addRow(self.w_crest_quick)
             form.addRow(self.w_crest_fallback)
             self.w_maxconf = QSpinBox()
@@ -426,33 +449,41 @@ class MainWindow(QMainWindow):
             self.w_fmax.setSuffix(" eV/Å")
             self.w_steps = QSpinBox()
             self.w_steps.setRange(10, 10000)
+            self._method_tooltips()
             self.w_optimizer = QComboBox()
-            for k, label in (("lbfgs", "L-BFGS (ASE)"), ("fire", "FIRE (ASE)"),
-                             ("native", "Engine's own optimizer (xtb, MOPAC; else L-BFGS)")):
+            for k, label in OPTIMIZERS:
                 self.w_optimizer.addItem(label, k)
+            self._guide_tooltips(self.w_optimizer, guide.OPTIMIZER_ENTRIES)
             self.w_solvent = QComboBox()
             self.w_solvent.addItem("Gas phase", "")
+            self.w_solvent.setItemData(0, guide.plain(guide.get("gas-phase").summary), Qt.ItemDataRole.ToolTipRole)
             for name, sv in solvents.SOLVENTS.items():
                 self.w_solvent.addItem(f"{sv.label} (ε = {sv.epsilon:g})", name)
+                self.w_solvent.setItemData(self.w_solvent.count() - 1, _solvent_tooltip(sv),
+                                           Qt.ItemDataRole.ToolTipRole)
             self.w_solvent.setToolTip("Implicit solvent for engines that have one: ALPB (xtb, tblite), COSMO (MOPAC), "
                                       "PCM (Psi4). Engines without one run in the gas phase (noted per molecule).")
-            self.w_solvent.currentIndexChanged.connect(self._update_engine_info)
             self.w_batched = QComboBox()
             for key, label in BATCHED_CHOICES:
                 self.w_batched.addItem(label, key)
             self.w_batched.setToolTip("Refine all conformers of a molecule in one torch batch (xTB, AIMNet2). "
                                       "Same results as one at a time; much faster on a GPU.")
-            self.engine_info = QLabel()
-            self.engine_info.setWordWrap(True)
+            self.engine_info = self._guide_label()
+            self.solvent_info = self._guide_label()
+            self.optimizer_info = self._guide_label()
             self.w_method.currentIndexChanged.connect(self._update_engine_info)
+            self.w_solvent.currentIndexChanged.connect(self._update_engine_info)
+            self.w_optimizer.currentIndexChanged.connect(self._update_engine_info)
             form.addRow("Method", self.w_method)
+            form.addRow(self.engine_info)
             form.addRow("Solvent", self.w_solvent)
+            form.addRow(self.solvent_info)
             form.addRow("Refine lowest", self.w_refine_top)
             form.addRow("Force convergence", self.w_fmax)
             form.addRow("Max steps", self.w_steps)
             form.addRow("Optimizer", self.w_optimizer)
+            form.addRow(self.optimizer_info)
             form.addRow("Conformer batching", self.w_batched)
-            form.addRow(self.engine_info)
         elif key == "properties":
             self.w_xtbprops = QCheckBox("GFN1-xTB charges, dipole, polarizability (best conformer)")
             self.w_xtbprops.setEnabled(resources.has_package("dxtb"))
@@ -487,9 +518,15 @@ class MainWindow(QMainWindow):
             self.w_qm_func = QComboBox()
             self.w_qm_func.setEditable(True)
             self.w_qm_func.addItems(QM_FUNCTIONALS)
+            self._guide_tooltips(self.w_qm_func)
             self.w_qm_basis = QComboBox()
             self.w_qm_basis.setEditable(True)
             self.w_qm_basis.addItems(QM_BASES)
+            self._guide_tooltips(self.w_qm_basis)
+            self.qm_func_info = self._guide_label()
+            self.qm_basis_info = self._guide_label()
+            self.w_qm_func.currentTextChanged.connect(self._update_qm_info)
+            self.w_qm_basis.currentTextChanged.connect(self._update_qm_info)
             self.w_qm_task = QComboBox()
             self.w_qm_task.addItem("Single point", "energy")
             self.w_qm_task.addItem("Optimize", "optimize")
@@ -510,7 +547,9 @@ class MainWindow(QMainWindow):
             self.w_qm_on.toggled.connect(self._update_qm_widgets)
             form.addRow(self.w_qm_on)
             form.addRow("Functional", self.w_qm_func)
+            form.addRow(self.qm_func_info)
             form.addRow("Basis set", self.w_qm_basis)
+            form.addRow(self.qm_basis_info)
             form.addRow("Task", self.w_qm_task)
             form.addRow("Conformers", self.w_qm_top)
             form.addRow(self.w_qm_props)
@@ -695,6 +734,11 @@ class MainWindow(QMainWindow):
         t.addAction(self.a_settings)
         t.addAction(act("Hardware report", self.show_hardware_report))
         h = m.addMenu("&Help")
+        self.a_methods_guide = act("Methods guide...", lambda _checked=False: self.show_methods_guide(), "F1",
+                                   "What each method, basis set, solvent model and conformer search is, what it is "
+                                   "good and bad at, and what it costs")
+        h.addAction(self.a_methods_guide)
+        h.addSeparator()
         h.addAction(act("About QuantaBench", self.about))
 
     def _build_statusbar(self) -> None:
@@ -733,6 +777,7 @@ class MainWindow(QMainWindow):
             self.w_qm_basis.setCurrentText(level[1] if len(level) > 1 else "def2-svp")
         self._update_crest_widgets()
         self._update_qm_widgets()
+        self._update_qm_info()
         self.w_fmax.setValue(b.fmax)
         self.w_steps.setValue(b.max_steps)
         self.w_temp.setValue(b.temperature_k)
@@ -783,6 +828,66 @@ class MainWindow(QMainWindow):
         self.w_crest_method.setEnabled(on)
         self.w_crest_quick.setEnabled(on)
         self.w_crest_fallback.setEnabled(on)
+        self._update_conformer_info()          # crest_info stays enabled: its "More…" link works before CREST is on
+
+    # ------------------------------------------------------------------ methods guide (chem.method_guide)
+    def _guide_label(self) -> QLabel:
+        """An info label for a pipeline choice: the guide's one-line summary and a "More…" link to the entry."""
+        label = QLabel()
+        label.setWordWrap(True)
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setOpenExternalLinks(False)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        label.linkActivated.connect(self._on_guide_link)
+        return label
+
+    def _on_guide_link(self, href: str) -> None:
+        if href.startswith("guide:"):
+            self.show_methods_guide(href.split(":", 1)[1])
+
+    def show_methods_guide(self, key: str = ""):
+        """Help > Methods guide... at entry ``key`` (a guide key, alias or anchor; "" = the index)."""
+        from . import method_guide_window
+
+        return method_guide_window.show(self, key)
+
+    @staticmethod
+    def _guide_tooltips(combo: QComboBox, table: dict[str, str] | None = None) -> None:
+        """Each item's tooltip: its guide entry's one-line summary (``table`` maps item data to entry keys;
+        without it the item text is looked up)."""
+        for i in range(combo.count()):
+            key = table.get(combo.itemData(i), "") if table is not None else ""
+            e = guide.ENTRIES.get(key) if key else guide.lookup(combo.itemText(i))
+            if e is not None:
+                combo.setItemData(i, f"{e.name}: {guide.plain(e.summary)}", Qt.ItemDataRole.ToolTipRole)
+
+    def _method_tooltips(self) -> None:
+        for i in range(self.w_method.count()):
+            key = self.w_method.itemData(i)
+            e = guide.for_engine(key)
+            if e is not None:
+                note = guide.engine_note(key)
+                tip = f"{e.name}: {guide.plain(e.summary)}" + (f"\nThis engine: {guide.plain(note)}" if note else "")
+                self.w_method.setItemData(i, tip, Qt.ItemDataRole.ToolTipRole)
+
+    def _update_conformer_info(self, _index=0) -> None:
+        for label, table, data in ((self.search_info, guide.CONFORMER_SEARCH_ENTRIES, self.w_confsearch.currentData()),
+                                   (self.crest_info, guide.CREST_LEVEL_ENTRIES, self.w_crest_method.currentData())):
+            e = guide.ENTRIES.get(table.get(data, ""))
+            label.setText(guide.summary_html(e) if e is not None else "")
+
+    def _update_qm_info(self, _text="") -> None:
+        for label, combo, what in ((self.qm_func_info, self.w_qm_func, "functional"),
+                                   (self.qm_basis_info, self.w_qm_basis, "basis set")):
+            text = combo.currentText().strip()
+            e = guide.lookup(text) if text else None
+            if e is not None:
+                label.setText(guide.summary_html(e))
+            elif text:
+                label.setText(f"No guide entry for {html.escape(text)}: Psi4 takes any {what} it knows. "
+                              '<a href="guide:dft">Functionals</a>, <a href="guide:basis-sets">basis sets</a>.')
+            else:
+                label.setText("")
 
     def _update_qm_widgets(self, _checked=False) -> None:
         on = self.w_qm_on.isChecked()
@@ -817,26 +922,47 @@ class MainWindow(QMainWindow):
             self.w_method.addItem(method_label(m), m)
         self._set_combo(self.w_method, current)
         self.w_method.blockSignals(False)
+        self._method_tooltips()
         ok, _why = crest.available()
         self.w_confsearch.setItemText(1, "CREST iMTD-GC" + ("" if ok else " (not installed)"))
         ok, _why = qm.available()
         self.w_qm_on.setText("Run a QM stage" + ("" if ok else " (Psi4 not found)"))
         self._update_engine_info()
 
-    def _update_engine_info(self) -> None:
+    def _update_engine_info(self, _index=0) -> None:
+        """The info under Method (the guide's summary, how this engine runs it, availability and solvent warnings),
+        under Solvent (the model this engine uses for it) and under Optimizer."""
         key = self.w_method.currentData()
+        solvent = self.w_solvent.currentData() if hasattr(self, "w_solvent") else ""
+        entry = guide.for_engine(key)
+        lines = [guide.summary_html(entry)] if entry is not None else []
+        info = engines.all_engines().get(key) if key != "auto" else None
         if key == "auto":
             order = [k for k in engines.AUTO_ORDER if k in engines.all_engines() and engines.available(k, quick=True)[0]]
-            text = "Uses the best installed engine the molecule's elements allow: " + \
-                   (" > ".join(engines.ENGINES[k].label for k in order) or "none") + " > MMFF94s."
-        else:
-            info = engines.all_engines()[key]
+            lines.append(html.escape("Uses the best installed engine the molecule's elements allow: "
+                                     + (" > ".join(engines.ENGINES[k].label for k in order) or "none") + " > MMFF94s.",
+                                     quote=False))
+        elif info is not None:
+            note = guide.engine_note(key)
+            lines.append(f"This engine: {html.escape(guide.plain(note), quote=False)}" if note
+                         else html.escape(info.description, quote=False))
             ok, why = engines.available(key, quick=True)
-            text = info.description + ("" if ok else f"\nNot available: {why}")
-            solvent = self.w_solvent.currentData() if hasattr(self, "w_solvent") else ""
+            if not ok:
+                lines.append(html.escape(f"Not available: {why}", quote=False))
             if solvent and not engines.supports_solvent(key, solvent):
-                text += f"\nNo implicit solvent model for {solvent}: this engine runs in the gas phase."
-        self.engine_info.setText(text)
+                lines.append(html.escape(f"No implicit solvent model for {solvent}: this engine runs in the gas phase.",
+                                         quote=False))
+        self.engine_info.setText("<br>".join(lines))
+        if hasattr(self, "solvent_info"):
+            models = info.solvation if info is not None and engines.supports_solvent(key, solvent) else ()
+            self.solvent_info.setText(guide.summary_html(guide.solvation_entry(key, solvent, models)))
+        if hasattr(self, "optimizer_info"):
+            opt = self.w_optimizer.currentData()
+            e = guide.ENTRIES.get(guide.OPTIMIZER_ENTRIES.get(opt, ""))
+            text = guide.summary_html(e) if e is not None else ""
+            if opt == "native" and key not in ("auto", "mmff") and engines.native_optimizer(key) is None:
+                text += "<br>This engine has none: L-BFGS."
+            self.optimizer_info.setText(text)
 
     # ================================================================== hardware
     def _detect_hardware(self) -> None:

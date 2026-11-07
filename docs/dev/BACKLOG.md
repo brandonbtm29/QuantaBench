@@ -332,6 +332,17 @@ Depends on: none (research only; can run any night).
   kills that PID through `wsl.exe` before `taskkill`. Children of CREST's legacy mode (xtb) may survive a
   cancel: if they do, start the program with `setsid -w` and kill the process group.
 
+## DOC-1: Methods guide (what the methods mean) · done 2026-11-07 (branch `feat/method-guide`)
+Brandon (2026-11-07): an explanation of the models in each pipeline (ωB97X / B3LYP / GFN2 ...), for a chemist
+who is not a computational chemist; many of his Spartan runs had no dispersion correction, and QuantaBench should
+not try to match Spartan exactly.
+- Done: `chem/method_guide.py` (49 entries, references checked against Crossref), the info text and tooltips under
+  each pipeline choice, Help > Methods guide... (F1), `quantabench-cli methods [NAME]`, `docs/METHODS.md` from
+  `scripts/write_methods_doc.py`. Tests fail when a GUI choice or a registered engine has no entry, or the doc is
+  stale.
+- Follow-ups: an entry for each new engine or QM list item (the tests ask for it); entries for the frequency and
+  thermochemistry choices (qRRHO, symmetry number) and the Properties page if those raise questions.
+
 ## ENG-3: Engine follow-ups · ready
 - `vibrations.from_hessian(...)`: make the second half of `analyze()` public so `qm.vibrations_from_hessian`
   stops duplicating it (see the QM builder's suggested signature in DEVLOG 2026-11-01).

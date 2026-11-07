@@ -215,6 +215,12 @@ coordinates.
 The external programs install with conda from [`envs/`](envs); see [docs/ENGINES.md](docs/ENGINES.md)
 for versions, pins and pitfalls.
 
+**What the methods mean.** [docs/METHODS.md](docs/METHODS.md) explains each engine, conformer search,
+functional, basis set and solvent model: what it is, what it is good and bad at, what it costs, whether it has a
+dispersion correction, and what Spartan's B3LYP, ωB97X-D and PM6 numbers are. The same text is under each
+pipeline choice in the app (with a "More…" link), in Help > Methods guide... (F1), and on the command line:
+`quantabench-cli methods` lists the entries, `quantabench-cli methods wb97x-d` shows one.
+
 ![ESP on the 0.002 au density surface of trifluoroacetic acid (Psi4 ωB97X-D/def2-SVP)](docs/img/esp_surface.png)
 
 ## Settings

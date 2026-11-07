@@ -6,6 +6,10 @@ programs that run as subprocesses: their OpenMP and BLAS stay out of PyTorch's w
 the GUI down, a run can be cancelled by killing the process tree, and Linux-only programs can run
 through WSL on Windows. `quantabench-cli doctor` lists what it found and where.
 
+This page is about installing and running the engines. What each method is, what it is good and bad at, and
+what it costs (GFN2-xTB, ωB97X-D, def2-SVP, ALPB, dispersion corrections, ...) is in [METHODS.md](METHODS.md),
+the same text as Help > Methods guide... and `quantabench-cli methods NAME`.
+
 | Engine key | What | Family | Runs | Solvent | Windows | Notes |
 |---|---|---|---|---|---|---|
 | `mmff` | MMFF94s / UFF (RDKit) | force field | in process | none | yes | conformer pre-optimization |

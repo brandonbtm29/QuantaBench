@@ -1083,6 +1083,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_sketcher import register as register_sketcher
 
     register_sketcher(sub)      # sketcher: the Sketch dock's editor files (quantabench.sketcher_assets)
+    from .cli_methods import register as register_methods
+
+    register_methods(sub)       # methods [NAME]: the methods guide (quantabench.chem.method_guide)
 
     se = sub.add_parser("settings", help="show settings, or move them (e.g. into a synced folder)")
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")
