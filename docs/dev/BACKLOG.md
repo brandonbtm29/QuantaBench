@@ -998,8 +998,9 @@ the code, but three things never arrived through it.
       that; check that run's log. Every parallel run now starts its largest molecules first.
     - Not done: a running CREST cannot take more threads when other lanes go idle; largest-first is the cheap
       version of that.
-    - Left: after the merge, re-time the GFN-FF gas run on the Mac with `--lanes auto` (expect 3 x 4, about
-      773 s, and the 54-heavy-atom molecule started first), then one GFN2 batch.
+    - Re-timed 2026-11-07 after the merge: `--lanes auto` gave 3 x 4 and started 54950-05-9 first; GFN-FF gas
+      took 942 s (20/20), 3.3x faster than the old auto plan (the earlier hand-set 3 x 4 run: 773 s; sampling
+      and the Mac's other load vary). Left: one GFN2 batch with the new plan.
   - GFN2 CREST on the Mac finished 2026-11-07: gas 16/20, water 15/20; the 9 failures are all the 3 h limit on
     the largest molecules. Compare their dipoles and conformers with the GFN-FF runs and Spartan (VAL-3).
 - **Windows:** `qb/windows` has a native build (docs/WINDOWS.md there), but Brandon decided on WSL (ENG-2).

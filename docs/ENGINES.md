@@ -444,6 +444,11 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     3 x 4 is 4.0x faster than the auto plan of the time and faster than NOVA's WSL run (1,247 s, 20 x 2). Two
     threads per lane leave the largest molecule as the last one running, on 2 threads; 12 threads on one molecule
     scale poorly. One run each, so the ranking is clear but the exact factors are not.
+  - Re-timed with the new auto plan (3 x 4, largest first; 2026-11-07 afternoon, `crest-gfnff-auto-new`):
+    942 s, 20/20 with CREST conformers, 3.3x faster than the old auto plan. The 54-heavy-atom molecule
+    (54950-05-9) started first and took 821 s of it on 4 threads; the other 19 finished on the other two
+    lanes meanwhile. Slower than the earlier 3 x 4 run (773 s): CREST's sampling differs from run to run, and
+    Excel, Messages and other apps were open (load average 5-7).
 - **Lanes (`--lanes auto`, since 2026-11-07).**
   - Apple Silicon: 4 threads per lane, one lane per 4 performance cores, rounded half up (at least 1). The
     performance cores are `sysctl hw.perflevel0.physicalcpu`, or the physical cores when that cannot be read.
