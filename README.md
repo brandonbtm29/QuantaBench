@@ -19,7 +19,7 @@ dynamics. Every step is visible in an OVITO-style 3D workspace.
 
 | Stage | What happens |
 |---|---|
-| Input | SMILES, InChI, InChIKeys, chemical names or CAS (PubChem); SDF/MOL (V2000, V3000), MOL2, PDB, XYZ, ChemDraw CDX/CDXML, Marvin MRV, CML, CIF, Gaussian/ORCA inputs, SMILES and InChI lists, CSV and Excel lists (CompTox exports: DTXSID, preferred name, SMILES / QSAR-ready / MS-ready fallback); other formats through Open Babel when installed. Spartan-style import options (2D to 3D, hydrogens, data fields, filters, atom order) |
+| Input | SMILES, InChI, InChIKeys, chemical names or CAS (PubChem); SDF/MOL (V2000, V3000), MOL2, PDB, XYZ, ChemDraw CDX/CDXML, Marvin MRV, CML, CIF, Gaussian/ORCA inputs, SMILES and InChI lists, CSV and Excel lists (CompTox exports: DTXSID, preferred name, SMILES / QSAR-ready / MS-ready fallback); other formats through Open Babel when installed. Spartan-style import options (2D to 3D, hydrogens, data fields, filters, atom order); paste from ChemDraw (CDX, CDXML, MOL) and drag and drop |
 | Standardize & protonate | Largest fragment (strips counter-ions, named in the results; metal complexes drawn as ions are refused, not computed without their metal), neutral parent, dominant charge state at your pH, spin from drawn radicals. PFAS-aware: carboxylates, sulfonates and acidic perfluoroalkane sulfonamides are handled |
 | Conformer search | RDKit ETKDGv3, MMFF94s pre-optimization, energy window, symmetry-aware RMSD de-duplication; or **CREST** (iMTD-GC metadynamics with GFN2-xTB / GFN-FF) |
 | Refinement | **AIMNet2** (ML, ωB97M-D3 quality, neutral and charged), **GFN1/GFN2-xTB** (dxtb, PyTorch; tblite; or the xtb program), **GFN-FF**, **PM7/PM6** (MOPAC), or MMFF94s, optionally in an implicit solvent (ALPB, COSMO). On GPU when available with automatic CPU fallback; on a GPU all conformers of a molecule are optimized in one batch |
@@ -103,6 +103,15 @@ quantabench-cli md parse pfoa_smd       # after the run: detachment work and pea
 `build` uses the resumable job table whenever it builds more than one molecule or gets `--run-dir`,
 `--resume` or `--chunk`; a single molecule runs directly. `--batched auto|on|off` controls batched
 conformer refinement (auto: only on a GPU).
+
+## Adding molecules
+
+Type a SMILES, name or CAS number in the Molecules box and press Enter, or use File > Open for structure
+files and lists. **Edit > Paste** (Ctrl+V) adds what is on the clipboard: a structure copied in ChemDraw
+(its own format), a MOL or SD block, CDXML, Marvin, or lines of SMILES and names. The log says which
+format was used. In a text field, Ctrl+V pastes text as usual. **Edit > Copy as SMILES / MOL / CDXML**
+goes the other way, for the selected molecules (as entered); in ChemDraw, paste with Ctrl+V or Edit >
+Paste Special. You can also drop files on the window (a folder opens as a run folder) or drop text on it.
 
 ## Importing structures
 

@@ -102,10 +102,27 @@ Depends on: none (goes into today's File menu and Molecules box; UI-1 later move
   - Several structures of one constitution in a file: separate molecules, or conformers of one molecule
     (Spartan's documents work this way).
 - **Text box:** also accept InChI (`InChI=1S/...`, parsed locally) and InChIKey (PubChem).
-- **Clipboard and drag-and-drop:** Ctrl+V in the Molecules dock reads SMILES, InChI, MOL blocks and
-  CDXML text, and ChemDraw's own clipboard format (binary CDX; Windows "ChemDraw Interchange Format",
-  macOS `com.cambridgesoft.chemdraw.cdx`), so a structure copied in ChemDraw pastes as a molecule.
-  Edit > Copy as SMILES / MOL / CDXML goes the other way. Dropping files on the window opens them.
+- **Clipboard and drag-and-drop:** · done 2026-11-07 (`chem.interchange`, `gui.clipboard`), needs a hand
+  check. Edit > Paste (Ctrl+V) reads, in order: ChemDraw CDX (Windows "ChemDraw Interchange Format", which
+  Qt names `application/x-qt-windows-mime;value="ChemDraw Interchange Format"`; macOS
+  `com.cambridgesoft.chemdraw.cdx`, read straight from NSPasteboard because Qt hides unknown pasteboard
+  types; `chemical/x-cdx`), CDXML (`chemical/x-cdxml`, `com.cambridgesoft.chemdraw.cdxml`, a "CDXML"
+  format), MDL molfile (`chemical/x-mdl-molfile` / `-sdfile`, Windows "MDLCT"), file URLs, text (MOL/SD,
+  CDXML, MRV, SMILES, names, CAS; InChI once `parse_text` takes it). Names are compared ignoring case; the
+  log names the format used, and on macOS the pasteboard types are logged. RDKit 2026.09 cannot read CDX
+  bytes from Python, so `cdx_to_cdxml` translates CDX for its CDXML reader (checked on ChemDraw-written
+  test files from RDKit; the fixtures here are written by hand). Edit > Copy as SMILES / MOL / CDXML goes
+  the other way (text always; also `chemical/x-mdl-molfile`, Windows "MDLCT", `chemical/x-cdxml`). Drops:
+  files open (File > Open path, outputs through Import calculation output, a folder as a run folder), text
+  is parsed.
+  - **Needs Brandon (hand check, Windows and macOS):** in ChemDraw draw PFOA, K-PFOS (salt) and GenX (one
+    stereocenter), plus a label such as CF3 or CO2H; Ctrl+C; in QuantaBench click the molecule list and
+    press Ctrl+V. Check the SMILES and stereo, and read the log line ("Paste: N molecule(s) from ..."). On
+    the Mac the log also lists the pasteboard types: send them if the paste fails. Then Edit > Copy as
+    MOL / CDXML / SMILES and paste into ChemDraw (Ctrl+V, or Edit > Paste Special > MOL Text / CDXML Text /
+    SMILES). Also drag a `.sdf` file and a ChemDraw selection onto the window.
+  - Not done: writing binary CDX for the clipboard (so a plain Ctrl+V in ChemDraw gets ChemDraw's own
+    format), and macOS drags from ChemDraw that carry only the CDX pasteboard type (Qt hides it).
 - Acceptance: one small fixture per format (made by RDKit or written by hand, never from Brandon's data)
   round-trips to the same canonical SMILES; the options each have a test (2D → 3D gives non-zero z,
   filters drop water and HCl, SD fields become columns, standard vs read order); clipboard parsing
