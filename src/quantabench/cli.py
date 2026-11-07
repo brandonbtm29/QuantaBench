@@ -19,6 +19,7 @@
     quantabench-cli md parse DIR
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
     quantabench-cli update [--check] [--upgrade-packages]                       # git pull + reinstall if needed
+    quantabench-cli sketcher [--install [--from-zip ZIP]] [--use DIR]            # the Sketch dock's editor files
 
 Splitting work (``quantabench.dist``):
 
@@ -112,6 +113,11 @@ def _doctor(args) -> int:
     py = external.find_python_with("psi4", "psi4_python")
     print(f"    {'OK ' if py else '-- '} {'psi4 Python':30s} {py or 'no interpreter that can import psi4'}")
     print("  Optional      " + ", ".join(f"{k}={'yes' if v else 'no'}" for k, v in rep.optional_packages.items()))
+    from . import sketcher_assets
+    from .gui import sketcher_web
+
+    print(f"  Sketch dock   {sketcher_assets.status_text().split(': ', 1)[-1]}; Qt WebEngine "
+          f"{'installed' if sketcher_web.webengine_installed() else 'not installed (pip install quantabench[editor])'}")
     print(f"  Settings      {settings_mod.settings_dir() / settings_mod.SETTINGS_FILE}")
     from .dist import profile
 
@@ -1031,6 +1037,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_conformers import register as register_conformers
 
     register_conformers(sub)    # conformers compare (quantabench.chem.conformer_compare)
+    from .cli_sketcher import register as register_sketcher
+
+    register_sketcher(sub)      # sketcher: the Sketch dock's editor files (quantabench.sketcher_assets)
 
     se = sub.add_parser("settings", help="show settings, or move them (e.g. into a synced folder)")
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")

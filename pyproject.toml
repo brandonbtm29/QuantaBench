@@ -67,6 +67,10 @@ md = ["lammps>=2023.8; sys_platform != 'darwin'",
       "lammps[mpi]>=2023.8; sys_platform == 'darwin'"]
 excel = ["openpyxl>=3.1"]                  # .xlsx/.xlsm input (CompTox dashboard exports)
 validate = ["matplotlib>=3.8"]             # parity plots of `quantabench-cli validate` (skipped without it)
+# The Sketch dock (Schrödinger's Sketcher, downloaded on first use) runs in Qt WebEngine: PySide6-Addons up to
+# PySide6 6.11, PySide6-WebEngine from 6.12. The PySide6 package brings whichever its version has (same pin as
+# PySide6-Essentials above).
+editor = ["PySide6>=6.8"]
 # lammps ships wheels for Windows (win_amd64), Linux and macOS; openpyxl is pure Python
 all = ["quantabench[ml,xtb,protonate,md,excel,interop,validate]"]
 # External programs (xtb, CREST, MOPAC, Psi4) are not pip packages: see environment.yml and docs/ENGINES.md
