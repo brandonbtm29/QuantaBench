@@ -66,8 +66,20 @@ calculation output reads cclib outputs and `.spartan` documents; the 2D view (RD
   installed, never bundled or imported. The embedded editors need QtWebEngine, which is in
   `PySide6-Addons`, not the `PySide6-Essentials` QuantaBench depends on: an optional `[editor]` extra.
 
-## UI-4: Import from many formats, with Spartan-style import options · ready
+## UI-4: Import from many formats, with Spartan-style import options · ready (formats and options done)
 Depends on: none (goes into today's File menu and Molecules box; UI-1 later moves it into Build).
+- **Done 2026-11-07 (branch `feat/import-formats`):** the formats, the Open Babel fallback, the Import Options
+  dialog with Settings > Import and `Settings.import_`, the text box (InChI, InChIKey), the CLI flags
+  (`--keep-coords`, `--filter`, `--label-order`, `--same-structures`, `--import-options`, ...), posted fields as
+  molecule-list and `summary.csv` columns, and *keep coordinates* in the pipeline (seeds RDKit's conformer
+  search). Code: `chem/formats.py`, `chem/import_options.py`, `gui/import_options.py`; tests:
+  `tests/test_import_formats.py`, `tests/test_import_options.py`, `tests/test_gui_import_options.py`.
+  Screenshot: `docs/img/import_options_dialog.png`.
+- **Left:** clipboard, drag-and-drop and Copy as (below; another branch). Needs-Brandon: open a few real
+  ChemDraw `.cdx` files (the CDX reader is tested on hand-built files only; RDKit's own Python reader takes
+  every file as CDXML). Follow-ups: *keep coordinates* is not used with CREST (it makes its own start
+  geometry); posted fields show for molecules opened in this session, not for rows of an opened run folder;
+  ORCA `%coords` and Z-matrix blocks and CIF disorder are not read.
 - **Formats** (all through `chem.inputs.read_file`, so the CLI gets them too): SDF/MOL V2000 and V3000,
   MOL2, PDB, XYZ (bonds by `rdDetermineBonds`), SMILES lists, CSV/XLSX, InChI lists (`.inchi`, one per
   line), ChemDraw `.cdx` / `.cdxml` (RDKit), Marvin `.mrv`, CML (small reader, or Open Babel), CIF of
