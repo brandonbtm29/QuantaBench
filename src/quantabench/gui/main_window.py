@@ -589,7 +589,9 @@ class MainWindow(QMainWindow):
                 a.setToolTip(tip)
             return a
 
-        self.a_open = act("Open...", self.open_files, "Ctrl+O", "Open SDF, MOL, XYZ, PDB, SMI or CSV files")
+        self.a_open = act("Open...", self.open_files, "Ctrl+O",
+                          "Open structure files (SDF, MOL2, PDB, XYZ, ChemDraw, Marvin, CML, CIF, Gaussian/ORCA "
+                          "inputs, ...), SMILES or InChI lists, tables, or calculation outputs")
         self.a_open_run = act("Open run folder...", self.open_run_folder, "Ctrl+Shift+O",
                               "List the molecules of a run folder (finished or partial); results load when selected")
         self.a_resume = act("Resume run folder", self.resume_run, None,
@@ -889,7 +891,7 @@ class MainWindow(QMainWindow):
                 n += 1
             existing.add(it.id)
             rows.append(MoleculeRow(id=it.id, name=it.name or "", smiles=it.smiles or "", source=it.source or "",
-                                    input=it))
+                                    input=it, fields=molecule_list.posted_fields(it)))
         by_id = {r.id: r for r in rows}
         for res in built:                     # res.input is one of items: already renamed
             self.results.pin(res)
@@ -943,12 +945,26 @@ class MainWindow(QMainWindow):
         workers.start(w, self, on_done=done, on_failed=failed)   # relayed: the callbacks touch widgets
 
     def open_files(self, paths: list[str] | None = None) -> None:
+        """Read structure files, lists and tables (``inputs.read_raw``), ask for the import options when a file has
+        choices (``gui.import_options``), then apply them off the GUI thread. Calculation outputs and Spartan
+        documents go to File > Import calculation output."""
+        from . import import_action
+        from . import import_options as import_gui
+
         if not paths:
             patterns = " ".join(f"*{ext}" for ext in sorted(inputs_mod.FILE_TYPES))
-            paths, _ = QFileDialog.getOpenFileNames(self, "Open structures", "",
-                                                    f"Structures and tables ({patterns});;All files (*)")
+            outputs = " ".join(f"*{ext}" for ext in import_gui.CALCULATION_OUTPUTS)
+            paths, _ = QFileDialog.getOpenFileNames(
+                self, "Open structures", "", f"Structures, lists and tables ({patterns});;Calculation outputs "
+                f"({outputs});;All files: other formats through Open Babel, when installed (*)")
         if not paths:
             return
+        outputs = [p for p in paths if import_gui.is_calculation_output(p)]
+        if outputs:
+            import_action.import_files(self, outputs)
+            paths = [p for p in paths if p not in outputs]
+            if not paths:
+                return
         sheet = self.csv_sheet.text().strip() or None
         if sheet is not None and sheet.isdigit():
             sheet = int(sheet)
@@ -959,7 +975,7 @@ class MainWindow(QMainWindow):
             out, messages, errors = [], [], []
             for p in paths:
                 try:
-                    out += inputs_mod.read_file(p, log=messages.append, **opts)
+                    out += inputs_mod.read_raw(p, log=messages.append, **opts)
                 except Exception as exc:
                     errors.append(f"{Path(p).name}: {exc}")
             return out, messages, errors
@@ -969,13 +985,36 @@ class MainWindow(QMainWindow):
             self.statusBar().clearMessage()
             for m in messages:
                 self.log(m)
-            self.add_inputs(items)
             if errors:
                 QMessageBox.warning(self, "Open", "\n".join(errors))
+            if items:
+                options = import_gui.choose(self, self.s, items, [Path(p).name for p in paths])
+                if options is not None:
+                    self._import_inputs(items, options)
 
         self.statusBar().showMessage(f"Reading {len(paths)} file(s)...")
         w = workers.FunctionWorker(read_all)
         workers.start(w, self, on_done=done, on_failed=lambda msg: QMessageBox.warning(self, "Open", msg))
+
+    def _import_inputs(self, items: list, options) -> None:
+        """Apply import options (2D -> 3D embeds each structure: a worker thread) and add the molecules."""
+        from ..chem import import_options
+
+        messages: list[str] = []
+        self.statusBar().showMessage(f"Importing {len(items)} structure(s)...")
+
+        def done(out):
+            self.statusBar().clearMessage()
+            for m in messages:
+                self.log(m)
+            self.add_inputs(out)
+
+        def failed(msg):
+            self.statusBar().clearMessage()
+            QMessageBox.warning(self, "Open", msg)
+
+        w = workers.FunctionWorker(import_options.apply, items, options, messages.append)
+        workers.start(w, self, on_done=done, on_failed=failed)
 
     def remove_selected(self) -> None:
         ids = [i for i in self.mol_list.selected_ids() if i not in self.running]
