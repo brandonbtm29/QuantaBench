@@ -2,6 +2,23 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Methods guide (2026-11-07)
+- **What the methods mean** (`chem/method_guide.py`): one entry for every engine (GFN2-xTB once, with how dxtb,
+  tblite and the xtb program differ), CREST level, functional, basis set, solvent model and optimizer, plus
+  Spartan's B3LYP/6-311+G** (C-PCM), ωB97X-D/6-31G* and PM6, and the concepts behind them (dispersion
+  corrections and why plain B3LYP favours extended chains, basis-set names, implicit solvation, single point vs
+  optimization, Boltzmann weights, xTB HOMO/LUMO as trend descriptors). Each says what it is, what it is good and
+  bad at, the cost (QuantaBench's own timings where there are some), dispersion, solvation and 1-3 references
+  (checked against Crossref). 49 entries.
+- **GUI:** the pipeline pages show the entry's one-line summary under Method, Solvent (the model the chosen engine
+  uses), Optimizer, Search, CREST level, Functional and Basis set, with a "More…" link; the items' tooltips carry
+  the summaries. Method keeps its availability and gas-phase warnings. Help > Methods guide... (F1) lists every
+  entry by family, with a search box and links between entries.
+- **CLI:** `quantabench-cli methods` lists the entries, `methods NAME` shows one (case, hyphens and ω/w do not
+  matter: `methods wB97X-D`, `methods gfn2`, `methods 6-31G(d)`; `methods wb97x-d/def2-svp` shows both).
+- **docs/METHODS.md** is written from the same data by `scripts/write_methods_doc.py`; a test fails when it is out
+  of date. A test also fails when an engine, CREST level, functional or basis set in the GUI has no entry.
+
 ### After the merge (2026-11-07)
 - **One CDX reader.** `.cdx` files and ChemDraw's clipboard data go through the same converter
   (`chem.interchange.cdx_to_cdxml`), which was checked against files ChemDraw wrote. The file reader's own copy
