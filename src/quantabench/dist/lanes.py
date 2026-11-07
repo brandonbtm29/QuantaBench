@@ -31,6 +31,9 @@ How a parallel run works (``run_parallel``):
   (RDKit Mol with its conformers and properties) over its pipe, with its log lines (prefixed "[lane]") and
   stage updates. The parent is the only process that writes jobs.sqlite (mark_running, record) and the
   only one that calls ``progress``/``log``/``on_result``, all in the calling thread.
+* the largest molecules (atoms with hydrogens) are handed out first (``dispatch_order``), so the end of a
+  batch is short molecules and no lane is left alone with a large one while the others are idle; molecules
+  that crashed a process still go last. Results are returned in ``todo`` order.
 * speed-aware end of a batch (``dist.speed``, on unless ``settings.resources.speed_aware_lanes`` or
   ``build --no-speed-aware-lanes`` turns it off; only for pools with lanes of more than one kind): a free
   lane leaves the next molecule in the queue when the lanes clearly faster than it (a GPU lane next to CPU
@@ -93,6 +96,15 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
   fast as 1-thread lanes on all cores, with half the processes: each holds torch, ~0.5-1 GB).
 * external programs (an engine with ``.external``, CREST conformer search, a QM stage): 2-thread lanes on
   all threads (the programs spend part of their time in I/O and start-up).
+* CREST conformer search on a CPU with known performance cores (Apple Silicon, ``resources.performance_cores``:
+  ``hw.perflevel0.physicalcpu``, the physical cores when that cannot be read): ``CREST_LANE_THREADS`` (4)
+  threads per lane, lanes = performance cores / 4 rounded half up, at least 1 (the M3 Max's 10: 3 x 4, 12
+  threads on 10 performance + 4 efficiency cores). GFN-FF gas phase, 20 PFAS, M3 Max, 2026-11-07: 1 x 12
+  1,727 s, 3 x 4 773 s, 5 x 2 1,457 s, 6 x 2 (the 2-thread rule) 3,108 s. With 2 threads per lane the batch
+  waits for its largest molecule (54 heavy atoms) on 2 threads while the other lanes are idle; one molecule on
+  12 threads scales poorly. Elsewhere CREST keeps the 2-thread rule above: on NOVA (WSL CREST) the layout
+  mattered little (4 large ions: 1 x 23 756 s, 4 x 5 769 s). Lanes are planned per run, not per stage: the
+  refinement and properties after CREST (tblite, xtb, ...) run in the same lanes with the same threads.
 * a GPU-capable engine with a GPU: one GPU lane with 4 threads (RDKit embedding and the host side of the
   batch run on the CPU) plus CPU lanes on the remaining threads by the rules above, when this machine's
   benchmark (``machines --bench <method>``, registry keys ``<method>@<device>``, ``+water`` for a run in
@@ -140,6 +152,8 @@ TYPICAL_ELEMENTS = (1, 6, 7, 8, 9, 16)
 #: Working set of one lane process in GB, by workload, for the memory cap of the auto plan
 LANE_MEMORY_GB = {"mmff": 0.4, "native": 0.6, "torch": 1.2, "external": 0.6}
 GPU_LANE_THREADS = 4
+#: Threads per lane of the CREST plan on a CPU with known performance cores (Apple Silicon); see plan_auto
+CREST_LANE_THREADS = 4
 STARTUP_FAILURES = 3          # a lane that dies this often before it is ready is given up
 #: Windows waits on at most 63 handles at once (WaitForMultipleObjects) and the pool waits on two per lane
 #: (its pipe and its process), so more lanes would make every wait raise ValueError.
@@ -191,6 +205,7 @@ class _CPUReport:
     ram_gb: float
     gpus: list
     torch_backend: str = "none"
+    performance_cores: int = 0       # ``resources.performance_cores()``: Apple Silicon's, 0 = none known
 
 
 def cpu_report() -> _CPUReport:
@@ -199,7 +214,7 @@ def cpu_report() -> _CPUReport:
     from .. import resources
 
     return _CPUReport(resources.physical_cores(), resources.logical_cores(),
-                      psutil.virtual_memory().total / 1024**3, [], "unknown")
+                      psutil.virtual_memory().total / 1024**3, [], "unknown", resources.performance_cores())
 
 
 def _gpus(report) -> tuple[str, list]:
@@ -345,6 +360,8 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
     total = resources.resolve_threads(cfg.threads)
     hw = report if report is not None else cpu_report()
     cores = max(1, min(int(hw.physical_cores or total), total))
+    perf = max(0, min(int(getattr(hw, "performance_cores", 0) or 0), cores))
+    crest = getattr(cfg, "conformer_search", "") == "crest"
     method, kind, gpu_capable = workload(cfg)
     device = "cpu"
     why_gpu = ""
@@ -403,9 +420,16 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
             per = max(1, budget // max(1, wanted))
             reason = (f"{method}: one lane per physical core, {per} thread{'s' if per > 1 else ''} each"
                       + (" (all the threads: SMT)" if per > 1 else ""))
+        elif kind == "external" and crest and perf:
+            # CREST on Apple Silicon: about 4 threads per lane on the performance cores (module docstring)
+            fast = max(1, perf - (lanes[0].threads if lanes else 0))     # performance cores a GPU lane leaves
+            per = min(CREST_LANE_THREADS, budget)
+            wanted = max(1, min(int(fast / CREST_LANE_THREADS + 0.5), budget // per))    # rounded half up
+            reason = (f"CREST: {per}-thread lanes, one per {CREST_LANE_THREADS} of the {perf} performance cores "
+                      "(rounded)")
         elif kind == "external":
             per, wanted = 2, budget // 2
-            reason = "external programs: 2-thread lanes on all threads"
+            reason = ("CREST" if crest else "external programs") + ": 2-thread lanes on all threads"
         else:
             per, wanted = 2, min(cpu_cores, budget) // 2
             reason = f"{method} on the CPU: 2-thread lanes on the physical cores"
@@ -894,6 +918,16 @@ def speed_policy(lanes: list[Lane], cfg):
     return speed.SpeedPolicy(lanes, speed.registry_seeds(lanes, method, solvent=getattr(cfg, "solvent", "")))
 
 
+def dispatch_order(todo, size_of, crashes: dict[str, int] | None = None) -> list[int]:
+    """Indices into ``todo`` ([(id, MoleculeInput)]) in the order a parallel run hands the molecules out:
+    largest first (``size_of(id)``: ``speed.molecule_size``, atoms with hydrogens), so the end of the batch is
+    short molecules and no lane is left alone with a large one while the others are idle (the CREST runs on
+    the Mac waited 51 min for a 54-heavy-atom molecule on 2 threads). Molecules that crashed a process
+    (``crashes``) still go last, as in ``JobStore.todo``; equal sizes keep the input order."""
+    crashes = crashes or {}
+    return sorted(range(len(todo)), key=lambda j: (crashes.get(todo[j][0], 0), -size_of(todo[j][0])))
+
+
 def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, done_before: int,
                  progress, should_stop, log, on_result, keep_results: bool = True,
                  speed_aware: bool | None = None, handoff=None) -> list:
@@ -935,9 +969,9 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     # each lane gets its share of the machine's memory for the dxtb steps (chem.memory_guard), resolved once here
     cfg = replace(cfg, memory_budget_gb=pipeline_mod.resolved_budget(cfg, len(lanes), log))
     pool = LanePool(lanes, cfg, run_dir, log)
-    queue = deque((k, mol_id, inp) for k, (mol_id, inp) in enumerate(todo))
     texts = {mol_id: jobs.input_to_json(inp) for mol_id, inp in todo}
     inputs = dict(todo)
+    position = {mol_id: j for j, (mol_id, _) in enumerate(todo)}     # results are returned in todo order
     results: dict[int, MoleculeResult] = {}
     n_done = 0
     stopping = False
@@ -953,6 +987,10 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
 
     def typical_size() -> float:
         return sum(sizes.values()) / len(sizes) if sizes else speed.DEFAULT_SIZE
+
+    # k: the dispatch position (progress counts in it), largest molecules first
+    queue = deque((k, todo[j][0], todo[j][1]) for k, j in enumerate(dispatch_order(todo, size_of,
+                                                                                   store.crash_counts())))
 
     def lane_state(w: _LaneProcess) -> str:
         if w.conn is None or not w.alive:
@@ -976,7 +1014,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     def finish(w: _LaneProcess | None, k: int, mol_id: str, res, result_dir: str = "") -> None:
         nonlocal n_done
         store.record(res, result_dir)
-        results[k] = res if keep_results else jobs.light_result(res)
+        results[position[mol_id]] = res if keep_results else jobs.light_result(res)
         n_done += 1
         if w is not None:
             w.done += 1

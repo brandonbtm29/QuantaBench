@@ -68,7 +68,7 @@ def _doctor(args) -> int:
         return 0
     print(f"QuantaBench {__version__}")
     print(f"  OS            {rep.os}{' (WSL2)' if rep.wsl else ''}, Python {rep.python}")
-    print(f"  CPU           {rep.cpu_name}, {rep.physical_cores} cores / {rep.logical_cores} threads, "
+    print(f"  CPU           {rep.cpu_name}, {rep.cores_text()} / {rep.logical_cores} threads, "
           f"{rep.ram_gb:.0f} GB RAM")
     print(f"  PyTorch       {rep.torch_version or 'not installed'} (backend: {rep.torch_backend})")
     for g in rep.gpus:
@@ -654,7 +654,8 @@ def _settings(args) -> int:
         from .chem import external
 
         known = (*external.PROGRAMS, "psi4_python")
-        machine = settings_mod.machine_key(args.machine) if args.machine else settings_mod.this_machine()
+        # --machine NAME: that machine; no --machine, or --machine with no name: this one
+        machine = settings_mod.machine_key(args.machine) if (args.machine or "").strip() else settings_mod.this_machine()
         for item in args.engine_path:
             name, sep, value = item.partition("=")
             if not sep or name.strip() not in known:
@@ -1036,9 +1037,12 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")
     se.add_argument("--init", action="store_true", help="write settings.json with defaults if missing")
     se.add_argument("--engine-path", action="append", metavar="NAME=PATH",
-                    help="path of an external program (xtb, crest, mopac, psi4, psi4_python) on this machine only "
-                         "(engines.machine_paths; the settings file is shared); NAME= finds it automatically again")
-    se.add_argument("--machine", help="with --engine-path: set it for this machine name instead of this one")
+                    help="path of an external program (xtb, crest, mopac, psi4, psi4_python) for this machine only, "
+                         "or for the machine --machine NAME names (engines.machine_paths; the settings file is "
+                         "shared); NAME= finds it automatically again")
+    se.add_argument("--machine", nargs="?", const="", metavar="NAME",
+                    help="with --engine-path: the machine to set the path for. Without --machine, or with "
+                         "--machine and no name, it is this machine")
     se.set_defaults(func=_settings)
     return p
 

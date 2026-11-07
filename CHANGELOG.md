@@ -2,6 +2,18 @@
 
 ## 0.3.0.dev (unreleased)
 
+### CREST lanes on Apple Silicon, largest molecules first (2026-11-07)
+- **CREST lanes on Apple Silicon** (`dist/lanes.py`, `resources.py`): `--lanes auto` for a CREST run gives
+  4 threads per lane, one lane per 4 performance cores (`sysctl hw.perflevel0.physicalcpu`; the physical cores
+  when that cannot be read). The M3 Max gets 3 x 4 instead of 6 x 2. On that machine 3 x 4 took 773 s and 6 x 2
+  3,108 s for 20 PFAS with GFN-FF in the gas phase. Other machines keep 2-thread lanes on all threads (NOVA:
+  11 x 2). `doctor` shows the performance cores ("14 cores (10 performance)").
+- **Largest molecules first** (`dist/lanes.py`): parallel runs hand out the largest molecules first (atoms
+  with hydrogens), as grid shares already did. A batch no longer ends with one large molecule on 2 threads while
+  the other lanes are idle. Molecules that crashed a lane still go last. Results stay in input order.
+- **`settings --engine-path NAME=PATH --machine`**: `--machine` with no name means this machine (before, it
+  was an error).
+
 ### CREST on the Mac, loud CREST failures, engine paths per machine (2026-11-06)
 - **Why the Mac's CREST failed.** conda-forge's osx-arm64 `crest 3.0.2` links Apple's Accelerate, whose classic
   BLAS returns a double from `sdot` (f2c convention). ANCOPT's Davidson step (19+ atoms) then fails, so every

@@ -472,6 +472,11 @@ class JobStore:
         row = self.conn.execute("SELECT crashes FROM molecules WHERE id = ?", (mol_id,)).fetchone()
         return int(row[0]) if row else MAX_CRASHES
 
+    def crash_counts(self) -> dict[str, int]:
+        """{id: crashes} of the molecules that crashed the process at least once."""
+        rows = self.conn.execute("SELECT id, crashes FROM molecules WHERE crashes > 0")
+        return {r["id"]: int(r["crashes"]) for r in rows}
+
     def todo(self, retry_failed: bool = False) -> list[tuple[str, MoleculeInput]]:
         """Molecules still to do, in input order, except that molecules which crashed the process go last."""
         wanted = ("pending", "running", "cancelled") + (("failed",) if retry_failed else ())

@@ -226,8 +226,8 @@ places (`~/miniforge3/envs/*`, `~/mambaforge`, `~/miniconda3`, `~/micromamba`, .
 usually belongs to one: NOVA runs CREST as `wsl:/home/<you>/micromamba/envs/qb-tools/bin/crest`, the Mac
 its own build. Settings > Engines and `quantabench-cli settings --engine-path crest=PATH` therefore store
 the path for this machine only (`engines.machine_paths`, keyed by the machine name as `dist.machine_lanes`
-is); `--machine NAME` sets another machine's, and `crest=` (empty) goes back to finding it automatically
-there. `engines.paths` stays the default of every machine (a path that does not exist on a machine, or a
+is); `--machine NAME` sets another machine's (`--machine` with no name is this machine), and `crest=` (empty)
+goes back to finding it automatically there. `engines.paths` stays the default of every machine (a path that does not exist on a machine, or a
 `wsl:` path off Windows, is skipped there). `doctor` names the source: "settings (this machine)" or
 "settings". A machine's entry wins over the environment variable, as `engines.paths` always did; to try
 another binary for one run, pass `QUANTABENCH_CREST` on a machine without an entry. Saving merges the
@@ -355,7 +355,8 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   - Windows: install it inside WSL2 and set NOVA's CREST path to
     `wsl:/home/<you>/miniforge3/envs/qb-tools/bin/crest` (Settings > Engines on NOVA, or
     `quantabench-cli settings --engine-path crest=wsl:/home/...` there: this machine only, see Finding
-    programs). The full path is needed because WSL starts it without conda's PATH.
+    programs; `--machine NAME` sets another machine's, `--machine` alone this one's). The full path is needed
+    because WSL starts it without conda's PATH.
   - macOS (Apple Silicon): **not conda-forge's crest.** Its osx-arm64 3.0.2 cannot optimize molecules of 19
     atoms or more (below). Use the fork's macOS build: `crest-macos-arm64.tar.gz` from `brandonbtm29/crest`
     (branch `qb/macos`, workflow `qb-macos`). Unpack it anywhere, keep `bin/` and `lib/` together, and set it
@@ -435,9 +436,19 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     |---|---|---|---|---|
     | wall | 1,727 s | **773 s** | 1,457 s | 3,108 s |
 
-    3 x 4 is 4.0x faster than today's auto plan and faster than NOVA's WSL run (1,247 s, 20 x 2). Two threads
-    per lane leave the largest molecule as the last one running, on 2 threads; 12 threads on one molecule scale
-    poorly. One run each, so the ranking is clear but the exact factors are not.
+    3 x 4 is 4.0x faster than the auto plan of the time and faster than NOVA's WSL run (1,247 s, 20 x 2). Two
+    threads per lane leave the largest molecule as the last one running, on 2 threads; 12 threads on one molecule
+    scale poorly. One run each, so the ranking is clear but the exact factors are not.
+- **Lanes (`--lanes auto`, since 2026-11-07).**
+  - Apple Silicon: 4 threads per lane, one lane per 4 performance cores, rounded half up (at least 1). The
+    performance cores are `sysctl hw.perflevel0.physicalcpu`, or the physical cores when that cannot be read.
+    The M3 Max (10 performance + 4 efficiency cores) gets 3 x 4. `doctor` shows "14 cores (10 performance)".
+  - Other machines keep 2-thread lanes on all threads: NOVA (24 threads, 23 used) gets 11 x 2. There the layout
+    mattered little: 4 large ions took 756 s as 1 x 23 and 769 s as 4 x 5.
+  - Lanes are planned once per run, not per stage. The refinement and properties after CREST (tblite, xtb)
+    run in the same lanes, with the same threads.
+  - Every parallel run starts its largest molecules first (atoms with hydrogens), so no lane is left alone
+    with a large molecule at the end. Molecules that crashed a lane still go last.
 
 ## tblite (`tblite-gfn2`, `tblite-gfn1`)
 

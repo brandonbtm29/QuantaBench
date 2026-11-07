@@ -81,6 +81,9 @@ numbers:
 - No benchmark of the method on both devices: the GPU lane as before, "(no benchmark ... on this machine: GPU
   lane by default)".
 
+CREST runs on Apple Silicon get 4-thread lanes, one per 4 performance cores (3 x 4 on the M3 Max); other
+machines keep 2-thread lanes (docs/ENGINES.md, CREST). Every parallel run starts its largest molecules first.
+
 A run in water reads only water benchmarks: `machines --bench tblite-gfn2 --solvent water` records
 `tblite-gfn2+water@cpu`, never mixed with the gas-phase `tblite-gfn2@cpu` (methods without a water model are not
 timed in water: their runs are gas phase). `--bench-set mixed` adds ethanol, toluene, caffeine, atrazine and

@@ -22,6 +22,29 @@ def test_detect_and_cpu_device():
     assert resources.select_device("auto") in ("cpu", "mps") or resources.select_device("auto").startswith("cuda")
 
 
+def test_performance_cores(monkeypatch):
+    """Apple Silicon's performance cores from sysctl (also under Rosetta), detected once; 0 on other machines."""
+    calls = []
+
+    def sysctl(name):
+        calls.append(name)
+        return {"hw.perflevel0.physicalcpu": 10, "hw.perflevel1.physicalcpu": 4}.get(name)
+
+    monkeypatch.setattr(resources, "_perf_cores", None)
+    monkeypatch.setattr(resources, "_sysctl_int", sysctl)
+    monkeypatch.setattr(resources, "_os_arch", lambda: ("darwin", "x86_64"))      # Rosetta on an M3 Max
+    assert resources.performance_cores() == 10 and resources.performance_cores() == 10
+    assert calls == ["hw.perflevel0.physicalcpu"]                                  # cached
+    rep = resources.HardwareReport(os="", python="", cpu_name="Apple M3 Max", physical_cores=14, logical_cores=14,
+                                   ram_gb=36.0, wsl=False, performance_cores=10)
+    assert rep.summary().startswith("Apple M3 Max: 14 cores (10 performance) / 14 threads")
+    rep.performance_cores = 0
+    assert rep.cores_text() == "14 cores"
+    monkeypatch.setattr(resources, "_perf_cores", None)
+    monkeypatch.setattr(resources, "_os_arch", lambda: ("win32", "amd64"))
+    assert resources.performance_cores() == 0 and resources.detect_light().performance_cores == 0
+
+
 def test_import_checks_and_hints():
     checks = resources.import_checks()
     assert all(ok for _, mod, ok, _ in checks if mod.startswith(("rdkit", "ase"))), checks

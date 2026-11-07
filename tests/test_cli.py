@@ -142,3 +142,15 @@ def test_settings_engine_path_is_per_machine(capsys, monkeypatch):
     assert cli.main(["settings", "--engine-path", "crest="]) == 0          # automatic again on this machine
     assert "crest" not in sm.load().engine_paths_for()
     assert cli.main(["settings", "--engine-path", "nonsense=/x"]) == 2
+    # --machine with no name is this machine, before or after --engine-path
+    capsys.readouterr()
+    assert cli.main(["settings", "--engine-path", "crest=/opt/crest/bin/crest", "--machine"]) == 0
+    assert "crest on brandons-macbook-pro: /opt/crest/bin/crest" in capsys.readouterr().out
+    assert cli.main(["settings", "--machine", "--engine-path", "xtb=/opt/xtb/bin/xtb"]) == 0
+    s = sm.load()
+    assert s.engine_paths_for()["crest"] == ("/opt/crest/bin/crest", "this machine")
+    assert s.engine_paths_for()["xtb"] == ("/opt/xtb/bin/xtb", "this machine")
+    assert s.engine_paths_for("btm-nova")["crest"][0] == "wsl:/home/b/envs/qb-tools/bin/crest"     # untouched
+    with pytest.raises(SystemExit):
+        cli.main(["settings", "--help"])
+    assert "--machine [NAME]" in " ".join(capsys.readouterr().out.split())

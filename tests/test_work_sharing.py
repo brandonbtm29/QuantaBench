@@ -279,10 +279,15 @@ def test_grid_moves_unstarted_molecules_to_the_idle_machine(make_worker, qb_sett
 
 
 def test_lanes_hand_over_from_the_end_of_their_queue(tmp_path):
-    """Two lane processes: a release answered by the dispatch loop takes queued molecules, never started ones."""
-    from quantabench.dist.lanes import Lane
+    """Two lane processes: a release answered by the dispatch loop takes queued molecules, never started ones:
+    the end of the lanes' queue, which hands out the largest molecules first."""
+    from quantabench.dist import speed
+    from quantabench.dist.lanes import Lane, dispatch_order
 
     mols, run_dir, h = inputs(), tmp_path / "lanes", jobs.Handoff()
+    by_id = {m.id: m for m in mols}
+    queued = [mols[j] for j in dispatch_order([(m.id, m) for m in mols], lambda i: speed.molecule_size(by_id[i]))]
+    assert queued[0].id == "butane" and queued[-1].id == "formic_acid"          # 14 atoms ... 5 atoms
     cfg = pipeline.BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False,
                                write_files=False)
     lanes = [Lane("cpu1", "cpu", 1), Lane("cpu2", "cpu", 1)]
@@ -292,8 +297,8 @@ def test_lanes_hand_over_from_the_end_of_their_queue(tmp_path):
     th.start()
     moved = h.request(4, "w2", timeout=60)       # served at the loop's first turn, before lanes are ready
     th.join(240)
-    assert moved == [m.id for m in mols[-4:]][::-1]
+    assert moved == [m.id for m in queued[-4:]][::-1]
     results, _ = out["r"]
-    assert {r.input.id for r in results} == {m.id for m in mols[:-4]} and all(r.status == "ok" for r in results)
+    assert {r.input.id for r in results} == {m.id for m in queued[:-4]} and all(r.status == "ok" for r in results)
     st = jobs.open_run(run_dir)
     assert st.counts["moved"] == 4 and st.finished == st.total == len(mols) - 4 and h.closed
