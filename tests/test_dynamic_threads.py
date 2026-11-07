@@ -46,21 +46,23 @@ def test_widths_are_whole_lanes_within_the_free_threads():
     assert T.choose_width(T.crest_cost(80), 3, 2, 12, rest=0.0) == 3        # never below the lane's own
 
 
-def test_a_wider_width_must_be_clearly_better():
-    """Twice the threads for a 1 % earlier predicted end is not worth the efficiency lost."""
-    base, budget = 4, 12
-    rest = 1.0
-    cost = 1.0
-    # choose rest so that 8 threads predict an end only 1 % earlier than 4
-    for _ in range(60):
+def test_only_a_clearly_dominant_molecule_is_widened():
+    """A molecule is widened only when its predicted time at the lane's width is more than DOMINANCE times the
+    rest's work over the other threads (the size model scatters x1.8), and only to a width that predicts a clearly
+    earlier end (MARGIN)."""
+    base, budget, cost = 4, 12, 1.0
+    rest = 1e-3
+    seen = set()
+    for _ in range(80):
         w = T.choose_width(cost, base, 12, budget, rest)
+        seen.add(w)
+        dominant = cost > T.DOMINANCE * rest / (budget - base)
         e4 = T.predicted_end(cost, 4, base, budget, rest)
-        e8 = T.predicted_end(cost, 8, base, budget, rest)
-        if w == 8:
-            assert e8 < e4 * (1 - T.MARGIN)
-        else:
-            assert e8 >= e4 * (1 - T.MARGIN)
+        ew = T.predicted_end(cost, w, base, budget, rest)
+        assert (w > base) == (dominant and T.predicted_end(cost, 8, base, budget, rest) < e4 * (1 - T.MARGIN))
+        assert w == base or ew < e4 * (1 - T.MARGIN)
         rest *= 1.15
+    assert seen == {4, 8}
 
 
 # ------------------------------------------------------------------------------------- the accounting

@@ -15,11 +15,15 @@ properties) runs on the lane's own threads.
     DynamicThreads(budget, cost_of)   one run's policy state: the budget, the running CREST calls, calibration
 
 Policy (chosen with a discrete-event simulation of batches on the Mac's and NOVA's lane plans, docs/ENGINES.md):
-a molecule's CREST width is a whole number of lanes' worth (base, 2 x base, ... up to the free threads). For
-each width the predicted end of the batch is the larger of this CREST call at that width and the rest of the
-work spread over the threads left; the narrowest width wins unless a wider one predicts an end at least
-``MARGIN`` (10 %) earlier. Predicted CREST cost: ``size ** COST_POWER`` with ``speed.molecule_size`` (atoms
-with hydrogens; the fitted exponent is 3.9 for GFN-FF and 4.5 for GFN2 on the Mac), speedup
+a molecule gets more than its lane's threads only when it would set the end of the batch on its own: its
+predicted CREST time at the lane's width is more than ``DOMINANCE`` (2) times the rest of the work spread over
+the other threads. The size model is off by a factor of about 1.8 per molecule, and the factor 2 keeps a
+molecule that only looks large from taking lanes the real straggler needs. Its width is then a whole number of
+lanes' worth (base, 2 x base, ... up to the free threads): for each width the predicted end of the batch is the
+larger of this CREST call at that width and the rest of the work spread over the threads left, and the
+narrowest width wins unless a wider one predicts an end at least ``MARGIN`` (10 %) earlier. With nothing else
+to do, it gets every whole lane free. Predicted CREST cost: ``size ** COST_POWER`` with ``speed.molecule_size``
+(atoms with hydrogens; the fitted exponent is 3.9 for GFN-FF and 4.5 for GFN2 on the Mac), speedup
 ``(width / base) ** SPEEDUP_POWER``. The rest is the queued molecules' cost plus what the running CREST calls
 have left (calibrated in seconds from the CREST calls already finished, else their whole cost).
 
@@ -41,6 +45,9 @@ COST_POWER = 4.0
 SPEEDUP_POWER = 0.6
 #: a wider CREST call must predict an end of the batch at least this much earlier than the narrower one
 MARGIN = 0.10
+#: only a molecule whose predicted time at its lane's width exceeds this many times the rest's work over the other
+#: threads is widened (the size model scatters x1.8 per molecule)
+DOMINANCE = 2.0
 #: calibration samples kept (seconds per cost unit of the finished CREST calls)
 CALIBRATION_SAMPLES = 50
 
@@ -66,12 +73,15 @@ def predicted_end(cost: float, width: int, base: int, budget: int, rest: float) 
 
 def choose_width(cost: float, base: int, free: int, budget: int, rest: float) -> int:
     """Threads for a CREST call of predicted ``cost`` started on a lane of ``base`` threads, with ``free`` threads
-    free in a budget of ``budget`` and ``rest`` (thread x cost units) of other work to do: whole lanes' worth, the
-    narrowest unless a wider width predicts an end ``MARGIN`` earlier. Never more than ``free``, never less than
-    ``base``. With nothing else to do (``rest`` 0) the threads have no other use: all whole lanes' worth free."""
+    free in a budget of ``budget`` and ``rest`` (thread x cost units) of other work to do. ``base`` unless the call
+    would set the end of the batch on its own (``DOMINANCE``); then whole lanes' worth, the narrowest unless a
+    wider width predicts an end ``MARGIN`` earlier. Never more than ``free``, never less than ``base``. With
+    nothing else to do (``rest`` 0) the threads have no other use: all whole lanes' worth free."""
     base = max(1, int(base))
     if rest <= 0:
         return max(base, int(free) // base * base)
+    if budget <= base or cost <= DOMINANCE * rest / (budget - base):
+        return base
     best_w = base
     best = predicted_end(cost, base, base, budget, rest)
     w = 2 * base
