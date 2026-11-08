@@ -95,7 +95,9 @@ radon (Z = 86).
   dipoles 0.81 D MAE from ωB97X-D/6-31G\* (0.76 D higher on average, 63 PFAS), and water dipoles 0.52 D MAE
   from Spartan's B3LYP/C-PCM (61 ions; docs/VALIDATION.md, VAL-3). In the gas phase a multiply charged anion
   can have an unbound HOMO, and its polarizability can then diverge (QuantaBench discards implausible values
-  with a note).
+  with a note). For flexible PFAS ions in water its conformer ranking disagreed with ωB97X-D and B3LYP-D3(BJ)
+  in PCM by tens of kJ/mol, in the gas phase too (the DFT conformer test, VAL-3). When the conformer matters,
+  re-rank a diverse pool with the QM stage in PCM; DFT's lowest was often not among GFN2's lowest three.
 - **Cost:** Milliseconds to a fraction of a second per energy and gradient for PFAS-size molecules on one
   core. QuantaBench measured the whole pipeline for 24 PFAS on BTM NOVA: 126 s with tblite GFN2, against 76 s
   with AIMNet2 and 34 s with MMFF94s alone (docs/dev/BACKLOG.md, PERF-1).
@@ -605,8 +607,10 @@ into hairpins in the gas phase, held together by dispersion between the strands.
   new work.
 - **Watch out:** This matters for PFAS conformers. In QuantaBench's comparison, GFN2/ALPB (with D4) put
   compact, low-dipole ions lowest and Spartan's B3LYP/C-PCM single points put extended ones lowest, and the
-  conformer choice is 88 % of the 4.35 D water-dipole gap (docs/VALIDATION.md, VAL-3). The missing dispersion
-  is a likely part of that; the solvent models and geometries differ too.
+  conformer choice is 88 % of the 4.35 D water-dipole gap (docs/VALIDATION.md, VAL-3). Dispersion is only a
+  small part of that: at common GFN2 geometries D3(BJ) moves the energy difference between the two picks by
+  about 10 kJ/mol, and ωB97X-D and B3LYP-D3(BJ) in PCM water side with Spartan's pick, not GFN2's (the DFT
+  conformer test, VAL-3).
 - **Cost:** Hybrid DFT: minutes per conformer for PFAS. QuantaBench measured ωB97X-D/def2-SVP on PFHpA (23
   atoms, 313 basis functions): SCF 101 s; with properties, cubes and the polarizability 507 s (2 threads,
   docs/VALIDATION.md). Other hybrids cost roughly the same; time grows about as N^2.5 with the number of basis
@@ -1339,8 +1343,9 @@ same effect.
 - **Watch out:** A functional without one, like plain B3LYP in Spartan's runs, lacks the attraction between
   chain segments that touch, so it tends to favour extended conformers over folded ones ([B3LYP (no
   dispersion)](#b3lyp)). For PFAS ions in water, GFN2/ALPB (D4) and Spartan's B3LYP/C-PCM disagree on folded
-  vs extended conformers by tens of kJ/mol (VAL-3); the missing dispersion is a likely part of that, with the
-  different solvent models and geometries.
+  vs extended conformers by tens of kJ/mol (VAL-3). A DFT test found dispersion only a small part of that
+  (D3(BJ): about 10 kJ/mol): ωB97X-D and B3LYP-D3(BJ) also put Spartan's pick below GFN2's in most of those
+  ions, and GFN2/ALPB is the outlier.
 - **Cost:** Negligible: milliseconds even for large molecules.
 - **Dispersion:** This entry.
 - **Solvation:** Not applicable.

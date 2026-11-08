@@ -18,6 +18,10 @@
   matter: `methods wB97X-D`, `methods gfn2`, `methods 6-31G(d)`; `methods wb97x-d/def2-svp` shows both).
 - **docs/METHODS.md** is written from the same data by `scripts/write_methods_doc.py`; a test fails when it is out
   of date. A test also fails when an engine, CREST level, functional or basis set in the GUI has no entry.
+- **The DFT conformer test** (docs/VALIDATION.md, VAL-3) is now in the B3LYP, dispersion and GFN2-xTB entries.
+  For PFAS ions in water, the missing dispersion in Spartan's B3LYP is a small part of the disagreement with
+  GFN2/ALPB; ωB97X-D and B3LYP-D3(BJ) also put Spartan's pick below GFN2's in most ions, and GFN2's ranking is the
+  outlier.
 
 ### After the merge (2026-11-07)
 - **One CDX reader.** `.cdx` files and ChemDraw's clipboard data go through the same converter
