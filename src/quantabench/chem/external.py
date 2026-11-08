@@ -681,23 +681,82 @@ def _children_rusage() -> tuple[float, float] | None:
     return ru.ru_utime + ru.ru_stime, rss
 
 
-def _windows_usage(proc: subprocess.Popen) -> tuple[float | None, float | None]:
-    """(CPU s, peak working set MB) of a finished program from its process handle (Windows). Popen keeps the
-    handle open, so the numbers are there after the program has ended. Only the program itself: a ``.bat`` or
-    ``wsl.exe`` launcher reports its own (tiny) time, which the caller does not use."""
+def _k32():
     import ctypes
     from ctypes import wintypes
 
-    handle = wintypes.HANDLE(int(proc._handle))           # noqa: SLF001 - Popen's process handle on Windows
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    k32.AssignProcessToJobObject.restype = wintypes.BOOL
+    k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                              ctypes.POINTER(wintypes.DWORD)]
+    k32.QueryInformationJobObject.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
     k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
     k32.GetProcessTimes.restype = wintypes.BOOL
-    times = [wintypes.FILETIME() for _ in range(4)]
-    cpu = None
-    if k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
-        def secs(ft) -> float:
-            return ((ft.dwHighDateTime << 32) | ft.dwLowDateTime) * 1e-7      # 100 ns units
-        cpu = secs(times[2]) + secs(times[3])             # kernel + user
+    return k32
+
+
+def _windows_job(proc: subprocess.Popen):
+    """A job object holding the program, so its CPU time counts the processes it starts (a venv's python.exe
+    launcher, a conda wrapper), as getrusage(RUSAGE_CHILDREN) does on POSIX. No limits are set, and closing the
+    handle leaves the processes alone. None when it cannot be made (the program then counts alone)."""
+    k32 = _k32()
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        return None
+    if not k32.AssignProcessToJobObject(job, int(proc._handle)):     # noqa: SLF001 - Popen's process handle
+        k32.CloseHandle(job)
+        return None
+    return job
+
+
+def _windows_usage(proc: subprocess.Popen, job=None) -> tuple[float | None, float | None]:
+    """(CPU s, peak memory MB) of a finished program (Windows). With its job object: the CPU time of every
+    process in the job, and when it started others, the largest one's peak private memory; otherwise the process
+    handle's own times and peak working set (Popen keeps the handle open, so they are there after the end)."""
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = _k32()
+    handle = wintypes.HANDLE(int(proc._handle))           # noqa: SLF001 - Popen's process handle on Windows
+    cpu = peak = None
+    n_processes = 1
+    if job:
+        class Accounting(ctypes.Structure):               # JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+            _fields_ = [("TotalUserTime", ctypes.c_int64), ("TotalKernelTime", ctypes.c_int64),
+                        ("ThisPeriodTotalUserTime", ctypes.c_int64), ("ThisPeriodTotalKernelTime", ctypes.c_int64),
+                        ("TotalPageFaultCount", wintypes.DWORD), ("TotalProcesses", wintypes.DWORD),
+                        ("ActiveProcesses", wintypes.DWORD), ("TotalTerminatedProcesses", wintypes.DWORD)]
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class ExtendedLimits(ctypes.Structure):           # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+            _fields_ = [("Basic", BasicLimits), ("IoInfo", ctypes.c_uint64 * 6),
+                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        acc = Accounting()
+        if k32.QueryInformationJobObject(job, 1, ctypes.byref(acc), ctypes.sizeof(acc), None):
+            cpu = (acc.TotalUserTime + acc.TotalKernelTime) * 1e-7          # 100 ns units
+            n_processes = int(acc.TotalProcesses)
+        ext = ExtendedLimits()
+        if n_processes > 1 and k32.QueryInformationJobObject(job, 9, ctypes.byref(ext), ctypes.sizeof(ext), None):
+            peak = ext.PeakProcessMemoryUsed / 2**20 or None
+    if cpu is None:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            def secs(ft) -> float:
+                return ((ft.dwHighDateTime << 32) | ft.dwLowDateTime) * 1e-7
+            cpu = secs(times[2]) + secs(times[3])         # kernel + user
 
     class Counters(ctypes.Structure):
         _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
@@ -706,13 +765,13 @@ def _windows_usage(proc: subprocess.Popen) -> tuple[float | None, float | None]:
                     ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
                     ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
 
-    k32.K32GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
-    k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
-    counters = Counters()
-    counters.cb = ctypes.sizeof(Counters)
-    peak = None
-    if k32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
-        peak = counters.PeakWorkingSetSize / 2**20
+    if peak is None:
+        k32.K32GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
+        counters = Counters()
+        counters.cb = ctypes.sizeof(Counters)
+        if k32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            peak = counters.PeakWorkingSetSize / 2**20
     return cpu, peak
 
 
@@ -721,8 +780,8 @@ class _UsageMeter:
     None. POSIX: the change of ``getrusage(RUSAGE_CHILDREN)`` across the run, exact for the program and the
     children it waited for, unless another ``run_program`` ran in this process at the same time (then None);
     the peak memory is sampled about once a second, and taken from ``ru_maxrss`` when this program set a new
-    maximum. Windows: the process handle's times and peak working set; nothing for ``wsl.exe`` (the work runs
-    in the Linux VM) or a batch-file launcher."""
+    maximum. Windows: a job object's times (the program and the processes it starts) and peak memory; nothing
+    for ``wsl.exe`` (the work runs in the Linux VM) or a batch-file launcher."""
 
     SAMPLE_EVERY_S = 1.0
 
@@ -731,6 +790,7 @@ class _UsageMeter:
         self.before = None
         self.proc = None
         self.ps = None
+        self.job = None
         self.peak = None
         self.next_sample = 0.0
         self.key = id(self)
@@ -746,7 +806,13 @@ class _UsageMeter:
 
     def started(self, proc: subprocess.Popen) -> None:
         self.proc = proc
-        if not self.ok or IS_WINDOWS:
+        if not self.ok:
+            return
+        if IS_WINDOWS:
+            try:
+                self.job = _windows_job(proc)
+            except Exception:  # noqa: BLE001 - measuring must never stop a program
+                self.job = None
             return
         try:
             import psutil
@@ -775,7 +841,7 @@ class _UsageMeter:
             if not self.ok or self.proc is None or self.proc.returncode is None:
                 return None, None
             if IS_WINDOWS:
-                return _windows_usage(self.proc)
+                return _windows_usage(self.proc, self.job)
             after = _children_rusage()
             if after is None or self.before is None:
                 return None, self.peak
@@ -786,6 +852,13 @@ class _UsageMeter:
             return cpu, peak
         except Exception:  # noqa: BLE001
             return None, None
+        finally:
+            if self.job:
+                job, self.job = self.job, None
+                try:
+                    _k32().CloseHandle(job)
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 def program_name(cmd: Sequence[str]) -> str:

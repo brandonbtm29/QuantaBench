@@ -391,7 +391,7 @@ class LoadSampler(threading.Thread):
         self.t0 = time.time()
         self._samples: list[dict] = []
         self._lock = threading.Lock()
-        self._stop = threading.Event()
+        self._halt = threading.Event()   # not _stop: Thread._stop() is a method on Python <= 3.12
 
     def take(self) -> list[dict]:
         with self._lock:
@@ -399,7 +399,7 @@ class LoadSampler(threading.Thread):
         return out
 
     def stop(self) -> None:
-        self._stop.set()
+        self._halt.set()
         if self.is_alive():
             self.join(2.0)
 
@@ -412,7 +412,7 @@ class LoadSampler(threading.Thread):
             psutil.cpu_percent(None)
             last = (time.monotonic(), self._own_cpu(me))
             wait = self.first
-            while not self._stop.wait(wait):
+            while not self._halt.wait(wait):
                 wait = self.interval
                 now = time.monotonic()
                 own = self._own_cpu(me)

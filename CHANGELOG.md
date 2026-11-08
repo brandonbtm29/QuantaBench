@@ -6,6 +6,11 @@
 - `tests/test_lanes.py::test_speed_aware_fast_lane_crash_releases_the_slow_lane` failed about one run in three:
   the fast lane crashed the moment it took TFE, sometimes before the slow lane had started, so the slow lane was
   never held back. The crash test hook takes a delay (`QUANTABENCH_TEST_LANE_CRASH=TFE@2`) and the test uses it.
+- Run timings on Windows (Python 3.12): the load sampler's stop event was called `_stop`, which hides
+  `threading.Thread._stop()`, so stopping it raised and the run row was never closed (no end time, an interrupted
+  molecule left as "running"). Renamed.
+- A program's CPU time on Windows counts the processes it starts (a job object, as `getrusage` does on POSIX):
+  a venv's `python.exe` is a launcher, and its own time was all that was recorded.
 
 ### Run timings (2026-11-08)
 - **Every batch records its timings in its job table** (`chem/telemetry.py`, SCHED-1 step 1). Per run: versions,
