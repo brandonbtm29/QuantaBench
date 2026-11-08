@@ -414,12 +414,37 @@ Open (needs-Brandon):
     - Refine more than 5 MMFF94s conformers for ions in water. The gas-phase force field ranks the pool, and the
       GFN2-lower conformers Spartan has are lost there. Try `--refine-top 20`, CREST in ALPB, and MMFF ranking with
       a solvent term, then rerun the comparison.
-    - Decide which level ranks the conformers for the QSAR descriptors: GFN2/ALPB and B3LYP/C-PCM disagree by tens
-      of kJ/mol for extended vs folded ions. Options: re-rank the lowest N with the QM stage (PCM), or use Boltzmann
-      averages (`validate --boltzmann`, below).
-      Brandon (2026-11-07): don't try to match Spartan exactly; many of his Spartan runs used methods without a
-      dispersion correction (plain B3LYP, PM6). So Spartan's ranking is a reference, not the target; the open
-      question is GFN2 ranking vs dispersion-corrected DFT re-ranking (the 3 h DFT test on 10 ions decides it).
+    - Done 2026-11-07: which level ranks the conformers for the QSAR descriptors. Brandon (2026-11-07): don't try to
+      match Spartan exactly; many of his Spartan runs used methods without a dispersion correction (plain B3LYP,
+      PM6), so Spartan's ranking is a reference, not the target.
+      - The DFT conformer test (docs/VALIDATION.md, "DFT conformer test"; `Runs/dft-test-2026-11-07`):
+        - Ions: the 10 worst. Pool: Spartan's, QuantaBench's and CREST's lowest 3 plus GFN2's best of Spartan's
+          pool, 7-10 conformers per ion at common GFN2/ALPB geometries.
+        - Levels: ωB97X-D, B3LYP-D3(BJ) and B3LYP with def2-SVP in PCM water; 168 + 22 Psi4 single points, 7.7 h
+          on NOVA.
+      - Dispersion does not explain it. D3(BJ) moves dE(Spartan's pick − GFN2's pick) by +10 kJ/mol of 68.
+        ωB97X-D prefers Spartan's pick in 7 of 9 ions (B3LYP-D3(BJ) 6, plus 3 ties). No DFT level puts GFN2's pick
+        lowest in any ion.
+      - The GFN2 − DFT gap: Hamiltonian +39 kJ/mol, ALPB vs PCM +20. GFN2's picks pack anionic O against chain F
+        (O···F < 2.6 Å) in 7 of 9 ions.
+      - Decision: for ions in water, re-rank a diverse pool with DFT in PCM; GFN2's ranking and GFN2 Boltzmann
+        averages are not defensible. DFT's lowest sits at GFN2 rank 2-6 (median 5), so the pool must not be
+        GFN2's lowest few.
+    - For the QSAR run's ions, build the DFT re-ranking:
+      - A pool step that keeps folded and extended conformers from RDKit and CREST, 6-10 per ion. Then
+        `--qm wb97x-d/def2-svp` (or `b3lyp-d3bj/def2-svp`, 30 % cheaper, same ranking to 2.6 kJ/mol) with
+        `--qm-top N` in water.
+      - Every descriptor from the QM-lowest conformer: today only `qm_*` follows it, and the xTB descriptors stay at
+        GFN2's lowest.
+      - Cost: 4-27 min per conformer on a 4-thread NOVA lane (30-54 heavy atoms).
+    - Follow-ups of the DFT test:
+      - def2-SVPD on a subset (diffuse functions for the anions).
+      - DFT optimizations of a few GFN2 picks, to see how much of their penalty is geometry.
+      - Check whether GFN2 overbinds anionic O···F-C contacts. Conformers with three or more sit 43 kJ/mol lower
+        relative to the pool at GFN2 than at ωB97X-D.
+      - 67940-02-7: Spartan computed the drawn sulfonamide-NH2⁺ tautomer, 183 kJ/mol above the amine-protonated one
+        (ωB97X-D/PCM). Leave it out of the dipole comparison or re-protonate it; its 11.5 D gap is the proton, not
+        the conformer.
     - Run the comparison on the CREST runs (`Runs/crest-2026-11-06`) once CREST works there. In the first MacBook
       runs, 18 of 20 molecules fell back to RDKit (`crest` exited with code 1).
   - `validate --boltzmann`: compare `dipole_debye_boltz` with a Boltzmann average over Spartan's DFT conformers
