@@ -2,6 +2,20 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Run timings (2026-11-08)
+- **Every batch records its timings in its job table** (`chem/telemetry.py`, SCHED-1 step 1). Per run: versions,
+  machine, CPU, cores, RAM, thread budget, lane plan, dynamic threads, engines and their versions, the settings
+  that change the cost, and the machine's load every 60 s. Per molecule attempt and stage: lane, threads planned,
+  borrowed and given (CREST's `-T`), wall and CPU time (also of CREST, xtb and Psi4), peak memory, queue wait,
+  outcome, conformers in and out, and the molecule's size, rotatable bonds, rings, charge and F/O/S/N counts.
+  Lanes send their numbers with the result; a lane that dies or is killed leaves a partial row. Always on, about
+  0.3 % of a run; it never fails a molecule or a run. Old run folders get the tables on their next run.
+- **`quantabench-cli timings [PATHS]`** collects them from run folders and grid parts into one CSV, with a
+  summary per machine, stage and engine. **`timings --fit`** refits the CREST cost model (time ~ atoms^p,
+  speedup threads^q) per machine and CREST level, and saves it to `<settings>/machines/cost-models/` when there
+  are at least 30 molecules over 2 thread widths; the dynamic CREST threads then use that machine's constants.
+  docs/ENGINES.md, Run timings.
+
 ### Tests never reach the real settings (2026-11-08)
 - A GUI test called `monkeypatch.undo()`, which also undid the per-test settings folder; its window then saved
   on close into the folder `settings_location.json` points at. On the MacBook (2026-11-07 15:10) that overwrote

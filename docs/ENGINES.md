@@ -508,6 +508,58 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     (the rule assumes 1.5x). The 20 PFAS differ from the earlier run by sampling and load only.
   - Not widened: in-process steps (tblite refinement stays on the lane's threads), the xtb program and Psi4
     (their thread count would be chosen in the middle of a molecule).
+  - A machine's own constants (since 2026-11-08): `quantabench-cli timings --fit` refits the cost model on the
+    CREST searches its runs recorded (next section). When a fit is saved, the rule uses that machine's exponents
+    instead of atoms^4 and ^0.6, and the log says so ("cost model: fit btm-nova gfnff quick (...)").
+
+## Run timings (`quantabench-cli timings`)
+
+Every batch run records its timings in its own `jobs.sqlite` (since 2026-11-08, `chem/telemetry.py`), so each
+run adds data for the lane plan and the dynamic CREST threads (SCHED-1). It is always on, needs nothing new, and
+costs about 0.3 % of a run (below). Old run folders get the tables the next time a run opens them.
+
+- **What is recorded.**
+  - Per run (each call of a build or resume; each machine part of a grid has its own row): QuantaBench version
+    and commit, machine, OS, CPU model, physical/logical/performance cores, RAM, the thread budget, the lane plan
+    (text and lanes), dynamic threads on or off, the cost model in force, the engines and their versions (CREST
+    path and version, xtb, tblite and the other packages, Psi4's Python), the settings that change the cost
+    (method, conformer search and CREST level, solvent, max conformers, refine-top, frequencies, QM), start and
+    end. The load at the start and every 60 s: load average (macOS, Linux), CPU percent of the machine and of
+    the run's own processes (all OSes), memory in use. A busy machine shows as a high machine CPU percent next
+    to a low own one.
+  - Per molecule attempt: lane, its threads, CREST threads given and borrowed, queue wait, wall time, outcome
+    (`ok`, `failed`, `timeout`, `crashed`, `cancelled`, `interrupted`), the attempt number (a resume or
+    `--retry-failed` counts on), the cost model's prediction, and the molecule's features: atoms with H, heavy
+    atoms, rotatable bonds, rings, formal charge, F/O/S/N counts.
+  - Per attempt and stage (`prepare`, `conformers`, `refine`, `descriptors`, `properties`, `frequencies`, `qm`,
+    `export`): engine, threads planned, borrowed and given (CREST's `-T`), wall start and end, CPU seconds of
+    the process and of the programs it ran (CREST, xtb, Psi4), peak memory, conformers in and out.
+    `properties` is the xTB-properties part of the `descriptors` time in summary.csv; `export` is the writing
+    of the molecule's files.
+- **How.** The process that computes a molecule (a lane, or the main process) measures its stages and sends
+  the numbers with the result; the parent, already the only writer of the job table, writes them in the same
+  transaction as the result. A lane that dies or is killed gets a partial row: its last stage, from when it
+  began to the death. A program's CPU time comes from `getrusage` on macOS and Linux and from the process
+  handle on Windows; it is empty for `wsl:` programs (the work runs in the Linux VM) and when two programs ran
+  at once in one process. Recording can never fail a molecule or a run: an error is logged once and the run
+  goes on. `QUANTABENCH_TELEMETRY=0` turns it off (only to measure what it costs).
+- **Overhead.** 20 molecules with MMFF (50 conformers, 1 thread, a 2-vCPU cloud Linux VM): 35-46 ms of 13 s inside
+  the recording calls (0.3 %), about 20 ms of it once per run (machine and package versions). An A/B of 13 and 8
+  fresh runs each way: +1.5 % and -0.4 %, inside the ±3 % run-to-run spread.
+- **`quantabench-cli timings [PATHS ...] [-o timings.csv]`** finds every `jobs.sqlite` under the folders
+  (default: the output folder in the settings), grid parts included, and writes one CSV: one row per molecule
+  attempt and stage, with the run's machine and settings and the nearest load sample joined in. A run found
+  twice (a worker's synced folder and its downloaded copy) is read once. On screen: one line per machine,
+  stage and engine with the molecules, the median seconds, the median s/atom^p (p = 4 for CREST, 1 for the
+  rest; `--power` changes the CREST one) and the CPU efficiency (CPU s / (wall s x threads given)).
+- **`timings --fit`** fits CREST time = A x atoms^p x threads^-q to the CREST searches that ended ok, per machine
+  and CREST level (method and `--quick`; gas and solvent runs are pooled), and prints it next to the built-in
+  atoms^4 and ^0.6 with the scatter of both on the same data. It saves the fit to
+  `<settings>/machines/cost-models/<machine>.json` only with at least 30 molecules over at least 2 thread
+  widths (`--min-molecules`, `--min-widths`) and with p in 1-8 and q in 0-1.2; otherwise it says what is
+  missing (a run with fixed lanes has one width: dynamic threads or runs with other lane plans add more).
+  `--no-save` only prints. Runs on that machine then use its exponents, and its scale for the predicted
+  seconds in the attempt rows.
 
 ## tblite (`tblite-gfn2`, `tblite-gfn1`)
 
