@@ -31,7 +31,7 @@ from rdkit import Chem
 
 from .. import resources
 from ..settings import Settings
-from . import batch_opt, engines, export, properties
+from . import batch_opt, engines, export, properties, telemetry
 from . import conformers as confs
 from . import descriptors as desc
 from . import import_options as imp
@@ -163,9 +163,12 @@ class MoleculeResult:
     phase: str = ""                    # the phase the run asked for: "gas" or the solvent (BuildConfig.solvent)
     solvation_model: str = ""          # model of ``solvent`` ("alpb", "cosmo", ...); "" = gas phase
     phase_steps: dict = field(default_factory=dict)   # step -> where it was computed ("ALPB(water)", "gas (why)")
+    # the stage timings, threads and CPU time of this attempt (chem.telemetry.StageClock), for the job table's
+    # telemetry rows; not a result, so not in to_dict() and not in the molecule's files
+    telemetry: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        d = {k: v for k, v in asdict(self).items() if k not in ("mol", "input")}
+        d = {k: v for k, v in asdict(self).items() if k not in ("mol", "input", "telemetry")}
         d["input"] = {k: v for k, v in asdict(self.input).items() if k != "mol"}
         return d
 
@@ -714,7 +717,9 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                  should_stop: Callable[[], bool] = lambda: False,
                  log: Callable[[str], None] = _noop, stage: Callable[[str], None] = _noop) -> MoleculeResult:
     result = MoleculeResult(input=inp, multiplicity=inp.multiplicity, device=device)
+    clock = telemetry.StageClock(result, threads)       # stage timings for the job table (never raises)
     t = time.perf_counter()
+    clock.start("prepare", engine="rdkit")
     try:
         if device != "cpu":   # GPU policies for dxtb (also set in lane processes, which get cfg, not settings)
             from . import torch_compat
@@ -773,6 +778,8 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         if method == "mmff" or not engines.ENGINES[method].gpu_capable:
             result.device = "cpu"
         result.timings["prepare"] = time.perf_counter() - t
+        clock.features(prepared)
+        clock.stop()
         log(f"{inp.id}: {result.smiles} (charge {result.charge:+d}"
             + (f", multiplicity {result.multiplicity}" if result.multiplicity != 1 else "")
             + f") -> {engines.ENGINES[method].label} on {result.device}"
@@ -782,6 +789,8 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
 
         stage("conformers")
         t = time.perf_counter()
+        crest_run = cfg.conformer_search == "crest"
+        clock.start("conformers", threads=int(cfg.crest_threads or 0) or threads if crest_run else threads)
         conformer_solvent = result.solvent        # what CREST was given (RDKit's MMFF94s has no solvent)
         seeds: list = []
         if inp.meta.get(imp.KEEP_COORDS):
@@ -792,6 +801,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         cs = _conformer_search(prepared, result, cfg, threads, should_stop, log, seeds=seeds)
         result.forcefield, result.n_embedded = cs.forcefield, cs.n_embedded
         result.timings["conformers"] = time.perf_counter() - t
+        clock.stop(n_out=len(cs.conf_ids), engine=_conformer_engine(result, cfg, conformer_solvent))
         log(f"  {cs.n_embedded} embedded, {len(cs.conf_ids)} unique after {cs.forcefield} + pruning")
         for note in cs.notes:
             result.notes.append(note)
@@ -803,6 +813,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
 
         stage("refine")
         t = time.perf_counter()
+        clock.start("refine", engine=method, n_in=min(len(cs.conf_ids), max(1, cfg.refine_top)))
         candidates = [method]
         if cfg.method == "auto":  # if the first choice cannot start (e.g. model download offline), try the next
             order = engines.auto_candidates(numbers, solvent)
@@ -837,6 +848,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                 log(f"  {result.notes[-1]}")
         method = result.method
         result.timings["refine"] = time.perf_counter() - t
+        clock.stop(n_out=len(refined), engine=_engine_label(method, result.device, result.solvent))
         result.solvation_model = solvation_model(method, result.solvent)
         steps = result.phase_steps
         if solvent:                  # a solvent run: where each step was computed, and why a step was not
@@ -862,6 +874,8 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
 
         stage("descriptors")
         t = time.perf_counter()
+        clock.start("descriptors", engine="rdkit" + (f" + {method} properties" if engines.properties_function(method)
+                                                     else ""), n_in=len(kept))
         result.descriptors = {**desc.graph_descriptors(cs.mol),
                               **desc.ensemble_descriptors(cs.mol, [c.conf_id for c in kept], weights,
                                                           surface_options(cfg))}
@@ -890,7 +904,10 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         # in a solvent, the GFN1-xTB properties come from tblite with the same solvation (dxtb has none)
         solvated_props = bool(result.solvent) and properties.tblite_available()
         if cfg.xtb_properties and (solvated_props or properties.available()):
+            clock.stop(n_out=len(kept))
             stage("properties")
+            clock.start("properties", engine="tblite gfn1" + (f" ({result.solvent})" if result.solvent else "")
+                        if solvated_props else "dxtb gfn1", n_in=1)
             done = _xtb_properties(result, cs.mol, kept[0], cfg, solvated_props, log)
             if solvent:
                 steps["xtb_properties"] = (
@@ -900,10 +917,13 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                     else "gas (dxtb GFN1-xTB has no implicit solvent; install tblite for solvated xTB properties)")
                 if done and result.solvent and not solvated_props:
                     result.notes.append(f"xTB properties: {steps['xtb_properties']}")
+            clock.stop(n_out=int(bool(done)))
         result.timings["descriptors"] = time.perf_counter() - t
+        clock.stop(n_out=len(kept))            # the descriptors stage, when no xTB properties ran
         if cfg.frequencies:
             stage("frequencies")
             t = time.perf_counter()
+            clock.start("frequencies", engine=f"{method} {cfg.freq_hessian}", n_in=1)
             done = _frequencies(result, cs, kept[0], cfg, should_stop, log)
             if solvent:
                 plugin_engine = engines.plugin(method) is not None
@@ -911,24 +931,47 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                                         solvation_label(method, result.solvent) if result.solvent and plugin_engine
                                         else _gas_reason(method, solvent))
             result.timings["frequencies"] = time.perf_counter() - t
+            clock.stop(n_out=int(bool(done)))
         if cfg.qm_method:
             stage("qm")
             t = time.perf_counter()
+            clock.start("qm", engine=f"{cfg.qm_program or 'psi4'} {cfg.qm_method} {cfg.qm_task}",
+                        n_in=max(1, int(cfg.qm_top or 1)))
             _qm_stage(result, cs, cfg, threads, should_stop, log)
             if solvent and result.qm is not None:
                 qm_solvent = result.qm.get("solvent") or ""
                 steps["qm"] = f"PCM({qm_solvent})" if qm_solvent else "gas (see the QM notes)"
             result.timings["qm"] = time.perf_counter() - t
+            qm_done = result.qm or {}
+            clock.stop(n_out=len(qm_done.get("conformers") or []),
+                       engine=f"{qm_done.get('program') or cfg.qm_program or 'psi4'} "
+                              f"{qm_done.get('program_version') or ''} {cfg.qm_method} {cfg.qm_task}".replace("  ", " "))
         result.status = "ok"
         log(f"  done: {len(kept)} conformer(s), best E = {e0:.5f} eV")
     except Cancelled:
         result.status = "cancelled"
         result.error = "cancelled"
+        clock.abort("cancelled")
     except Exception as exc:
         result.status = "failed"
         result.error = f"{type(exc).__name__}: {exc}"
+        clock.abort("failed")
         log(f"  FAILED: {result.error}")
     return result
+
+
+def _engine_label(method: str, device: str, solvent: str) -> str:
+    """'tblite-gfn2 (water)', 'aimnet2 on cuda:0': the engine of a stage for the telemetry rows."""
+    return method + (f" ({solvent})" if solvent else "") + (f" on {device}" if device and device != "cpu" else "")
+
+
+def _conformer_engine(result: MoleculeResult, cfg: BuildConfig, solvent: str) -> str:
+    """'crest gfnff quick (water)' or 'rdkit etkdg + MMFF94s' (with ' (crest failed)' after a fallback)."""
+    if result.conformer_search == "crest":
+        from ..dist.threads import crest_level
+
+        return f"crest {crest_level(cfg)}" + (f" ({solvent})" if solvent else "")
+    return f"rdkit etkdg + {result.forcefield or 'MMFF94s'}" + (" (crest failed)" if result.conformer_fallback else "")
 
 
 def new_run_dir(base: str | Path, label: str) -> Path:

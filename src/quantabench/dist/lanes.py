@@ -51,6 +51,10 @@ How a parallel run works (``run_parallel``):
   molecule ends or its lane dies or is killed; a lane starts a molecule only when its own threads are free, so
   the threads in use never exceed the budget. A run of one molecule on a plan of several lanes gives its CREST
   search all of the plan's threads.
+* timings (``chem.telemetry``): each lane measures its molecule's stages and sends the numbers with the result;
+  the parent adds the lane, its threads and the CREST threads it lent, and writes the rows in the result's
+  transaction. A lane that dies or is killed gets a partial row: its last stage, from when the parent heard of
+  it. The CREST cost model is this machine's fitted one when ``timings --fit`` saved one (``threads.CostModel``).
 * ``should_stop`` is polled by the parent and copied into a shared stop flag (``StopEvent``: Event semantics,
   no lock) that every lane's ``should_stop`` reads, so a cancel reaches the molecule running in each lane.
 * a lane that dies (segfault, OOM kill, ``os._exit``) is restarted. Its molecule's crash count goes up,
@@ -678,7 +682,7 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
         from rdkit import Chem
 
         Chem.SetDefaultPickleProperties(Chem.PropertyPickleOptions.AllProps)
-        from ..chem import export, external, jobs, pipeline
+        from ..chem import export, external, jobs, pipeline, telemetry
 
         external.set_program_registry(programs_dir or None)
 
@@ -716,13 +720,14 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
                 time.sleep(min(0.05, max(0.0, t_end - time.monotonic())))
             result_dir = ""
             if cfg.write_files and res.status == "ok":
-                try:
-                    files = export.write_molecule(res, Path(run_dir) / mol_id, cfg.formats)
-                    res.files = [str(p) for p in files]
-                    result_dir = mol_id
-                except Exception as exc:  # a disk or format error must not end an overnight run
-                    res.status, res.error = "failed", f"export failed: {type(exc).__name__}: {exc}"
-                    send("log", f"  {mol_id}: {res.error}")
+                with telemetry.export_clock(res, threads):
+                    try:
+                        files = export.write_molecule(res, Path(run_dir) / mol_id, cfg.formats)
+                        res.files = [str(p) for p in files]
+                        result_dir = mol_id
+                    except Exception as exc:  # a disk or format error must not end an overnight run
+                        res.status, res.error = "failed", f"export failed: {type(exc).__name__}: {exc}"
+                        send("log", f"  {mol_id}: {res.error}")
             try:
                 send("result", k, mol_id, res, result_dir)
             except (OSError, EOFError):
@@ -756,6 +761,7 @@ class _LaneProcess:
         self.ever_ready = False     # has been ready once (a restart is not a first start)
         self.busy_since = 0.0       # time.monotonic() when the running molecule was handed over (time limit)
         self.stage = ""             # the running molecule's last stage, for the time-limit error
+        self.stage_since = 0.0      # time.time() when that stage began (the partial telemetry row of a lost lane)
 
     @property
     def alive(self) -> bool:
@@ -963,7 +969,7 @@ def dynamic_threads_for(cfg, lanes: list[Lane], enabled: bool | None = None, bud
 def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, done_before: int,
                  progress, should_stop, log, on_result, keep_results: bool = True,
                  speed_aware: bool | None = None, handoff=None, dynamic_threads: bool | None = None,
-                 thread_budget: int = 0) -> list:
+                 thread_budget: int = 0, telemetry=None, cost_model=None) -> list:
     """Run ``todo`` ([(id, MoleculeInput)], from ``JobStore.todo``) in ``lanes`` worker processes. The
     calling thread is the only one that writes ``store`` and calls the callbacks. Returns the results in
     ``todo`` order (molecules not started because of a cancel are absent).
@@ -977,14 +983,23 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     of ``lanes``).
 
     ``handoff`` (``jobs.Handoff``): molecules not started yet can be handed to another machine; they are
-    taken from the end of the queue between dispatches and marked 'moved'."""
+    taken from the end of the queue between dispatches and marked 'moved'.
+
+    ``telemetry`` (``chem.telemetry.RunTelemetry``): the run's timing rows; each lane sends its stage numbers with
+    the result, and this process writes them next to the result (a lane that dies or is killed gets a partial row
+    from its last stage). ``cost_model`` (``threads.CostModel``): the CREST cost model of the dynamic threads;
+    None = this machine's fitted one, else the built-in."""
     from dataclasses import replace
 
     from ..chem import jobs
     from ..chem import pipeline as pipeline_mod
+    from ..chem import telemetry as telemetry_mod
     from ..chem.pipeline import MoleculeResult
     from . import speed
     from . import threads as threads_mod
+
+    tm = telemetry if telemetry is not None else telemetry_mod.NullTelemetry()
+    crest_run = getattr(cfg, "conformer_search", "") == "crest"
 
     limit = max(0.0, float(getattr(cfg, "molecule_timeout_s", 0) or 0))
     cap = max_lanes()
@@ -1028,10 +1043,15 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
 
     # dynamic CREST threads (dist.threads): this process owns the CPU lanes' thread budget
     budget = dynamic_threads_for(cfg, lanes, dynamic_threads, thread_budget)
-    dyn = threads_mod.DynamicThreads(budget, lambda m: threads_mod.crest_cost(size_of(m))) if budget else None
+    model = (cost_model or threads_mod.cost_model_for(cfg, log) or threads_mod.BUILT_IN) if crest_run else None
+    dyn = (threads_mod.DynamicThreads(budget, lambda m: model.cost(size_of(m)), model.speedup_power)
+           if budget else None)
     if dyn is not None:
         log(f"Dynamic threads: a CREST search may also use idle lanes' threads, in whole lanes, {budget} threads in "
             "all (build --no-dynamic-threads turns it off)")
+        if model.source != threads_mod.BUILT_IN.source:
+            log(f"  cost model: {model.source}: time ~ atoms^{model.power:.2f}, speedup (threads/lane)^"
+                f"{model.speedup_power:.2f} (quantabench-cli timings --fit)")
 
     def threads_back(w: _LaneProcess) -> None:
         """Every thread lane ``w``'s molecule held goes back to the budget (its molecule ended or was lost)."""
@@ -1063,6 +1083,9 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
 
     def finish(w: _LaneProcess | None, k: int, mol_id: str, res, result_dir: str = "") -> None:
         nonlocal n_done
+        # the attempt's timing rows, in the transaction of its result (a lost lane's rows were written already)
+        tm.end_attempt(mol_id, res, stage=w.stage if w is not None else "",
+                       stage_since=w.stage_since if w is not None else None)
         store.record(res, result_dir)
         results[position[mol_id]] = res if keep_results else jobs.light_result(res)
         n_done += 1
@@ -1092,6 +1115,8 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             w.busy = None
             if policy is not None:
                 policy.lost(w.lane.name)
+            tm.end_attempt(mol_id, None, outcome="crashed", error=f"lane {w.lane.name} died (exit code {code})",
+                           stage=w.stage, stage_since=w.stage_since)
             crashes = store.record_crash(mol_id)
             if crashes >= jobs.MAX_CRASHES:
                 msg = f"crashed the process {crashes} times"
@@ -1101,6 +1126,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             else:
                 log(f"[{w.lane.name}] lane died (exit code {code}) running {mol_id}; restarting the lane, "
                     f"{mol_id} is tried again at the end")
+                tm.requeued(mol_id)
                 queue.append((k, mol_id, inp))
                 progress(done_before + k, total, "queued", mol_id)
         elif not w.ready:
@@ -1136,6 +1162,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         log(f"[{w.lane.name}] {mol_id}: {err} after {elapsed:.0f} s; lane killed"
             + (f" with {left} external program(s)" if left else "")
             + ("; restarting it" if queue and not stopping else "") + " (--retry-failed redoes the molecule)")
+        tm.end_attempt(mol_id, None, outcome="timeout", error=err, stage=w.stage, stage_since=w.stage_since)
         finish(None, k, mol_id, MoleculeResult(input=inp, status="failed", error=err, device=w.device))
         if not w.retired and not stopping and queue:
             pool.start(w)
@@ -1162,6 +1189,8 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         elif kind == "stage":
             _, _, k, mol_id, stage = msg
             if w.busy is not None and w.busy[1] == mol_id:
+                if stage != w.stage:
+                    w.stage_since = time.time()
                 w.stage = stage
                 if dyn is not None:
                     if stage == "conformers":
@@ -1240,9 +1269,14 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                                 log(f"[{w.lane.name}] {mol_id}: CREST with {width} threads (borrowed "
                                     f"{width - w.lane.threads} from idle lanes)")
                         w.busy = (k, mol_id, inp)
-                        w.busy_since, w.stage = time.monotonic(), ""
+                        w.busy_since, w.stage, w.stage_since = time.monotonic(), "", time.time()
                         if policy is not None:
                             policy.started(w.lane.name, size_of(mol_id))
+                        # its timing row goes out with mark_running's commit (chem.telemetry)
+                        tm.dispatched(mol_id, inp, lane=w.lane, width=width if crest_run else None,
+                                      size=size_of(mol_id), k=k, pid=w.pid,
+                                      predicted_s=dyn.predicted_seconds(mol_id, w.lane.threads, width)
+                                      if shared and dyn is not None else None)
                         store.mark_running(mol_id)
                         progress(done_before + k, total, "start", mol_id)
                 if held and not held_logged:
@@ -1279,9 +1313,10 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                     pool.start(w)
         pool.close(graceful=True)
     except BaseException:
-        held = [w.busy for w in pool.workers if w.busy is not None]
+        held = [(w.busy, w.stage, w.stage_since) for w in pool.workers if w.busy is not None]
         pool.close(graceful=False)
-        for _k, _mol_id, inp in held:         # interrupted, not crashed: redone next time, no crash counted
+        for (_k, mol_id, inp), stage, since in held:   # interrupted, not crashed: redone next time, no crash counted
+            tm.end_attempt(mol_id, None, outcome="cancelled", stage=stage, stage_since=since)
             with contextlib.suppress(Exception):
                 store.record(MoleculeResult(input=inp, status="cancelled", error="cancelled"))
         raise
