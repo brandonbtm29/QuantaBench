@@ -159,7 +159,8 @@ aborts the process).
     summary.csv            one row per molecule: status, error, charge as drawn and computed, multiplicity,
                            removed fragments, method, force field, device, best energy, notes
     descriptors.csv        one row per molecule: graph + 3D (best/Boltzmann) + xTB + vib_* (frequencies)
-    jobs.sqlite            batch runs: job table (config, inputs, status, per-molecule summaries)
+    jobs.sqlite            batch runs: job table (config, inputs, status, per-molecule summaries), and the
+                           timings of each run (telemetry_* tables, chem/telemetry.py; quantabench-cli timings)
     jobs.lock              batch runs: host + pid of the process working on the folder (removed on exit)
     <id>/
         <id>.xyz           best conformer

@@ -111,6 +111,10 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
   of its job table, so nothing is written into another machine's folder). A share run by `local` on the
   other machine is found in the synced output folder. Molecules that crashed their worker process twice have
   no summary row; `grid.json` lists them in `failed_without_result`.
+- **Timings.** Each share's run folder records its own machine, lane plan and stage timings in its `jobs.sqlite`
+  (docs/ENGINES.md, Run timings). `quantabench-cli timings <grid folder>` reads the downloaded parts
+  (`parts/<machine>/...`), and `timings` on the output folder reads the synced ones; a run found in both is
+  read once.
 
 ## API (version 1)
 

@@ -6,7 +6,8 @@ memory and writes the batch tables at the end, so an interruption loses the tabl
 folders survive but nothing records which molecules are done). ``run_resumable`` wraps the same
 per-molecule step (``pipeline.run_molecule`` + ``export.write_molecule``) with a job table:
 
-    <run_dir>/jobs.sqlite      run(config, version, created, chunk) + molecules(id, status, ...)
+    <run_dir>/jobs.sqlite      run(config, version, created, chunk) + molecules(id, status, ...), and the
+                               timings of every call (telemetry_* tables, ``chem.telemetry``)
     <run_dir>/jobs.lock        host + pid of the process working on the run (removed on exit)
     <run_dir>/<id>/...         per-molecule files, exactly as pipeline.run writes them
     <run_dir>/summary.csv      rebuilt from the job table, so a resumed run has complete tables
@@ -50,13 +51,13 @@ from types import SimpleNamespace
 from rdkit import Chem
 
 from .. import __version__, resources
-from . import export, pipeline
+from . import export, pipeline, telemetry
 from .inputs import MoleculeInput, dedupe_ids
 from .pipeline import BuildConfig, MoleculeResult, ProgressFn
 
 DB_NAME = "jobs.sqlite"
 LOCK_NAME = "jobs.lock"
-SCHEMA_VERSION = 3                 # 2: molecules.crashes, 3: run.accepted
+SCHEMA_VERSION = 4                 # 2: molecules.crashes, 3: run.accepted, 4: telemetry_* tables
 STATUSES = ("pending", "running", "ok", "failed", "cancelled", "moved")   # moved: handed to another machine
 MAX_CRASHES = 2                    # a molecule that killed the process this often is marked failed
 
@@ -411,6 +412,7 @@ class JobStore:
             if "accepted" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(run)")}:
                 # newest version a forced resume accepted results from (version_differences); NULL = none
                 self.conn.execute("ALTER TABLE run ADD COLUMN accepted TEXT")
+            telemetry.create_tables(self.conn)      # version 4: what each run measured (chem.telemetry)
             self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def close(self) -> None:
@@ -806,77 +808,28 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
         thread_budget = sum(x.threads for x in planned if x.device == "cpu")
         if todo:
             log_time_limit(cfg, len(lanes) > 1, log)
-        if len(lanes) > 1:            # worker processes (dist.lanes); this process stays the only DB writer
-            from ..dist import lanes as lanes_mod
+        from ..dist import lanes as lanes_mod
+        from ..dist import threads as threads_mod
 
-            results = lanes_mod.run_parallel(store, todo, cfg, lanes, run_dir, total=total, done_before=done_before,
-                                             progress=progress, should_stop=should_stop, log=log,
-                                             on_result=on_result, keep_results=keep_results,
-                                             speed_aware=speed_aware, handoff=handoff,
-                                             dynamic_threads=dynamic_threads, thread_budget=thread_budget)
-            todo = []
-        elif lanes and lanes[0].device != "auto":       # one explicit lane, e.g. "cpu:1x4": its device and threads
-            from dataclasses import replace
-
-            from ..dist import lanes as lanes_mod
-
-            threads = resources.apply_thread_limits(lanes[0].threads)
-            cfg_run = replace(cfg, threads=threads)
-            device = lanes_mod.lane_device(lanes[0], cfg, cfg.gpu_memory_fraction)
-            log(f"Resources: {threads} CPU threads, device {device} (lane {lanes[0].name})")
-            wide = lanes_mod.dynamic_threads_for(cfg, lanes, dynamic_threads, thread_budget)
-            if wide > threads and len(todo) == 1:
-                # one molecule left for a plan of several lanes: its CREST search gets their threads (dist.threads)
-                cfg_run = replace(cfg_run, crest_threads=wide)
-                log(f"Dynamic threads: {todo[0][0]}: CREST with {wide} threads (borrowed {wide - threads} from "
-                    "the lanes this run does not need)")
-        else:
-            threads = resources.apply_thread_limits(cfg.threads)
-            cfg_run = cfg
-            device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
-            log(f"Resources: {threads} CPU threads, device {device}")
-        if todo:
-            from dataclasses import replace
-
-            cfg_run = replace(cfg_run, memory_budget_gb=pipeline.resolved_budget(cfg_run, 1, log))
-        queue = deque(todo)
-
-        def take(n: int, dest: str) -> list[str]:      # Handoff: the end of the queue, not started yet
-            picked = [queue.pop() for _ in range(min(n, len(queue)))]
-            moved = set(store.mark_moved([mol_id for mol_id, _ in picked], dest))
-            queue.extend(item for item in reversed(picked) if item[0] not in moved)   # could not move: kept
-            if moved:
-                log(f"Work sharing: {len(moved)} molecule(s) not started here go to {dest or 'another machine'}")
-            return [mol_id for mol_id, _ in picked if mol_id in moved]
-
-        k = -1
-        while queue:
-            if handoff is not None:
-                handoff.serve(take)
-                if not queue:
-                    break
-            if should_stop():
-                break
-            mol_id, inp = queue.popleft()
-            k += 1
-            i = done_before + k
-            progress(i, total, "start", mol_id)
-            store.mark_running(mol_id)
-            res = pipeline.run_molecule_limited(inp, cfg_run, device, threads, should_stop, log,
-                                                stage=lambda s, i=i, mol_id=mol_id: progress(i, total, s, mol_id))
-            result_dir = ""
-            if cfg.write_files and res.status == "ok":
-                try:
-                    files = export.write_molecule(res, run_dir / mol_id, cfg.formats)
-                    res.files = [str(p) for p in files]
-                    result_dir = mol_id  # relative, so the folder can move between machines
-                except Exception as exc:  # a disk or format error must not end an overnight run
-                    res.status, res.error = "failed", f"export failed: {type(exc).__name__}: {exc}"
-                    log(f"  {mol_id}: {res.error}")
-            store.record(res, result_dir)
-            on_result(res)
-            results.append(res if keep_results else light_result(res))
-            progress(i + 1, total, res.status, mol_id)
+        wide = lanes_mod.dynamic_threads_for(cfg, lanes, dynamic_threads, thread_budget) if lanes else 0
+        cost_model = threads_mod.cost_model_for(cfg, log)     # this machine's fitted CREST constants, or the built-in
+        tm = telemetry.NullTelemetry()
+        if todo:          # what this call measures goes into the job table (chem.telemetry); never stops the run
+            aware = None
+            if len(lanes) > 1:
+                aware = speed_aware if speed_aware is not None else lanes_mod.speed_aware_setting()
+            one = [lanes_mod.Lane("main", "auto", resources.resolve_threads(cfg.threads))]
+            tm = telemetry.start_run(store, cfg, run_dir, lanes_planned=planned or one, lanes_used=lanes or one,
+                                     thread_budget=max(thread_budget, sum(x.threads for x in lanes or one)),
+                                     dynamic_budget=wide, speed_aware=aware, chunk=chunk,
+                                     n_total=total, n_todo=len(todo), n_done_before=done_before,
+                                     cost_model=cost_model, log=log)
+        try:
+            results = _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, done_before, progress,
+                                should_stop, log, on_result, keep_results, speed_aware, handoff, dynamic_threads,
+                                thread_budget)
+        finally:
+            tm.close(store)          # never raises: an exception from the run itself stays the one raised
         counts = store.counts()
         fallbacks = store.fallbacks()
     if cfg.write_files:
@@ -887,6 +840,8 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
     log(f"{counts['ok']} ok, {counts['failed']} failed, "
         f"{counts['pending'] + counts['running'] + counts['cancelled']} remaining"
         + (f", {counts['moved']} moved to another machine" if counts.get("moved") else "") + f". Results in {run_dir}")
+    if tm.recorded:
+        log(f"Timings of {tm.recorded} molecule(s) recorded in {DB_NAME}; quantabench-cli timings collects them")
     line = pipeline.fallback_summary(len(fallbacks), counts["ok"] + counts["failed"])
     if line:          # the whole run folder, not only this call: a resumed run still says so
         log(line)
@@ -895,6 +850,87 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
         if len(fallbacks) > 10:
             log(f"  ... and {len(fallbacks) - 10} more (summary.csv: conformer_fallback)")
     return results, run_dir
+
+
+def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, done_before, progress, should_stop, log,
+              on_result, keep_results, speed_aware, handoff, dynamic_threads, thread_budget) -> list[MoleculeResult]:
+    """The molecules of ``todo``: in lane processes (``dist.lanes.run_parallel``) or one after the other here.
+    ``tm``: this call's telemetry (``chem.telemetry``); ``wide``: the dynamic CREST thread budget (0 = off)."""
+    from dataclasses import replace
+
+    from ..dist import lanes as lanes_mod
+
+    if len(lanes) > 1:            # worker processes (dist.lanes); this process stays the only DB writer
+        return lanes_mod.run_parallel(store, todo, cfg, lanes, run_dir, total=total, done_before=done_before,
+                                      progress=progress, should_stop=should_stop, log=log,
+                                      on_result=on_result, keep_results=keep_results,
+                                      speed_aware=speed_aware, handoff=handoff,
+                                      dynamic_threads=dynamic_threads, thread_budget=thread_budget,
+                                      telemetry=tm, cost_model=cost_model)
+    if lanes and lanes[0].device != "auto":       # one explicit lane, e.g. "cpu:1x4": its device and threads
+        threads = resources.apply_thread_limits(lanes[0].threads)
+        cfg_run = replace(cfg, threads=threads)
+        device = lanes_mod.lane_device(lanes[0], cfg, cfg.gpu_memory_fraction)
+        log(f"Resources: {threads} CPU threads, device {device} (lane {lanes[0].name})")
+        if wide > threads and len(todo) == 1:
+            # one molecule left for a plan of several lanes: its CREST search gets their threads (dist.threads)
+            cfg_run = replace(cfg_run, crest_threads=wide)
+            log(f"Dynamic threads: {todo[0][0]}: CREST with {wide} threads (borrowed {wide - threads} from "
+                "the lanes this run does not need)")
+    else:
+        threads = resources.apply_thread_limits(cfg.threads)
+        cfg_run = cfg
+        device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
+        log(f"Resources: {threads} CPU threads, device {device}")
+    if todo:
+        cfg_run = replace(cfg_run, memory_budget_gb=pipeline.resolved_budget(cfg_run, 1, log))
+    lane_name = lanes[0].name if lanes else "main"
+    crest_width = (cfg_run.crest_threads or threads) if cfg.conformer_search == "crest" else None
+    queue = deque(todo)
+    results: list[MoleculeResult] = []
+
+    def take(n: int, dest: str) -> list[str]:      # Handoff: the end of the queue, not started yet
+        picked = [queue.pop() for _ in range(min(n, len(queue)))]
+        moved = set(store.mark_moved([mol_id for mol_id, _ in picked], dest))
+        queue.extend(item for item in reversed(picked) if item[0] not in moved)   # could not move: kept
+        if moved:
+            log(f"Work sharing: {len(moved)} molecule(s) not started here go to {dest or 'another machine'}")
+        return [mol_id for mol_id, _ in picked if mol_id in moved]
+
+    k = -1
+    while queue:
+        if handoff is not None:
+            handoff.serve(take)
+            if not queue:
+                break
+        if should_stop():
+            break
+        mol_id, inp = queue.popleft()
+        k += 1
+        i = done_before + k
+        progress(i, total, "start", mol_id)
+        # the telemetry rows are written just before the store's commits and go out with them (chem.telemetry)
+        tm.dispatched(mol_id, inp, lane_name=lane_name, lane_device=device, lane_threads=threads, width=crest_width,
+                      k=k)
+        store.mark_running(mol_id)
+        res = pipeline.run_molecule_limited(inp, cfg_run, device, threads, should_stop, log,
+                                            stage=lambda s, i=i, mol_id=mol_id: progress(i, total, s, mol_id))
+        result_dir = ""
+        if cfg.write_files and res.status == "ok":
+            with telemetry.export_clock(res, threads):
+                try:
+                    files = export.write_molecule(res, run_dir / mol_id, cfg.formats)
+                    res.files = [str(p) for p in files]
+                    result_dir = mol_id  # relative, so the folder can move between machines
+                except Exception as exc:  # a disk or format error must not end an overnight run
+                    res.status, res.error = "failed", f"export failed: {type(exc).__name__}: {exc}"
+                    log(f"  {mol_id}: {res.error}")
+        tm.end_attempt(mol_id, res)
+        store.record(res, result_dir)
+        on_result(res)
+        results.append(res if keep_results else light_result(res))
+        progress(i + 1, total, res.status, mol_id)
+    return results
 
 
 # --------------------------------------------------------------------------------------- status

@@ -31,6 +31,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -484,6 +485,8 @@ class ProgramRun:
     returncode: int
     seconds: float
     log_file: Path
+    cpu_s: float | None = None          # the program's CPU time (user + system), None when it cannot be known
+    peak_rss_mb: float | None = None    # its peak resident memory, None when unknown
 
     def text(self) -> str:
         try:
@@ -633,6 +636,169 @@ def kill_recorded_programs(folder: str | Path) -> int:
     return n
 
 
+# ------------------------------------------------------------------- CPU time and memory of the programs
+#: The programs ``run_program`` ran in this thread, for the stage timings of a molecule (``chem.telemetry``): a
+#: molecule runs in one thread, so the programs of one of its stages are the records between two snapshots.
+class _ProgramUsage(threading.local):
+    def __init__(self) -> None:
+        self.n = 0                      # programs run so far (the index of the next record)
+        self.records: list[dict] = []   # the last RECORDS_KEPT: {name, threads, wall_s, cpu_s, peak_rss_mb}
+
+
+_usage = _ProgramUsage()
+RECORDS_KEPT = 256
+_active_lock = threading.Lock()
+_active: dict[int, bool] = {}          # running run_program calls -> "another one overlapped it"
+
+
+def program_count() -> int:
+    """How many programs ``run_program`` has run in this thread (``programs_since`` takes it)."""
+    return _usage.n
+
+
+def programs_since(n: int) -> list[dict]:
+    """The programs run in this thread since ``program_count()`` returned ``n`` (the last ``RECORDS_KEPT``)."""
+    first = _usage.n - len(_usage.records)
+    return [dict(r) for r in _usage.records[max(0, n - first):]]
+
+
+def _note_program(name: str, threads: int, wall: float, cpu: float | None, peak: float | None) -> None:
+    _usage.records.append({"name": name, "threads": int(threads), "wall_s": float(wall), "cpu_s": cpu,
+                           "peak_rss_mb": peak})
+    _usage.n += 1
+    if len(_usage.records) > RECORDS_KEPT:
+        del _usage.records[:len(_usage.records) - RECORDS_KEPT]
+
+
+def _children_rusage() -> tuple[float, float] | None:
+    """(CPU s, max RSS MB) of this process's waited-for children (POSIX), None on Windows."""
+    try:
+        import resource
+    except ImportError:
+        return None
+    ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+    rss = ru.ru_maxrss / (2**20 if sys.platform == "darwin" else 1024.0)     # macOS: bytes, Linux: KiB
+    return ru.ru_utime + ru.ru_stime, rss
+
+
+def _windows_usage(proc: subprocess.Popen) -> tuple[float | None, float | None]:
+    """(CPU s, peak working set MB) of a finished program from its process handle (Windows). Popen keeps the
+    handle open, so the numbers are there after the program has ended. Only the program itself: a ``.bat`` or
+    ``wsl.exe`` launcher reports its own (tiny) time, which the caller does not use."""
+    import ctypes
+    from ctypes import wintypes
+
+    handle = wintypes.HANDLE(int(proc._handle))           # noqa: SLF001 - Popen's process handle on Windows
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    k32.GetProcessTimes.restype = wintypes.BOOL
+    times = [wintypes.FILETIME() for _ in range(4)]
+    cpu = None
+    if k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+        def secs(ft) -> float:
+            return ((ft.dwHighDateTime << 32) | ft.dwLowDateTime) * 1e-7      # 100 ns units
+        cpu = secs(times[2]) + secs(times[3])             # kernel + user
+
+    class Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+
+    k32.K32GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+    k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
+    counters = Counters()
+    counters.cb = ctypes.sizeof(Counters)
+    peak = None
+    if k32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+        peak = counters.PeakWorkingSetSize / 2**20
+    return cpu, peak
+
+
+class _UsageMeter:
+    """CPU time and peak memory of one program run by ``run_program``. Never raises: what cannot be measured is
+    None. POSIX: the change of ``getrusage(RUSAGE_CHILDREN)`` across the run, exact for the program and the
+    children it waited for, unless another ``run_program`` ran in this process at the same time (then None);
+    the peak memory is sampled about once a second, and taken from ``ru_maxrss`` when this program set a new
+    maximum. Windows: the process handle's times and peak working set; nothing for ``wsl.exe`` (the work runs
+    in the Linux VM) or a batch-file launcher."""
+
+    SAMPLE_EVERY_S = 1.0
+
+    def __init__(self, via_wsl: bool, launcher: bool) -> None:
+        self.ok = not via_wsl and not launcher
+        self.before = None
+        self.proc = None
+        self.ps = None
+        self.peak = None
+        self.next_sample = 0.0
+        self.key = id(self)
+        try:
+            with _active_lock:
+                if _active:
+                    for k in _active:
+                        _active[k] = True
+                _active[self.key] = bool(_active)
+            self.before = _children_rusage() if not IS_WINDOWS else None
+        except Exception:  # noqa: BLE001 - measuring must never stop a program
+            self.ok = False
+
+    def started(self, proc: subprocess.Popen) -> None:
+        self.proc = proc
+        if not self.ok or IS_WINDOWS:
+            return
+        try:
+            import psutil
+
+            self.ps = psutil.Process(proc.pid)
+        except Exception:  # noqa: BLE001
+            self.ps = None
+
+    def poll(self) -> None:
+        if self.ps is None:
+            return
+        now = time.monotonic()
+        if now < self.next_sample:
+            return
+        self.next_sample = now + self.SAMPLE_EVERY_S
+        try:
+            rss = self.ps.memory_info().rss / 2**20
+            self.peak = rss if self.peak is None else max(self.peak, rss)
+        except Exception:  # noqa: BLE001 - gone between polls
+            self.ps = None
+
+    def finish(self) -> tuple[float | None, float | None]:
+        try:
+            with _active_lock:
+                overlapped = _active.pop(self.key, False)
+            if not self.ok or self.proc is None or self.proc.returncode is None:
+                return None, None
+            if IS_WINDOWS:
+                return _windows_usage(self.proc)
+            after = _children_rusage()
+            if after is None or self.before is None:
+                return None, self.peak
+            cpu = None if overlapped else max(0.0, after[0] - self.before[0])
+            peak = self.peak
+            if after[1] > self.before[1]:             # this program set a new maximum: its own peak
+                peak = max(peak or 0.0, after[1])
+            return cpu, peak
+        except Exception:  # noqa: BLE001
+            return None, None
+
+
+def program_name(cmd: Sequence[str]) -> str:
+    """'crest' for a command line (the program after the WSL launcher and its wrapper, without .exe)."""
+    parts = [str(c) for c in cmd]
+    if WSL_WRAPPER in parts and parts.index(WSL_WRAPPER) + 1 < len(parts):
+        prog = parts[parts.index(WSL_WRAPPER) + 1]
+    else:
+        prog = parts[0] if parts else ""
+    name = re.split(r"[\\/]", prog)[-1]
+    return name[:-4] if name.lower().endswith((".exe", ".bat", ".cmd")) else name
+
+
 def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: dict[str, str] | None = None,
                 stdin_text: str | None = None, timeout: float | None = None, log_name: str = "program.log",
                 should_stop: Callable[[], bool] | None = None, log: Callable[[str], None] | None = None,
@@ -663,6 +829,8 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
     t0 = time.perf_counter()
     if log:
         log(f"  $ {' '.join(shown)}")
+    name = program_name(shown)
+    usage: tuple[float | None, float | None] = (None, None)
     with open(log_file, "wb") as out:
         kwargs: dict = {"cwd": str(cwd), "env": env, "stdout": out, "stderr": subprocess.STDOUT,
                         "stdin": subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL}
@@ -672,10 +840,13 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
             kwargs["start_new_session"] = True     # own process group, so cancellation kills children
             if not Path(shown[0]).is_file() and shutil.which(shown[0]) is None:
                 raise ExternalProgramError(f"could not start {shown[0]}: no such program")
+        meter = _UsageMeter(via_wsl, launcher=IS_WINDOWS and Path(shown[0]).suffix.lower() in (".bat", ".cmd"))
         try:
             proc = subprocess.Popen(cmd, **kwargs)
         except OSError as exc:
+            meter.finish()
             raise ExternalProgramError(f"could not start {shown[0]}: {exc}") from exc
+        meter.started(proc)
         record = _record_program(proc, cwd, via_wsl, shown)
         try:
             if stdin_text is not None:
@@ -690,6 +861,7 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
                     break
                 except subprocess.TimeoutExpired:
                     pass
+                meter.poll()
                 if should_stop is not None and should_stop():
                     raise Cancelled()
                 if timeout is not None and time.perf_counter() - t0 > timeout:
@@ -706,7 +878,10 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
             if record is not None:
                 with contextlib.suppress(OSError):
                     record.unlink()
-    run = ProgramRun(proc.returncode, time.perf_counter() - t0, log_file)
+            usage = meter.finish()            # also for a program that was stopped: the time it used counts
+            with contextlib.suppress(Exception):
+                _note_program(name, threads, time.perf_counter() - t0, *usage)
+    run = ProgramRun(proc.returncode, time.perf_counter() - t0, log_file, *usage)
     if check and run.returncode != 0:
         raise ExternalProgramError(f"{' '.join(shown[:3])} exited with code {run.returncode}\n{run.tail()}")
     return run

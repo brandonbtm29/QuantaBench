@@ -1039,7 +1039,8 @@ the code, but three things never arrived through it.
       (nothing widened); two large PFAS 585 and 555 s vs 1,309 and 1,096 s (part of it CREST's sampling).
     - Left: time it on NOVA (11 x 2, where the simulation predicts the gain; NOVA was busy with DFT on
       2026-11-07). Widening for the time limit (the GFN2 failures: 54950-05-9 needs about 3.7 h on 4 threads)
-      needs the cost model in seconds before the first CREST call ends. The xtb program and Psi4 could borrow
+      needs the cost model in seconds before the first CREST call ends (a machine's `timings --fit` has that
+      scale since 2026-11-08, SCHED-1; the policy does not use it for the limit yet). The xtb program and Psi4 could borrow
       threads the same way, but their thread count is set mid-molecule, so the lane would have to ask the parent.
     - Re-timed 2026-11-07 after the merge: `--lanes auto` gave 3 x 4 and started 54950-05-9 first; GFN-FF gas
       took 942 s (20/20), 3.3x faster than the old auto plan (the earlier hand-set 3 x 4 run: 773 s; sampling
@@ -1059,6 +1060,15 @@ small job may start in a gap if it does not delay the reserved start of the big 
   and a launch-time rule that widens a molecule only when it would dominate the batch.
 - Study plan:
   1. Record every molecule's stage times, threads and CPU time in the job table, so each run adds training data.
+     **Done 2026-11-08** (branch `feat/run-telemetry`; docs/ENGINES.md, Run timings): `telemetry_*` tables in
+     every run's jobs.sqlite (run, load every 60 s, attempt, stage; partial rows for lost lanes),
+     `quantabench-cli timings` (one CSV over run folders and grid parts) and `timings --fit` (per machine and CREST
+     level, saved to `<settings>/machines/cost-models/<machine>.json` with >= 30 molecules over >= 2 widths; the
+     dynamic threads use it). Overhead about 0.3 % (20 MMFF molecules). Left: run `timings --fit` on NOVA and the
+     Mac once they have recorded runs (fixed lanes give one width: the fit needs dynamic-thread runs or other
+     lane plans); leave out samples from a busy machine (own vs machine CPU percent) in the fit; the xtb program
+     and Psi4 stages are recorded but have no cost model yet; Windows CPU time of `wsl:` CREST is not
+     measurable from Windows (would need the Linux side's times).
   2. Move the simulator into the repo (`dist/simulate.py`) with policies as plug-ins: fixed lanes, largest first,
      launch-time width, reservations with backfilling (Brandon's idea), and online calibration of the cost model
      from the molecules already finished in the same run.
