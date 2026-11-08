@@ -409,6 +409,8 @@ optimizations); the Essential 76 one about 50 min (1,237).
 - 75260-69-4 forms an O-S contact of 2.0 Å in 15 of its 34 optimizations. Those optimizations are set aside.
 - The water gap is the conformer, and the conformer is mostly the energy model. GFN2/ALPB puts compact, low-dipole
   ions lowest; B3LYP/C-PCM (single points at MMFF geometries) puts extended ones lowest.
+  The DFT conformer test below finds the dispersion-free B3LYP is not the cause: ωB97X-D and B3LYP-D3(BJ) side with
+  Spartan's ranking, and GFN2/ALPB is the outlier.
 - QuantaBench's search is short at its own level as well (the 5 lowest by gas-phase MMFF94s are refined). Fixing
   only that moves its dipoles further from Spartan's.
 
@@ -440,3 +442,115 @@ optimizations); the Essential 76 one about 50 min (1,237).
   where Spartan is anti.
 - Comparing a CREST run needs only its folder as `--b`. Copy the Spartan side's `rescore_cache.jsonl` into the new
   `--out`, so Spartan's conformers are not recomputed.
+
+## DFT conformer test (2026-11-07, `Runs/dft-test-2026-11-07`)
+
+The question: Spartan's B3LYP has no dispersion correction. Does dispersion-corrected DFT side with GFN2/ALPB's
+lowest conformer or with Spartan's? If ωB97X-D and B3LYP-D3(BJ) side with GFN2 and plain B3LYP with Spartan, the
+missing dispersion explains the disagreement and GFN2's ranking is defensible.
+
+**Setup** (BTM NOVA; scripts in `scratch/dft_test/`, not in the repository):
+- **Ions:** the 10 with the largest water-dipole errors (`Runs/crest-2026-11-06/molecules.csv`, 30-54 heavy atoms).
+- **Pool per ion,** by each source's own ranking:
+  - S1-S3: Spartan's B3LYP/6-311+G** C-PCM lowest (DFT_Top5 single points at MMFF geometries);
+  - Q1-Q3: QuantaBench's GFN2/ALPB lowest (the validation run; 1-3 conformers for some ions);
+  - C1-C3: CREST's (GFN-FF search, GFN2/ALPB refinement; the Mac's `crest-gfnff/water`);
+  - G1: the GFN2/ALPB-optimized lowest of Spartan's whole pool (DFT_Top5 + All_Conformers_Top30).
+- **One geometry per conformer:** GFN2-xTB/ALPB(water) optimization with `conformer_compare.rescore`
+  (fmax 0.03 eV/Å; 362 of 391 from the compare's cache).
+  - Every optimization kept its conformer: heavy-atom RMSD ≤ 0.49 Å, backbone torsions ≤ 46°.
+  - Two CREST pairs optimized to one conformer and are one entry ("C1+C3", "C2+C3").
+- **Levels:** Psi4 1.9.1 single points with the QM stage's settings (density fitting, IEFPCM water with a GePol/UFF
+  cavity, dipoles about the centre of mass; SCF converged to 1e-6, the two timing jobs to 1e-8):
+  - ωB97X-D/def2-SVP;
+  - B3LYP-D3(BJ)/def2-SVP;
+  - plain B3LYP/def2-SVP: the same SCF without the D3(BJ) term. Psi4 adds -D3 after the SCF; on trifluoroacetate
+    in PCM this equals a separate B3LYP SCF to 1e-13 Eh, and Psi4's D3(BJ) energy equals dftd3-python's to 2e-12 Eh.
+  - Diagnostics: GFN2 single points at the same geometries in the gas phase and in CPCM water (tblite, ddX), and
+    ωB97X-D in the gas phase for S1, GFN2's pick and the ωB97X-D/PCM lowest of S1, Q1, C1 and G1 (22 single
+    points).
+- **Cost:** 168 PCM single points (84 conformers × 2) plus 22 gas-phase ones, about 30 lane-hours, none failed.
+  They ran on 3-5 lanes × 4 threads at BelowNormal priority: 7.1 h of wall time after a 0.6 h timing run. The
+  largest ion (815 basis functions) took 17-27 min per ωB97X-D single point on a lane and 12-19 min per B3LYP one
+  (DiskDF at 3 GB per job); the smallest (487-500) took 4-6 min. Time grows as nbf^2.9.
+- **Left out:**
+  - 67940-02-7: a tautomer case, below.
+  - Two CREST conformers of 29811-19-6: C2 has a new O-C bond. In C3 a sulfonate O sits 1.93 Å from the ester
+    carbonyl C, a half-formed bond that the 1.25 × covalent-radii rule misses; ωB97X-D puts it 87 kJ/mol up.
+
+**Result** (9 ions; dE = E(S1) − E(GFN2's pick), kJ/mol; negative: the level prefers Spartan's pick):
+
+| ion | q | GFN2's pick | lowest at ωB97X-D | B3LYP-D3(BJ) | B3LYP | dE: GFN2 | ωB97X-D | B3LYP-D3(BJ) | B3LYP | D3 part |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 75032-81-4 | −1 | Q1 | C1 | C1 | C1 | +29.7 | −52.0 | −42.3 | −68.6 | +26.3 |
+| 92340-26-6 | −1 | G1 | S1 | S1 | S1 | +61.9 | −62.5 | −61.1 | −77.5 | +16.4 |
+| 57589-85-2 | −1 | G1 | S2 | S2 | S1 | +53.4 | −6.7 | +0.9 | −16.1 | +17.0 |
+| 54950-05-9 | −1 | G1 | C1 | C1 | C1 | +30.5 | −42.1 | −42.7 | −45.9 | +3.2 |
+| 68815-72-5 | −1 | G1 | C3 | C3 | Q2 | +51.5 | −12.9 | −10.7 | −30.6 | +19.9 |
+| 3793-74-6 | −1 | G1 | C1+C3 | C1+C3 | C1+C3 | +31.7 | −39.9 | −40.0 | −51.4 | +11.3 |
+| 313475-52-4 | +1 | C1 | S1 | S1 | G1 | +4.9 | −3.1 | −2.0 | +0.9 | −2.9 |
+| 29811-19-6 | −1 | G1 | Q1 | S3 | Q1 | +9.4 | +4.4 | +3.4 | +3.7 | −0.3 |
+| 61119-62-8 | −1 | G1 | S1 | S1 | S1 | +33.1 | −15.4 | −16.2 | −17.5 | +1.3 |
+
+"D3 part" is B3LYP-D3(BJ) minus B3LYP. Spartan's dipole is its B3LYP/C-PCM dipole of S1 at the MMFF geometry;
+"at S1" is each level's dipole at S1's GFN2 geometry.
+
+| level | lowest is GFN2's pick / S1 / other | S1 vs GFN2's pick: preferred / tie (≤ 4 kJ/mol) / not | mean dE | dipole MAE vs Spartan, own lowest | at S1 | own lowest vs ωB97X-D's |
+|---|---|---|---|---|---|---|
+| GFN2/ALPB | 9 / 0 / 0 | 0 / 0 / 9 | +34.0 | 10.7 D | 2.0 D | 9.5 D |
+| ωB97X-D | 0 / 3 / 6 | 7 / 1 / 1 | −25.6 | 7.5 D | 1.3 D | — |
+| B3LYP-D3(BJ) | 0 / 3 / 6 | 6 / 3 / 0 | −23.4 | 6.5 D | 1.3 D | 1.0 D |
+| B3LYP | 0 / 3 / 6 | 7 / 2 / 0 | −33.7 | 6.3 D | 1.3 D | 2.4 D |
+
+- **Dispersion is not the explanation.** D3(BJ) moves dE(S1 − GFN2's pick) by +10 kJ/mol on average toward GFN2's
+  pick (median +11, range −3 to +26). That is 15 % of the 68 kJ/mol between GFN2/ALPB and plain B3LYP. ωB97X-D and
+  B3LYP-D3(BJ) side with Spartan's pick about as often as plain B3LYP does.
+  - Plain B3LYP does lean toward extended conformers: the median rank correlation of its energies with the radius of
+    gyration is −0.50, and D3(BJ) takes it to 0.00.
+  - GFN2 leans the other way (+0.50), far beyond what dispersion gives.
+- **GFN2's ranking is the outlier.**
+  - No DFT level puts GFN2's pick lowest in any ion. ωB97X-D's lowest is Spartan's S1 in 3 ions, S2 in 1, CREST's
+    C1 or C3 in 4 and QuantaBench's Q1 in 1.
+  - Within a pool, ωB97X-D and B3LYP-D3(BJ) agree: median Spearman ρ 0.95, relative energies 2.6 kJ/mol apart on
+    average. GFN2 against ωB97X-D: ρ −0.36, 23 kJ/mol.
+  - Our B3LYP/def2-SVP//GFN2 orders Spartan's S1-S3 as Spartan's B3LYP/6-311+G**//MMFF does (median ρ 1.00; GFN2
+    −0.20), so the DFT side reproduces Spartan where the two overlap.
+- **Hamiltonian and solvent model.** GFN2/ALPB and ωB97X-D/PCM differ by 60 kJ/mol in dE(S1 − GFN2's pick).
+  - The gas-phase single points split it into +39 kJ/mol from the Hamiltonian (median +43) and +20 kJ/mol from ALPB
+    against PCM solvation (median +25).
+  - GFN2 single points in CPCM (ddX) still put GFN2's pick lowest in 5 of 9 ions and never prefer S1.
+- **Short O···F contacts.**
+  - GFN2's pick packs an anionic or carbonyl O within 2.6 Å of chain fluorines (Bondi sum 2.99 Å) in 7 of 9 ions,
+    with three or more such contacts in 5. Spartan's S1 has one in 1 of 9.
+  - Relative to the pool, GFN2 puts conformers with three or more such contacts 43 kJ/mol lower than ωB97X-D does;
+    conformers without any sit 22 kJ/mol higher.
+  - So GFN2 likely overbinds O···F-C contacts in these anions. That is a hypothesis, not tested here: the contacts
+    come with compactness, and a DFT optimization would open them somewhat.
+- **GFN2 cannot pre-screen for DFT here.** ωB97X-D's lowest sits at GFN2 rank 2-6 of 7-10 (median 5),
+  5-62 kJ/mol above GFN2's lowest (median 33). Re-ranking GFN2's lowest 3 would have missed it in 7 of 9 ions.
+- **Boltzmann averages do not rescue GFN2.** Its pool-averaged dipoles are 10.7 D from Spartan's, as its lowest
+  conformer's are: the gaps are tens of kJ/mol.
+- **The dipole follows the ranking level, not the functional.** GFN2's pick is 9.5 D from ωB97X-D's pick on average,
+  B3LYP-D3(BJ)'s pick 1.0 D. At the same conformer (S1) the levels differ from Spartan by 1.3-2.0 D.
+- **67940-02-7 is a protonation problem.**
+  - With the proton on the dimethylamino N (QuantaBench's conformers) the cation is 183 kJ/mol (ωB97X-D) or
+    170 kJ/mol (B3LYP-D3(BJ)) below the drawn sulfonamide-NH2⁺ form that Spartan computed. GFN2 gives 197 kJ/mol.
+  - The validation's 11.5 D dipole gap for this ion comes from the protonation site, not the conformer.
+
+**Recommendation for the PFAS QSAR run (ions in water):**
+- Rank conformers with DFT in PCM water, not with GFN2/ALPB. Neither GFN2's lowest nor GFN2 Boltzmann averages are
+  defensible for these ions.
+- Re-rank a diverse pool, not GFN2's lowest few: folded and extended conformers from RDKit and CREST, about 6-10 per
+  ion. Use `--qm wb97x-d/def2-svp --qm-top N --solvent water` on a pool built for it.
+- B3LYP-D3(BJ)/def2-SVP ranks like ωB97X-D (2.6 kJ/mol) and costs about 30 % less.
+- One single point takes 4-6 min (30 heavy atoms) to 12-27 min (54) on a 4-thread NOVA lane; time grows as nbf^2.9.
+- The QM stage's `qm_*` descriptors come from its lowest conformer, but the xTB descriptors stay at GFN2's lowest.
+  The QSAR run needs the descriptors of the DFT-lowest conformer.
+
+**Limits:**
+- Ten ions chosen for their large dipole errors: worst cases.
+- def2-SVP has no diffuse functions. Anions with an exposed charge may shift by a few kJ/mol.
+- IEFPCM is electrostatics only, and ALPB adds non-polar terms; the +20 kJ/mol solvent part depends on the model.
+- Single points at GFN2 geometries: no DFT relaxation and no thermal corrections. GFN2's own picks, with their short
+  O···F contacts, would relax the most.
+- At most 10 conformers per ion. DFT's lowest may lie outside the pool.
