@@ -16,6 +16,18 @@
   are at least 30 molecules over 2 thread widths; the dynamic CREST threads then use that machine's constants.
   docs/ENGINES.md, Run timings.
 
+### Conformer ranking benchmark, RANK-1 (2026-11-08)
+- docs/VALIDATION.md, "RANK-1": which cheap method ranks PFAS conformers as DFT does, on 17 ions in water
+  (ωB97X-D/def2-SVP PCM, a holdout of 8 included) and the Essential 76 neutrals in the gas phase (Spartan's
+  ωB97X-D/6-31G*). A reference check with r2SCAN-3c and ωB97X-D/def2-SVPD finds the def2-SVP reference
+  favours compact conformers; g-xTB gas + GFN1-xTB CPCM ΔG_solv is the recommended cheap ranker for ions. No code
+  change; the pipeline's rank step is BACKLOG RANK-2.
+- Methods guide: GFN2-xTB, ALPB, PCM, GFN1-xTB, AIMNet2, PM7, PM6-D3H4X, GFN-FF, MMFF94s, B3LYP-D3(BJ), r2SCAN,
+  HF, def2-SVP and def2-SVPD say what the benchmark found. GFN2-xTB ranks PFAS anions' conformers no better than
+  chance and overbinds short anionic O···F contacts. GFN1-xTB's CPCM solvation differences track IEF-PCM's.
+  AIMNet2 is the best cheap gas-phase ranker for the neutrals. def2-SVP favours compact anion conformers. The
+  entries also give r2SCAN-3c, HF-3c and def2-SVPD costs in Psi4.
+
 ### Tests never reach the real settings (2026-11-08)
 - A GUI test called `monkeypatch.undo()`, which also undid the per-test settings folder; its window then saved
   on close into the folder `settings_location.json` points at. On the MacBook (2026-11-07 15:10) that overwrote

@@ -439,18 +439,47 @@ Open (needs-Brandon):
       - Cost: 4-27 min per conformer on a 4-thread NOVA lane (30-54 heavy atoms). The QSAR list has about 590
         molecules that are charged as drawn (largest fragment; median 26 heavy atoms, 90th percentile 46): at ~8
         conformers and ~5 min each that is roughly 400 lane-hours, a few days on NOVA + MacBook.
-    - RANK-1 (· ready, next): find a cheap ranker that agrees with the DFT pool, before paying for DFT on every ion.
-      The test's 168 PCM single points at common geometries are a ready benchmark (`Runs/dft-test-2026-11-07`:
-      pool.json, xyz/, sp/). Score each candidate by rank correlation and by how often it picks DFT's lowest:
-      GFN2 with CPCM (ddX) instead of ALPB (ALPB is +20 kJ/mol of the gap), g-xTB if a build is available,
-      AIMNet2 (gas, ωB97M-D3 trained) plus a solvation term, r2SCAN-3c and B3LYP-D3(BJ)/def2-SV(P) in PCM, PM7 with
-      COSMO. A ranker within a few kJ/mol of ωB97X-D lets the QSAR run rank every ion's pool cheaply and keep DFT
-      for a check subset.
+    - RANK-1 (done 2026-11-08, branch `feat/rank1`; docs/VALIDATION.md, "RANK-1"; `Runs/rank1-2026-11-08`): a
+      cheap ranker against the DFT references, as single points at the references' geometries.
+      - Sets: the DFT test's 9 ions (79 conformers), a holdout of 8 smaller ions (52 conformers, new ωB97X-D/PCM
+        single points on the MacBook), and Spartan's 962 conformers of the Essential 76 neutrals (gas, ωB97X-D/6-31G*).
+      - Candidates: GFN2 (gas, ALPB, CPCM, GBSA, CPCM-X), GFN1, GFN-FF, g-xTB (official v2.0.1 build), AIMNet2, PM7,
+        PM6-D3H4X, MMFF94s, gas + ΔG_solv composites, HF-3c and r2SCAN-3c in PCM.
+      - Ions: no cheap method reproduces ωB97X-D/PCM. The closest: g-xTB gas + a GFN1/GFN2 CPCM (ddX) solvation
+        term, within 4 kJ/mol of DFT's pick in 13-14 of 17 ions (holdout 7/8), mean regret 2-3 kJ/mol, ~0.1 % of the
+        DFT cost. GFN2 in any solvent model is no better than a random pick (4/17), and its 6 kcal/mol window drops
+        DFT's lowest in 6 of 17 ions.
+      - Neutrals (gas): AIMNet2 is the best cheap ranker (45/53 within 4 kJ/mol; GFN2 36, random 25); their dipoles
+        barely depend on the conformer (0.3-0.4 D).
+      - O···F: GFN2, PM7 and PM6-D3H4X put conformers with short anionic O···F contacts 15-21 kJ/mol per contact too
+        low (Rg held fixed; holdout 10-16); g-xTB + CPCM and B3LYP-D3(BJ) do not.
+      - Reference check: r2SCAN-3c (5 test ions) and ωB97X-D/def2-SVPD (2) in PCM agree with each other better
+        than with ωB97X-D/def2-SVP. The def2-SVP levels favour compact conformers (+12 to +16 kJ/mol per Å of Rg
+        relative to r2SCAN-3c). Against r2SCAN-3c, g-xTB + GFN1-xTB CPCM picks within 4 kJ/mol in 5 of 5 ions
+        (ωB97X-D/def2-SVP 4 of 5, GFN2/ALPB 0 of 5). Recommended ranker for ions: g-xTB gas + GFN1-xTB CPCM ΔG_solv.
+    - RANK-2 (· ready, next): a rank step in the pipeline (from RANK-1).
+      - `rank_method` (BuildConfig, settings, `build --rank`): after refinement, single points of every refined
+        conformer at the rank level; the energy window, order, Boltzmann weights and `kept[0]` use those energies,
+        so every descriptor (`dipole_debye_best`, the ensemble, `xtb_*`, the QM stage's `qm_top`) follows the rank
+        level. No energy-window pruning at the refinement level before it (RMSD pruning only).
+      - Levels: `refine` (today), `gxtb+cpcm` (g-xTB gas + tblite GFN1-xTB CPCM ΔG_solv, for ions in water),
+        `aimnet2` (neutrals), `qm` (the QM stage's level on every kept conformer, then all descriptors from the
+        QM-lowest).
+      - A g-xTB engine: the official grimme-lab/g-xtb build of xtb (`--gxtb`; its own program entry, since it is a
+        different binary from xtb 6.7.1; record the version and SHA-256, the release is preliminary).
+      - For the QSAR ions: g-xTB + CPCM ranks all. Where DFT quality is needed, DFT re-ranks the conformers within
+        20-30 kJ/mol of its lowest, in PCM at r2SCAN-3c or with a diffuse basis, not at def2-SVP. First, a random
+        ~10 % check subset (~80 lane-hours at r2SCAN-3c) measures the agreement on the real list.
+    - Settle the conformer reference for PFAS ions (from RANK-1): ωB97X-D/def2-TZVPD or DLPNO-CCSD(T) PCM single
+      points on 29811-19-6, 61119-62-8 and 75032-81-4, where ωB97X-D/def2-SVP and r2SCAN-3c disagree. That is about
+      40-60 lane-hours; ask before starting.
     - Follow-ups of the DFT test:
-      - def2-SVPD on a subset (diffuse functions for the anions).
+      - Done in part 2026-11-08 (RANK-1): def2-SVPD on 2 test ions (3793-74-6, 29811-19-6). It moves ωB97X-D toward
+        r2SCAN-3c (MAE 16 to 8 kJ/mol on 29811-19-6).
       - DFT optimizations of a few GFN2 picks, to see how much of their penalty is geometry.
-      - Check whether GFN2 overbinds anionic O···F-C contacts. Conformers with three or more sit 43 kJ/mol lower
-        relative to the pool at GFN2 than at ωB97X-D.
+      - Done 2026-11-08 (RANK-1): GFN2 overbinds anionic O···F-C contacts, −18 ± 2 kJ/mol per contact with
+        compactness held fixed (test ions; holdout −10 ± 3). Open: DFT optimizations of a few contact-rich GFN2
+        picks, to separate overbinding from the strain DFT single points see at GFN2 geometries.
       - 67940-02-7: Spartan computed the drawn sulfonamide-NH2⁺ tautomer, 183 kJ/mol above the amine-protonated one
         (ωB97X-D/PCM). Leave it out of the dipole comparison or re-protonate it; its 11.5 D gap is the proton, not
         the conformer.
