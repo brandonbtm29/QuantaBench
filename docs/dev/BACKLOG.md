@@ -436,7 +436,16 @@ Open (needs-Brandon):
         `--qm-top N` in water.
       - Every descriptor from the QM-lowest conformer: today only `qm_*` follows it, and the xTB descriptors stay at
         GFN2's lowest.
-      - Cost: 4-27 min per conformer on a 4-thread NOVA lane (30-54 heavy atoms).
+      - Cost: 4-27 min per conformer on a 4-thread NOVA lane (30-54 heavy atoms). The QSAR list has about 590
+        molecules that are charged as drawn (largest fragment; median 26 heavy atoms, 90th percentile 46): at ~8
+        conformers and ~5 min each that is roughly 400 lane-hours, a few days on NOVA + MacBook.
+    - RANK-1 (· ready, next): find a cheap ranker that agrees with the DFT pool, before paying for DFT on every ion.
+      The test's 168 PCM single points at common geometries are a ready benchmark (`Runs/dft-test-2026-11-07`:
+      pool.json, xyz/, sp/). Score each candidate by rank correlation and by how often it picks DFT's lowest:
+      GFN2 with CPCM (ddX) instead of ALPB (ALPB is +20 kJ/mol of the gap), g-xTB if a build is available,
+      AIMNet2 (gas, ωB97M-D3 trained) plus a solvation term, r2SCAN-3c and B3LYP-D3(BJ)/def2-SV(P) in PCM, PM7 with
+      COSMO. A ranker within a few kJ/mol of ωB97X-D lets the QSAR run rank every ion's pool cheaply and keep DFT
+      for a check subset.
     - Follow-ups of the DFT test:
       - def2-SVPD on a subset (diffuse functions for the anions).
       - DFT optimizations of a few GFN2 picks, to see how much of their penalty is geometry.
@@ -1039,6 +1048,27 @@ the code, but three things never arrived through it.
     the largest molecules. Compare their dipoles and conformers with the GFN-FF runs and Spartan (VAL-3).
 - **Windows:** `qb/windows` has a native build (docs/WINDOWS.md there), but Brandon decided on WSL (ENG-2).
   Look at it again only if WSL becomes a problem.
+
+### SCHED-1: Runtime-aware scheduling of conformer searches (study) · proposed 2026-11-08
+Brandon (2026-11-08): choosing size-aware thread allocation could be a study in itself; also try moving small
+molecules up the queue when only a few threads are free and the next molecule is large (it would do better on more
+threads). This is moldable-job scheduling with backfilling, as HPC batch schedulers do it (EASY backfilling: a
+small job may start in a gap if it does not delay the reserved start of the big one).
+- What exists (2026-11-07, `dist/threads.py`, docs/ENGINES.md): a cost model (CREST time ~ atoms^3.9 with a x1.8
+  scatter; speedup 2->4 threads 1.86x, 4->13 threads 1.74x), a discrete-event simulator (scratch, not in the repo),
+  and a launch-time rule that widens a molecule only when it would dominate the batch.
+- Study plan:
+  1. Record every molecule's stage times, threads and CPU time in the job table, so each run adds training data.
+  2. Move the simulator into the repo (`dist/simulate.py`) with policies as plug-ins: fixed lanes, largest first,
+     launch-time width, reservations with backfilling (Brandon's idea), and online calibration of the cost model
+     from the molecules already finished in the same run.
+  3. Better runtime prediction: atoms, rotatable bonds, rings, charge and engine as features; a power law vs a
+     small gradient-boosted model, judged by makespan, not by fit.
+  4. Measure on the MacBook (performance + efficiency cores) and NOVA (SMT), batches of 20, 300 and 2,000, and on
+     the GFN2 CREST tail, where widening could also avoid the 3 h time limit.
+- Expectations: for thousands of molecules every policy ties (the queue empties evenly); the gains are in small
+  batches, narrow lanes, a few dominant molecules and expensive stages (CREST GFN2, DFT re-ranking). Could become a
+  short technical note.
 
 ### FORK-7: pyvistaqt 0.13 crash upstream · ready
 - Minimal repro of the `initializeGL` access violation with the AMD driver, filed upstream; re-check the
