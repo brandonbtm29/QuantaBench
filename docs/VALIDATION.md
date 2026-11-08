@@ -554,3 +554,215 @@ missing dispersion explains the disagreement and GFN2's ranking is defensible.
 - Single points at GFN2 geometries: no DFT relaxation and no thermal corrections. GFN2's own picks, with their short
   O···F contacts, would relax the most.
 - At most 10 conformers per ion. DFT's lowest may lie outside the pool.
+
+## RANK-1: a cheap conformer ranker? (2026-11-08, `Runs/rank1-2026-11-08`)
+
+The question: DFT re-ranking of every QSAR ion's pool would cost about 400 lane-hours. Is there a cheap method that
+ranks conformers as ωB97X-D/def2-SVP in PCM does, or is there none? Every candidate is a single point at the
+reference's own geometry, so only the energy model differs. Scripts: `scratch/rank1/` on NOVA (not in the
+repository); the full tables and `report.md` are in the run folder.
+
+**Benchmark sets:**
+
+| set | molecules (conformers) | geometries | reference |
+|---|---|---|---|
+| test ions, water | the DFT conformer test's 9 ions, 30-54 heavy atoms (79) | GFN2/ALPB(water), the test's | ωB97X-D/def2-SVP IEFPCM, the test's single points |
+| holdout ions, water | 8 ions the test did not use, 16-30 heavy atoms, 6 anions + 2 cations (52) | GFN2/ALPB(water) from the conformer comparison's cache | ωB97X-D/def2-SVP IEFPCM, new (MacBook, 0.5 h) |
+| neutrals, gas | the 63 Essential 76 PFAS with saved conformers, 53 with two or more (962) | Spartan's DLFFG1 | Spartan's ωB97X-D/6-31G* single points (VAL-2: QuantaBench's Psi4 reproduces them to 4e-4 Eh) |
+
+- The holdout pools (4-8 conformers): Spartan's two B3LYP/C-PCM-lowest, QuantaBench's two GFN2/ALPB-lowest, the two
+  GFN2/ALPB-optimized lowest of Spartan's pool, and the most extended and most compact of Spartan's relaxed pool. The
+  holdout was chosen before any candidate was scored on it, so it checks the choice made on the test ions.
+- **Candidates:** GFN2-xTB gas, ALPB, CPCM (tblite's ddX), GBSA (xtb), CPCM-X; GFN1-xTB gas, ALPB, CPCM; GFN-FF gas
+  and ALPB; g-xTB (grimme-lab/g-xtb v2.0.1, the official Windows build of xtb with `--gxtb`, a preliminary release)
+  gas and its electrostatics-only GBE and ddCOSMO; AIMNet2 gas; PM7 and PM6-D3H4X gas and COSMO; MMFF94s; composites
+  "gas-phase energy of one method + ΔG_solv = E(solvated) − E(gas) of another at the same geometry" (the full 8 x 10
+  grid is in the run folder); HF-3c and r2SCAN-3c (Psi4 1.9.1, gCP from mctc-gcp) in PCM; and the DFT test's own
+  B3LYP-D3(BJ) and plain B3LYP/def2-SVP in PCM.
+- **Measures**, per molecule: Spearman ρ and Kendall τ of the conformer energies; the error of each conformer's
+  energy relative to the reference's lowest (MAE, maximum); whether the candidate's lowest is the reference's
+  ("same") or within 4 kJ/mol of it at the reference level ("≤ 4"); the regret (the reference energy of the
+  candidate's pick above the reference's lowest); and the reference dipole of the candidate's pick against that of
+  the reference's pick (Δμ). Cost: core-seconds against the reference's on the same conformers.
+
+**Ions in water** (17 ions, 131 conformers; the test's 9 / the holdout's 8 in brackets):
+
+| candidate | cost vs ωB97X-D | ρ median | MAE kJ/mol | pick ≤ 4 kJ/mol | regret mean / max kJ/mol | Δμ of pick (D) |
+|---|---|---|---|---|---|---|
+| B3LYP-D3(BJ)/def2-SVP PCM (test only) | 0.72 | 0.95 | 3.5 | 9/9 | 0.1 / 1 | 0.9 |
+| g-xTB gas + ΔG CPCM(GFN2) | 0.001 | 0.86 (0.86 / 0.88) | 10.1 | 14/17 (7/9, 7/8) | 2.9 / 18 | 2.2 |
+| g-xTB gas + ΔG CPCM(GFN1) | 0.001 | 0.88 (0.82 / 0.89) | 9.0 | 13/17 (6/9, 7/8) | 2.3 / 10 | 2.4 |
+| AIMNet2 + ΔG CPCM(GFN2) | 0.001 | 0.64 (0.50 / 0.71) | 11.1 | 13/17 (6/9, 7/8) | 3.7 / 28 | 1.7 |
+| PM6-D3H4X COSMO | 1e-4 | 0.52 (0.57 / 0.30) | 15.2 | 13/17 (6/9, 7/8) | 6.9 / 35 | 2.1 |
+| g-xTB gas | 2e-4 | 0.71 (0.29 / 0.84) | 15.6 | 11/17 (5/9, 6/8) | 7.2 / 40 | 3.9 |
+| AIMNet2 gas | 1e-5 | 0.50 (0.42 / 0.64) | 16.1 | 12/17 (6/9, 6/8) | 3.7 / 26 | 3.1 |
+| GFN1-xTB CPCM | 9e-4 | 0.79 (0.73 / 0.81) | 11.9 | 11/17 (5/9, 6/8) | 4.2 / 20 | 1.1 |
+| GFN2-xTB CPCM | 1e-3 | 0.00 (−0.32 / 0.01) | 21.8 | 5/17 (2/9, 3/8) | 25.2 / 70 | 6.3 |
+| GFN2-xTB ALPB (today's ranking) | 4e-5 | −0.13 (−0.36 / 0.00) | 26.0 | 4/17 (1/9, 3/8) | 29.1 / 70 | 7.9 |
+| GFN2-xTB gas | 4e-5 | −0.14 (−0.25 / 0.07) | 30.4 | 4/17 (1/9, 3/8) | 28.4 / 70 | 7.8 |
+| PM7 COSMO | 1e-4 | −0.05 (0.03 / −0.07) | 18.6 | 5/17 (2/9, 3/8) | 20.2 / 81 | 4.3 |
+| MMFF94s gas | 1e-6 | 0.24 (0.24 / 0.22) | 51.3 | 7/17 (4/9, 3/8) | 13.3 / 48 | 4.8 |
+| HF-3c PCM (Psi4) | 0.21 | 0.65 (0.08 / 0.68) | 18.3 | 10/17 (3/9, 7/8) | 9.4 / 46 | 2.5 |
+| a random pick | | | | 4.7 (2.1, 2.7) | 17.2 | 5.1 |
+
+- **No cheap method reproduces the DFT ranking, but one family comes close:** g-xTB in the gas phase plus a CPCM
+  (ddX) solvation term from GFN1- or GFN2-xTB at the same geometry, three single points of about a second each. It
+  picks a conformer within 4 kJ/mol of ωB97X-D's lowest in 13-14 of 17 ions, with a mean regret of 2-3 kJ/mol. It
+  was chosen on the test ions and held on the holdout: 7 of 8, every regret ≤ 5 kJ/mol. With the GFN2 term it misses
+  3 of 17 ions by 4.5, 10 and 18 kJ/mol (dipoles 2.3, 8.3 and 3.9 D off DFT's pick); with the GFN1 term 4 of 17 by
+  4.5-10 kJ/mol. The 10 and 18 kJ/mol misses are test ions (75032-81-4, 61119-62-8). Part of the remaining error
+  is the reference's own (the reference check below).
+- **GFN2-xTB ranks these ions no better than a random pick, in every solvent model.** Today's ranking (GFN2/ALPB)
+  picks within 4 kJ/mol in 4 of 17 ions, a random pick in about 5. Its 6 kcal/mol (25 kJ/mol) window kept DFT's
+  lowest in only 11 of 17 ions; the pipeline prunes with that window before the QM stage sees the pool.
+- **Pre-screening.** Keeping the conformers within 30 kJ/mol of g-xTB + CPCM's lowest kept DFT's lowest in all 17
+  ions, with 80 % of these (already diverse) pools; within 20 kJ/mol, 16-17 of 17 with 62-67 %.
+- **Neither part alone is enough.** Pairs of conformers with gas-phase and PCM ωB97X-D single points (17 pairs, 9
+  ions) split each error into the gas-phase Hamiltonian and the solvation term. Errors of E(extended) − E(compact),
+  positive when a method favours the compact conformer:
+
+  | part | method | MAE kJ/mol | mean signed |
+  |---|---|---|---|
+  | gas-phase ΔE | g-xTB / AIMNet2 / GFN1 / PM6-D3H4X / GFN2 / PM7 | 13 / 16 / 16 / 31 / 39 / 42 | −9 / −11 / +6 / +18 / +16 / +29 |
+  | ΔΔG_solv vs PCM's | GFN1 CPCM / GFN2 CPCM / PM6 COSMO / GFN2 GBSA / GFN2 ALPB / ALPB Gelec only | 4 / 10 / 10 / 19 / 20 / 22 | +0.4 / +5 / −8 / +11 / +12 / +8 |
+
+  GFN2 favours compact conformers in both parts. ALPB's non-polar terms are not the cause: its electrostatic term
+  alone does no better. g-xTB, trained toward ωB97M-V/def2-TZVPPD, has the best gas-phase energies; GFN1 charges in
+  CPCM give the solvation differences closest to IEF-PCM's.
+- **The tautomer check** (67940-02-7): every QM method puts the amine-protonated cation below the drawn
+  sulfonamide-NH2⁺ form, as ωB97X-D does (183 kJ/mol): GFN2/ALPB 197, AIMNet2 173, g-xTB 162, PM7 101.
+
+**Cheaper DFT does not help much.** Psi4 1.9.1 in PCM against ωB97X-D/def2-SVP (37-atom ion, 4-thread lanes):
+HF-3c 0.2-0.3x, B3LYP-D3(BJ)/def2-SVP 0.72x (the DFT test), PBEh-3c 0.85x, B3LYP-D3(BJ)/6-31G* 0.85x, B97-3c
+1.3x, r2SCAN-3c 2.0x. def2-SV(P) is def2-SVP for PFAS without hydrogen, and ωB97X-3c did not run (Psi4 1.9.1's vDZP
+file has no fluorine). HF-3c, the only one much cheaper, ranks worse than g-xTB + CPCM at 200 times its cost and
+leans strongly toward extended conformers. B3LYP-D3(BJ)/def2-SVP follows the reference closely, but it shares the
+reference's basis and its errors.
+
+**Is the reference right? Two better-basis DFT levels side with the cheap ranker.** On 5 of the test ions (44
+conformers, the two hardest included), r2SCAN-3c was added in the same PCM, and on 2 of them (17 conformers)
+ωB97X-D/def2-SVPD. r2SCAN-3c is a composite with a triple-zeta basis (def2-mTZVPP), D4 dispersion and the gCP
+correction for basis-set superposition error (Grimme et al. 2021, doi:10.1063/5.0040021). def2-SVPD adds the diffuse
+functions that anions need. These two levels agree with each other (ρ 0.98 and 1.00, MAE 8 and 5 kJ/mol) better
+than either agrees with ωB97X-D/def2-SVP. Against def2-SVP, r2SCAN-3c has ρ 0.72 and MAE 10 kJ/mol; def2-SVPD has MAE
+9 and 6. With r2SCAN-3c as the reference (5 ions):
+
+| candidate | ρ median | MAE kJ/mol | pick ≤ 4 kJ/mol | regret mean / max kJ/mol |
+|---|---|---|---|---|
+| g-xTB gas + ΔG CPCM(GFN1) | 0.94 | 5.1 | 5/5 | 0.5 / 2 |
+| B3LYP/def2-SVP PCM (no dispersion) | 0.92 | 5.3 | 4/5 | 1.5 / 6 |
+| g-xTB gas + ΔG CPCM(GFN2) | 0.93 | 9.0 | 4/5 | 5.1 / 23 |
+| ωB97X-D/def2-SVP PCM (the reference) | 0.72 | 10.4 | 4/5 | 1.5 / 6 |
+| B3LYP-D3(BJ)/def2-SVP PCM | 0.60 | 13.8 | 3/5 | 4.2 / 14 |
+| g-xTB gas | 0.70 | 18.0 | 4/5 | 2.8 / 14 |
+| AIMNet2 gas | 0.38 | 19.6 | 4/5 | 2.8 / 14 |
+| HF-3c PCM | 0.35 | 21.8 | 1/5 | 13.8 / 28 |
+| GFN2-xTB ALPB (today's ranking) | −0.53 | 29.8 | 0/5 | 48.5 / 87 |
+| a random pick | | | 1.0 | 22.6 |
+
+- The def2-SVP levels with dispersion favour compact conformers relative to r2SCAN-3c. Their errors rise by
+  +12 ± 2 kJ/mol (ωB97X-D) and +16 ± 3 (B3LYP-D3(BJ)) per Å of radius of gyration, against −2 ± 2 for
+  g-xTB + CPCM(GFN1). On the extended/compact pairs, def2-SVPD and r2SCAN-3c put the extended conformer
+  11-13 kJ/mol lower than ωB97X-D/def2-SVP does. The likely cause is the small basis: superposition error
+  over-binds folded conformers, and without diffuse functions the anion is squeezed. B3LYP without dispersion agrees with r2SCAN-3c, which fits an
+  error cancellation. This is a reading, not a proof: no level here is converged.
+- So part of the cheap ranker's remaining error against the reference (9-10 kJ/mol MAE) is the reference's. Against
+  r2SCAN-3c, g-xTB + CPCM(GFN1) picked within 4 kJ/mol in 5 of 5 ions, and so did ωB97X-D/def2-SVPD on its 2 ions. The
+  GFN2-term variant's 18 kJ/mol miss on 61119-62-8 is a miss against r2SCAN-3c too (23 kJ/mol).
+- B3LYP-D3(BJ)/def2-SVP's close agreement with the reference (ρ 0.95) comes largely from the shared basis. It is not
+  a cheap stand-in for a better level. The lean toward extended conformers seen above for g-xTB and AIMNet2 is partly
+  the reference's lean toward compact ones. The DFT conformer test's conclusion that DFT sides with Spartan's
+  extended pick (VAL-3) gets stronger.
+- GFN2-xTB's verdict does not change: 0 of 5 against r2SCAN-3c, and its O···F error is the same (−20 ± 3 kJ/mol per
+  contact in the gas phase, Rg held fixed).
+- Cost on a 4-thread NOVA lane: ωB97X-D/def2-SVPD took 740-850 s for the 37-atom ion (about 3x def2-SVP), and
+  r2SCAN-3c took 2x def2-SVP.
+- This does not settle which DFT level is closer to the truth. Single points at a triple-zeta diffuse hybrid (for
+  example ωB97X-D/def2-TZVPD) or DLPNO-CCSD(T) on 29811-19-6, 61119-62-8 and 75032-81-4 would. That is roughly 40-60
+  lane-hours, not run here.
+
+**Neutrals in the gas phase** (53 molecules with two or more conformers):
+
+| candidate | time / SP | ρ median | MAE kJ/mol | pick ≤ 4 kJ/mol | regret mean / max | Δμ of pick (D) |
+|---|---|---|---|---|---|---|
+| Spartan's DLXD2XV (its own neural-network ranking) | | 0.84 | 1.5 | 53/53 | 0.5 / 3 | 0.12 |
+| AIMNet2 gas | 0.01 s | 0.69 | 3.1 | 45/53 | 1.7 / 9 | 0.43 |
+| g-xTB gas | 0.16 s | 0.39 | 4.5 | 39/53 | 2.3 / 7 | 0.30 |
+| GFN2-xTB gas | 0.03 s | 0.20 | 4.5 | 36/53 | 2.7 / 7 | 0.32 |
+| PM7 gas | 0.08 s | 0.26 | 5.1 | 35/53 | 3.4 / 10 | 0.26 |
+| GFN1-xTB gas | 0.03 s | 0.27 | 4.8 | 32/53 | 3.1 / 9 | 0.45 |
+| MMFF94s | < 0.001 s | 0.19 | 7.9 | 30/53 | 3.7 / 9 | 0.31 |
+| PM6-D3H4X gas | 0.09 s | 0.09 | 5.2 | 24/53 | 4.4 / 10 | 0.29 |
+| GFN-FF gas | 0.05 s | 0.00 | 7.9 | 22/53 | 4.3 / 10 | 0.57 |
+| a random pick | | | | 24.9 | 4.3 | 0.41 |
+
+- HF-3c (gas), run on the 27 smallest of these molecules (up to 28 atoms, 454 conformers; 13 s per single point):
+  18 of 27 within 4 kJ/mol, against AIMNet2 25, g-xTB 23, GFN2 21 and a random pick 14 on the same molecules.
+
+- Spartan saved conformers within about 10 kJ/mol of its lowest, so the neutral test is a narrow-window ranking:
+  regrets are small for every method, and the dipole of the pick barely depends on the ranker (0.3-0.4 D, a random
+  pick 0.41 D). AIMNet2, QuantaBench's `auto` refinement method, is the best cheap ranker here.
+- AIMNet2, g-xTB, GFN1 and GFN2 lean toward extended conformers relative to ωB97X-D/6-31G* (−8 to −16 kJ/mol per Å
+  of radius of gyration, compared with −3 for DLXD2XV, which estimates a larger basis). Part of that may be the
+  reference: 6-31G* without a counterpoise correction overbinds folded conformers (basis-set superposition error).
+  This is not tested here.
+
+**Short anionic O···F contacts (the DFT test's hypothesis): confirmed for GFN2-xTB and the NDDO methods.** Each
+conformer's error (candidate minus ωB97X-D/PCM, both centred on the ion's mean), regressed on its number of O···F
+contacts < 2.6 Å (O and F at least four bonds apart) and its radius of gyration, both centred per ion; ± is a
+bootstrap over ions:
+
+| candidate | test ions: none / 1-2 / ≥ 3 contacts (kJ/mol) | per contact, Rg held (test) | per contact (holdout) |
+|---|---|---|---|
+| GFN2-xTB gas | +15.5 / −18.0 / −59.4 | −20 ± 2 | −13 ± 5 |
+| GFN2-xTB ALPB | +13.8 / −17.3 / −51.3 | −18 ± 2 | −10 ± 3 |
+| GFN2-xTB CPCM | +11.3 / −14.4 / −41.8 | −15 ± 2 | −10 ± 3 |
+| PM7 gas | +15.8 / −17.7 / −61.3 | −21 ± 1 | −16 ± 4 |
+| PM6-D3H4X gas | +13.7 / −13.8 / −54.7 | −19 ± 1 | −16 ± 3 |
+| g-xTB gas | +4.6 / −4.5 / −18.7 | −7 ± 1 | −4 ± 2 |
+| g-xTB gas + ΔG CPCM(GFN2) | +0.4 / −0.8 / −1.1 | −1 ± 1 | −1 ± 2 |
+| B3LYP-D3(BJ)/def2-SVP PCM | +0.6 / −1.4 / −1.5 | −0.4 ± 0.4 | |
+
+- 56 test conformers have no such contact, 12 one or two, 11 three or more (holdout 37 / 9 / 6). Neutral PFAS
+  have almost none (35 of 962 conformers, one or two), and there GFN2 shows no contact error (−2 ± 1).
+- The error per contact stays when compactness is held fixed, so it is the contact, not folding. B3LYP-D3(BJ) and
+  g-xTB + CPCM do not show it. Caveat: the geometries are GFN2's, whose O···F contacts are short by its own
+  preference, so part of the penalty DFT gives them is strain a DFT optimization would relax.
+
+**Recommendation for the PFAS QSAR run:**
+- **Ions in water:** stop ranking with GFN2-xTB. Rank each ion's pool with g-xTB (gas) plus the CPCM (ddX)
+  solvation term of GFN1-xTB at the same geometry. It was the only ranker within 4 kJ/mol of the lowest at both DFT
+  levels on the ions checked:
+  - ωB97X-D/def2-SVP: 13 of 17 ions, mean regret 2.3 kJ/mol, max 10;
+  - r2SCAN-3c: 5 of 5 ions, max regret 2 kJ/mol.
+
+  It costs about 0.1 % of a DFT single point, a few core-hours for the whole QSAR list. The GFN2-xTB term ranked
+  about as well on the 17 ions, but it missed 61119-62-8 by 18-23 kJ/mol at both DFT levels.
+- **Where descriptors must be at DFT quality:** re-rank the conformers within 20-30 kJ/mol of the cheap ranker's
+  lowest. A 20 kJ/mol window kept ωB97X-D's lowest in 17 of 17 ions with 62 % of the pools; 30 kJ/mol kept it with
+  81 %. Re-rank in PCM with r2SCAN-3c (2x ωB97X-D/def2-SVP) or a diffuse basis, not at def2-SVP:
+  B3LYP-D3(BJ)/def2-SVP reproduces the reference's lean toward compact conformers.
+- **Before relying on the cheap ranking:** check it against DFT on a random ~10 % of the QSAR ions, about 80
+  lane-hours with r2SCAN-3c. Settle the reference level on the three disputed ions first (see the reference check
+  above).
+- **Neutrals:** AIMNet2 (gas) ranks them about as well as anything cheap tested, and their dipoles hardly depend on
+  the conformer chosen; no DFT re-ranking is needed for them in the gas phase.
+- **Pipeline change** (not made here; RANK-2 in docs/dev/BACKLOG.md): a rank step between refinement and pruning,
+  so that the energy window, order, Boltzmann weights and the conformer every descriptor comes from follow the rank
+  level, not the refinement level; a g-xTB engine (the official xtb build with `--gxtb`, a separate program entry);
+  and no pruning by GFN2 energy before the rank step.
+
+**Limits:**
+- 17 ions, 4-10 conformers each, many of them worst cases for the dipole; the 9 test ions are the hardest.
+- The reference (ωB97X-D/def2-SVP) is not converged. On the ions checked, r2SCAN-3c and def2-SVPD differ from it by
+  6-16 kJ/mol MAE, about as much as the cheap ranker does. That check covers 5 of the 9 test ions (r2SCAN-3c) and 2
+  (def2-SVPD), and no holdout ions. B3LYP-D3(BJ) agrees with the reference to 3.5 kJ/mol MAE because it shares the
+  basis. All levels used IEF-PCM electrostatics only, with no cavity or dispersion terms, at GFN2 geometries,
+  without DFT relaxation or thermal corrections.
+- g-xTB v2.0.1 is a preliminary release whose parameters are still being optimized; pin the binary (its SHA-256)
+  for a production run. Its GBE and ddCOSMO solvation, provisional per its README, ranked worse than adding a
+  GFN1/GFN2 CPCM term.
+- The composite was chosen among about 80 gas x solvation combinations on the 9 test ions (the holdout confirms the
+  choice, but on 8 smaller ions).
+- The neutral set is gas phase only, at Spartan's DLFFG1 geometries (not minima of any method tested), and its
+  conformers span only about 10 kJ/mol.
