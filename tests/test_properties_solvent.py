@@ -23,6 +23,13 @@ def tb(monkeypatch):
     return pytest.importorskip("tblite")
 
 
+@pytest.fixture
+def gas_xtb():
+    """The gas-phase xtb_* columns come from dxtb (torch): without it the gas runs have none to compare."""
+    if not properties.available():
+        pytest.skip("dxtb/torch not installed: no gas-phase GFN1-xTB properties")
+
+
 @pytest.mark.parametrize("method", ["GFN2-xTB", "GFN1-xTB"])
 def test_alpb_finite_field_polarizability_matches_the_energy_second_derivative(tb, method):
     """tblite takes a uniform field and ALPB in one SCF. The dipole-derivative polarizability (what the pipeline
@@ -87,7 +94,7 @@ def _run(solvent, method="tblite-gfn2", smiles="CC(=O)[O-]", **kw):
     return res
 
 
-def test_water_phase_is_solvated_in_every_step(tb):
+def test_water_phase_is_solvated_in_every_step(tb, gas_xtb):
     """tblite-gfn2 in water: refinement, engine properties (polarizability included), the GFN1-xTB properties
     (tblite, not dxtb's gas phase) and the Hessian all ran in ALPB water, and summary.csv says so."""
     wat = _run("water", frequencies=True)
@@ -115,7 +122,7 @@ def test_water_phase_is_solvated_in_every_step(tb):
     assert row["canonical_smiles"] == "CC(=O)[O-]"
 
 
-def test_a_step_without_a_solvent_model_says_so(tb):
+def test_a_step_without_a_solvent_model_says_so(tb, gas_xtb):
     """MMFF has no implicit solvent: the water run computes in the gas phase and says why, per step."""
     res = _run("water", method="mmff", smiles="CCO")
     assert res.solvent == "" and res.solvation_model == ""
