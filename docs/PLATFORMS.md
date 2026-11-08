@@ -101,6 +101,12 @@ after about one slow-lane molecule. The log says when lanes start holding back a
 each kind of lane. Switch it off with `build --no-speed-aware-lanes` or Settings > Compute
 (`resources.speed_aware_lanes`).
 
+**Dynamic CREST threads** (`dist.threads`): a CREST search started while lanes are idle may use their threads,
+in whole lanes, when it would otherwise set the end of the batch on its own; a run with fewer molecules than
+lanes lends the unused lanes' threads. The threads go back when the search ends, and the threads in use never
+exceed the plan's. Large batches are unchanged. Switch it off with `build --no-dynamic-threads` or Settings >
+Compute (`resources.dynamic_threads`); docs/ENGINES.md (CREST) has the rule and the timings.
+
 Two limits per lane keep one molecule from stopping a batch (see [ENGINES.md](ENGINES.md#memory-guard-for-dxtb-and-the-per-molecule-time-limit)):
 - **Memory:** each lane's dxtb steps get a share of the memory available at the start (available / lanes, at least
   1.5 GB; `--memory-budget GB`, Settings > Compute > Memory per lane). A step estimated above it takes a cheaper

@@ -734,7 +734,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
                   chunk: Chunk | None = None, force: bool = False,
                   lanes: list | None = None, keep_results: bool = True,
                   speed_aware: bool | None = None,
-                  handoff: Handoff | None = None) -> tuple[list[MoleculeResult], Path]:
+                  handoff: Handoff | None = None,
+                  dynamic_threads: bool | None = None) -> tuple[list[MoleculeResult], Path]:
     """Run (or continue) a batch in ``run_dir``; returns the results computed by this call.
 
     ``keep_results=False`` returns light copies (``light_result``: no RDKit molecule, no normal modes) so a
@@ -752,21 +753,23 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
     ``lanes`` (``dist.lanes.Lane`` list): more than one runs molecules in parallel worker processes
     (see ``dist.lanes``); ``None`` or one lane keeps the single-process loop. ``speed_aware`` (None: the
     ``resources.speed_aware_lanes`` setting): slower lanes leave the last molecules to faster ones
-    (``dist.speed``).
+    (``dist.speed``). ``dynamic_threads`` (None: the ``resources.dynamic_threads`` setting): a CREST search may
+    also use the threads of idle lanes, and of lanes left out because there are fewer molecules than lanes
+    (``dist.threads``).
 
     ``handoff``: lets another thread take molecules this call has not started (``Handoff``); it is closed
     when the call returns.
     """
     try:
         return _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, retry_failed, chunk,
-                              force, lanes, keep_results, speed_aware, handoff)
+                              force, lanes, keep_results, speed_aware, handoff, dynamic_threads)
     finally:
         if handoff is not None:
             handoff.close()
 
 
 def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, retry_failed, chunk, force,
-                   lanes, keep_results, speed_aware, handoff) -> tuple[list[MoleculeResult], Path]:
+                   lanes, keep_results, speed_aware, handoff, dynamic_threads=None) -> tuple[list[MoleculeResult], Path]:
     run_dir = Path(run_dir).expanduser()
     run_dir.mkdir(parents=True, exist_ok=True)
     chunk = check_chunk(chunk)
@@ -797,7 +800,10 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
         done_before = total - len(todo)
         if done_before:
             log(f"{done_before} of {total} molecule(s) already finished; {len(todo)} to do")
-        lanes = list(lanes or [])[:max(1, len(todo))]   # no more lanes than molecules (GPU lanes come first)
+        planned = list(lanes or [])
+        lanes = planned[:max(1, len(todo))]   # no more lanes than molecules (GPU lanes come first)
+        # the threads of the CPU lanes planned, including those left out: a CREST search may use them (dist.threads)
+        thread_budget = sum(x.threads for x in planned if x.device == "cpu")
         if todo:
             log_time_limit(cfg, len(lanes) > 1, log)
         if len(lanes) > 1:            # worker processes (dist.lanes); this process stays the only DB writer
@@ -806,7 +812,8 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
             results = lanes_mod.run_parallel(store, todo, cfg, lanes, run_dir, total=total, done_before=done_before,
                                              progress=progress, should_stop=should_stop, log=log,
                                              on_result=on_result, keep_results=keep_results,
-                                             speed_aware=speed_aware, handoff=handoff)
+                                             speed_aware=speed_aware, handoff=handoff,
+                                             dynamic_threads=dynamic_threads, thread_budget=thread_budget)
             todo = []
         elif lanes and lanes[0].device != "auto":       # one explicit lane, e.g. "cpu:1x4": its device and threads
             from dataclasses import replace
@@ -817,6 +824,12 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
             cfg_run = replace(cfg, threads=threads)
             device = lanes_mod.lane_device(lanes[0], cfg, cfg.gpu_memory_fraction)
             log(f"Resources: {threads} CPU threads, device {device} (lane {lanes[0].name})")
+            wide = lanes_mod.dynamic_threads_for(cfg, lanes, dynamic_threads, thread_budget)
+            if wide > threads and len(todo) == 1:
+                # one molecule left for a plan of several lanes: its CREST search gets their threads (dist.threads)
+                cfg_run = replace(cfg_run, crest_threads=wide)
+                log(f"Dynamic threads: {todo[0][0]}: CREST with {wide} threads (borrowed {wide - threads} from "
+                    "the lanes this run does not need)")
         else:
             threads = resources.apply_thread_limits(cfg.threads)
             cfg_run = cfg

@@ -2,6 +2,20 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Dynamic CREST threads (2026-11-07)
+- **A CREST search may use idle lanes' threads** (`dist/threads.py`, `dist/lanes.py`). The parent of a parallel
+  run owns the CPU lanes' threads and sets each CREST call's `-T` when it starts. A molecule that would set the
+  end of the batch on its own gets whole lanes' worth more; a run with fewer molecules than lanes lends the
+  unused lanes' threads, and a run of one molecule gives its search all of them. The threads go back when the
+  search ends; refinement and properties stay on the lane's threads. The threads in use never exceed the plan's.
+  The log shows each loan ("54950-05-9: CREST with 8 threads (borrowed 4 from idle lanes)").
+- The rule was chosen with a batch simulation on the measured CREST times: no change for the Mac's 3 x 4 on the
+  20 PFAS or for large batches, NOVA's 11 x 2 on the 20 PFAS 1,244 -> 819 s. On the Mac (GFN-FF gas): the 20 PFAS
+  842 s with nothing widened; two large PFAS 585 and 555 s instead of 1,309 and 1,096 s (CREST's sampling is
+  part of that).
+- On by default. `build --no-dynamic-threads`, Settings > Compute "Dynamic CREST threads"
+  (`resources.dynamic_threads`) turn it off; `lanes` says when it applies.
+
 ### Methods guide (2026-11-07)
 - **What the methods mean** (`chem/method_guide.py`): one entry for every engine (GFN2-xTB once, with how dxtb,
   tblite and the xtb program differ), CREST level, functional, basis set, solvent model and optimizer, plus

@@ -163,6 +163,13 @@ class SettingsDialog(QDialog):
                                     "not start one of the last molecules when the faster lanes would finish all of\n"
                                     "them sooner. Off: every free lane takes the next molecule.")
         form.addRow("", self.speed_aware)
+        self.dynamic_threads = QCheckBox("Dynamic CREST threads: a CREST search may use idle lanes' threads")
+        self.dynamic_threads.setChecked(bool(getattr(r, "dynamic_threads", True)))
+        self.dynamic_threads.setToolTip("With CREST conformers and several lanes, a CREST search started while other\n"
+                                        "lanes are idle may use their threads too (in whole lanes, when that is\n"
+                                        "predicted to end the batch sooner). The threads go back when the search\n"
+                                        "ends; the refinement after it runs on the lane's own threads.")
+        form.addRow("", self.dynamic_threads)
         self.memory_budget = QDoubleSpinBox()
         self.memory_budget.setRange(-1.0, 1024.0)
         self.memory_budget.setSingleStep(0.5)
@@ -669,6 +676,7 @@ class SettingsDialog(QDialog):
         s.resources.dxtb_gpu = self.dxtb_gpu.currentText()
         s.resources.linalg = self.linalg.currentText()
         s.resources.speed_aware_lanes = self.speed_aware.isChecked()
+        s.resources.dynamic_threads = self.dynamic_threads.isChecked()
         budget = float(self.memory_budget.value())
         s.resources.memory_budget_gb = -1.0 if budget < 0 else budget       # below 0 is off
         s.resources.molecule_timeout_s = float(self.molecule_timeout.value())

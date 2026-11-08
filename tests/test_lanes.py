@@ -135,6 +135,26 @@ def test_auto_never_oversubscribes(monkeypatch, hw, threads, method, extra):
     assert sum(x.threads for x in lanes) <= total and all(x.threads >= 1 for x in lanes), (lanes, reason)
     assert len({x.name for x in lanes}) == len(lanes)
     assert len(lanes) == 1 or not any(x.device == "auto" for x in lanes)
+    # dynamic CREST threads on this plan (dist.threads): every lane starts the largest molecules first, CREST calls
+    # take what the policy gives them; the threads in use stay within the run's threads
+    budget = L.dynamic_threads_for(c, lanes, enabled=True)
+    if budget:
+        from quantabench.dist import threads as T
+
+        assert budget <= total
+        d = T.DynamicThreads(budget, lambda m: T.crest_cost(int(m)))
+        queue = [str(n) for n in (65, 59, 56, 54, 50, 49, 46, 44, 30, 20, 9)]
+        cpu = [x for x in lanes if x.device == "cpu"]
+        for step in range(40):
+            for x in cpu:
+                if x.name not in d.pool.held and queue and d.can_start(x.threads):
+                    m = queue.pop(0)
+                    d.start(x.name, x.threads, d.width(x.threads, m, queue), m)
+                    assert d.pool.in_use() <= budget <= total
+            name = sorted(d.pool.held)[step % len(d.pool.held)] if d.pool.held else None
+            if name is not None:
+                d.crest_done(name) if step % 2 else d.finish(name)
+        assert d.pool.in_use() <= budget
 
 
 def test_auto_plans(cores, monkeypatch):

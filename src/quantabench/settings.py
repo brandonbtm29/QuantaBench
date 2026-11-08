@@ -38,6 +38,7 @@ class ResourceSettings:
     linalg: str = "auto"             # dxtb dense linear algebra a GPU lacks: "auto" | "cpu" | "device" (torch_compat)
     dxtb_gpu: str = "auto"           # dxtb on a GPU: "auto" (only where faster) | "on" | "off" (torch_compat)
     speed_aware_lanes: bool = True   # lanes: slower lanes leave the last molecules to faster ones (dist.speed)
+    dynamic_threads: bool = True     # lanes: a CREST search may also use idle lanes' threads (dist.threads)
     # memory budget per process for the dxtb steps (chem.memory_guard), GB: 0 = available memory / lanes
     # (at least 1.5 GB), < 0 = no guard
     memory_budget_gb: float = 0.0
