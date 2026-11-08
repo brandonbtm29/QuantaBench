@@ -207,10 +207,10 @@ def test_paste_into_a_text_field_and_the_molecules_box(tmp_path, monkeypatch):
 
     # Edit > Paste with the focus in a text field pastes the text there
     clip.setText("CCO")
-    monkeypatch.setattr(cb.QApplication, "focusWidget", staticmethod(lambda: w.search))
-    w.a_paste.trigger()
-    assert w.search.text() == "CCO" and w.model.rowCount() == 0
-    monkeypatch.undo()
+    with pytest.MonkeyPatch.context() as mp:     # not monkeypatch.undo(): that would also undo isolated_settings
+        mp.setattr(cb.QApplication, "focusWidget", staticmethod(lambda: w.search))
+        w.a_paste.trigger()
+        assert w.search.text() == "CCO" and w.model.rowCount() == 0
 
     def ctrl_v(kind):
         ev = QKeyEvent(kind, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier, "v")

@@ -2,6 +2,15 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Tests never reach the real settings (2026-11-08)
+- A GUI test called `monkeypatch.undo()`, which also undid the per-test settings folder; its window then saved
+  on close into the folder `settings_location.json` points at. On the MacBook (2026-11-07 15:10) that overwrote
+  the shared settings.json: `output_dir` became a pytest folder and the per-machine engine paths were dropped.
+  conftest now points the settings, window state and cache at a session folder before any test runs, so nothing
+  in a test run can fall back to the real one; the test uses `MonkeyPatch.context()`. The settings were put back
+  (output_dir `~/SyncThing/QuantaBench/Runs`, the MacBook's CREST path); the overwritten file is kept as
+  `settings.json.bak-test-overwrite-20261108-011301`.
+
 ### Dynamic CREST threads (2026-11-07)
 - **A CREST search may use idle lanes' threads** (`dist/threads.py`, `dist/lanes.py`). The parent of a parallel
   run owns the CPU lanes' threads and sets each CREST call's `-T` when it starts. A molecule that would set the

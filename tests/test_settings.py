@@ -143,3 +143,12 @@ def test_settings_made_in_code_are_written_as_they_are(isolated_settings):
     fresh.set_lanes_for("2", "brandons-macbook-pro")
     sm.save(fresh)
     assert sm.load().dist.machine_lanes == {"brandons-macbook-pro": "2"}
+
+
+def test_undoing_monkeypatch_never_exposes_the_real_settings_folder(monkeypatch):
+    """conftest points the settings at a session folder too, so code that saves after a test's
+    ``monkeypatch.undo()`` (a window closed later) cannot reach the real settings.json (2026-11-07)."""
+    from quantabench import settings as sm
+
+    monkeypatch.undo()
+    assert "quantabench-tests-" in str(sm.settings_dir())
