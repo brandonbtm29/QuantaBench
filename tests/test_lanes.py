@@ -614,9 +614,10 @@ def test_speed_aware_measured_slow_lane_stops_at_the_end(tmp_path, monkeypatch):
 
 def test_speed_aware_fast_lane_crash_releases_the_slow_lane(tmp_path, monkeypatch):
     """cpu2 holds back for cpu1, then cpu1 dies running TFE: while cpu1 restarts, cpu2 takes the molecules
-    held for it; TFE is counted and marked failed at the second crash; the run completes."""
+    held for it; TFE is counted and marked failed at the second crash; the run completes. TFE crashes 2 s
+    after it is taken, so cpu2 has started and been asked by then (an instant crash raced cpu2's start)."""
     seeds(monkeypatch)
-    monkeypatch.setenv(L.TEST_CRASH_ENV, "TFE")
+    monkeypatch.setenv(L.TEST_CRASH_ENV, "TFE@2")
     decisions = record_decisions(monkeypatch)
     c = cfg(tmp_path)
     logs = []

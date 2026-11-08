@@ -155,7 +155,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 #: Test hook: a lane whose molecule id is listed here (comma separated) calls ``os._exit(TEST_CRASH_EXIT)``,
-#: standing in for a segfault or OOM kill. Only tests set it.
+#: standing in for a segfault or OOM kill; "TFE@1.5" crashes 1.5 s after the lane takes TFE (time for the
+#: other lanes to start and be asked). Only tests set it.
 TEST_CRASH_ENV = "QUANTABENCH_TEST_LANE_CRASH"
 TEST_CRASH_EXIT = 86
 #: Test hook: "cpu2=1.5,gpu0=0" makes the named lanes wait that many seconds after each molecule (a slow
@@ -649,6 +650,19 @@ def _test_delay(name: str) -> float:
     return 0.0
 
 
+def _test_crashes() -> dict[str, float]:
+    """Molecule id -> seconds before the crash, from the test hook ``TEST_CRASH_ENV``."""
+    out = {}
+    for item in os.environ.get(TEST_CRASH_ENV, "").split(","):
+        mol_id, _, seconds = item.strip().partition("@")
+        if mol_id:
+            try:
+                out[mol_id] = max(0.0, float(seconds)) if seconds else 0.0
+            except ValueError:
+                out[mol_id] = 0.0
+    return out
+
+
 def _lane_main(*args, **kwargs) -> None:
     """Entry of one lane process (``_lane_loop``), with a hard exit where the GPU runtime would hang at
     shutdown (``resources.hard_exit_if_needed``: Windows ROCm). Module level, for the spawn start method."""
@@ -690,7 +704,7 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
         # this lane's memory share and time limit for the steps not handed cfg (embedding, Hessian)
         resources.set_molecule_limits(cfg)
         device = lane_device(lane, cfg, memory_fraction)
-        crash_ids = {x for x in os.environ.get(TEST_CRASH_ENV, "").split(",") if x}
+        crash_ids = _test_crashes()
         delay = _test_delay(lane.name)
     except BaseException:
         with contextlib.suppress(Exception):
@@ -711,6 +725,7 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
         try:
             inp = jobs.input_from_json(text)
             if mol_id in crash_ids:
+                time.sleep(crash_ids[mol_id])
                 os._exit(TEST_CRASH_EXIT)
             res = pipeline.run_molecule(inp, cfg_mol, device, threads, stop_event.is_set,
                                         log=lambda m: send("log", m),

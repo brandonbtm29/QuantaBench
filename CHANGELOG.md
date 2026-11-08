@@ -2,6 +2,11 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Fixes (2026-11-08)
+- `tests/test_lanes.py::test_speed_aware_fast_lane_crash_releases_the_slow_lane` failed about one run in three:
+  the fast lane crashed the moment it took TFE, sometimes before the slow lane had started, so the slow lane was
+  never held back. The crash test hook takes a delay (`QUANTABENCH_TEST_LANE_CRASH=TFE@2`) and the test uses it.
+
 ### Run timings (2026-11-08)
 - **Every batch records its timings in its job table** (`chem/telemetry.py`, SCHED-1 step 1). Per run: versions,
   machine, CPU, cores, RAM, thread budget, lane plan, dynamic threads, engines and their versions, the settings
