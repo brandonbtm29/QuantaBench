@@ -213,6 +213,50 @@ Depends on: none to start (the 3D view exists); UI-1 places it in Build.
   needed: the commands are plain functions) and match canonical SMILES; bond lengths within 0.05 Å of
   MMFF after Minimize; undo/redo round-trips; screenshot.
 
+## ADV-1: Model advisor, a review of the molecules before a run · done 2026-11-09 (branch `feat/advisor`); follow-ups ready
+Brandon (2026-11-09): "Maybe as part of the job submission process, there can also be a review checking what types
+of atoms and groups are present in the molecules about to be submitted, and which makes recommendations of which
+models to choose from. That's another reason I found Spartan often difficult to use. I didn't know how to choose
+models or what they were intended to correct."
+- Done:
+  - `chem/advisor.py`: `review(inputs, cfg) -> Review`.
+    - The profile, each count with its first 25 molecule ids: elements; charge class at the run's pH; net charges;
+      open shells; PFAS by the OECD 2021 definition and the perfluoroalkyl chain length; 16 functional groups by
+      SMARTS; pure hydrocarbons; heavy atoms and rotatable bonds; macrocycles; undefined stereo; fragments and what
+      the run removes; isotopes; metals and unusual elements.
+    - Findings (`level`, `topic`, ids, message, `changes` as BuildConfig fields, why, guide entries, evidence), each
+      tied to the DFT conformer test, RANK-1, RANK-1b or a method's documentation. `rank_verdict` is the measured
+      ranking table by method family, molecule class and phase.
+    - Three presets (Fast screen, Recommended, Careful), each a valid BuildConfig with a rationale and a cost
+      estimate. They never use a method outside a molecule's elements, charge or spin.
+    - Speed: 14,000 molecules (median 34 heavy atoms) in about 7 s cold on a 2-vCPU cloud VM, 0.3 s warm. The
+      fast path skips RDKit's normalization for neutral single-fragment records and gives the same species. The
+      protonation rules' SMARTS are compiled once, and their distance matrix is built only near an N+.
+  - `method_guide.py`:
+    - `COVERAGE`: element, charge and spin coverage of every method, basis set and CREST level, with its source
+      and how it was checked. MMFF94 was checked with RDKit, tblite's Z ≤ 86 by running it, and AIMNet2 and MOPAC
+      against the engines.
+    - New entries g-xTB, r2SCAN-3c and the -3c composites, BSSE and gCP, conformer ranking, protonation (54
+      entries).
+    - `corrects` / `use_for` / `avoid_for` on 35 entries.
+    - The coverage table in docs/METHODS.md.
+  - CLI: `quantabench-cli review` (build's inputs and options, `--phase gas|water`, `--json`). `build` and
+    `grid build` print a short review header; `--no-review` skips it.
+  - GUI: `gui/review_panel.py`: the Review window before a run (Run anyway / Cancel run) and on demand (Review...,
+    F6), with the profile (click-through to the molecules), findings with icons, Apply, Explain and the presets.
+    `MainWindow.request_run` is the Run buttons' entry; `run_build` never asks.
+  - User guide: docs/CHOOSING_METHODS.md.
+- Open:
+  - When RANK-2 lands, add `rank_method` to the rules and the presets: g-xTB + GFN1-xTB CPCM replaces the DFT
+    re-rank as the water recommendation, and AIMNet2 the gas one.
+  - r2SCAN-3c in the QM stage. Psi4 runs -3c methods with an empty basis (`energy('r2scan3c/')`); the stage takes
+    'functional/basis'. Then the Careful preset uses it, the level RANK-1b recommends for DFT checks.
+  - UI-5's job dialog: the review as its last page before Submit.
+  - Cost: fit the refinement and QM stages from the run telemetry too (today only CREST has a fitted model; the
+    rest is anchored on measured PFAS timings and scaled by size). Detect a GPU for the AIMNet2 estimate.
+  - Measured rankings for transition-metal and main-group-element compounds: the review checks their coverage only.
+  - Process-parallel profiling for very large lists (only needed if lists grow well past 14,000).
+
 ## UI-5: Job dialog (level of theory × task × resources) and job monitor · ready
 Depends on: UI-1.
 - Calculate workspace: one dialog to submit selected molecules. **Level of theory** grouped by family

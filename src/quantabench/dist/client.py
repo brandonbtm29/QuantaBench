@@ -1423,6 +1423,9 @@ def _build_args(b: argparse.ArgumentParser) -> None:
         out_help="this machine's output folder for the grid record, the merged tables and the local share "
                  "(default from settings)")
     cli_mod.add_build_science_args(b)
+    from ..cli_review import add_review_flag
+
+    add_review_flag(b)
 
 
 def _worker_opts(p: argparse.ArgumentParser) -> None:
@@ -1474,6 +1477,10 @@ def _cli_build(args) -> int:
         print(exc, file=sys.stderr)
         return 2
     cfg = cli_mod.config_from_args(args)
+    if items and not getattr(args, "no_review", False):   # the model advisor's short review (cli_review)
+        from ..cli_review import print_header
+
+        print_header(items, cfg)
     keep = tuple(name for name, value in (("threads", args.threads), ("gpu", args.gpu)) if value is not None)
     machines = [m for m in (args.machines or "").split(",") if m.strip()]
     try:

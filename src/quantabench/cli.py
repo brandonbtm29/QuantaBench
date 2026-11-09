@@ -20,6 +20,7 @@
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
     quantabench-cli update [--check] [--upgrade-packages]                       # git pull + reinstall if needed
     quantabench-cli sketcher [--install [--from-zip ZIP]] [--use DIR]            # the Sketch dock's editor files
+    quantabench-cli review --file cohort.csv --phase water [--json]             # the review before a run
 
 Splitting work (``quantabench.dist``):
 
@@ -292,6 +293,10 @@ def _build(args) -> int:
             print(exc, file=sys.stderr)
             return 2
 
+    if items and not getattr(args, "no_review", False):   # the model advisor's short review (cli_review)
+        from .cli_review import print_header
+
+        print_header(items, cfg)
     resources.set_molecule_limits(cfg)   # memory budget and time limit of the embedding and the Hessian
 
     resumable = bool(run_dir or chunk or args.retry_failed or len(items) > 1)
@@ -979,6 +984,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="wall-clock limit per molecule, s (0 = none; default from settings, 1800): a lane past it is "
                         "killed and restarted, one process stops at the next checkpoint; the molecule is marked "
                         "failed 'time limit (S s)' and --retry-failed redoes it")
+    from .cli_review import add_review_flag
+
+    add_review_flag(b)
     b.set_defaults(func=_build)
 
     st = sub.add_parser("status", help="progress of a (resumable) run folder")
@@ -1091,6 +1099,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_methods import register as register_methods
 
     register_methods(sub)       # methods [NAME]: the methods guide (quantabench.chem.method_guide)
+    from .cli_review import register as register_review
+
+    register_review(sub)        # review: the model advisor before a run (quantabench.chem.advisor)
 
     se = sub.add_parser("settings", help="show settings, or move them (e.g. into a synced folder)")
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")

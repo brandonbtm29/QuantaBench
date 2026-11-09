@@ -221,6 +221,12 @@ dispersion correction, and what Spartan's B3LYP, ωB97X-D and PM6 numbers are. T
 pipeline choice in the app (with a "More…" link), in Help > Methods guide... (F1), and on the command line:
 `quantabench-cli methods` lists the entries, `quantabench-cli methods wb97x-d` shows one.
 
+**Which method for which molecules.** Before a run, QuantaBench reviews the batch (the elements, charges, PFAS and
+functional groups, salts, stereo, radicals), lists the methods that can take it, and recommends settings, each
+tied to QuantaBench's own measurements and with a link to the methods guide: the Review window in the app (shown
+when you press Run, or Review... / F6), `quantabench-cli review` on the command line, and a short version printed
+by `build`. See [docs/CHOOSING_METHODS.md](docs/CHOOSING_METHODS.md).
+
 ![ESP on the 0.002 au density surface of trifluoroacetic acid (Psi4 ωB97X-D/def2-SVP)](docs/img/esp_surface.png)
 
 ## Settings

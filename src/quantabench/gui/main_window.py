@@ -189,6 +189,7 @@ class MainWindow(QMainWindow):
             clipboard,
             import_action,
             machines_panel,
+            review_panel,
             sketcher_dock,
             spectra_panel,
             surface_panel,
@@ -196,7 +197,7 @@ class MainWindow(QMainWindow):
         )
 
         for panel in (spectra_panel, surface_panel, import_action, machines_panel, update_action, clipboard,
-                      sketcher_dock):
+                      sketcher_dock, review_panel):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
@@ -332,9 +333,9 @@ class MainWindow(QMainWindow):
         self.stage_tree.setCurrentItem(self.stage_items["refine"])
         run_row = QHBoxLayout()
         self.run_btn = QPushButton("Run all")
-        self.run_btn.clicked.connect(lambda: self.run_build(selected_only=False))
+        self.run_btn.clicked.connect(lambda: self.request_run(selected_only=False))
         self.run_sel_btn = QPushButton("Run selected")
-        self.run_sel_btn.clicked.connect(lambda: self.run_build(selected_only=True))
+        self.run_sel_btn.clicked.connect(lambda: self.request_run(selected_only=True))
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_build)
@@ -645,7 +646,7 @@ class MainWindow(QMainWindow):
         self.a_resume = act("Resume run folder", self.resume_run, None,
                             "Continue the unfinished molecules of the opened (or last) run folder with its stored "
                             "settings")
-        self.a_run = act("Run", lambda: self.run_build(False), "F5", "Build every molecule in the list")
+        self.a_run = act("Run", lambda: self.request_run(False), "F5", "Build every molecule in the list")
         # Not Esc: the views use Esc to clear the selection, and a window-wide Esc would cancel the batch
         self.a_cancel = act("Cancel", self.cancel_build, "Shift+Esc", "Stop the build after the current step "
                             "(Shift+Esc)")
@@ -1378,6 +1379,15 @@ class MainWindow(QMainWindow):
             self.stage_stack.setCurrentIndex(self.stage_pages[cur.data(0, Qt.ItemDataRole.UserRole)])
 
     # ================================================================== running
+    def request_run(self, selected_only: bool = False) -> None:
+        """Run all / Run selected / F5: the review of the molecules first (``gui.review_panel``, which starts
+        ``run_build`` from its window), else ``run_build`` at once. ``run_build`` itself never asks."""
+        review = getattr(self, "review_before_run", None)
+        ids = self.mol_list.selected_ids() if selected_only else self.model.ids()
+        if ids and self.worker is None and review is not None and review(selected_only):
+            return
+        self.run_build(selected_only)
+
     def run_build(self, selected_only: bool = False) -> None:
         if self.worker is not None:
             return
