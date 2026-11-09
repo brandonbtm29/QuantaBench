@@ -209,3 +209,26 @@ def test_cli_methods_unknown_name(capsys):
     assert "wb97x-d" in captured.out + captured.err
     assert cli.main(["methods", "zzz-not-a-method"]) == 1
     assert "No entry named" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------------ what each method corrects (ADV-1)
+def test_decision_lines_render_everywhere():
+    assert set(guide.DECISIONS) <= set(guide.ENTRIES)
+    for key in ("dispersion", "gcp", "def2-svpd", "pcm", "alpb", "smd", "r2scan-3c", "pm6-d3h4x", "gfn2-xtb"):
+        e = guide.get(key)
+        assert e.corrects, key
+        assert f"Corrects: {guide.plain(e.corrects)[:30]}" in guide.text_entry(e, width=400), key
+        assert "<b>Corrects:</b>" in guide.html_entry(e) and "- **Corrects:**" in guide.markdown_entry(e)
+    assert "cavity or dispersion" in guide.get("pcm").corrects and "non-polar" in guide.get("alpb").corrects
+    assert "superposition" in guide.get("gcp").corrects
+    assert guide.get("aimnet2").avoid_for.startswith("Open shells")
+    assert [e.key for e in guide.search("superposition")][:1] == ["gcp"]
+
+
+def test_new_entries_and_moved_aliases():
+    for name, key in (("r2SCAN-3c", "r2scan-3c"), ("HF-3c", "r2scan-3c"), ("g-xTB", "g-xtb"), ("gxtb", "g-xtb"),
+                      ("BSSE", "gcp"), ("counterpoise", "gcp"), ("pKa", "protonation"), ("rank step", "conformer-ranking"),
+                      ("r2scan", "r2scan"), ("hf", "hf")):
+        assert guide.lookup(name).key == key, name
+    assert guide.R_GXTB.citation().endswith("ChemRxiv (preprint) (2025).")      # no volume or pages: no stray commas
+    assert "Chem. Sci. 16, 10228-10244 (2025)." in guide.R_AIMNET2.citation()

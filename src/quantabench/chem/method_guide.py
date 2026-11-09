@@ -27,7 +27,7 @@ import re
 import textwrap
 import unicodedata
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 FAMILIES: tuple[str, ...] = (
     "Machine-learning potentials",
@@ -59,8 +59,8 @@ class Reference:
         return "https://doi.org/" + urllib.parse.quote(self.doi, safe="/")
 
     def citation(self) -> str:
-        vol = f" {self.volume}," if self.volume else ""
-        return f"{self.authors}. {self.title}. {self.journal}{vol} {self.pages} ({self.year})."
+        where = ", ".join(x for x in (self.volume, self.pages) if x)
+        return f"{self.authors}. {self.title}. {self.journal}{' ' + where if where else ''} ({self.year})."
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,10 @@ class Entry:
     aliases: tuple[str, ...] = ()     # other spellings that find this entry (case, hyphens and ω/w are loose anyway)
     see_also: tuple[str, ...] = ()
     implementations: tuple[tuple[str, str], ...] = ()   # (engine key, how that engine runs the method)
+    # one line each, where it applies (``DECISIONS``): the error it corrects, what to use it for, what not to
+    corrects: str = ""
+    use_for: str = ""
+    avoid_for: str = ""
 
     @property
     def anchor(self) -> str:
@@ -179,6 +183,18 @@ R_R2SCAN3C = _ref("Grimme, Hansen, Ehlert, Mewes", "r2SCAN-3c: a \"Swiss army kn
                   "electronic-structure method", "J. Chem. Phys.", 2021, "154", "064103", "10.1063/5.0040021")
 R_HF3C = _ref("Sure, Grimme", "Corrected small basis set Hartree-Fock method for large systems",
               "J. Comput. Chem.", 2013, "34", "1672-1685", "10.1002/jcc.23317")
+R_GCP = _ref("Kruse, Grimme", "A geometrical correction for the inter- and intra-molecular basis set superposition "
+             "error in Hartree-Fock and density functional theory calculations for large systems", "J. Chem. Phys.",
+             2012, "136", "154101", "10.1063/1.3700154")
+R_COUNTERPOISE = _ref("Boys, Bernardi", "The calculation of small molecular interactions by the differences of "
+                      "separate total energies. Some procedures with reduced errors", "Mol. Phys.", 1970, "19",
+                      "553-566", "10.1080/00268977000101561")
+R_GXTB = _ref("Froitzheim, Müller, Hansen, Grimme", "g-xTB: a general-purpose extended tight-binding electronic "
+              "structure method for the elements H to Lr (Z = 1-103)", "ChemRxiv (preprint)", 2025, "", "",
+              "10.26434/chemrxiv-2025-bjxvt")
+R_OECD_PFAS = _ref("OECD", "Reconciling terminology of the universe of per- and polyfluoroalkyl substances: "
+                   "recommendations and practical guidance", "OECD Series on Risk Management of Chemicals", 2021,
+                   "61", "", "10.1787/e458e796-en")
 R_M062X = _ref("Zhao, Truhlar", "The M06 suite of density functionals for main group thermochemistry, "
                "thermochemical kinetics, noncovalent interactions, excited states, and transition elements: two new "
                "functionals and systematic testing of four M06-class functionals and 12 other functionals",
@@ -350,6 +366,28 @@ _ENTRIES: tuple[Entry, ...] = (
                             "finite-field polarizability."),
             ("xtb-gfn1", "the xtb program (external): ALPB or GBSA, its own optimizer."),
         ),
+    ),
+    Entry(
+        "g-xtb", "g-xTB", _FAMILY_TB,
+        "Grimme's general tight binding (2025, preliminary), fitted toward ωB97M-V; not a QuantaBench engine yet.",
+        "g-xTB (2025) is a tight-binding method from Grimme's group fitted toward ωB97M-V/def2-TZVPPD energies for the "
+        "elements H to Lr (Z = 1-103). It keeps the minimal-basis tight-binding form of the GFN methods with new, "
+        "charge-dependent terms. The official build of the xtb program runs it with `--gxtb` (`--chrg` and `--uhf` "
+        "as for GFN2); its README calls it a preliminary version whose parameters may still change.",
+        "The best cheap energy QuantaBench tested for ranking conformers. In the gas phase it picked a conformer within "
+        "4 kJ/mol of r2SCAN-3c's lowest in 40 of 40 non-fluorinated neutrals and 18 of 20 neutral PFAS. With a "
+        "GFN1-xTB CPCM solvation term at the same geometry it did so in water in 38 of 40 neutrals and 12 of 13 PFAS "
+        "ions, and in 13 of 17 PFAS ions against ωB97X-D/def2-SVP (docs/VALIDATION.md, RANK-1 and RANK-1b).",
+        "Not yet an engine or a rank level in QuantaBench: the rank step that will use it is BACKLOG RANK-2. Its own "
+        "solvation models (generalized Born `--gbe` and COSMO) are provisional per its README and ranked worse than "
+        "the GFN1-xTB CPCM term (RANK-1). Pin the binary (its SHA-256) for a production run.",
+        "About 0.16 s per single point for neutral PFAS; with the CPCM term about 0.1 % of a ωB97X-D/def2-SVP single "
+        "point for PFAS ions (QuantaBench measured, RANK-1).",
+        "Yes, part of the method.",
+        "Limited and provisional (generalized Born, COSMO); QuantaBench measured it with a GFN1-xTB CPCM term.",
+        (R_GXTB,),
+        aliases=("gxtb", "--gxtb", "g xtb"),
+        see_also=("gfn2-xtb", "gfn1-xtb", "conformer-ranking", "pcm"),
     ),
     # ------------------------------------------------------------------ semi-empirical NDDO
     Entry(
@@ -686,8 +724,31 @@ _ENTRIES: tuple[Entry, ...] = (
         "Medium range only, from the functional itself.",
         "PCM in Psi4 (single points).",
         (R_R2SCAN, R_R2SCAN_D4, R_R2SCAN3C),
-        aliases=("r2-scan", "r²scan", "r2scan-3c"),
-        see_also=("dispersion", "dft"),
+        aliases=("r2-scan", "r²scan"),
+        see_also=("r2scan-3c", "dispersion", "dft"),
+    ),
+    Entry(
+        "r2scan-3c", "r2SCAN-3c and the -3c composites", _FAMILY_DFT,
+        "Grimme's composite DFT recipes: functional, matched basis, D4 or D3 and gCP in one; RANK-1b's reference.",
+        "A '-3c' method is a recipe of three parts chosen together: a functional, a basis set made for it, and "
+        "corrections for the two errors that basis leaves, [[dispersion|D4 or D3 dispersion]] and the "
+        "[[gcp|gCP]] correction for basis-set superposition error. r2SCAN-3c uses the [[r2scan|r2SCAN]] meta-GGA "
+        "with the triple-zeta def2-mTZVPP basis and D4; HF-3c (Hartree-Fock, the minimal MINIX basis, D3(BJ)) and "
+        "PBEh-3c are cheaper relatives. Psi4 runs them by name with their own basis (`energy('r2scan3c/')`).",
+        "Conformer energies near triple-zeta hybrid quality at about twice the cost of ωB97X-D/def2-SVP. QuantaBench "
+        "used r2SCAN-3c as its conformer reference: it agreed with ωB97X-D/def2-TZVP on 8 neutrals (ρ 0.98, MAE "
+        "1.1 kJ/mol) and, on PFAS ions in PCM, with ωB97X-D/def2-SVPD better than ωB97X-D/def2-SVP did "
+        "(docs/VALIDATION.md, RANK-1 and RANK-1b).",
+        "Not selectable in the QM stage yet: the stage takes 'functional/basis', and Psi4 wants the -3c methods with "
+        "an empty basis. Psi4 needs `mctc-gcp` on the PATH and `dftd4-python` for r2SCAN-3c. HF-3c is much cheaper "
+        "but ranked PFAS conformers poorly (10 of 17 ions within 4 kJ/mol, leaning to extended ones; RANK-1).",
+        "r2SCAN-3c in PCM: 2x ωB97X-D/def2-SVP for a 37-atom PFAS ion on a 4-thread NOVA lane; HF-3c 0.2-0.3x "
+        "(QuantaBench measured, Psi4 1.9.1, RANK-1).",
+        "Yes: D4 (r2SCAN-3c), D3 with Becke-Johnson damping (HF-3c, PBEh-3c).",
+        "PCM in Psi4 (single points).",
+        (R_R2SCAN3C, R_HF3C, R_GCP),
+        aliases=("r2scan3c", "hf-3c", "hf3c", "pbeh-3c", "pbeh3c", "3c", "composite methods"),
+        see_also=("gcp", "r2scan", "dispersion", "conformer-ranking"),
     ),
     Entry(
         "m06-2x", "M06-2X", _FAMILY_DFT,
@@ -723,8 +784,8 @@ _ENTRIES: tuple[Entry, ...] = (
         "No.",
         "PCM in Psi4 (single points).",
         (R_ROOTHAAN, R_KOOPMANS, R_HF3C),
-        aliases=("hartree-fock", "rhf", "uhf", "scf", "hf-3c"),
-        see_also=("dft", "homo-lumo"),
+        aliases=("hartree-fock", "rhf", "uhf", "scf"),
+        see_also=("dft", "homo-lumo", "r2scan-3c"),
     ),
     Entry(
         "wb97m", "ωB97M-D3(BJ) / ωB97M-V", _FAMILY_DFT,
@@ -1195,6 +1256,72 @@ _ENTRIES: tuple[Entry, ...] = (
         see_also=("gfn2-xtb", "spartan-pm6", "hf"),
     ),
     Entry(
+        "gcp", "Basis-set superposition error and gCP", _FAMILY_CONCEPTS,
+        "In a small basis, touching atoms borrow each other's functions and bind too strongly; gCP corrects that.",
+        "In a finite basis set the electrons of one atom can use the functions centred on its neighbours. Two parts "
+        "of a molecule that touch are then bound a little too strongly: the basis-set superposition error (BSSE). It "
+        "is largest in small basis sets and makes folded, compact conformers too low. The counterpoise correction "
+        "(Boys and Bernardi) removes it for complexes; gCP (Kruse and Grimme) is a cheap geometric estimate that also "
+        "works within one molecule, and the [[r2scan-3c|-3c composites]] include it.",
+        "Knowing why def2-SVP and 6-31G* lean toward compact conformers, and why r2SCAN-3c needs no larger basis.",
+        "QuantaBench measured the small-basis lean against r2SCAN-3c: ωB97X-D/def2-SVP in PCM favours compact "
+        "conformers by +15.0 ± 2.4 kJ/mol per Å of radius of gyration for PFAS ions and +7.8 ± 1.0 for "
+        "non-fluorinated ions; in the gas phase +3.7 ± 1.9 against def2-TZVP for neutrals, 1-2 kJ/mol across their "
+        "pools (docs/VALIDATION.md, RANK-1b). For anions part of it is the missing diffuse functions. The QM stage "
+        "has no gCP option: use a diffuse or triple-zeta basis instead.",
+        "gCP itself costs nothing; a larger basis does (def2-SVPD about 3x, def2-TZVP about 7x def2-SVP).",
+        "Not applicable.",
+        "Not applicable.",
+        (R_GCP, R_COUNTERPOISE),
+        aliases=("bsse", "basis set superposition error", "counterpoise", "counterpoise correction"),
+        see_also=("r2scan-3c", "def2-svp", "def2-svpd", "basis-sets"),
+    ),
+    Entry(
+        "conformer-ranking", "Ranking conformers (which level picks the lowest)", _FAMILY_CONCEPTS,
+        "Which method decides the lowest conformer: QuantaBench's measured choices by phase and molecule class.",
+        "The pipeline ranks the refined conformers by the refinement method's energies: the lowest conformer, the "
+        "energy window and the Boltzmann weights all follow that ranking, and so does every descriptor taken from "
+        "the lowest conformer. A method can give good geometries and still rank conformers poorly, because conformer "
+        "energy differences are a few kJ/mol and its errors can be larger. QuantaBench measured cheap rankers "
+        "against DFT references on conformer pools of PFAS and non-fluorinated molecules (RANK-1, RANK-1b).",
+        "Choosing the refinement method, and whether a DFT re-rank is needed. Measured picks within 4 kJ/mol of the "
+        "reference's lowest: pure hydrocarbons, every cheap method (GFN2-xTB 12 of 12 in both phases); neutrals in "
+        "the gas phase, AIMNet2 (39 of 40 non-fluorinated, 18 of 20 PFAS) or [[g-xtb|g-xTB]] (40 of 40, 18 of 20); "
+        "molecules in water, g-xTB gas + a GFN1-xTB CPCM term (38 of 40 neutrals, 12 of 13 PFAS ions) "
+        "(docs/VALIDATION.md, RANK-1b).",
+        "GFN2-xTB ranks polar molecules poorly in water (16 of 28 polar organics, 14 of 20 neutral PFAS with ALPB) "
+        "and PFAS ions no better than a random pick in every solvent model (0 of 13 against r2SCAN-3c, 4 of 17 "
+        "against ωB97X-D/def2-SVP); its 6 kcal/mol window dropped DFT's lowest in 6 of 17 ions (RANK-1). Until the "
+        "rank step (BACKLOG RANK-2) exists, re-rank a wide pool with the QM stage in PCM, with a diffuse basis.",
+        "A single point per conformer at the rank level: about 0.1 % of a DFT single point for g-xTB + CPCM, minutes "
+        "per conformer for DFT.",
+        "Not applicable.",
+        "In water the rank level needs a solvation term: g-xTB in the gas phase alone picked within 4 kJ/mol in 11 of "
+        "17 PFAS ions, with the GFN1-xTB CPCM term 13 (RANK-1).",
+        (),
+        aliases=("conformer ranking", "ranking", "rank step", "rank-2", "lowest conformer"),
+        see_also=("gfn2-xtb", "aimnet2", "g-xtb", "pcm", "boltzmann"),
+    ),
+    Entry(
+        "protonation", "Protonation state at pH", _FAMILY_CONCEPTS,
+        "Acids lose and bases gain a proton at the run's pH (built-in rules); the charge then sets everything after.",
+        "Before the conformer search QuantaBench neutralizes each structure, then applies a small table of acid and "
+        "base sites with typical pKa values at the pH setting (7 by default): carboxylic, sulfonic and phosphonic "
+        "acids lose a proton, aliphatic amines and amidines gain one, and perfluoroalkyl sulfonamides (pKa about 6.5) "
+        "lose their N-H proton. Dimorphite-DL can replace the table. `--no-protonate` keeps the charges as drawn.",
+        "Water runs of acids and bases, where the ion is the species present.",
+        "One state per molecule, the one the rule's pKa makes dominant; near a pKa both forms matter, and sulfonamide "
+        "pKa values vary with substitution. With `--no-protonate` a record drawn with the proton in the wrong place "
+        "keeps it: one ion of the DFT conformer test was drawn with the proton on its sulfonamide N, 183 kJ/mol "
+        "(ωB97X-D/PCM) above the amine-protonated cation (docs/VALIDATION.md).",
+        "Free.",
+        "Not applicable.",
+        "The charge state is chosen for water at that pH; a gas-phase run of the same ion stays charged.",
+        (),
+        aliases=("ph", "pka", "charge state", "tautomer", "protonation state"),
+        see_also=("gas-phase", "solvation"),
+    ),
+    Entry(
         "auto", "Auto (best available)", _FAMILY_CONCEPTS,
         "Takes the best installed engine for the molecule's elements: AIMNet2, then GFN2-xTB, then GFN1-xTB, then MMFF94s.",
         "QuantaBench tries AIMNet2, GFN2-xTB (dxtb, then tblite, then the xtb program) and GFN1-xTB in that order and "
@@ -1212,7 +1339,140 @@ _ENTRIES: tuple[Entry, ...] = (
     ),
 )
 
-ENTRIES: dict[str, Entry] = {e.key: e for e in sorted(_ENTRIES, key=lambda e: FAMILIES.index(e.family))}
+#: What each method or correction is for, one line each: (corrects, use for, avoid for). The model advisor
+#: (``chem.advisor``) links its findings to these entries; numbers are QuantaBench's own (docs/VALIDATION.md).
+DECISIONS: dict[str, tuple[str, str, str]] = {
+    "dispersion": (
+        "The London dispersion attraction most functionals and HF miss: without it, folded conformers, stacked rings "
+        "and touching chain segments come out too high.",
+        "Every DFT conformer energy: pick a level with -D3(BJ), -D4, -D or -V.",
+        "Nothing: it costs milliseconds. The Spartan B3LYP and PM6 results QuantaBench is validated against "
+        "have none, which is the cautionary case."),
+    "b3lyp-d3bj": (
+        "Plain B3LYP's missing dispersion, with D3 and Becke-Johnson damping.",
+        "B3LYP comparisons with the dispersion fixed.",
+        "Ranking anion conformers at def2-SVP: it shares that basis' lean toward compact conformers (RANK-1)."),
+    "b3lyp": (
+        "Nothing: no dispersion correction.",
+        "Reproducing Spartan or older B3LYP numbers.",
+        "New conformer energies: folded conformers come out too high."),
+    "wb97x-d": (
+        "Dispersion (its own -D term); long-range exact exchange treats anions and orbital energies better than "
+        "global hybrids.",
+        "DFT single points and properties; QuantaBench's default QM functional.",
+        "Ranking anion conformers at def2-SVP: use def2-SVPD (RANK-1)."),
+    "pbe0-d3bj": ("Dispersion, through D3(BJ).", "A second hybrid next to B3LYP or ωB97X-D.", ""),
+    "r2scan": (
+        "Medium-range dispersion only, from the functional.",
+        "Larger molecules when hybrids are too slow, with -D4 added.",
+        "Conformer energies without -D4."),
+    "m06-2x": (
+        "Medium-range dispersion, through its fit.",
+        "Reaction energies and barriers.",
+        "Long-range contacts without an added D3 term."),
+    "hf": (
+        "Nothing: no electron correlation, no dispersion.",
+        "A baseline; Koopmans ionization energies.",
+        "Conformer energies."),
+    "r2scan-3c": (
+        "Bundles what a small basis lacks: D4 dispersion and gCP for basis-set superposition error, in a matched "
+        "triple-zeta basis.",
+        "A DFT reference for conformer energies (RANK-1b's).",
+        "The QM stage today: not selectable yet."),
+    "gcp": (
+        "Basis-set superposition error: folded conformers and complexes bound too strongly in a small basis.",
+        "Small-basis DFT and HF; built into the -3c composites.",
+        ""),
+    "basis-sets": (
+        "Diffuse functions: the loosely bound electrons of anions, which a compact basis squeezes. Polarization "
+        "functions: bonds that bend and polarize.",
+        "A diffuse basis (def2-SVPD, 6-31+G*) for anions, polarizabilities and ESP surfaces.",
+        "A compact basis (def2-SVP, 6-31G*) for ranking anion conformers."),
+    "def2-svp": (
+        "",
+        "Fast DFT of neutral molecules.",
+        "Ranking anion conformers: +15 kJ/mol per Å of radius of gyration toward compact ones for PFAS ions "
+        "(RANK-1b)."),
+    "def2-svpd": (
+        "The loosely bound electrons of anions (diffuse functions).",
+        "Anions: conformer ranking, polarizabilities, ESP.",
+        "Large neutral batches, where it adds about 3x the cost for little."),
+    "def2-tzvp": (
+        "Most of a double-zeta basis' superposition error.",
+        "Final energies and properties of neutral molecules.",
+        "Anions, unless a diffuse set is added."),
+    "6-31g*": ("", "Like-for-like checks against Spartan's ωB97X-D/6-31G*.",
+               "Anions; elements beyond Kr (Psi4 has it for H-Kr only)."),
+    "6-31+g*": ("The loosely bound electrons of anions (diffuse s and p on heavy atoms).", "Anions at modest cost.",
+                "Elements beyond Ca (Psi4 has it for H-Ca only)."),
+    "6-311+g**": ("Anions (diffuse functions) and polarization on hydrogen.",
+                  "Like-for-like checks against Spartan's B3LYP/6-311+G** water numbers.",
+                  "Elements beyond Ca (Psi4 has it for H-Ca only)."),
+    "aug-cc-pvdz": ("Diffuse functions on every atom, hydrogen included.", "Anions, polarizabilities, weak complexes.",
+                    "Large molecules (nearly linearly dependent functions); K and Ca (not in Psi4's set)."),
+    "solvation": (
+        "The solvent's screening of charges and its solvation energy, which decide the conformers and dipoles of "
+        "ions and polar molecules.",
+        "Ions and polar molecules in water.",
+        ""),
+    "gas-phase": ("Nothing: the isolated molecule.", "Neutral molecules; gas-phase reference data.",
+                  "Ions: their charges are unscreened."),
+    "alpb": (
+        "Electrostatic screening (generalized Born) plus non-polar surface terms for the cavity and dispersion with "
+        "the solvent.",
+        "xTB geometries and properties in water.",
+        "Ranking polar conformers: its solvation differences missed IEF-PCM's by 20 kJ/mol for PFAS ions (RANK-1)."),
+    "gbsa": ("Like ALPB: generalized Born screening plus a surface-area term.", "Reproducing older xtb results.",
+             "New work: ALPB replaced it."),
+    "pcm": (
+        "Electrostatic screening by the solvent (the reaction field). As QuantaBench sets it up it has no cavity or "
+        "dispersion terms, which favours extended chains of surfactant-like ions (RANK-1b).",
+        "DFT single points in water; with GFN1-xTB charges (tblite's CPCM), the solvation term of a conformer "
+        "ranking (RANK-1).",
+        "Solvation free energies (use SMD in another program)."),
+    "cosmo": ("Electrostatic screening, as a conductor scaled to the dielectric constant.",
+              "Solvated PM7 and PM6-D3H4X energies; COSMO areas and volumes.",
+              "Frequencies in solvent (MOPAC's COSMO is not smooth)."),
+    "smd": (
+        "Electrostatics plus fitted non-electrostatic terms (cavity, dispersion, solvent structure): solvation free "
+        "energies.",
+        "Solvation free energies, in programs that have it.",
+        "QuantaBench today: not available."),
+    "pm6-d3h4x": (
+        "Plain PM6's dispersion (D3), hydrogen-bond (H4) and halogen-contact (X) errors.",
+        "Noncovalent contacts at semi-empirical cost.",
+        "Ranking PFAS anion conformers: it overbinds short O···F contacts like GFN2-xTB (RANK-1)."),
+    "pm7": ("Dispersion and hydrogen bonds, with terms built into the method.",
+            "Heats of formation; MOPAC's QSAR properties.",
+            "Ranking the conformers of PFAS ions (RANK-1)."),
+    "gfn2-xtb": (
+        "GFN1's charge-only electrostatics: atomic dipoles and quadrupoles describe anisotropic contacts (hydrogen "
+        "and halogen bonds); D4 dispersion is computed self-consistently.",
+        "Geometries in the gas phase and in ALPB; ranking pure hydrocarbon conformers (12 of 12, RANK-1b).",
+        "Ranking the conformers of ions and polar molecules, in any solvent model (RANK-1, RANK-1b)."),
+    "gfn1-xtb": ("Halogen bonds, with an extra term.",
+                 "The CPCM solvation term of a conformer ranking (RANK-1); the `xtb_*` properties.", ""),
+    "g-xtb": ("", "Ranking conformers, with a GFN1-xTB CPCM term in water (RANK-1, RANK-1b).",
+              "QuantaBench today: not an engine yet (BACKLOG RANK-2)."),
+    "aimnet2": (
+        "", "Neutral molecules in the gas phase: geometries and conformer ranking (RANK-1, RANK-1b).",
+        "Open shells (a closed-shell model), elements outside its 14, solvent runs (no implicit solvent)."),
+    "mmff94s": ("", "Pre-optimizing the conformer pool.", "The final conformer ranking; electronic properties."),
+    "gfn-ff": ("", "Fast CREST searches of large or unusual molecules.", "Ranking conformers: a search level only."),
+    "crest": ("", "Flexible molecules and ions in water; conformers ETKDG misses.",
+              "Large batches of large flexible molecules at GFN2 (hours each)."),
+    "rdkit-etkdg": ("", "Fast, reproducible conformer pools.",
+                    "Ions in water with few conformers refined: the pool is ranked by gas-phase MMFF94s."),
+}
+
+
+def _with_decisions(e: Entry) -> Entry:
+    corrects, use_for, avoid_for = DECISIONS.get(e.key, ("", "", ""))
+    return replace(e, corrects=corrects, use_for=use_for, avoid_for=avoid_for)
+
+
+ENTRIES: dict[str, Entry] = {e.key: _with_decisions(e)
+                             for e in sorted(_ENTRIES, key=lambda e: FAMILIES.index(e.family))}
 
 #: engine key (``engines.all_engines()``, plus "auto") -> entry key
 ENGINE_ENTRIES: dict[str, str] = {
@@ -1230,6 +1490,170 @@ OPTIMIZER_ENTRIES: dict[str, str] = {"lbfgs": "lbfgs", "fire": "fire", "native":
 #: solvation model (``EngineInfo.solvation``, Psi4's "pcm"; "" = gas phase) -> entry key
 SOLVATION_MODEL_ENTRIES: dict[str, str] = {"": "gas-phase", "alpb": "alpb", "gbsa": "gbsa", "cpcm": "pcm",
                                            "cosmo": "cosmo", "pcm": "pcm"}
+
+
+# ============================================================================== coverage: which molecules a method takes
+SYMBOLS = ("X H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr "
+           "Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W "
+           "Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr").split()
+
+
+def _z(*spans) -> frozenset[int]:
+    """Atomic numbers from single numbers and (first, last) pairs."""
+    out: set[int] = set()
+    for s in spans:
+        out.update(range(s[0], s[1] + 1) if isinstance(s, tuple) else (s,))
+    return frozenset(out)
+
+
+def element_text(numbers) -> str:
+    """'H-Rn', 'H-La, Lu-Bi', 'H, B, C, ...': runs of six or more consecutive elements as ranges."""
+    zs = sorted({int(z) for z in numbers if 0 < int(z) < len(SYMBOLS)})
+    parts, i = [], 0
+    while i < len(zs):
+        j = i
+        while j + 1 < len(zs) and zs[j + 1] == zs[j] + 1:
+            j += 1
+        if j - i >= 5:
+            parts.append(f"{SYMBOLS[zs[i]]}-{SYMBOLS[zs[j]]}")
+        else:
+            parts += [SYMBOLS[z] for z in zs[i:j + 1]]
+        i = j + 1
+    return ", ".join(parts)
+
+
+Z_H_RN = _z((1, 86))
+#: AIMNet2's 14 elements (engines.AIMNET2_ELEMENTS; a test checks they agree)
+Z_AIMNET2 = _z(1, 5, 6, 7, 8, 9, 14, 15, 16, 17, 33, 34, 35, 53)
+#: MMFF94's organic elements and the free ions it has types for (Halgren 1996)
+Z_MMFF94 = _z(1, 6, 7, 8, 9, 14, 15, 16, 17, 35, 53)
+Z_MMFF94_IONS = _z(3, 11, 12, 19, 20, 26, 29, 30)
+#: PM6 and PM7 in MOPAC: H-La and Lu-Bi (Ce-Yb only as Sparkles; eng_mopac.ELEMENTS)
+Z_NDDO = _z((1, 57), (71, 83))
+#: the def2 basis sets as Psi4 ships them: H-Rn without Ce-Lu
+Z_DEF2 = _z((1, 57), (72, 86))
+
+
+@dataclass(frozen=True)
+class Coverage:
+    """Which molecules a method (or basis set, or CREST level) can take: elements, charge and spin. The model
+    advisor (``chem.advisor``) never recommends a method for a molecule outside its coverage."""
+
+    key: str                       # the method's guide entry (COVERAGE is keyed by it)
+    label: str
+    elements: frozenset[int]
+    open_shell: str = "yes"        # "yes" (unrestricted / spin-polarized), "no" (closed shells only), "ignored"
+                                   # (a force field: no electrons, the spin is not modelled)
+    charged: bool = True
+    solvation: str = ""            # what it does in a solvent run
+    available: str = ""            # "" = QuantaBench runs it; else where it can run instead and why not here
+    note: str = ""
+    source: str = ""               # where the element list comes from
+    verified: str = ""             # how QuantaBench checked it
+    extra_elements: frozenset[int] = field(default_factory=frozenset)   # e.g. MMFF94's free ions
+
+    def missing(self, numbers) -> list[int]:
+        """Atomic numbers of ``numbers`` it has no parameters for."""
+        return sorted({int(z) for z in numbers} - self.elements - self.extra_elements)
+
+    def handles(self, numbers, charge: int = 0, multiplicity: int = 1) -> tuple[bool, str]:
+        """(ok, why not) for a molecule of these elements, total charge and spin multiplicity."""
+        missing = self.missing(numbers)
+        if missing:
+            return False, f"{self.label} has no parameters for {', '.join(SYMBOLS[z] for z in missing)}"
+        if charge and not self.charged:
+            return False, f"{self.label} takes neutral molecules only"
+        if multiplicity > 1 and self.open_shell == "no":
+            return False, f"{self.label} is a closed-shell model (multiplicity {multiplicity})"
+        return True, ""
+
+
+_XTB_VERIFIED = ("tblite 0.8 refuses Z > 86 ('No support for elements with Z >86', checked 2026-11-09); the dxtb, "
+                 "tblite and xtb engines register Z = 1-86")
+_PSI4_BASIS = "Psi4 manual, appendix 'Basis Sets by Element' (the basis files Psi4 ships), read 2026-11-09"
+
+COVERAGE: dict[str, Coverage] = {c.key: c for c in (
+    Coverage("mmff94s", "MMFF94s", Z_MMFF94, open_shell="ignored", solvation="none (gas phase)",
+             note="metals only as free ions (Li+, Na+, K+, Mg2+, Ca2+, Fe2+/3+, Cu+/2+, Zn2+); a molecule without "
+                  "parameters is pre-optimized with UFF instead",
+             source="Halgren, J. Comput. Chem. 1996, 17, 490 (MMFF94: C, H, N, O, F, Si, P, S, Cl, Br, I and those "
+                    "ions)",
+             verified="RDKit 2026.09 MMFFHasAllMoleculeParams on one probe molecule per element (2026-11-09): B, Se, "
+                      "As, Ge, Sn, Al, Hg and Te have none", extra_elements=Z_MMFF94_IONS),
+    Coverage("gfn-ff", "GFN-FF", Z_H_RN, open_shell="ignored", solvation="ALPB, GBSA (xtb, CREST)",
+             source="Spicher, Grimme, Angew. Chem. Int. Ed. 2020, 59, 15665 (elements up to Rn)",
+             verified="the gfnff engine registers Z = 1-86"),
+    Coverage("gfn1-xtb", "GFN1-xTB", Z_H_RN, solvation="ALPB, GBSA, CPCM (tblite, xtb); none in dxtb",
+             source="Grimme, Bannwarth, Shushkov, J. Chem. Theory Comput. 2017, 13, 1989 (Z = 1-86)",
+             verified=_XTB_VERIFIED),
+    Coverage("gfn2-xtb", "GFN2-xTB", Z_H_RN, solvation="ALPB, GBSA, CPCM (tblite, xtb); none in dxtb",
+             source="Bannwarth, Ehlert, Grimme, J. Chem. Theory Comput. 2019, 15, 1652 (H to Rn)",
+             verified=_XTB_VERIFIED),
+    Coverage("g-xtb", "g-xTB", _z((1, 103)), solvation="limited (generalized Born, COSMO; provisional)",
+             available="not an engine in QuantaBench yet (BACKLOG RANK-2); the official xtb build runs it "
+                       "(`xtb --gxtb`)",
+             source="Froitzheim, Müller, Hansen, Grimme, ChemRxiv 2025 (H to Lr, Z = 1-103); grimme-lab/g-xtb README "
+                    "(preliminary version; --chrg, --uhf)",
+             verified="not run here: RANK-1 used the official Windows build (v2.0.1)"),
+    Coverage("aimnet2", "AIMNet2", Z_AIMNET2, open_shell="no", solvation="none (gas phase)",
+             note="validated up to about 100 heavy atoms",
+             source="Anstine, Zubatyuk, Isayev, Chem. Sci. 2025, 16, 10228; the aimnet model card (isayevlab."
+                    "github.io/aimnetcentral): 14 elements, 'assumes closed-shell electronic structure'",
+             verified="engines.AIMNET2_ELEMENTS (a test checks they agree)"),
+    Coverage("pm7", "PM7", Z_NDDO, solvation="COSMO",
+             source="openmopac.net manual, 'Elements available in PM7' (Ce-Yb only as 3+ Sparkles, left out)",
+             verified="eng_mopac.ELEMENTS (a test checks they agree)"),
+    Coverage("pm6-d3h4x", "PM6-D3H4X", Z_NDDO, solvation="COSMO",
+             source="Stewart, J. Mol. Model. 2007, 13, 1173 (PM6: 70 elements, H-La and Lu-Bi)",
+             verified="eng_mopac.ELEMENTS (a test checks they agree)"),
+    Coverage("def2-svp", "def2-SVP", Z_DEF2, solvation="PCM (Psi4)", source=_PSI4_BASIS),
+    Coverage("def2-svpd", "def2-SVPD", Z_DEF2, solvation="PCM (Psi4)", source=_PSI4_BASIS),
+    Coverage("def2-tzvp", "def2-TZVP", Z_DEF2, solvation="PCM (Psi4)", source=_PSI4_BASIS),
+    Coverage("6-31g*", "6-31G*", _z((1, 36)), solvation="PCM (Psi4)", source=_PSI4_BASIS),
+    Coverage("6-31+g*", "6-31+G*", _z((1, 20)), solvation="PCM (Psi4)", source=_PSI4_BASIS),
+    Coverage("6-311+g**", "6-311+G**", _z((1, 20)), solvation="PCM (Psi4)", source=_PSI4_BASIS),
+    Coverage("aug-cc-pvdz", "aug-cc-pVDZ", _z((1, 18), (21, 36)), solvation="PCM (Psi4)", source=_PSI4_BASIS),
+    Coverage("r2scan-3c", "r2SCAN-3c", Z_DEF2, solvation="PCM (Psi4)",
+             available="Psi4 directly (`energy('r2scan3c/')`), not the QM stage, which takes 'functional/basis'",
+             source="Grimme et al., J. Chem. Phys. 2021, 154, 064103 (def2-mTZVPP, H to Rn); " + _PSI4_BASIS),
+    Coverage("crest-gfn2", "CREST (GFN2-xTB)", Z_H_RN, solvation="ALPB",
+             source="as GFN2-xTB (CREST runs it; charge and spin through --chrg and --uhf)"),
+    Coverage("crest-gfn1", "CREST (GFN1-xTB)", Z_H_RN, solvation="ALPB", source="as GFN1-xTB"),
+    Coverage("crest-gfnff", "CREST (GFN-FF)", Z_H_RN, open_shell="ignored", solvation="ALPB", source="as GFN-FF"),
+    Coverage("crest-gfn2//gfnff", "CREST (GFN2-xTB // GFN-FF)", Z_H_RN, solvation="ALPB",
+             source="as GFN-FF and GFN2-xTB"),
+)}
+
+
+def coverage_for_engine(engine_key: str) -> Coverage | None:
+    """The coverage of refinement engine ``engine_key`` (None for "auto": it picks per molecule)."""
+    return COVERAGE.get(ENGINE_ENTRIES.get(engine_key, ""))
+
+
+def coverage_for_crest(level: str) -> Coverage | None:
+    return COVERAGE.get(CREST_LEVEL_ENTRIES.get(str(level or "").strip().lower(), ""))
+
+
+def coverage_for_basis(basis: str) -> Coverage | None:
+    """The coverage of a QM basis set ('def2-svp', '6-31G(d)', ...); None for a basis the table does not list."""
+    e = lookup(basis)
+    return COVERAGE.get(e.key) if e is not None and e.family == "Basis sets" else None
+
+
+def coverage_markdown() -> str:
+    """The coverage table for docs/METHODS.md."""
+    rows = ["| Method | Elements | Ions | Open shells | Solvent | Source |", "|---|---|---|---|---|---|"]
+    shell = {"yes": "yes", "no": "no (closed shells only)", "ignored": "spin not modelled (no electrons)"}
+    for c in COVERAGE.values():
+        elements = element_text(c.elements) + (f" (+ ions {element_text(c.extra_elements)})" if c.extra_elements
+                                               else "")
+        name = f"[{_escape(c.label, 'md')}](#{ENTRIES[c.key].anchor})"
+        if c.available:
+            name += f" ({_escape(c.available, 'md')})"
+        src = _escape(c.source + (f"; checked: {c.verified}" if c.verified else ""), "md")
+        rows.append(f"| {name} | {elements} | {'yes' if c.charged else 'no'} | {shell[c.open_shell]} | "
+                    f"{_escape(c.solvation, 'md')} | {src} |")
+    return "\n".join(rows)
 
 
 # ============================================================================== lookup
@@ -1301,7 +1725,8 @@ def search(text: str) -> list[Entry]:
 
 def _haystack(e: Entry) -> str:
     fields = (e.key, e.name, e.family, e.summary, e.what, e.good_for, e.watch_out, e.cost, e.dispersion,
-              e.solvation, " ".join(e.aliases), " ".join(t for _k, t in e.implementations))
+              e.solvation, e.corrects, e.use_for, e.avoid_for, " ".join(e.aliases),
+              " ".join(t for _k, t in e.implementations))
     text = " ".join(plain(f) for f in fields).lower()
     return text + " " + text.replace("ω", "w")
 
@@ -1386,6 +1811,12 @@ def plain(text: str) -> str:
 
 _FIELDS = (("What it is", "what"), ("Good for", "good_for"), ("Watch out", "watch_out"), ("Cost", "cost"),
            ("Dispersion", "dispersion"), ("Solvation", "solvation"))
+#: the one-line decision fields (``DECISIONS``), shown after "What it is" when the entry has them
+DECISION_FIELDS = (("Corrects", "corrects"), ("Use for", "use_for"), ("Avoid for", "avoid_for"))
+
+
+def _decisions(e: Entry) -> list[tuple[str, str]]:
+    return [(label, getattr(e, attr)) for label, attr in DECISION_FIELDS if getattr(e, attr)]
 
 
 def text_entry(e: Entry, width: int = 100) -> str:
@@ -1397,6 +1828,9 @@ def text_entry(e: Entry, width: int = 100) -> str:
     lines = [f"{e.name}  [{e.family}]", *textwrap.wrap(plain(e.summary), width), ""]
     for label, attr in _FIELDS:
         lines += para(label, getattr(e, attr))
+        if attr == "what":
+            for d_label, body in _decisions(e):
+                lines += para(d_label, body)
     if e.implementations:
         lines.append("In QuantaBench:")
         for k, note in e.implementations:
@@ -1442,6 +1876,8 @@ def html_entry(e: Entry) -> str:
              f'<p style="color: gray;">{_html.escape(e.family)}</p>',
              f"<p><b>{_render(e.summary, 'html')}</b></p>",
              f"<p>{_render(e.what, 'html')}</p>"]
+    for label, body in _decisions(e):
+        parts.append(f"<p><b>{label}:</b> {_render(body, 'html')}</p>")
     for label, attr in _FIELDS[1:]:
         parts.append(f"<p><b>{label}.</b> {_render(getattr(e, attr), 'html')}</p>")
     if e.implementations:
@@ -1486,6 +1922,8 @@ def _md_wrap(text: str, width: int = 110, indent: str = "") -> str:
 def markdown_entry(e: Entry) -> str:
     lines = [f'<a id="{e.anchor}"></a>', "", f"### {_escape(e.name, 'md')}", "",
              _md_wrap(f"> {_render(e.summary, 'md')}", indent="> "), "", _md_wrap(_render(e.what, "md")), ""]
+    for label, body in _decisions(e):
+        lines.append(_md_wrap(f"- **{label}:** {_render(body, 'md')}", indent="  "))
     for label, attr in _FIELDS[1:]:
         lines.append(_md_wrap(f"- **{label}:** {_render(getattr(e, attr), 'md')}", indent="  "))
     if e.implementations:
@@ -1517,8 +1955,18 @@ several of the Spartan results it is validated against (B3LYP, PM6) have none. T
 numbers are. Numbers marked "QuantaBench measured" are from [VALIDATION.md](VALIDATION.md),
 [ENGINES.md](ENGINES.md) and [dev/BACKLOG.md](dev/BACKLOG.md); references were checked against Crossref.
 
+Which method to choose for which molecules, and the review QuantaBench makes of a batch before it runs, are in
+[CHOOSING_METHODS.md](CHOOSING_METHODS.md).
+
 This file is generated from `src/quantabench/chem/method_guide.py` by `python scripts/write_methods_doc.py`.
 Edit the data there, not this file (a test checks that the two agree).
+"""
+
+COVERAGE_HEADER = """\
+## Which molecules each method takes
+
+Elements, charge and spin each method, basis set and CREST level can handle (`method_guide.COVERAGE`). The review
+before a run (`quantabench-cli review`, the Review window) never recommends a method for a molecule outside it.
 """
 
 
@@ -1528,7 +1976,7 @@ def markdown_document() -> str:
     for family, entries in by_family():
         names = ", ".join(f"[{_escape(e.name, 'md')}](#{e.anchor})" for e in entries)
         toc.append(_md_wrap(f"- **{family}:** {names}", indent="  "))
-    parts = [DOC_HEADER, "## Contents", "", "\n".join(toc), ""]
+    parts = [DOC_HEADER, "## Contents", "", "\n".join(toc), "", COVERAGE_HEADER, coverage_markdown(), ""]
     for family, entries in by_family():
         parts += [f"## {family}", ""]
         for e in entries:

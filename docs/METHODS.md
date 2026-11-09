@@ -9,13 +9,16 @@ several of the Spartan results it is validated against (B3LYP, PM6) have none. T
 numbers are. Numbers marked "QuantaBench measured" are from [VALIDATION.md](VALIDATION.md),
 [ENGINES.md](ENGINES.md) and [dev/BACKLOG.md](dev/BACKLOG.md); references were checked against Crossref.
 
+Which method to choose for which molecules, and the review QuantaBench makes of a batch before it runs, are in
+[CHOOSING_METHODS.md](CHOOSING_METHODS.md).
+
 This file is generated from `src/quantabench/chem/method_guide.py` by `python scripts/write_methods_doc.py`.
 Edit the data there, not this file (a test checks that the two agree).
 
 ## Contents
 
 - **Machine-learning potentials:** [AIMNet2](#aimnet2)
-- **Tight binding (xTB):** [GFN2-xTB](#gfn2-xtb), [GFN1-xTB](#gfn1-xtb)
+- **Tight binding (xTB):** [GFN2-xTB](#gfn2-xtb), [GFN1-xTB](#gfn1-xtb), [g-xTB](#g-xtb)
 - **Semi-empirical (NDDO):** [PM7](#pm7), [PM6-D3H4X](#pm6-d3h4x)
 - **Force fields:** [MMFF94s](#mmff94s), [UFF](#uff), [GFN-FF](#gfn-ff)
 - **Conformer search:** [RDKit ETKDGv3 + MMFF94s](#rdkit-etkdg), [CREST iMTD-GC](#crest), [CREST level:
@@ -23,7 +26,8 @@ Edit the data there, not this file (a test checks that the two agree).
   GFN-FF](#crest-gfn2--gfnff), [CREST level: GFN1-xTB](#crest-gfn1)
 - **DFT functionals and HF:** [DFT and functional names](#dft), [ωB97X-D](#wb97x-d),
   [B3LYP-D3(BJ)](#b3lyp-d3bj), [B3LYP (no dispersion)](#b3lyp), [PBE0-D3(BJ)](#pbe0-d3bj), [r2SCAN](#r2scan),
-  [M06-2X](#m06-2x), [Hartree-Fock (HF)](#hf), [ωB97M-D3(BJ) / ωB97M-V](#wb97m)
+  [r2SCAN-3c and the -3c composites](#r2scan-3c), [M06-2X](#m06-2x), [Hartree-Fock (HF)](#hf), [ωB97M-D3(BJ) /
+  ωB97M-V](#wb97m)
 - **Basis sets:** [Basis sets (what the names mean)](#basis-sets), [def2-SVP](#def2-svp),
   [def2-SVPD](#def2-svpd), [def2-TZVP](#def2-tzvp), [6-31G\*](#6-31gs), [6-31+G\*](#6-31pgs),
   [6-311+G\*\*](#6-311pgss), [aug-cc-pVDZ](#aug-cc-pvdz)
@@ -33,8 +37,37 @@ Edit the data there, not this file (a test checks that the two agree).
 - **Spartan's levels:** [Spartan B3LYP/6-311+G\*\* (C-PCM water)](#spartan-b3lyp), [Spartan
   ωB97X-D/6-31G\*](#spartan-wb97x-d), [Spartan PM6](#spartan-pm6)
 - **Concepts:** [Dispersion corrections (D3, D3(BJ), D4, -D)](#dispersion), [Single point vs
-  optimization](#single-point), [Boltzmann weighting](#boltzmann), [HOMO and LUMO energies](#homo-lumo), [Auto
-  (best available)](#auto)
+  optimization](#single-point), [Boltzmann weighting](#boltzmann), [HOMO and LUMO energies](#homo-lumo),
+  [Basis-set superposition error and gCP](#gcp), [Ranking conformers (which level picks the
+  lowest)](#conformer-ranking), [Protonation state at pH](#protonation), [Auto (best available)](#auto)
+
+## Which molecules each method takes
+
+Elements, charge and spin each method, basis set and CREST level can handle (`method_guide.COVERAGE`). The review
+before a run (`quantabench-cli review`, the Review window) never recommends a method for a molecule outside it.
+
+| Method | Elements | Ions | Open shells | Solvent | Source |
+|---|---|---|---|---|---|
+| [MMFF94s](#mmff94s) | H, C, N, O, F, Si, P, S, Cl, Br, I (+ ions Li, Na, Mg, K, Ca, Fe, Cu, Zn) | yes | spin not modelled (no electrons) | none (gas phase) | Halgren, J. Comput. Chem. 1996, 17, 490 (MMFF94: C, H, N, O, F, Si, P, S, Cl, Br, I and those ions); checked: RDKit 2026.09 MMFFHasAllMoleculeParams on one probe molecule per element (2026-11-09): B, Se, As, Ge, Sn, Al, Hg and Te have none |
+| [GFN-FF](#gfn-ff) | H-Rn | yes | spin not modelled (no electrons) | ALPB, GBSA (xtb, CREST) | Spicher, Grimme, Angew. Chem. Int. Ed. 2020, 59, 15665 (elements up to Rn); checked: the gfnff engine registers Z = 1-86 |
+| [GFN1-xTB](#gfn1-xtb) | H-Rn | yes | yes | ALPB, GBSA, CPCM (tblite, xtb); none in dxtb | Grimme, Bannwarth, Shushkov, J. Chem. Theory Comput. 2017, 13, 1989 (Z = 1-86); checked: tblite 0.8 refuses Z \> 86 ('No support for elements with Z \>86', checked 2026-11-09); the dxtb, tblite and xtb engines register Z = 1-86 |
+| [GFN2-xTB](#gfn2-xtb) | H-Rn | yes | yes | ALPB, GBSA, CPCM (tblite, xtb); none in dxtb | Bannwarth, Ehlert, Grimme, J. Chem. Theory Comput. 2019, 15, 1652 (H to Rn); checked: tblite 0.8 refuses Z \> 86 ('No support for elements with Z \>86', checked 2026-11-09); the dxtb, tblite and xtb engines register Z = 1-86 |
+| [g-xTB](#g-xtb) (not an engine in QuantaBench yet (BACKLOG RANK-2); the official xtb build runs it (`xtb --gxtb`)) | H-Lr | yes | yes | limited (generalized Born, COSMO; provisional) | Froitzheim, Müller, Hansen, Grimme, ChemRxiv 2025 (H to Lr, Z = 1-103); grimme-lab/g-xtb README (preliminary version; --chrg, --uhf); checked: not run here: RANK-1 used the official Windows build (v2.0.1) |
+| [AIMNet2](#aimnet2) | H, B, C, N, O, F, Si, P, S, Cl, As, Se, Br, I | yes | no (closed shells only) | none (gas phase) | Anstine, Zubatyuk, Isayev, Chem. Sci. 2025, 16, 10228; the aimnet model card (isayevlab.github.io/aimnetcentral): 14 elements, 'assumes closed-shell electronic structure'; checked: engines.AIMNET2\_ELEMENTS (a test checks they agree) |
+| [PM7](#pm7) | H-La, Lu-Bi | yes | yes | COSMO | openmopac.net manual, 'Elements available in PM7' (Ce-Yb only as 3+ Sparkles, left out); checked: eng\_mopac.ELEMENTS (a test checks they agree) |
+| [PM6-D3H4X](#pm6-d3h4x) | H-La, Lu-Bi | yes | yes | COSMO | Stewart, J. Mol. Model. 2007, 13, 1173 (PM6: 70 elements, H-La and Lu-Bi); checked: eng\_mopac.ELEMENTS (a test checks they agree) |
+| [def2-SVP](#def2-svp) | H-La, Hf-Rn | yes | yes | PCM (Psi4) | Psi4 manual, appendix 'Basis Sets by Element' (the basis files Psi4 ships), read 2026-11-09 |
+| [def2-SVPD](#def2-svpd) | H-La, Hf-Rn | yes | yes | PCM (Psi4) | Psi4 manual, appendix 'Basis Sets by Element' (the basis files Psi4 ships), read 2026-11-09 |
+| [def2-TZVP](#def2-tzvp) | H-La, Hf-Rn | yes | yes | PCM (Psi4) | Psi4 manual, appendix 'Basis Sets by Element' (the basis files Psi4 ships), read 2026-11-09 |
+| [6-31G\*](#6-31gs) | H-Kr | yes | yes | PCM (Psi4) | Psi4 manual, appendix 'Basis Sets by Element' (the basis files Psi4 ships), read 2026-11-09 |
+| [6-31+G\*](#6-31pgs) | H-Ca | yes | yes | PCM (Psi4) | Psi4 manual, appendix 'Basis Sets by Element' (the basis files Psi4 ships), read 2026-11-09 |
+| [6-311+G\*\*](#6-311pgss) | H-Ca | yes | yes | PCM (Psi4) | Psi4 manual, appendix 'Basis Sets by Element' (the basis files Psi4 ships), read 2026-11-09 |
+| [aug-cc-pVDZ](#aug-cc-pvdz) | H-Ar, Sc-Kr | yes | yes | PCM (Psi4) | Psi4 manual, appendix 'Basis Sets by Element' (the basis files Psi4 ships), read 2026-11-09 |
+| [r2SCAN-3c](#r2scan-3c) (Psi4 directly (`energy('r2scan3c/')`), not the QM stage, which takes 'functional/basis') | H-La, Hf-Rn | yes | yes | PCM (Psi4) | Grimme et al., J. Chem. Phys. 2021, 154, 064103 (def2-mTZVPP, H to Rn); Psi4 manual, appendix 'Basis Sets by Element' (the basis files Psi4 ships), read 2026-11-09 |
+| [CREST (GFN2-xTB)](#crest-gfn2) | H-Rn | yes | yes | ALPB | as GFN2-xTB (CREST runs it; charge and spin through --chrg and --uhf) |
+| [CREST (GFN1-xTB)](#crest-gfn1) | H-Rn | yes | yes | ALPB | as GFN1-xTB |
+| [CREST (GFN-FF)](#crest-gfnff) | H-Rn | yes | spin not modelled (no electrons) | ALPB | as GFN-FF |
+| [CREST (GFN2-xTB // GFN-FF)](#crest-gfn2--gfnff) | H-Rn | yes | yes | ALPB | as GFN-FF and GFN2-xTB |
 
 ## Machine-learning potentials
 
@@ -49,6 +82,9 @@ charge to an energy, forces and atomic charges. It was trained on about 20 milli
 ([ωB97M](#wb97m)/def2-TZVPP) of neutral and charged molecules. Long-range electrostatics and D3(BJ) dispersion
 are explicit physics terms added to the network's short-range energy.
 
+- **Use for:** Neutral molecules in the gas phase: geometries and conformer ranking (RANK-1, RANK-1b).
+- **Avoid for:** Open shells (a closed-shell model), elements outside its 14, solvent runs (no implicit
+  solvent).
 - **Good for:** Conformer energies and geometries of organic molecules and ions made of H, B, C, N, O, F, Si,
   P, S, Cl, As, Se, Br and I, at a small fraction of the DFT cost. The first choice of `auto` when it is
   installed. The best cheap gas-phase conformer ranker QuantaBench tested on neutral PFAS: its lowest
@@ -91,6 +127,11 @@ interactions. GFN2 adds atomic dipole and quadrupole electrostatics to GFN1's at
 charge-dependent [D4 dispersion](#dispersion) self-consistently. It has parameters for every element up to
 radon (Z = 86).
 
+- **Corrects:** GFN1's charge-only electrostatics: atomic dipoles and quadrupoles describe anisotropic
+  contacts (hydrogen and halogen bonds); D4 dispersion is computed self-consistently.
+- **Use for:** Geometries in the gas phase and in ALPB; ranking pure hydrocarbon conformers (12 of 12,
+  RANK-1b).
+- **Avoid for:** Ranking the conformers of ions and polar molecules, in any solvent model (RANK-1, RANK-1b).
 - **Good for:** Geometries and conformer ranking of organic molecules, ions and organometallics, in the gas
   phase or in [ALPB](#alpb) solvent, at low cost. Descriptors (dipole, charges, polarizability) for trends
   across molecules. QuantaBench's default refinement level for the PFAS validation.
@@ -147,6 +188,8 @@ GFN1-xTB (2017) is the first of the GFN tight-binding methods. Its electrostatic
 atomic dipoles or quadrupoles), dispersion is [D3 with Becke-Johnson damping](#dispersion), and a halogen-bond
 correction is added. It has parameters for H to Rn (Z = 1-86).
 
+- **Corrects:** Halogen bonds, with an extra term.
+- **Use for:** The CPCM solvation term of a conformer ranking (RANK-1); the `xtb_*` properties.
 - **Good for:** A cross-check of GFN2-xTB results. QuantaBench's xTB properties step (the `xtb_*` charges,
   dipole and polarizability) uses it. dxtb runs it without the libcint backend, on the CPU or a GPU. With
   tblite's CPCM (ddX) its solvation energy differences between conformers of PFAS ions follow IEF-PCM's at
@@ -177,6 +220,40 @@ correction is added. It has parameters for H to Rn (Z = 1-86).
     [doi:10.1002/wcms.1493](https://doi.org/10.1002/wcms.1493)
 - **Also found as:** `gfn1`, `gfn1 xtb`, `gfn-xtb`
 
+<a id="g-xtb"></a>
+
+### g-xTB
+
+> Grimme's general tight binding (2025, preliminary), fitted toward ωB97M-V; not a QuantaBench engine yet.
+
+g-xTB (2025) is a tight-binding method from Grimme's group fitted toward ωB97M-V/def2-TZVPPD energies for the
+elements H to Lr (Z = 1-103). It keeps the minimal-basis tight-binding form of the GFN methods with new,
+charge-dependent terms. The official build of the xtb program runs it with `--gxtb` (`--chrg` and `--uhf` as
+for GFN2); its README calls it a preliminary version whose parameters may still change.
+
+- **Use for:** Ranking conformers, with a GFN1-xTB CPCM term in water (RANK-1, RANK-1b).
+- **Avoid for:** QuantaBench today: not an engine yet (BACKLOG RANK-2).
+- **Good for:** The best cheap energy QuantaBench tested for ranking conformers. In the gas phase it picked a
+  conformer within 4 kJ/mol of r2SCAN-3c's lowest in 40 of 40 non-fluorinated neutrals and 18 of 20 neutral
+  PFAS. With a GFN1-xTB CPCM solvation term at the same geometry it did so in water in 38 of 40 neutrals and
+  12 of 13 PFAS ions, and in 13 of 17 PFAS ions against ωB97X-D/def2-SVP (docs/VALIDATION.md, RANK-1 and
+  RANK-1b).
+- **Watch out:** Not yet an engine or a rank level in QuantaBench: the rank step that will use it is BACKLOG
+  RANK-2. Its own solvation models (generalized Born `--gbe` and COSMO) are provisional per its README and
+  ranked worse than the GFN1-xTB CPCM term (RANK-1). Pin the binary (its SHA-256) for a production run.
+- **Cost:** About 0.16 s per single point for neutral PFAS; with the CPCM term about 0.1 % of a
+  ωB97X-D/def2-SVP single point for PFAS ions (QuantaBench measured, RANK-1).
+- **Dispersion:** Yes, part of the method.
+- **Solvation:** Limited and provisional (generalized Born, COSMO); QuantaBench measured it with a GFN1-xTB
+  CPCM term.
+- **See also:** [GFN2-xTB](#gfn2-xtb), [GFN1-xTB](#gfn1-xtb), [Ranking conformers (which level picks the
+  lowest)](#conformer-ranking), [PCM (IEF-PCM, C-PCM)](#pcm)
+- **References:**
+  - Froitzheim, Müller, Hansen, Grimme. g-xTB: a general-purpose extended tight-binding electronic structure
+    method for the elements H to Lr (Z = 1-103). ChemRxiv (preprint) (2025).
+    [doi:10.26434/chemrxiv-2025-bjxvt](https://doi.org/10.26434/chemrxiv-2025-bjxvt)
+- **Also found as:** `gxtb`, `--gxtb`, `g xtb`
+
 ## Semi-empirical (NDDO)
 
 <a id="pm7"></a>
@@ -190,6 +267,9 @@ most two-electron integrals are dropped and the rest come from fitted parameters
 experimental and high-level reference data, crystal structures included, with dispersion and hydrogen-bond
 terms in the method. MOPAC reports the energy as a heat of formation ΔHf.
 
+- **Corrects:** Dispersion and hydrogen bonds, with terms built into the method.
+- **Use for:** Heats of formation; MOPAC's QSAR properties.
+- **Avoid for:** Ranking the conformers of PFAS ions (RANK-1).
 - **Good for:** Heats of formation, dipoles and polarizabilities (MOPAC POLAR) of organic molecules; COSMO
   areas and volumes as size descriptors; a second semi-empirical opinion next to xTB. For simple gas-phase
   organic molecules Stewart reports average ΔHf errors about 10 % below PM6's.
@@ -222,6 +302,9 @@ PM6 (2007) is the NDDO method before PM7, parametrized for 70 elements. Plain PM
 hydrogen bonds poorly. D3H4X adds Grimme's D3 dispersion, the H4 hydrogen-bond correction and a correction for
 halogen-oxygen and halogen-nitrogen contacts. QuantaBench's `mopac-pm6` engine always runs PM6-D3H4X.
 
+- **Corrects:** Plain PM6's dispersion (D3), hydrogen-bond (H4) and halogen-contact (X) errors.
+- **Use for:** Noncovalent contacts at semi-empirical cost.
+- **Avoid for:** Ranking PFAS anion conformers: it overbinds short O···F contacts like GFN2-xTB (RANK-1).
 - **Good for:** Noncovalent contacts (stacking, hydrogen and halogen bonds) at semi-empirical cost.
 - **Watch out:** Not the same as Spartan's PM6, which is plain PM6 ([Spartan PM6](#spartan-pm6)): geometries
   and conformer energies of flexible molecules can differ. The energy is a heat of formation; COSMO caveats as
@@ -263,6 +346,8 @@ atomic charges, with no electrons. MMFF94 was parametrized on quantum-chemical d
 molecules; the 's' variant makes delocalized trigonal nitrogens (as in anilines) planar, which suits energy
 minimization. RDKit's MMFF94s minimizes every embedded conformer, and the method `mmff` stops there.
 
+- **Use for:** Pre-optimizing the conformer pool.
+- **Avoid for:** The final conformer ranking; electronic properties.
 - **Good for:** Fast pre-optimization and a first ranking of many conformers; large batches where only
   geometries and 2D/3D shape descriptors are needed.
 - **Watch out:** Fixed charges: no polarization, no solvent, no electronic properties. Its conformer ranking
@@ -320,6 +405,8 @@ charges come from the structure, so no atom types are needed. Dispersion is a si
 conformational subsets of the GMTKN55 benchmark it has a mean absolute deviation of 1.53 kcal/mol, which its
 authors report as on par with the GFN-xTB methods.
 
+- **Use for:** Fast CREST searches of large or unusual molecules.
+- **Avoid for:** Ranking conformers: a search level only.
 - **Good for:** Large or unusual molecules, molecules with metals, and fast conformer searches ([CREST level:
   GFN-FF](#crest-gfnff)).
 - **Watch out:** The bond topology is fixed when it is set up: bonds cannot form or break. The dipole comes
@@ -356,6 +443,8 @@ bounds, embedded in 3D and corrected with torsion-angle preferences from crystal
 up to Max conformers structures (50 by default), minimizes each with [MMFF94s](#mmff94s), and prunes by the
 energy window and an RMSD duplicate test.
 
+- **Use for:** Fast, reproducible conformer pools.
+- **Avoid for:** Ions in water with few conformers refined: the pool is ranked by gas-phase MMFF94s.
 - **Good for:** The default search: fast, reproducible with the random seed, and it needs no external program.
 - **Watch out:** The pool is ranked by gas-phase MMFF94s and only the lowest go on to the refinement, so
   conformers that a quantum method in water prefers can be lost there. In QuantaBench's comparison with
@@ -388,6 +477,8 @@ genetic crossover step (GC) combines parts of different conformers. Energies com
 in [ALPB](#alpb) solvent when one is set. Quick mode (`--quick`, on by default here) uses reduced settings for
 a cruder ensemble; turn it off for CREST's full search.
 
+- **Use for:** Flexible molecules and ions in water; conformers ETKDG misses.
+- **Avoid for:** Large batches of large flexible molecules at GFN2 (hours each).
 - **Good for:** Flexible molecules and ions, especially in water, where a gas-phase force-field pool ranks
   poorly; ensembles for Boltzmann averages.
 - **Watch out:** Needs the crest program (Linux, the fork build on macOS, WSL on Windows). Run time grows
@@ -561,6 +652,10 @@ A range-separated hybrid: about 22 % exact exchange between nearby electrons, ri
 together with the functional; it is an older pairwise form, not Grimme's D3. Full exact exchange at long range
 improves anions, charge transfer and orbital energies over global hybrids such as B3LYP.
 
+- **Corrects:** Dispersion (its own -D term); long-range exact exchange treats anions and orbital energies
+  better than global hybrids.
+- **Use for:** DFT single points and properties; QuantaBench's default QM functional.
+- **Avoid for:** Ranking anion conformers at def2-SVP: use def2-SVPD (RANK-1).
 - **Good for:** General organic chemistry: conformer energies, noncovalent contacts, dipoles and
   polarizabilities. Matching Spartan's ωB97X-D/6-31G\* results: at Spartan's geometry QuantaBench's Psi4 stage
   reproduces its energies to 4e-4 Eh and its dipoles to 0.001 D (docs/VALIDATION.md, VAL-2).
@@ -591,6 +686,10 @@ correlation functional, with three fitted mixing parameters. The -D3(BJ) suffix 
 with Becke-Johnson damping; without it B3LYP misses most of the London dispersion between nonbonded atoms
 ([B3LYP (no dispersion)](#b3lyp)).
 
+- **Corrects:** Plain B3LYP's missing dispersion, with D3 and Becke-Johnson damping.
+- **Use for:** B3LYP comparisons with the dispersion fixed.
+- **Avoid for:** Ranking anion conformers at def2-SVP: it shares that basis' lean toward compact conformers
+  (RANK-1).
 - **Good for:** Comparing with the large literature that uses B3LYP, with the dispersion fixed; geometries and
   vibrational frequencies. Ranking the conformers of PFAS ions in PCM water: at def2-SVP it agreed with
   ωB97X-D (median ρ 0.95; its lowest within 4 kJ/mol of ωB97X-D's in 9 of 9 ions) at 0.72x the cost
@@ -630,6 +729,9 @@ folded conformer, where chain segments touch, loses an attraction an extended on
 therefore tends to favour extended chains over folded ones. Even n-alkanes longer than about 17 carbons fold
 into hairpins in the gas phase, held together by dispersion between the strands.
 
+- **Corrects:** Nothing: no dispersion correction.
+- **Use for:** Reproducing Spartan or older B3LYP numbers.
+- **Avoid for:** New conformer energies: folded conformers come out too high.
 - **Good for:** Reproducing older or Spartan results. Type `b3lyp` in the Functional box; use b3lyp-d3bj for
   new work.
 - **Watch out:** This matters for PFAS conformers. In QuantaBench's comparison, GFN2/ALPB (with D4) put
@@ -666,6 +768,8 @@ into hairpins in the gas phase, held together by dispersion between the strands.
 PBE0 takes the PBE gradient-corrected functional, built from physical constraints rather than fitted to data,
 and replaces 25 % of its exchange with exact exchange. D3(BJ) adds dispersion.
 
+- **Corrects:** Dispersion, through D3(BJ).
+- **Use for:** A second hybrid next to B3LYP or ωB97X-D.
 - **Good for:** Geometries, dipoles and polarizabilities; a second hybrid to check B3LYP or ωB97X-D results.
 - **Watch out:** A global hybrid, with the same long-range limits as B3LYP for anions and charge transfer.
 - **Cost:** Hybrid DFT: minutes per conformer for PFAS. QuantaBench measured ωB97X-D/def2-SVP on PFHpA (23
@@ -696,6 +800,9 @@ A meta-GGA uses the kinetic-energy density as well as the density and its gradie
 bonds, double bonds and weak contacts apart. r2SCAN (regularized-restored SCAN) keeps most of SCAN's exact
 constraints and is numerically stable on ordinary integration grids. It has no exact exchange.
 
+- **Corrects:** Medium-range dispersion only, from the functional.
+- **Use for:** Larger molecules when hybrids are too slow, with -D4 added.
+- **Avoid for:** Conformer energies without -D4.
 - **Good for:** Geometries and conformer energies of larger molecules when hybrids are too slow. The composite
   r2SCAN-3c was QuantaBench's check on the conformer reference for PFAS ions in PCM water. On 5 ions it agreed
   with ωB97X-D/def2-SVPD (median ρ 0.99) better than ωB97X-D/def2-SVP did (0.72). Of the cheap rankers, it
@@ -708,7 +815,8 @@ constraints and is numerically stable on ordinary integration grids. It has no e
   ωB97X-D/def2-SVP for a 37-atom PFAS ion in Psi4 1.9.1 (QuantaBench measured, RANK-1).
 - **Dispersion:** Medium range only, from the functional itself.
 - **Solvation:** PCM in Psi4 (single points).
-- **See also:** [Dispersion corrections (D3, D3(BJ), D4, -D)](#dispersion), [DFT and functional names](#dft)
+- **See also:** [r2SCAN-3c and the -3c composites](#r2scan-3c), [Dispersion corrections (D3, D3(BJ), D4,
+  -D)](#dispersion), [DFT and functional names](#dft)
 - **References:**
   - Furness, Kaplan, Ning, Perdew, Sun. Accurate and numerically efficient r2SCAN meta-generalized gradient
     approximation. J. Phys. Chem. Lett. 11, 8208-8215 (2020).
@@ -718,7 +826,47 @@ constraints and is numerically stable on ordinary integration grids. It has no e
     (2021). [doi:10.1063/5.0041008](https://doi.org/10.1063/5.0041008)
   - Grimme, Hansen, Ehlert, Mewes. r2SCAN-3c: a "Swiss army knife" composite electronic-structure method. J.
     Chem. Phys. 154, 064103 (2021). [doi:10.1063/5.0040021](https://doi.org/10.1063/5.0040021)
-- **Also found as:** `r2-scan`, `r²scan`, `r2scan-3c`
+- **Also found as:** `r2-scan`, `r²scan`
+
+<a id="r2scan-3c"></a>
+
+### r2SCAN-3c and the -3c composites
+
+> Grimme's composite DFT recipes: functional, matched basis, D4 or D3 and gCP in one; RANK-1b's reference.
+
+A '-3c' method is a recipe of three parts chosen together: a functional, a basis set made for it, and
+corrections for the two errors that basis leaves, [D4 or D3 dispersion](#dispersion) and the [gCP](#gcp)
+correction for basis-set superposition error. r2SCAN-3c uses the [r2SCAN](#r2scan) meta-GGA with the
+triple-zeta def2-mTZVPP basis and D4; HF-3c (Hartree-Fock, the minimal MINIX basis, D3(BJ)) and PBEh-3c are
+cheaper relatives. Psi4 runs them by name with their own basis (`energy('r2scan3c/')`).
+
+- **Corrects:** Bundles what a small basis lacks: D4 dispersion and gCP for basis-set superposition error, in
+  a matched triple-zeta basis.
+- **Use for:** A DFT reference for conformer energies (RANK-1b's).
+- **Avoid for:** The QM stage today: not selectable yet.
+- **Good for:** Conformer energies near triple-zeta hybrid quality at about twice the cost of
+  ωB97X-D/def2-SVP. QuantaBench used r2SCAN-3c as its conformer reference: it agreed with ωB97X-D/def2-TZVP on
+  8 neutrals (ρ 0.98, MAE 1.1 kJ/mol) and, on PFAS ions in PCM, with ωB97X-D/def2-SVPD better than
+  ωB97X-D/def2-SVP did (docs/VALIDATION.md, RANK-1 and RANK-1b).
+- **Watch out:** Not selectable in the QM stage yet: the stage takes 'functional/basis', and Psi4 wants the
+  -3c methods with an empty basis. Psi4 needs `mctc-gcp` on the PATH and `dftd4-python` for r2SCAN-3c. HF-3c
+  is much cheaper but ranked PFAS conformers poorly (10 of 17 ions within 4 kJ/mol, leaning to extended ones;
+  RANK-1).
+- **Cost:** r2SCAN-3c in PCM: 2x ωB97X-D/def2-SVP for a 37-atom PFAS ion on a 4-thread NOVA lane; HF-3c
+  0.2-0.3x (QuantaBench measured, Psi4 1.9.1, RANK-1).
+- **Dispersion:** Yes: D4 (r2SCAN-3c), D3 with Becke-Johnson damping (HF-3c, PBEh-3c).
+- **Solvation:** PCM in Psi4 (single points).
+- **See also:** [Basis-set superposition error and gCP](#gcp), [r2SCAN](#r2scan), [Dispersion corrections (D3,
+  D3(BJ), D4, -D)](#dispersion), [Ranking conformers (which level picks the lowest)](#conformer-ranking)
+- **References:**
+  - Grimme, Hansen, Ehlert, Mewes. r2SCAN-3c: a "Swiss army knife" composite electronic-structure method. J.
+    Chem. Phys. 154, 064103 (2021). [doi:10.1063/5.0040021](https://doi.org/10.1063/5.0040021)
+  - Sure, Grimme. Corrected small basis set Hartree-Fock method for large systems. J. Comput. Chem. 34,
+    1672-1685 (2013). [doi:10.1002/jcc.23317](https://doi.org/10.1002/jcc.23317)
+  - Kruse, Grimme. A geometrical correction for the inter- and intra-molecular basis set superposition error
+    in Hartree-Fock and density functional theory calculations for large systems. J. Chem. Phys. 136, 154101
+    (2012). [doi:10.1063/1.3700154](https://doi.org/10.1063/1.3700154)
+- **Also found as:** `r2scan3c`, `hf-3c`, `hf3c`, `pbeh-3c`, `pbeh3c`, `3c`, `composite methods`
 
 <a id="m06-2x"></a>
 
@@ -731,6 +879,9 @@ M06-2X is one of the Minnesota 2006 functionals; '2X' means twice the exact exch
 fitted to main-group thermochemistry, reaction barriers and noncovalent interactions, so its parameters
 describe medium-range dispersion.
 
+- **Corrects:** Medium-range dispersion, through its fit.
+- **Use for:** Reaction energies and barriers.
+- **Avoid for:** Long-range contacts without an added D3 term.
 - **Good for:** Reaction energies and barriers of organic molecules; noncovalent complexes at short range.
 - **Watch out:** No long-range dispersion: GMTKN55 found that Minnesota functionals still need a D3
   correction. Meta-GGAs of the M06 family are sensitive to the integration grid. Psi4 uses a finite-field
@@ -767,6 +918,9 @@ Each electron moves in the average field of the others. Exchange is exact, but e
 entirely, dispersion included. Correlated wavefunction methods start from HF, and the NDDO methods (PM6, PM7)
 are parametrized HF.
 
+- **Corrects:** Nothing: no electron correlation, no dispersion.
+- **Use for:** A baseline; Koopmans ionization energies.
+- **Avoid for:** Conformer energies.
 - **Good for:** A baseline; Koopmans' estimate of the ionization energy (−ε\_HOMO); the HF/6-31G\*
   electrostatic potential that classic force-field charges are fitted to.
 - **Watch out:** No correlation and no dispersion: conformer energies of flexible chains and noncovalent
@@ -778,7 +932,8 @@ are parametrized HF.
   ions in PCM, where the PCM steps then dominate (QuantaBench measured, RANK-1).
 - **Dispersion:** No.
 - **Solvation:** PCM in Psi4 (single points).
-- **See also:** [DFT and functional names](#dft), [HOMO and LUMO energies](#homo-lumo)
+- **See also:** [DFT and functional names](#dft), [HOMO and LUMO energies](#homo-lumo), [r2SCAN-3c and the -3c
+  composites](#r2scan-3c)
 - **References:**
   - Roothaan. New developments in molecular orbital theory. Rev. Mod. Phys. 23, 69-89 (1951).
     [doi:10.1103/RevModPhys.23.69](https://doi.org/10.1103/RevModPhys.23.69)
@@ -787,7 +942,7 @@ are parametrized HF.
     [doi:10.1016/S0031-8914(34)90011-2](https://doi.org/10.1016/S0031-8914%2834%2990011-2)
   - Sure, Grimme. Corrected small basis set Hartree-Fock method for large systems. J. Comput. Chem. 34,
     1672-1685 (2013). [doi:10.1002/jcc.23317](https://doi.org/10.1002/jcc.23317)
-- **Also found as:** `hartree-fock`, `rhf`, `uhf`, `scf`, `hf-3c`
+- **Also found as:** `hartree-fock`, `rhf`, `uhf`, `scf`
 
 <a id="wb97m"></a>
 
@@ -835,6 +990,10 @@ functions ('P', '\*', '(d,p)') add higher angular momentum (d on C, N, O, F; p o
 bonds can polarize. Diffuse functions ('D', '+', 'aug-') are wide, slowly decaying functions for electrons far
 from the nuclei.
 
+- **Corrects:** Diffuse functions: the loosely bound electrons of anions, which a compact basis squeezes.
+  Polarization functions: bonds that bend and polarize.
+- **Use for:** A diffuse basis (def2-SVPD, 6-31+G\*) for anions, polarizabilities and ESP surfaces.
+- **Avoid for:** A compact basis (def2-SVP, 6-31G\*) for ranking anion conformers.
 - **Good for:** def2-SVP for screening, def2-TZVP for final energies, a diffuse basis (def2-SVPD, 6-31+G\*,
   aug-cc-pVDZ) for anions, polarizabilities and ESP surfaces.
 - **Watch out:** Anions need diffuse functions: the extra electron occupies a spread-out orbital that a
@@ -871,6 +1030,9 @@ Two functions per valence orbital, one d set on heavy atoms and one p set on hyd
 (Weigend and Ahlrichs) is balanced across the periodic table, H to Rn, with effective core potentials beyond
 Kr.
 
+- **Use for:** Fast DFT of neutral molecules.
+- **Avoid for:** Ranking anion conformers: +15 kJ/mol per Å of radius of gyration toward compact ones for PFAS
+  ions (RANK-1b).
 - **Good for:** Geometries and screening at hybrid-DFT level; QuantaBench's default QM basis.
 - **Watch out:** No diffuse functions, so anions come out too compact. QuantaBench measured, against
   ωB97X-D/6-31G\* at the same geometry for TFA and PFPrA: dipoles −0.05 to −0.07 D, HOMO/LUMO −0.21 to −0.25
@@ -898,6 +1060,9 @@ Kr.
 def2-SVP with diffuse functions (Rappoport and Furche) chosen to give accurate polarizabilities and other
 response properties at small cost.
 
+- **Corrects:** The loosely bound electrons of anions (diffuse functions).
+- **Use for:** Anions: conformer ranking, polarizabilities, ESP.
+- **Avoid for:** Large neutral batches, where it adds about 3x the cost for little.
 - **Good for:** Anions (carboxylates, sulfonates), polarizabilities and ESP surfaces at DFT level. Conformer
   energies of PFAS ions: on the ion where ωB97X-D/def2-SVP and r2SCAN-3c disagreed most, def2-SVPD moved
   ωB97X-D to within 8 kJ/mol MAE of r2SCAN-3c, from 16 (docs/VALIDATION.md, RANK-1).
@@ -921,6 +1086,9 @@ response properties at small cost.
 Three functions per valence orbital, two d sets and one f set on heavy atoms (C to F) and one p set on
 hydrogen.
 
+- **Corrects:** Most of a double-zeta basis' superposition error.
+- **Use for:** Final energies and properties of neutral molecules.
+- **Avoid for:** Anions, unless a diffuse set is added.
 - **Good for:** Final energies and properties of neutral molecules at DFT level.
 - **Watch out:** No diffuse functions, so anions and polarizabilities still need a diffuse basis.
 - **Cost:** 781 functions for PFOA: about 7x the def2-SVP time.
@@ -942,6 +1110,8 @@ hydrogen.
 Core orbitals use one function (a contraction of 6 Gaussians), valence orbitals two (3 + 1 Gaussians); '\*'
 adds one set of d functions on non-hydrogen atoms. Also written 6-31G(d).
 
+- **Use for:** Like-for-like checks against Spartan's ωB97X-D/6-31G\*.
+- **Avoid for:** Anions; elements beyond Kr (Psi4 has it for H-Kr only).
 - **Good for:** Like-for-like comparisons with Spartan's ωB97X-D/6-31G\* results; quick DFT geometries.
 - **Watch out:** No polarization on hydrogen (6-31G\*\* adds it) and no diffuse functions for anions.
 - **Cost:** 377 functions for PFOA. PFHpA (332) at ωB97X-D: SCF 127 s, full protocol 533 s on 2 threads
@@ -966,6 +1136,9 @@ adds one set of d functions on non-hydrogen atoms. Also written 6-31G(d).
 
 '+' adds one diffuse s and one diffuse p function on every non-hydrogen atom. Also written 6-31+G(d).
 
+- **Corrects:** The loosely bound electrons of anions (diffuse s and p on heavy atoms).
+- **Use for:** Anions at modest cost.
+- **Avoid for:** Elements beyond Ca (Psi4 has it for H-Ca only).
 - **Good for:** Anions at modest cost.
 - **Watch out:** Still no functions beyond s on hydrogen.
 - **Cost:** 477 functions for PFOA: about 2x the def2-SVP time.
@@ -990,6 +1163,9 @@ adds one set of d functions on non-hydrogen atoms. Also written 6-31G(d).
 Valence orbitals get three functions; '+' adds diffuse s and p on heavy atoms and '\*\*' adds d on heavy atoms
 and p on hydrogen. Also written 6-311+G(d,p).
 
+- **Corrects:** Anions (diffuse functions) and polarization on hydrogen.
+- **Use for:** Like-for-like checks against Spartan's B3LYP/6-311+G\*\* water numbers.
+- **Avoid for:** Elements beyond Ca (Psi4 has it for H-Ca only).
 - **Good for:** Like-for-like comparisons with Spartan's B3LYP/6-311+G\*\* water results; anions.
 - **Watch out:** No f functions, and it costs about as much as def2-SVPD.
 - **Cost:** 556 functions for PFOA: about 3x the def2-SVP time.
@@ -1015,6 +1191,9 @@ and p on hydrogen. Also written 6-311+G(d,p).
 cc-pVnZ sets were designed so that results converge systematically from DZ to TZ to QZ in correlated
 calculations. 'aug-' adds one diffuse function of each angular momentum on every atom.
 
+- **Corrects:** Diffuse functions on every atom, hydrogen included.
+- **Use for:** Anions, polarizabilities, weak complexes.
+- **Avoid for:** Large molecules (nearly linearly dependent functions); K and Ca (not in Psi4's set).
 - **Good for:** Anions, polarizabilities and weak complexes; the first step of a basis-set convergence series.
 - **Watch out:** Diffuse functions on all atoms: slower, and in large molecules nearly linearly dependent
   functions can stall the SCF. For DFT, def2-SVPD costs about the same and was tuned for response properties.
@@ -1047,6 +1226,9 @@ name and maps it onto each engine's model: [ALPB](#alpb) in tblite, xtb and CRES
 MOPAC, [PCM](#pcm) in Psi4. Engines without one (dxtb, AIMNet2, MMFF94s) run in the gas phase and the notes
 say so.
 
+- **Corrects:** The solvent's screening of charges and its solvation energy, which decide the conformers and
+  dipoles of ions and polar molecules.
+- **Use for:** Ions and polar molecules in water.
 - **Good for:** Ions and polar molecules, where water changes conformer rankings and raises dipoles: at the
   same geometry PCM water raised the ωB97X-D/6-31G\* dipoles of TFA and PFPrA by 26-28 % (QuantaBench
   measured, docs/VALIDATION.md).
@@ -1075,6 +1257,9 @@ say so.
 With no solvent, or with an engine that has no solvent model, every step treats the molecule as isolated. This
 is the reference state of most benchmark data and of Spartan's PM6 and ωB97X-D/6-31G\* results.
 
+- **Corrects:** Nothing: the isolated molecule.
+- **Use for:** Neutral molecules; gas-phase reference data.
+- **Avoid for:** Ions: their charges are unscreened.
 - **Good for:** Neutral molecules; comparison with gas-phase reference data.
 - **Watch out:** Ions are unscreened: a multiply charged anion can be unbound in the gas phase (its HOMO above
   zero), and its xTB polarizability can then diverge. QuantaBench reports ions' dipoles about the centre of
@@ -1097,6 +1282,11 @@ effects. It is parametrized for each method (GFN1, GFN2, GFN-FF) and for more th
 report hydration free energies with GFN1-xTB(ALPB) within 1.4 kcal/mol of experiment on average, and
 octanol-water log K within about 0.65 with GFN2-xTB(ALPB).
 
+- **Corrects:** Electrostatic screening (generalized Born) plus non-polar surface terms for the cavity and
+  dispersion with the solvent.
+- **Use for:** xTB geometries and properties in water.
+- **Avoid for:** Ranking polar conformers: its solvation differences missed IEF-PCM's by 20 kJ/mol for PFAS
+  ions (RANK-1).
 - **Good for:** Fast solvated optimizations and conformer ranking at xTB level; QuantaBench's water runs.
 - **Watch out:** A continuum: no explicit hydrogen bonds to water. GFN2/ALPB and B3LYP/C-PCM rank folded and
   extended PFAS ions differently (VAL-3). Between conformers of one PFAS ion, ALPB's solvation energy
@@ -1123,6 +1313,9 @@ Generalized Born estimates the electrostatic solvation energy from pairwise atom
 radii; the SASA term adds cavity and dispersion effects in proportion to the exposed surface. The CREST
 documentation calls ALPB an improved version of GBSA.
 
+- **Corrects:** Like ALPB: generalized Born screening plus a surface-area term.
+- **Use for:** Reproducing older xtb results.
+- **Avoid for:** New work: ALPB replaced it.
 - **Good for:** Reproducing older xtb results.
 - **Watch out:** tblite has no GBSA parameters for some solvents (ethanol, ...) and falls back to ALPB with a
   note.
@@ -1149,6 +1342,9 @@ COSMO first finds the surface charges that would screen the solute completely in
 down for a finite dielectric constant. C-PCM uses the same idea. QuantaBench passes MOPAC only the dielectric
 constant (`EPS=`), so no solvent-specific parameters are involved.
 
+- **Corrects:** Electrostatic screening, as a conductor scaled to the dielectric constant.
+- **Use for:** Solvated PM7 and PM6-D3H4X energies; COSMO areas and volumes.
+- **Avoid for:** Frequencies in solvent (MOPAC's COSMO is not smooth).
 - **Good for:** Solvated PM7 and PM6 energies; the COSMO area and volume descriptors (MOPAC computes them in
   the gas phase too).
 - **Watch out:** MOPAC's COSMO is not smooth: energies and gradients jump as surface segments switch, so
@@ -1175,6 +1371,11 @@ dielectric's reaction field. IEF-PCM (Psi4, through PCMSolver) solves the dielec
 and COSMO treat the solvent as a conductor and scale the result, which changes little for water (ε about 78).
 tblite's CPCM solves it with the ddX library, from the dielectric constant alone.
 
+- **Corrects:** Electrostatic screening by the solvent (the reaction field). As QuantaBench sets it up it has
+  no cavity or dispersion terms, which favours extended chains of surfactant-like ions (RANK-1b).
+- **Use for:** DFT single points in water; with GFN1-xTB charges (tblite's CPCM), the solvation term of a
+  conformer ranking (RANK-1).
+- **Avoid for:** Solvation free energies (use SMD in another program).
 - **Good for:** DFT single points in water: dipoles, orbital energies, ESP and polarizabilities in the
   reaction field. tblite's CPCM is a cheap stand-in for the solvation part of a DFT/PCM conformer ranking:
   with GFN1-xTB charges its solvation energy differences between conformers of PFAS ions followed IEF-PCM's to
@@ -1209,6 +1410,10 @@ SMD adds to an IEF-PCM-type electrostatic term a CDS term (cavitation, dispersio
 atomic surface tensions fitted to experimental solvation free energies in many solvents. Its authors report
 mean unsigned errors of 0.6-1.0 kcal/mol for neutral solutes and about 4 kcal/mol for ions.
 
+- **Corrects:** Electrostatics plus fitted non-electrostatic terms (cavity, dispersion, solvent structure):
+  solvation free energies.
+- **Use for:** Solvation free energies, in programs that have it.
+- **Avoid for:** QuantaBench today: not available.
 - **Good for:** Solvation free energies and partition coefficients at DFT level, in programs that have it.
 - **Watch out:** QuantaBench's Psi4 stage runs IEF-PCM, not SMD: keep that in mind when comparing with SMD
   numbers from other programs.
@@ -1387,6 +1592,11 @@ instead of switching it off (zero damping, D3(0)). D4 makes them depend on atomi
 ωB97X-D is Chai and Head-Gordon's own older pairwise term; VV10 (in ωB97M-V) is a nonlocal functional for the
 same effect.
 
+- **Corrects:** The London dispersion attraction most functionals and HF miss: without it, folded conformers,
+  stacked rings and touching chain segments come out too high.
+- **Use for:** Every DFT conformer energy: pick a level with -D3(BJ), -D4, -D or -V.
+- **Avoid for:** Nothing: it costs milliseconds. The Spartan B3LYP and PM6 results QuantaBench is validated
+  against have none, which is the cautionary case.
 - **Good for:** In QuantaBench: AIMNet2 (D3(BJ)), GFN2-xTB and GFN-FF (D4), GFN1-xTB (D3(BJ)), PM6-D3H4X (D3),
   PM7 (built in), ωB97X-D (-D), B3LYP-D3(BJ) and PBE0-D3(BJ). None in plain B3LYP, HF or r2SCAN as listed;
   M06-2X only at medium range.
@@ -1490,6 +1700,96 @@ frequencies and noncovalent energies, not to orbital energies.
     Chem. Theory Comput. 15, 1652-1671 (2019).
     [doi:10.1021/acs.jctc.8b01176](https://doi.org/10.1021/acs.jctc.8b01176)
 - **Also found as:** `homo`, `lumo`, `gap`, `homo-lumo gap`, `orbital energies`
+
+<a id="gcp"></a>
+
+### Basis-set superposition error and gCP
+
+> In a small basis, touching atoms borrow each other's functions and bind too strongly; gCP corrects that.
+
+In a finite basis set the electrons of one atom can use the functions centred on its neighbours. Two parts of
+a molecule that touch are then bound a little too strongly: the basis-set superposition error (BSSE). It is
+largest in small basis sets and makes folded, compact conformers too low. The counterpoise correction (Boys
+and Bernardi) removes it for complexes; gCP (Kruse and Grimme) is a cheap geometric estimate that also works
+within one molecule, and the [-3c composites](#r2scan-3c) include it.
+
+- **Corrects:** Basis-set superposition error: folded conformers and complexes bound too strongly in a small
+  basis.
+- **Use for:** Small-basis DFT and HF; built into the -3c composites.
+- **Good for:** Knowing why def2-SVP and 6-31G\* lean toward compact conformers, and why r2SCAN-3c needs no
+  larger basis.
+- **Watch out:** QuantaBench measured the small-basis lean against r2SCAN-3c: ωB97X-D/def2-SVP in PCM favours
+  compact conformers by +15.0 ± 2.4 kJ/mol per Å of radius of gyration for PFAS ions and +7.8 ± 1.0 for
+  non-fluorinated ions; in the gas phase +3.7 ± 1.9 against def2-TZVP for neutrals, 1-2 kJ/mol across their
+  pools (docs/VALIDATION.md, RANK-1b). For anions part of it is the missing diffuse functions. The QM stage
+  has no gCP option: use a diffuse or triple-zeta basis instead.
+- **Cost:** gCP itself costs nothing; a larger basis does (def2-SVPD about 3x, def2-TZVP about 7x def2-SVP).
+- **Dispersion:** Not applicable.
+- **Solvation:** Not applicable.
+- **See also:** [r2SCAN-3c and the -3c composites](#r2scan-3c), [def2-SVP](#def2-svp),
+  [def2-SVPD](#def2-svpd), [Basis sets (what the names mean)](#basis-sets)
+- **References:**
+  - Kruse, Grimme. A geometrical correction for the inter- and intra-molecular basis set superposition error
+    in Hartree-Fock and density functional theory calculations for large systems. J. Chem. Phys. 136, 154101
+    (2012). [doi:10.1063/1.3700154](https://doi.org/10.1063/1.3700154)
+  - Boys, Bernardi. The calculation of small molecular interactions by the differences of separate total
+    energies. Some procedures with reduced errors. Mol. Phys. 19, 553-566 (1970).
+    [doi:10.1080/00268977000101561](https://doi.org/10.1080/00268977000101561)
+- **Also found as:** `bsse`, `basis set superposition error`, `counterpoise`, `counterpoise correction`
+
+<a id="conformer-ranking"></a>
+
+### Ranking conformers (which level picks the lowest)
+
+> Which method decides the lowest conformer: QuantaBench's measured choices by phase and molecule class.
+
+The pipeline ranks the refined conformers by the refinement method's energies: the lowest conformer, the
+energy window and the Boltzmann weights all follow that ranking, and so does every descriptor taken from the
+lowest conformer. A method can give good geometries and still rank conformers poorly, because conformer energy
+differences are a few kJ/mol and its errors can be larger. QuantaBench measured cheap rankers against DFT
+references on conformer pools of PFAS and non-fluorinated molecules (RANK-1, RANK-1b).
+
+- **Good for:** Choosing the refinement method, and whether a DFT re-rank is needed. Measured picks within 4
+  kJ/mol of the reference's lowest: pure hydrocarbons, every cheap method (GFN2-xTB 12 of 12 in both phases);
+  neutrals in the gas phase, AIMNet2 (39 of 40 non-fluorinated, 18 of 20 PFAS) or [g-xTB](#g-xtb) (40 of 40,
+  18 of 20); molecules in water, g-xTB gas + a GFN1-xTB CPCM term (38 of 40 neutrals, 12 of 13 PFAS ions)
+  (docs/VALIDATION.md, RANK-1b).
+- **Watch out:** GFN2-xTB ranks polar molecules poorly in water (16 of 28 polar organics, 14 of 20 neutral
+  PFAS with ALPB) and PFAS ions no better than a random pick in every solvent model (0 of 13 against
+  r2SCAN-3c, 4 of 17 against ωB97X-D/def2-SVP); its 6 kcal/mol window dropped DFT's lowest in 6 of 17 ions
+  (RANK-1). Until the rank step (BACKLOG RANK-2) exists, re-rank a wide pool with the QM stage in PCM, with a
+  diffuse basis.
+- **Cost:** A single point per conformer at the rank level: about 0.1 % of a DFT single point for g-xTB +
+  CPCM, minutes per conformer for DFT.
+- **Dispersion:** Not applicable.
+- **Solvation:** In water the rank level needs a solvation term: g-xTB in the gas phase alone picked within 4
+  kJ/mol in 11 of 17 PFAS ions, with the GFN1-xTB CPCM term 13 (RANK-1).
+- **See also:** [GFN2-xTB](#gfn2-xtb), [AIMNet2](#aimnet2), [g-xTB](#g-xtb), [PCM (IEF-PCM, C-PCM)](#pcm),
+  [Boltzmann weighting](#boltzmann)
+- **Also found as:** `conformer ranking`, `ranking`, `rank step`, `rank-2`, `lowest conformer`
+
+<a id="protonation"></a>
+
+### Protonation state at pH
+
+> Acids lose and bases gain a proton at the run's pH (built-in rules); the charge then sets everything after.
+
+Before the conformer search QuantaBench neutralizes each structure, then applies a small table of acid and
+base sites with typical pKa values at the pH setting (7 by default): carboxylic, sulfonic and phosphonic acids
+lose a proton, aliphatic amines and amidines gain one, and perfluoroalkyl sulfonamides (pKa about 6.5) lose
+their N-H proton. Dimorphite-DL can replace the table. `--no-protonate` keeps the charges as drawn.
+
+- **Good for:** Water runs of acids and bases, where the ion is the species present.
+- **Watch out:** One state per molecule, the one the rule's pKa makes dominant; near a pKa both forms matter,
+  and sulfonamide pKa values vary with substitution. With `--no-protonate` a record drawn with the proton in
+  the wrong place keeps it: one ion of the DFT conformer test was drawn with the proton on its sulfonamide N,
+  183 kJ/mol (ωB97X-D/PCM) above the amine-protonated cation (docs/VALIDATION.md).
+- **Cost:** Free.
+- **Dispersion:** Not applicable.
+- **Solvation:** The charge state is chosen for water at that pH; a gas-phase run of the same ion stays
+  charged.
+- **See also:** [Gas phase](#gas-phase), [Implicit solvation](#solvation)
+- **Also found as:** `ph`, `pka`, `charge state`, `tautomer`, `protonation state`
 
 <a id="auto"></a>
 
