@@ -766,3 +766,253 @@ bootstrap over ions:
   choice, but on 8 smaller ions).
 - The neutral set is gas phase only, at Spartan's DLFFG1 geometries (not minima of any method tested), and its
   conformers span only about 10 kJ/mol.
+
+## RANK-1b: non-fluorinated molecules (2026-11-08, `Runs/rank1b-2026-11-08`)
+
+The question: RANK-1 found three things. GFN2-xTB ranks PFAS anions' conformers no better than chance. The cheap
+rankers to use are g-xTB gas + a GFN1-xTB CPCM ΔG_solv for ions and AIMNet2 for neutrals. And a def2-SVP reference
+favours compact anion conformers. Are these fluorine effects or general ones? Brandon's handbook molecules (cohorts
+4A, 4B, 5A, 6A) and a matched PFAS control went through one protocol. A difference between the groups then comes
+from the chemistry, not from the pools, geometries or reference. Scripts: `scratch/rank1b/` on NOVA (not in the
+repository); the selection, pools, tables and `report.md` are in the run folder.
+
+**Sets** (fixed with seed 20261108 before any candidate was scored; `selection/selection.csv`, `selection.json`):
+
+| group | molecules | conformers gas / water | heavy atoms | rotatable bonds | atoms | from |
+|---|---|---|---|---|---|---|
+| pure hydrocarbons (C, H) | 12 | 84 / 84 | 15 (7-20) | 7.5 (3-17) | 39 | C4A 9, C4B 3 |
+| polar organics (O, N, S, P, Si, Cl, I; no F) | 28 | 187 / 188 | 14 (6-20) | 4.5 (3-14) | 30 | C4A 10, C4B 9, C5A 9 |
+| PFAS control (neutral) | 20 | 140 / 138 | 15 (10-22) | 4.5 (3-12) | 23.5 | C1A 20 |
+| C6A ions | 2 | — / 8 | 18, 21 | 4, 14 | 35, 52 | 59-43-8 (+1), 1929-77-7 (−1) |
+| derived baseline ions | 6 | — / 42 | 13 (8-20) | 7.5 (3-11) | 33 | C4A: 4 carboxylates, 2 ammoniums |
+| PFAS ions, for context | 13 | — / 96 | 16-54 | | | RANK-1's 5 test + 8 holdout ions |
+
+Medians (ranges); rotatable bonds are RDKit's strict count.
+
+- **Sampling:**
+  - `quantabench-cli sample` on the v6 Spartan wide table listed every eligible neutral in its seeded order
+    (`--stratify cohort,size`).
+  - Filters: 6-22 heavy atoms, ≥ 3 rotatable bonds, ≥ 3 Spartan conformers, one fragment, AIMNet2's elements.
+  - Then the first per heavy-atom bin (6-10, 11-14, 15-18, 19-22) in turn: 9 hydrocarbons from C4A and 3 from C4B;
+    10 polar organics from C4A, 9 from C4B, 9 from C5A.
+  - **PFAS control:** baseline molecules in a seeded order; each took the nearest unused C1A/C1B PFAS by |Δ heavy
+    atoms|/SD + |Δ rotatable bonds|/SD, until there were 20. The medians match the baseline set's. Per molecule,
+    PFAS have fewer atoms (F, not H), and hydrocarbons have more rotatable bonds.
+- **C6A** (19 records, no Spartan conformers): 2 are usable.
+  - Left out: 3 multi-fragment metal carbonyls, 9 records with fewer than 3 rotatable bonds, a 44-heavy-atom NAD
+    analogue (above the size range), and 4 H-phosphonates drawn as (RO)2P⁺=O cations without their P-H hydrogen
+    (not real ions).
+  - Record 1929-77-7 is named after the herbicide vernolate, but its structure is the vernolic-acid anion
+    (C18H31O3⁻). It was run as drawn.
+- **Derived baseline ions:** C6A alone cannot answer the ion question. The selection adds 6 ions made from C4A
+  molecules in the same seeded order: 4 aliphatic carboxylic acids as carboxylates and 2 primary alkylamines as
+  ammonium, the non-fluorinated analogues of PFAS carboxylates and cationic surfactants. They are not Brandon's
+  charged cohort and are reported as their own group.
+- **PFAS ions, for context:** the 5 of RANK-1's test ions that have its r2SCAN-3c/PCM points, and its 8 holdout ions
+  (r2SCAN-3c/PCM new here, 52 single points), with RANK-1's pools and cheap single points. Their pools were built
+  differently (Spartan's B3LYP picks, QuantaBench's and GFN2's picks, Rg extremes), from the same kind of GFN2/ALPB
+  geometries.
+
+**Protocol** (the same for every group):
+- **Pools** (`make_pools.py`):
+  - **Start:** QuantaBench's ensemble joined by constitution with Spartan's conformers of the molecule.
+    - QuantaBench's is a fresh `build` with the val300 settings: GFN2-xTB, an MMFF94s embedding of 50, the 5 lowest
+      refined, a 6 kcal/mol window, no protonation; gas and ALPB water.
+    - Spartan's come from its `All_Conformers` or `All_Conformers_Top30` document, read with QuantaBench's Spartan
+      reader. A derived ion takes its parent's conformers, with the COOH proton removed or an N-H added. C6A has
+      none.
+  - **Optimization:** every conformer with GFN2-xTB in the phase, gas or ALPB water (LBFGS to 0.03 eV/Å). All
+    3,550 optimizations converged and kept their bonds.
+  - **Duplicates:** within 2 kJ/mol and the same conformer by `conformer_compare` (RMSD ≤ 0.5 Å, torsions within
+    60°). Median distinct conformers: hydrocarbons 32, polar organics 18-19, PFAS 31.
+  - **Seven picked:** the 3 GFN2-lowest, the MMFF94s-lowest (at the GFN2 geometry), the most extended and the most
+    compact (radius of gyration), then random others. 72 % of the picks exist only in Spartan's pools, 12 % only in
+    QuantaBench's, 15 % in both.
+  - Neutrals have a gas pool and a water pool; ions a water pool.
+- **Reference:** r2SCAN-3c single points (Psi4 1.9.1, gCP from mctc-gcp, RANK-1's settings), in the gas phase on
+  the gas pools and in IEF-PCM water on the water pools: 873 single points.
+  - Two water ones failed for PCM-cavity reasons, the same on NOVA and the MacBook, and are left out. One SCF did not
+    converge (65530-83-8). One converged to a collapsed PCM solution, −39 Eh of polarization and 344 D
+    (56236-41-0). `collect_dft.py` rejects any single point with |PCM polarization| > 0.5 Eh.
+  - NOVA and the MacBook agree to 1e-8 Eh on the same job, gas and PCM.
+- **Candidates** (RANK-1's `cands.py`, at the same geometries):
+  - GFN2-xTB gas, ALPB, CPCM; GFN1-xTB gas, ALPB, CPCM; GFN-FF gas, ALPB;
+  - g-xTB gas (v2.0.1), AIMNet2 gas, and the composites "gas energy + ΔG_solv of another method";
+  - PM7 and PM6-D3H4X gas and COSMO; MMFF94s.
+
+  10,218 single points, none failed, 7.7 min on 4 workers. HF-3c was left out: it costs about a tenth of an r2SCAN-3c
+  single point, and RANK-1 found it worse than g-xTB + CPCM.
+- **Measures:** RANK-1's, per molecule: Spearman ρ, MAE of relative energies against the reference's lowest, the
+  pick within 4 kJ/mol, regret, Δμ of the pick. Added:
+  - **Regret / random's:** the regret as a fraction of a random pick's from the same pool (0 = always right, 1 = no
+    better than chance). The pools spread differently: a random pick's regret is 5.0 kJ/mol for hydrocarbons, 7.2-7.6
+    for polar organics, 5.0-5.2 for neutral PFAS, 5.0 for the baseline ions and 20 for the PFAS ions.
+  - **Group differences:** bootstrap 95 % intervals, 10,000 resamples of molecules within each group.
+  - **Error against Rg:** each conformer's error (candidate minus reference, both centred on the molecule's mean),
+    regressed on its Rg (centred the same way); ± a bootstrap over molecules. Positive: the candidate puts extended
+    conformers too high, so it favours compact ones.
+- **Cost:** 1,079 Psi4 single points, about 31 lane-hours (4 threads each). They ran in 4.4 h of wall time on NOVA
+  (5 lanes, BelowNormal) and the MacBook (2 lanes at nice 15) together, from the two ends of one job list, kept apart
+  by claim files in the synced folder.
+  - r2SCAN-3c, the 873 pool points and the 52 holdout ones: 3.6 + 0.5 h.
+  - ωB97X-D check: 0.2 + 0.2 h.
+  - A MacBook lane was about 3-4 times as fast as a NOVA lane (the same job: 24 s against 70-88 s).
+
+**Neutrals** (within 4 kJ/mol / mean regret in kJ/mol / median ρ). Gas: r2SCAN-3c gas on the gas pools. Water:
+r2SCAN-3c/PCM on the ALPB pools; gas-phase candidates rank the water pools as they are.
+
+| candidate | hydrocarbons, gas (12) | polar, gas (28) | PFAS, gas (20) | hydrocarbons, water (12) | polar, water (28) | PFAS, water (20) |
+|---|---|---|---|---|---|---|
+| GFN2-xTB ALPB | | | | 12 / 0.8 / 0.86 | 16 / 5.3 / 0.31 | 14 / 3.1 / 0.36 |
+| GFN2-xTB gas | 12 / 0.7 / 0.89 | 22 / 2.3 / 0.61 | 15 / 1.9 / 0.63 | 12 / 0.8 / 0.86 | 16 / 4.8 / 0.43 | 16 / 2.3 / 0.45 |
+| g-xTB gas | 12 / 0.1 / 0.93 | 28 / 0.8 / 0.86 | 18 / 0.9 / 0.80 | 12 / 0.2 / 0.91 | 24 / 1.3 / 0.76 | 19 / 1.2 / 0.70 |
+| g-xTB gas + ΔG CPCM(GFN1) | | | | 12 / 0.2 / 0.91 | 26 / 1.0 / 0.86 | 19 / 0.6 / 0.80 |
+| AIMNet2 gas | 12 / 0.4 / 0.93 | 27 / 0.9 / 0.89 | 18 / 1.0 / 0.82 | 12 / 0.2 / 0.91 | 25 / 0.8 / 0.88 | 19 / 1.2 / 0.84 |
+| AIMNet2 + ΔG CPCM(GFN1) | | | | 12 / 0.2 / 0.91 | 26 / 0.8 / 0.85 | 18 / 1.2 / 0.86 |
+| PM7 gas | 10 / 1.7 / 0.75 | 20 / 5.6 / 0.66 | 16 / 1.4 / 0.55 | 11 / 1.6 / 0.73 | 14 / 5.0 / 0.45 | 16 / 2.3 / 0.43 |
+| MMFF94s | 11 / 1.3 / 0.68 | 19 / 3.5 / 0.61 | 10 / 3.3 / 0.32 | 11 / 0.7 / 0.89 | 21 / 2.1 / 0.71 | 14 / 3.0 / 0.50 |
+| a random pick | 6.3 / 4.9 | 11.7 / 7.2 | 8.9 / 5.2 | 6.4 / 5.0 | 10.9 / 7.6 | 10.6 / 5.0 |
+
+Regret / random's, same columns:
+
+| candidate | hydrocarbons, gas | polar, gas | PFAS, gas | hydrocarbons, water | polar, water | PFAS, water |
+|---|---|---|---|---|---|---|
+| GFN2-xTB ALPB | | | | 0.14 | 0.71 | 0.62 |
+| GFN2-xTB gas | 0.13 | 0.36 | 0.40 | 0.14 | 0.62 | 0.49 |
+| g-xTB gas | 0.02 | 0.14 | 0.24 | 0.05 | 0.20 | 0.29 |
+| g-xTB gas + ΔG CPCM(GFN1) | | | | 0.05 | 0.16 | 0.13 |
+| AIMNet2 gas | 0.10 | 0.10 | 0.22 | 0.07 | 0.14 | 0.25 |
+| PM7 gas | 0.36 | 0.64 | 0.33 | 0.34 | 0.76 | 0.48 |
+| MMFF94s | 0.24 | 0.48 | 0.65 | 0.10 | 0.33 | 0.62 |
+
+- **Hydrocarbons are easy.** Their pools (C4A/C4B alkanes, alkenes, alkynes, alkylbenzenes) span little, and every
+  cheap method picks within 4 kJ/mol in 10-12 of 12, MMFF94s and PM7 included.
+- **g-xTB and AIMNet2 rank every group well.** In the gas phase they pick within 4 kJ/mol in 39-40 of 40 baseline
+  neutrals and 18 of 20 PFAS, with mean regrets of 1 kJ/mol or less. In water, g-xTB + CPCM(GFN1) and AIMNet2 (with
+  or without a CPCM(GFN1) ΔG_solv) pick within 4 kJ/mol in 37-38 of 40 and 18-19 of 20.
+- **GFN2-xTB is fine for hydrocarbons and weak for anything polar.** In the gas phase it picks within 4 kJ/mol in
+  22 of 28 polar organics and 15 of 20 PFAS. In water with ALPB it does so in 16 of 28 and 14 of 20 (ρ 0.31-0.36),
+  at 0.6-0.7 of a random pick's regret. PM7 is as weak on polar organics.
+- **MMFF94s favours extended conformers** in every group: −5 to −16 kJ/mol per Å of Rg.
+- **O···F contacts do not apply to the neutral control:** 1 of 140 PFAS conformers has one (< 2.6 Å, ≥ 4 bonds), as
+  RANK-1 found for the Essential 76.
+- **QuantaBench's own search.** Its 5-conformer ensemble held the reference's lowest conformer in 35 of 120 neutral
+  pools; Spartan's pools supplied the rest (VAL-3 found the same for the C3 ions).
+
+**Ions in water** (r2SCAN-3c/PCM; within 4 kJ/mol / mean regret / median ρ, and regret / random's):
+
+| candidate | baseline ions (8) | of them derived (6) | PFAS ions (13) |
+|---|---|---|---|
+| GFN2-xTB ALPB | 4 / 4.5 / 0.39, 0.73 | 2 / 5.9 / 0.39, 0.90 | 0 / 36.3 / −0.13, 1.62 |
+| GFN2-xTB gas | 5 / 4.3 / 0.38, 0.78 | 3 / 5.4 / 0.25, 0.95 | 1 / 37.1 / −0.21, 1.58 |
+| g-xTB gas | 5 / 3.7 / 0.57, 0.70 | 3 / 4.4 / 0.52, 0.75 | 10 / 5.0 / 0.70, 0.17 |
+| g-xTB gas + ΔG CPCM(GFN1) | 5 / 2.9 / 0.55, 0.56 | 4 / 2.9 / 0.63, 0.47 | 12 / 0.6 / 0.94, 0.06 |
+| AIMNet2 gas | 5 / 3.7 / 0.46, 0.66 | 3 / 4.6 / 0.41, 0.79 | 10 / 1.9 / 0.59, 0.14 |
+| AIMNet2 + ΔG CPCM(GFN1) | 5 / 3.1 / 0.71, 0.49 | 3 / 3.7 / 0.45, 0.56 | 11 / 0.8 / 0.86, 0.07 |
+| PM7 gas | 6 / 3.3 / 0.38, 0.65 | 4 / 4.4 / 0.23, 0.87 | 1 / 40.1 / −0.43, 1.91 |
+| MMFF94s | 7 / 0.9 / 0.57, 0.18 | 5 / 0.8 / 0.61, 0.14 | 6 / 13.1 / 0.21, 0.48 |
+| ωB97X-D/def2-SVP PCM | 5 / 3.6 / 0.63, 0.63 | 3 / 4.8 / 0.46, 0.84 | 12 / 1.0 / 0.93, 0.05 |
+| a random pick | 3.8 / 5.0 | 2.7 / 5.6 | 3.5 / 20.1 |
+
+- The baseline ions' pools are flat: a random pick misses by 5 kJ/mol, against 20 for the PFAS ions.
+- No xTB, g-xTB or AIMNet2 variant ranks the carboxylates well. GFN2, g-xTB and AIMNet2, with or without a CPCM
+  term, miss two of them (benzenepentanoate, 2-methyldodecanoate) by 8-11 kJ/mol.
+- Force fields and the semi-empirical COSMO models rank them best: MMFF94s and GFN-FF ALPB pick within 4 kJ/mol in
+  7 of 8, GFN-FF gas, PM7 COSMO and PM6-D3H4X COSMO in 6. Most of these favour extended conformers (−8 to −12 kJ/mol
+  per Å of Rg). The xTB and AIMNet2 family leans compact (+1 to +9).
+- IEF-PCM is electrostatics only. A cavity and dispersion term would favour the folded chains in water, so
+  r2SCAN-3c/PCM's lean toward extended conformers for these amphiphiles may be the reference's, not the rankers'.
+- ωB97X-D/def2-SVP/PCM, another DFT level, agrees with r2SCAN-3c/PCM on only 5 of 8 baseline ions. The rankers'
+  misses there are of the size of the DFT levels' own disagreement.
+
+**Is GFN2-xTB's failure fluorine-specific?** Group differences, a − b with bootstrap 95 % intervals:
+
+| comparison | candidate | pick ≤ 4 rate | regret kJ/mol | regret / random's |
+|---|---|---|---|---|
+| hydrocarbons − PFAS, gas | GFN2-xTB gas | +0.25 [+0.05, +0.45] | −1.2 [−2.3, −0.1] | −0.27 [−0.51, −0.05] |
+| polar − PFAS, gas | GFN2-xTB gas | +0.04 [−0.20, +0.28] | +0.4 [−1.3, +2.4] | −0.05 [−0.34, +0.26] |
+| hydrocarbons − PFAS, water | GFN2-xTB ALPB | +0.30 [+0.10, +0.50] | −2.3 [−4.0, −0.8] | −0.47 [−0.75, −0.22] |
+| polar − PFAS, water | GFN2-xTB ALPB | −0.13 [−0.40, +0.15] | +2.2 [−0.4, +5.0] | +0.09 [−0.25, +0.44] |
+| baseline ions − PFAS ions | GFN2-xTB ALPB | +0.50 [+0.12, +0.88] | −31.8 [−49.0, −15.6] | −0.88 [−1.51, −0.24] |
+| baseline − PFAS, gas | g-xTB gas | +0.10 [+0.00, +0.25] | −0.3 [−1.2, +0.4] | −0.14 [−0.33, +0.03] |
+| baseline − PFAS, gas | AIMNet2 gas | +0.07 [−0.05, +0.22] | −0.3 [−1.3, +0.7] | −0.12 [−0.29, +0.03] |
+| baseline − PFAS, water | g-xTB gas + ΔG CPCM(GFN1) | +0.00 [−0.10, +0.12] | +0.2 [−0.5, +1.0] | −0.00 [−0.15, +0.12] |
+| baseline ions − PFAS ions | g-xTB gas + ΔG CPCM(GFN1) | −0.30 [−0.67, +0.03] | +2.3 [−0.2, +5.1] | +0.51 [+0.10, +0.96] |
+
+- **For neutrals, no: it is about polarity.** GFN2 ranks PFAS worse than hydrocarbons, but not worse than polar
+  organics, in either phase; the intervals of the polar − PFAS differences span zero. In water, GFN2/ALPB is
+  equally weak on polar organics (0.71 of a random pick's regret) and on neutral PFAS (0.62).
+- **For ions, the catastrophe is fluorine's.**
+  - On PFAS ions GFN2/ALPB is worse than a random pick: 0 of 13 within 4 kJ/mol, regret 36 kJ/mol, 1.6 times a
+    random pick's. Its error grows by +43 ± 14 kJ/mol per Å of Rg. With Rg held fixed, it drops by −17 ± 2 kJ/mol
+    per short anionic O···F contact (96 conformers, 26 with contacts). RANK-1 found −18 ± 2 against def2-SVP on the
+    test ions; r2SCAN-3c reproduces it.
+  - On the non-fluorinated ions its regret is 4.5 kJ/mol: about a random pick's (0.73), no better, but without the
+    tens of kJ/mol.
+  - So GFN2 is a poor conformer ranker for polar and charged molecules in general, and the O···F overbinding turns
+    that into the large errors RANK-1 found.
+- **The O···F error is GFN2's (and PM7's and PM6-D3H4X's: −21 and −20 kJ/mol per contact in the gas phase), not the
+  reference's.** g-xTB + CPCM(GFN1) shows −3 ± 1.
+
+**Do the recommended rankers generalize?**
+- **Neutrals: yes.**
+  - Gas: AIMNet2 and g-xTB pick within 4 kJ/mol in 39-40 of 40 baseline neutrals and 18 of 20 PFAS. Every interval
+    of a baseline − PFAS difference includes zero (g-xTB's pick rate, +0.10 [+0.00, +0.25], only just).
+  - Water: g-xTB + CPCM(GFN1) and AIMNet2 + CPCM(GFN1) are as good on the baseline as on the PFAS (0.13 of a random
+    pick's regret for both groups).
+  - RANK-1 found AIMNet2 best on the Essential 76 against Spartan's ωB97X-D/6-31G* (45/53). Against r2SCAN-3c,
+    g-xTB and AIMNet2 tie.
+- **Ions: g-xTB + CPCM(GFN1) stays the best cheap xTB-family ranker, but less clearly without fluorine.**
+  - PFAS ions: 12 of 13 within 4 kJ/mol, 0.06 of a random pick's regret.
+  - Baseline ions: 5 of 8, 0.56 (difference +0.51 [+0.10, +0.96]).
+  - Part of that is the flat pools and the reference's solvent model (above). Eight ions is a small set.
+
+**def2-SVP and def2-TZVP.** ωB97X-D/def2-SVP and /def2-TZVP gas-phase single points on 8 neutrals (3 hydrocarbons,
+3 polar, 2 PFAS; 52 conformers), and def2-SVP/PCM on the 8 baseline ions (50):
+
+| check | ρ median | MAE kJ/mol | pick ≤ 4 | kJ/mol per Å Rg |
+|---|---|---|---|---|
+| r2SCAN-3c against ωB97X-D/def2-TZVP, gas (8) | 0.98 | 1.1 | 8/8 | −1.9 ± 1.1 |
+| ωB97X-D/def2-SVP against def2-TZVP, gas (8) | 0.78 | 1.4 | 8/8 | +3.7 ± 1.9 |
+| ωB97X-D/def2-SVP against r2SCAN-3c, gas (8) | 0.79 | 1.9 | 8/8 | +5.6 ± 1.8 |
+| of them, the 3 hydrocarbons, def2-SVP against def2-TZVP | 0.75 | 1.0 | 3/3 | +2.0 ± 0.7 |
+| ωB97X-D/def2-SVP/PCM against r2SCAN-3c/PCM, baseline ions (8) | 0.63 | 6.4 | 5/8 | +7.8 ± 1.0 |
+| ωB97X-D/def2-SVP/PCM against r2SCAN-3c/PCM, PFAS ions (13) | 0.93 | 8.4 | 12/13 | +15.0 ± 2.4 |
+
+- **The r2SCAN-3c reference holds** where a triple-zeta hybrid checks it: ρ 0.98 and 1.1 kJ/mol MAE against
+  ωB97X-D/def2-TZVP, the same pick within 4 kJ/mol in 8 of 8 neutrals.
+- **def2-SVP favours compact conformers without fluorine too, at about half the PFAS anions' rate.** Against
+  r2SCAN-3c in PCM:
+  - +7.8 ± 1.0 kJ/mol per Å of Rg for the baseline ions, +15.0 ± 2.4 for the 13 PFAS ions;
+  - in the gas phase, +3.7 ± 1.9 against def2-TZVP (hydrocarbons alone +2.0 ± 0.7).
+
+  The neutral pools' Rg spreads are small (SD 0.4-0.6 Å), so in the gas phase this is 1-2 kJ/mol and changes no
+  pick. A small-basis artefact (superposition error, and for anions no diffuse functions) fits: it is largest for
+  the compact, F-rich anions.
+- Eight neutrals and two levels: a check of the reference, not a convergence study.
+
+**What this means for RANK-2 (the rank step):**
+- **One rank level per phase, not per fluorine content.**
+  - In water, neutrals and ions: g-xTB gas + GFN1-xTB CPCM ΔG_solv (`gxtb+cpcm`). It was within one molecule of the
+    best in every neutral water group and the best on the PFAS ions. On the 8 baseline ions no xTB-family ranker did
+    well (above).
+  - In the gas phase: AIMNet2 (`aimnet2`) or g-xTB. AIMNet2 is about 15 times cheaper per single point; g-xTB was
+    marginally better here (40/40 against 39/40).
+- **GFN2-xTB should not rank polar molecules, fluorinated or not.** For hydrocarbons it is as good as the others, so
+  `refine` stays acceptable for pure hydrocarbons only.
+- **The DFT check level:** r2SCAN-3c (PCM in water), not def2-SVP. It agrees with ωB97X-D/def2-TZVP on neutrals.
+  def2-SVP's compact lean appears for non-fluorinated ions too.
+- **Surfactant-like hydrocarbon ions** (alkyl carboxylates, alkylammonium) need a reference with a non-electrostatic
+  solvation term (SMD, or IEF-PCM plus cavitation and dispersion) before any cheap ranker is judged on them; their
+  pools are flat and the electrostatics-only reference favours extended chains.
+
+**Limits:**
+- Single points at GFN2 geometries (gas or ALPB), no DFT relaxation, no thermal corrections. The geometries are
+  GFN2's minima, which may favour GFN2 slightly.
+- At most 7 conformers per pool, chosen to include each method's likely pick. The reference's global minimum may lie
+  outside the pool.
+- 8 baseline ions, 6 of them derived from neutral handbook molecules; 2 usable C6A records.
+- The PFAS-ion context uses RANK-1's pools, built differently (4-10 conformers per ion; the test ions were chosen
+  for their large dipole errors). Its candidates' single points are RANK-1's.
+- IEF-PCM is electrostatics only; the baseline-ion verdict depends on it more than the PFAS-ion one.
+- g-xTB v2.0.1 is a preliminary release (RANK-1).

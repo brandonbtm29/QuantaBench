@@ -457,14 +457,35 @@ Open (needs-Brandon):
         than with ωB97X-D/def2-SVP. The def2-SVP levels favour compact conformers (+12 to +16 kJ/mol per Å of Rg
         relative to r2SCAN-3c). Against r2SCAN-3c, g-xTB + GFN1-xTB CPCM picks within 4 kJ/mol in 5 of 5 ions
         (ωB97X-D/def2-SVP 4 of 5, GFN2/ALPB 0 of 5). Recommended ranker for ions: g-xTB gas + GFN1-xTB CPCM ΔG_solv.
-    - RANK-2 (· ready, next): a rank step in the pipeline (from RANK-1).
+    - RANK-1b (done 2026-11-08, branch `feat/rank1b`; docs/VALIDATION.md, "RANK-1b"; `Runs/rank1b-2026-11-08`):
+      RANK-1's rankers on Brandon's non-fluorinated handbook molecules and a matched PFAS control, one protocol
+      (QuantaBench + Spartan pools, GFN2 re-optimized in the phase, 7 diverse conformers), r2SCAN-3c references in
+      the gas phase and IEF-PCM water.
+      - Sets: 12 hydrocarbons, 28 polar organics (C4A/C4B/C5A) and 20 matched C1A PFAS, gas and water; 2 usable
+        C6A ions + 6 derived baseline ions (C4A carboxylates and ammoniums), water. RANK-1's PFAS ions (5 test + 8
+        holdout, 52 new r2SCAN-3c points) for context. 1,079 Psi4 single points, ~31 lane-hours, 4.4 h on NOVA +
+        MacBook; 10,218 cheap single points.
+      - GFN2's failure is not fluorine-specific for neutrals but its size is for ions. Neutrals: GFN2/ALPB picks
+        within 4 kJ/mol in 12/12 hydrocarbons, 16/28 polar organics and 14/20 PFAS in water (polar − PFAS: −0.13
+        [−0.40, +0.15]). PFAS ions: 0/13, regret 36 kJ/mol, 1.6x a random pick's (O···F −17 ± 2 kJ/mol per contact
+        at r2SCAN-3c). Baseline ions: 4/8, regret 4.5 kJ/mol, about a random pick's.
+      - The rankers generalize to neutrals: gas, g-xTB 40/40 and AIMNet2 39/40 baseline (18/20 PFAS); water,
+        g-xTB + CPCM(GFN1) 38/40 (19/20). On the 8 baseline ions g-xTB + CPCM(GFN1) picks 5/8 (PFAS ions 12/13):
+        flat pools, and the electrostatics-only PCM reference favours extended chains (MMFF94s 7/8).
+      - r2SCAN-3c agrees with ωB97X-D/def2-TZVP on 8 neutrals (ρ 0.98, MAE 1.1 kJ/mol). def2-SVP favours compact
+        conformers without fluorine too: +7.8 ± 1.0 kJ/mol per Å of Rg for baseline ions against +15.0 ± 2.4 for PFAS
+        ions (PCM), +3.7 ± 1.9 for neutrals in the gas phase (against def2-TZVP).
+    - Follow-up of RANK-1b: a reference with non-electrostatic solvation (SMD, or IEF-PCM + cavitation/dispersion) for
+      surfactant-like hydrocarbon ions, whose pools are flat; until then no cheap ranker is judged on them.
+    - RANK-2 (· ready, next): a rank step in the pipeline (from RANK-1; levels per phase from RANK-1b).
       - `rank_method` (BuildConfig, settings, `build --rank`): after refinement, single points of every refined
         conformer at the rank level; the energy window, order, Boltzmann weights and `kept[0]` use those energies,
         so every descriptor (`dipole_debye_best`, the ensemble, `xtb_*`, the QM stage's `qm_top`) follows the rank
         level. No energy-window pruning at the refinement level before it (RMSD pruning only).
-      - Levels: `refine` (today), `gxtb+cpcm` (g-xTB gas + tblite GFN1-xTB CPCM ΔG_solv, for ions in water),
-        `aimnet2` (neutrals), `qm` (the QM stage's level on every kept conformer, then all descriptors from the
-        QM-lowest).
+      - Levels: `refine` (today), `gxtb+cpcm` (g-xTB gas + tblite GFN1-xTB CPCM ΔG_solv), `aimnet2`, `qm` (the QM
+        stage's level on every kept conformer, then all descriptors from the QM-lowest).
+      - Defaults by phase, not by fluorine content (RANK-1b): `gxtb+cpcm` for every molecule in water, neutrals
+        included; `aimnet2` (or g-xTB) in the gas phase. GFN2 (`refine`) only for pure hydrocarbons.
       - A g-xTB engine: the official grimme-lab/g-xtb build of xtb (`--gxtb`; its own program entry, since it is a
         different binary from xtb 6.7.1; record the version and SHA-256, the release is preliminary).
       - For the QSAR ions: g-xTB + CPCM ranks all. Where DFT quality is needed, DFT re-ranks the conformers within

@@ -2,6 +2,19 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Conformer ranking benchmark, RANK-1b (2026-11-08)
+- docs/VALIDATION.md, "RANK-1b": RANK-1's cheap rankers on Brandon's non-fluorinated handbook molecules (12
+  hydrocarbons, 28 polar organics, 8 ions) and a matched control of 20 neutral PFAS. All went through one protocol
+  against r2SCAN-3c in the gas phase and in PCM water; RANK-1's 13 PFAS ions are the ion context.
+  - GFN2-xTB's weak ranking of neutrals is about polarity, not fluorine: in water, 16 of 28 polar organics and 14 of
+    20 PFAS within 4 kJ/mol.
+  - Its catastrophic ion failure is fluorine's: 0 of 13 PFAS ions, against about a random pick on non-fluorinated
+    ions.
+  - g-xTB, AIMNet2 and g-xTB + GFN1-xTB CPCM generalize to non-fluorinated neutrals.
+  - r2SCAN-3c agrees with ωB97X-D/def2-TZVP. def2-SVP's lean toward compact conformers also appears without
+    fluorine, at half the PFAS anions' size.
+- No code change. BACKLOG RANK-2 now picks the rank level by phase: g-xTB + CPCM in water, AIMNet2 in the gas phase.
+
 ### Fixes (2026-11-08)
 - `tests/test_lanes.py::test_speed_aware_fast_lane_crash_releases_the_slow_lane` failed about one run in three:
   the fast lane crashed the moment it took TFE, sometimes before the slow lane had started, so the slow lane was
