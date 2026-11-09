@@ -57,6 +57,7 @@
 | `chem.conformer_compare` | Two programs' conformer sets (Spartan documents or imports, QuantaBench run folders) joined by constitution and matched by a symmetric heavy-atom RMSD that factors out PFAS sibling-group symmetry, plus torsions and stereo; coverage, same-lowest, search vs ranking at a GFN2-xTB common level (tblite), dipole split (`conformers compare`, `cli_conformers`). |
 | `chem.export` | Per-molecule writers and batch CSV tables; `read_molecule` reads a molecule's folder back into a `MoleculeResult` (every conformer from the SDF). |
 | `chem.pipeline` | `BuildConfig`, `MoleculeResult`, `run_molecule`, `run`, `use_batched` (when to batch). |
+| `chem.method_guide`, `chem.advisor` | The methods guide as data (entries, what each corrects, the element, charge and spin `COVERAGE` of every method, basis set and CREST level) and the model advisor: `review(inputs, cfg)` profiles a batch (fast path for neutral single-fragment records, a per-process cache), checks coverage, and returns findings tied to docs/VALIDATION.md and three presets with cost estimates (docs/CHOOSING_METHODS.md). |
 | `chem.jobs` | Resumable batch runs: `JobStore` (SQLite, WAL), run lock, config guard, hash-based chunks, `run_resumable`, `open_run`, `rebuild_tables`, `merge_tables`; read helpers for the GUI: `molecule_rows` (light rows via SQLite `json_extract`), `load_result`, `load_inputs`, `stored_config`. |
 | `build.surfaces` | Graphite and metal slabs, orientation, placement, overlap report. |
 | `md.params` | UFF Lennard-Jones table (Rappé 1992) and graphite presets (AMBER parm94, Steele 1973). |
@@ -71,9 +72,10 @@
 | `gui.clipboard` | Edit > Paste (ChemDraw CDX, CDXML, MOL, MDLCT, text, in that order; the macOS pasteboard is also read directly for ChemDraw's type) and Copy as SMILES / MOL / CDXML; drops on the window (files, folders, text). |
 | `gui.sketcher_dock`, `gui.sketcher_view`, `gui.sketcher_web` | The Sketch dock (UI-6): Schrödinger's Sketcher (WebAssembly) in a `QWebEngineView`, served from a `qb-sketcher://` URL scheme registered before the QApplication; buttons hand MOL V3000 to `chem.sketch` (RDKit checks, `MoleculeInput`). Qt WebEngine is optional and loaded only when the dock opens. `sketcher_assets` fetches the editor's files (pinned sha256) into the programs folder. |
 | `gui.machine_monitor` | The machine monitor strip in the Pipeline dock, above the Run buttons: this computer (`sensors.Monitor`) and the workers (`RemotePoller`, `/v1/sensors`), sparklines, colours by threshold; a QTimer only copies the threads' latest samples. |
+| `gui.review_panel` | The Review window (ADV-1): shown when Run is pressed (`MainWindow.request_run` -> `review_before_run`) and on demand (Review..., F6); the review runs on a worker thread; Apply sets a finding's or preset's settings in the pipeline pages, Explain opens the methods guide. |
 | `gui.surface_dialog`, `gui.settings_dialog`, `gui.workers` | Dialogs and `QThread` workers. |
 | `gui.energy_widgets` | `EnergySpinBox`: an energy input shown in the display unit and stored in a fixed one (the energy window in kcal/mol), returning the stored value exactly until it is edited. |
-| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`); `sketcher` (`cli_sketcher`); `monitor` (`cli_monitor`: live machine metrics). |
+| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`); `sketcher` (`cli_sketcher`); `monitor` (`cli_monitor`: live machine metrics); `methods` (`cli_methods`); `review` and the review header of `build` (`cli_review`). |
 
 ## Key decisions
 

@@ -89,6 +89,20 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
 - **Resources per job:** CPU threads, GPU on/off/device, memory cap, and the machine: this one, a
   worker such as BTM NOVA or the MacBook, or auto (DIST-3 in the backlog, PLATFORMS.md). Jobs run in a queue shown in the
   job monitor and can be resumed.
+- **The review before submitting (ADV-1, in the app since 2026-11-09).** Brandon (2026-11-09): "a review checking what
+  types of atoms and groups are present in the molecules about to be submitted, and which makes recommendations of
+  which models to choose from... I didn't know how to choose models or what they were intended to correct."
+  - Today it is the Review window (`gui.review_panel`), opened by Run (Build > Review before each run turns that
+    off), by Review... next to the Run buttons and by Build > Review molecules... (F6). It never blocks: Run anyway
+    starts the run, Cancel run drops it.
+  - It shows the batch profile (counts with click-through to the molecules), the methods that can take the batch,
+    where each step runs, the findings with icons, Apply (sets the finding's settings in the pipeline pages) and
+    Explain (the methods guide at the entry), and the Fast screen / Recommended / Careful presets with estimated
+    times.
+  - In UI-5's job dialog it becomes the dialog's last page before Submit: the same `chem.advisor.Review`, its
+    presets next to the recipes, Apply acting on the dialog's level of theory. The CLI has it as
+    `quantabench-cli review` and the header `build` prints.
+  - User guide: docs/CHOOSING_METHODS.md.
 
 ## Job monitor: live machine metrics (MON-1, 2026-11-09)
 

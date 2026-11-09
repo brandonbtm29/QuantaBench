@@ -25,6 +25,7 @@ Salts, mixtures and metals (the conservative choices; ``prepare`` notes each one
 
 from __future__ import annotations
 
+import functools
 from collections import Counter
 from dataclasses import dataclass
 
@@ -206,15 +207,33 @@ def _ammonium(atom: Chem.Atom) -> bool:
             and all(nb.GetFormalCharge() >= 0 for nb in atom.GetNeighbors()))
 
 
+@functools.cache
+def _rule_pattern(smarts: str) -> tuple[Chem.Mol, int]:
+    """The compiled SMARTS of a rule and the index of its site atom (``:1``), compiled once per process: compiling
+    the table took most of the protonation time of a 14,000-molecule review (``chem.advisor``)."""
+    patt = Chem.MolFromSmarts(smarts)
+    return patt, next((a.GetIdx() for a in patt.GetAtoms() if a.GetAtomMapNum() == 1), 0)
+
+
+_N_PLUS = Chem.MolFromSmarts("[N+]")
+
+
 def _apply_rules(mol: Chem.Mol, ph: float) -> tuple[Chem.Mol, list[str]]:
     rw = Chem.RWMol(mol)
     changes = []
     done: set[int] = set()
-    dist = Chem.GetDistanceMatrix(mol)
-    cations = {a.GetIdx() for a in mol.GetAtoms() if _ammonium(a)}
+    # the distance matrix and the ammonium scan only matter for base sites near an N+: built when first needed
+    # (most molecules have no N+, and a 14,000-molecule review spent most of its protonation time here)
+    dist_cache: list = []
+
+    def dist(i: int, j: int) -> float:
+        if not dist_cache:
+            dist_cache.append(Chem.GetDistanceMatrix(mol))
+        return dist_cache[0][i][j]
+
+    cations = ({a.GetIdx() for a in mol.GetAtoms() if _ammonium(a)} if mol.HasSubstructMatch(_N_PLUS) else set())
     for rule in RULES:
-        patt = Chem.MolFromSmarts(rule.smarts)
-        site_idx = next((a.GetIdx() for a in patt.GetAtoms() if a.GetAtomMapNum() == 1), 0)
+        patt, site_idx = _rule_pattern(rule.smarts)
         for match in rw.GetSubstructMatches(patt):
             idx = match[site_idx]
             if idx in done:
@@ -228,7 +247,7 @@ def _apply_rules(mol: Chem.Mol, ph: float) -> tuple[Chem.Mol, list[str]]:
                 done.add(idx)
             elif rule.kind == "base" and ph < rule.pka:
                 done.add(idx)
-                if any(dist[idx][j] <= BASE_EXCLUSION_BONDS for j in cations):
+                if any(dist(idx, j) <= BASE_EXCLUSION_BONDS for j in cations):
                     changes.append(f"left {rule.name} neutral (within {BASE_EXCLUSION_BONDS} bonds of an N+: one "
                                    "proton for basic sites that close, as in piperazine or a 1,2-diamine)")
                     continue

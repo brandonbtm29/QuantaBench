@@ -53,6 +53,34 @@
   `sensors.machine` (the file is shared by SyncThing); the defaults need no configuration. docs/ENGINES.md, Live
   machine metrics.
 
+### The review before a run: a model advisor, ADV-1 (2026-11-09)
+- **QuantaBench reviews the molecules before a run** and recommends methods, saying what each one is for and what
+  it corrects (`chem/advisor.py`; user guide docs/CHOOSING_METHODS.md).
+  - The batch: elements, charge class at the run's pH, PFAS (OECD 2021) and chain length, functional groups,
+    sizes, salts, stereo, radicals, isotopes, metals. Every count lists its molecules.
+  - Which methods, basis sets and CREST levels can take the batch (elements, charge, spin), and where each step
+    runs in a solvent run.
+  - Findings tied to QuantaBench's measured results. Examples:
+    - GFN2-xTB ranks PFAS ions no better than a random pick (RANK-1, RANK-1b); the finding recommends a DFT
+      re-rank in PCM on a wide pool until the rank step (RANK-2) lands.
+    - AIMNet2 is a closed-shell model, which method `auto` does not check.
+    - A functional without dispersion, or a basis without diffuse functions for anions (def2-SVP favours compact
+      PFAS-ion conformers by 15 kJ/mol per Å).
+    - Ions in the gas phase; salts; undefined stereocentres; a proton on a sulfonamide N.
+  - Three presets (Fast screen, Recommended, Careful) with estimated times on this machine.
+- **App:** the Review window opens when you press Run (Run anyway starts the build; Build > Review before each run
+  turns it off) and from Review... or F6. It has the batch with click-through to the molecules, Apply and Explain
+  per finding, and the presets.
+- **CLI:** `quantabench-cli review` (build's inputs and options, `--phase gas|water`, `--json`). `build` and
+  `grid build` print a short review first; `--no-review` skips it.
+- **Methods guide:**
+  - New entries for g-xTB, r2SCAN-3c and the -3c composites, basis-set superposition error and gCP, conformer
+    ranking, and protonation.
+  - "Corrects / Use for / Avoid for" lines on 35 entries.
+  - docs/METHODS.md gains the element, charge and spin coverage table (`method_guide.COVERAGE`, with sources).
+- **Faster protonation:** the rule table's SMARTS are compiled once and its distance matrix is built only when a
+  base sits near an N+. The results are unchanged.
+
 ### Conformer ranking benchmark, RANK-1b (2026-11-08)
 - docs/VALIDATION.md, "RANK-1b": RANK-1's cheap rankers on Brandon's non-fluorinated handbook molecules (12
   hydrocarbons, 28 polar organics, 8 ions) and a matched control of 20 neutral PFAS. All went through one protocol

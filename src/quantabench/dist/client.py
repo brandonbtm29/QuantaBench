@@ -1429,6 +1429,9 @@ def _build_args(b: argparse.ArgumentParser) -> None:
                  "(default from settings)")
     cli_mod.add_build_science_args(b)
     cli_mod.add_priority_args(b, where="each machine's")
+    from ..cli_review import add_review_flag
+
+    add_review_flag(b)
 
 
 def _worker_opts(p: argparse.ArgumentParser) -> None:
@@ -1480,6 +1483,10 @@ def _cli_build(args) -> int:
         print(exc, file=sys.stderr)
         return 2
     cfg = cli_mod.config_from_args(args)
+    if items and not getattr(args, "no_review", False):   # the model advisor's short review (cli_review)
+        from ..cli_review import print_header
+
+        print_header(items, cfg)
     # --threads/--gpu/--priority/--free-threads: the same on every machine; otherwise each machine's own settings
     keep = tuple(name for name, value in (("threads", args.threads), ("gpu", args.gpu), ("priority", args.priority),
                                           ("free_threads", args.free_threads)) if value is not None)
