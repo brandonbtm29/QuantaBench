@@ -511,7 +511,8 @@ def test_schema_4_gets_the_sensor_columns(tmp_path, monkeypatch):
     monkeypatch.setattr(sensors, "read", lambda *a, **k: fake)
     monkeypatch.setattr(telemetry, "LOAD_INTERVAL_S", 0.2)
     real_sampler = telemetry.LoadSampler
-    monkeypatch.setattr(telemetry, "LoadSampler", lambda: real_sampler(interval=0.2, first=0.05, sensors=True))
+    # first=0: a sample at once (on the MacBook this resume finished before a 0.05 s first sample)
+    monkeypatch.setattr(telemetry, "LoadSampler", lambda: real_sampler(interval=0.2, first=0.0, sensors=True))
     jobs.run_resumable(None, c, run_dir, force=True)
     new = [r for r in rows(run_dir, "telemetry_load") if r["run_id"] != "old"]
     # a sample taken while the run stops skips the sensors (stopping never waits for a slow sensor read)
