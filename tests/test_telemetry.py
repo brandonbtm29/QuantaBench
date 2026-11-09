@@ -514,8 +514,10 @@ def test_schema_4_gets_the_sensor_columns(tmp_path, monkeypatch):
     monkeypatch.setattr(telemetry, "LoadSampler", lambda: real_sampler(interval=0.2, first=0.05, sensors=True))
     jobs.run_resumable(None, c, run_dir, force=True)
     new = [r for r in rows(run_dir, "telemetry_load") if r["run_id"] != "old"]
-    assert new and all(r["cpu_temp_c"] == 71.5 and r["cpu_clock_mhz"] == 4650.0 and r["gpu_power_w"] == 18.0
-                       and r["sensor_source"] == "test sensors" for r in new)
+    # a sample taken while the run stops skips the sensors (stopping never waits for a slow sensor read)
+    sensed = [r for r in new if r["sensor_source"] is not None]
+    assert sensed and all(r["cpu_temp_c"] == 71.5 and r["cpu_clock_mhz"] == 4650.0 and r["gpu_power_w"] == 18.0
+                          and r["sensor_source"] == "test sensors" for r in sensed), new
 
 
 def test_the_load_sampler_records_sensors_or_skips_them(monkeypatch):

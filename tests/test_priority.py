@@ -299,7 +299,7 @@ def test_the_wsl_wrapper_runs_in_a_posix_shell(tmp_path):
     out = subprocess.run(["sh", "-c", wrapper, sys.executable, "-c", code], cwd=tmp_path, capture_output=True,
                          text=True, check=True).stdout.split()
     assert out[0] == (tmp_path / ".qb_pid").read_text().strip()
-    assert int(out[1]) == min(19, P.current_nice() + 19)
+    assert int(out[1]) == min(20 if sys.platform == "darwin" else 19, P.current_nice() + 19)   # macOS caps at 20
 
 
 @posix_only
