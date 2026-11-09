@@ -9,7 +9,8 @@ all scale poorly past a few threads for a PFAS-sized molecule. A batch therefore
                                            lane of spec "1" uses it)
     parse_lanes(spec, cfg, report=None) -> list[Lane]
         "1"                  one lane, all threads: today's single-process loop (the default)
-        "N"                  N CPU lanes with resolve_threads(cfg.threads) // N threads each (at least 1)
+        "N"                  N CPU lanes with the thread budget // N threads each (at least 1; the budget is
+                             ``priority.budget_of(cfg)``: threads 0 = the logical threads minus the free ones)
         "gpu:1x4,cpu:5x2"    explicit: 1 GPU lane with 4 threads + 5 CPU lanes with 2 threads. Items are
                              cpu|gpu|gpuK|mps[:count[xthreads]] or countxthreads (CPU); an item without
                              threads shares what the others leave. "gpu" is the GPU the settings select
@@ -25,6 +26,10 @@ How a parallel run works (``run_parallel``):
   ``if __name__ == "__main__"`` guard and starts from the GUI's QThread as well as from the CLI. The thread
   variables (OMP_NUM_THREADS, ...) are set to the lane's budget in the environment the child starts with,
   and the lane applies ``resources.apply_thread_limits`` before it imports the pipeline (and torch).
+* run priority (``quantabench.priority``, ``BuildConfig.priority``): each lane lowers its own process before it
+  imports anything (``priority.apply_to_process``: below-normal or idle class and lower I/O priority on Windows,
+  nice and ionice on Linux, nice and the disk I/O policy on macOS), so the programs it starts inherit it; the
+  parent (the GUI, a CLI build) is not lowered by the lanes.
 * molecules are handed out pull-style: a lane gets the next molecule when it reports the last one done,
   so a fast lane (the GPU) simply takes more of them. Each lane runs ``pipeline.run_molecule`` and writes
   that molecule's folder (``export.write_molecule`` into run_dir/<id>), then sends the MoleculeResult back
@@ -135,8 +140,9 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
   6 x 2 CPU lanes.
 * lanes are capped by memory (0.75 x RAM over a per-lane working set; Psi4 adds its memory per job) and
   ``settings.resources.parallel_molecules`` (> 0) fixes the number of lanes. The plan never uses more
-  threads than ``resolve_threads(cfg.threads)``. On Windows a pool runs at most ``WINDOWS_MAX_LANES`` (31)
-  lanes: it waits on two handles per lane and Windows waits on at most 63.
+  threads than the run's thread budget (``priority.budget_of``: with CPU threads 0 the logical threads minus
+  ``BuildConfig.free_threads``, at least 25 % and 2 of them at priority ``background``). On Windows a pool runs
+  at most ``WINDOWS_MAX_LANES`` (31) lanes: it waits on two handles per lane and Windows waits on at most 63.
 """
 
 from __future__ import annotations
@@ -369,10 +375,10 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
     one. ``profile``: the registry profile whose benchmark decides whether a GPU lane pays
     (``gpu_benchmark_verdict``); default this machine's, None = no benchmark. See the module docstring for
     the rules and the measurements behind them."""
-    from .. import resources
+    from .. import priority
 
     cfg = _cfg(cfg)
-    total = resources.resolve_threads(cfg.threads)
+    total = priority.budget_of(cfg)       # threads 0: all but the free ones; an explicit count as given
     hw = report if report is not None else cpu_report()
     cores = max(1, min(int(hw.physical_cores or total), total))
     perf = max(0, min(int(getattr(hw, "performance_cores", 0) or 0), cores))
@@ -455,7 +461,7 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
             n = cap - len(lanes)
             reason += f", capped at {cap} lanes (Windows)"
         if not lanes and n <= 1:
-            return [Lane("main", "auto", total)], f"{reason}: room for one lane only"
+            return [Lane("main", "auto", total)], f"{reason}: room for one lane only{_free_note(cfg)}"
         lanes += [Lane(f"cpu{i + 1}", "cpu", per) for i in range(n)]
         if lanes[0].device != "cpu":
             reason = f"{method} on {device}: 1 GPU lane with {lanes[0].threads} threads; " + reason
@@ -463,9 +469,22 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
         reason += f" ({why_gpu})"
     if bench_why:
         reason += f" ({bench_why})"
+    reason += _free_note(cfg)
     if len(lanes) == 1:
         return [Lane("main", "auto", total)], reason
     return lanes, reason
+
+
+def _free_note(cfg) -> str:
+    """'; 6 of 24 threads left free (background)' when a run leaves more than today's one thread free."""
+    from .. import priority, resources
+
+    level, free = priority.of(cfg)
+    n = resources.logical_cores()
+    left = priority.effective_free_threads(free, level, n)
+    if left <= priority.DEFAULT_FREE_THREADS:
+        return ""
+    return f"; {left} of {n} threads left free" + (f" ({level})" if level == "background" else "")
 
 
 _ITEM = re.compile(r"^(?:(cpu|gpu|mps)(\d*)(?::(\d+)(?:x(\d+))?)?|(\d+)x(\d+))$")
@@ -524,10 +543,10 @@ def _explicit(text: str, cfg, report, total: int) -> list[Lane]:
 def parse_lanes(spec: str | int | None, cfg=None, report=None) -> list[Lane]:
     """The lanes for ``spec`` (see the module docstring). Raises ValueError with a readable message for a spec
     that cannot be used here (bad syntax, a GPU lane without a GPU, more threads than logical cores)."""
-    from .. import resources
+    from .. import priority, resources
 
     cfg = _cfg(cfg)
-    total = resources.resolve_threads(cfg.threads)
+    total = priority.budget_of(cfg)          # threads 0: all but the free threads
     text = "1" if spec is None else str(spec).strip().lower()
     if text in ("", "1"):
         return [Lane("main", "auto", total)]
@@ -581,11 +600,11 @@ def describe(lanes: list[Lane]) -> str:
 def plan_text(spec: str | None, cfg=None, report=None, parallel_molecules: int | None = None) -> str:
     """Human-readable plan for a lane spec, never raises (for the settings dialog). ``report`` None uses
     ``cpu_report()``: no torch import, so GPU lanes show as unavailable until hardware detection has run."""
-    from .. import resources
+    from .. import priority
 
     cfg = _cfg(cfg)
     hw = report if report is not None else cpu_report()
-    total = resources.resolve_threads(cfg.threads)
+    total = priority.budget_of(cfg)
     try:
         text = "1" if spec is None else str(spec).strip().lower()
         if text == "auto":
@@ -688,8 +707,10 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
     try:
         from dataclasses import replace
 
-        from .. import resources
+        from .. import priority, resources
 
+        # this lane process and every program it starts at the run's priority (never the GUI: lanes are its children)
+        priority.apply_to_process(cfg_dict.get("priority", priority.DEFAULT_PRIORITY))
         threads = resources.apply_thread_limits(lane.threads)     # before the pipeline (and torch) loads
         from pathlib import Path
 
@@ -964,10 +985,17 @@ def dispatch_order(todo, size_of, crashes: dict[str, int] | None = None) -> list
     return sorted(range(len(todo)), key=lambda j: (crashes.get(todo[j][0], 0), -size_of(todo[j][0])))
 
 
-def dynamic_threads_for(cfg, lanes: list[Lane], enabled: bool | None = None, budget: int = 0) -> int:
+def dynamic_threads_for(cfg, lanes: list[Lane], enabled: bool | None = None, budget: int = 0,
+                        logical: int | None = None) -> int:
     """The thread budget of dynamic CREST threads (``dist.threads``) for a run of ``cfg`` on ``lanes``, 0 when they
     are off: only for CREST conformer searches, on CPU lanes, when ``enabled`` (None: the setting) and the budget
-    (``budget``, at least the CPU lanes' threads) has room for two lanes' worth of the narrowest lane."""
+    (``budget``, at least the CPU lanes' threads) has room for two lanes' worth of the narrowest lane.
+
+    Borrowed threads never eat into the free threads: with CPU threads 0 (auto) the budget is cut to
+    ``priority.cap_of`` (the logical threads, ``logical`` or this machine's, minus the run's free threads) minus the
+    GPU lanes' threads, but never below the CPU lanes' own threads (an explicit lane spec may use more; it then
+    borrows nothing). An explicit thread count keeps the plan's budget, as before."""
+    from .. import priority
     from . import threads as threads_mod
 
     cpu = [x.threads for x in lanes if x.device == "cpu"]
@@ -977,7 +1005,11 @@ def dynamic_threads_for(cfg, lanes: list[Lane], enabled: bool | None = None, bud
         enabled = threads_mod.setting()
     if not enabled:
         return 0
-    total = max(int(budget or 0), sum(cpu))
+    own = sum(cpu)
+    total = max(int(budget or 0), own)
+    cap = priority.cap_of(cfg, logical)
+    if cap is not None:
+        total = max(own, min(total, cap - sum(x.threads for x in lanes if x.device != "cpu")))
     return total if total >= 2 * min(cpu) else 0
 
 
@@ -1350,8 +1382,11 @@ def register_cli(subparsers) -> None:
     p = subparsers.add_parser("lanes", help="show how a lane spec splits this machine (build --lanes)")
     p.add_argument("spec", nargs="?", help="1, auto, N, or a list like gpu:1x4,cpu:5x2 (default: the lanes setting)")
     p.add_argument("--method", help="engine the plan is for (default from settings)")
-    p.add_argument("--threads", type=int, help="CPU threads to plan with (0 = all but one)")
+    p.add_argument("--threads", type=int, help="CPU threads to plan with (0 = all but the free threads)")
     p.add_argument("--gpu", choices=["auto", "on", "off"])
+    from ..cli import add_priority_args
+
+    add_priority_args(p)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=_cli)
 
@@ -1366,9 +1401,11 @@ def _cli(args) -> int:
 
     s = settings_mod.load()
     cfg = BuildConfig.from_settings(s)
-    cfg = replace(cfg, **{k: v for k, v in {"method": args.method, "threads": args.threads, "gpu": args.gpu}.items()
+    cfg = replace(cfg, **{k: v for k, v in {"method": args.method, "threads": args.threads, "gpu": args.gpu,
+                                            "priority": getattr(args, "priority", None),
+                                            "free_threads": getattr(args, "free_threads", None)}.items()
                           if v is not None})
-    spec = args.spec or s.dist.lanes
+    spec = args.spec or s.lanes_for()
     report = resources.detect()
     try:
         lanes = parse_lanes(spec, cfg, report)

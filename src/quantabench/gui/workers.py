@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import traceback
 
@@ -52,7 +53,12 @@ class BuildWorker(QObject):
         """One molecule runs directly; a batch goes through the resumable job table (``chem.jobs``), so an
         interrupted GUI batch can be finished with ``quantabench-cli build --resume RUN_DIR``. A batch runs in
         this machine's lanes from the settings (worker processes; ``dist.lanes``); results still arrive one molecule at a
-        time through ``molecule_done``."""
+        time through ``molecule_done``.
+
+        Run priority (``quantabench.priority``): lanes lower their own processes; work done here, in this process
+        (one lane, or one molecule), runs on this thread lowered to the run's priority (``priority.thread_lowered``),
+        never the GUI thread or the GUI process."""
+        from .. import priority
         from ..chem import jobs, pipeline
         from ..settings import Settings
 
@@ -65,15 +71,19 @@ class BuildWorker(QObject):
             if run_dir is None and inputs is not None and len(inputs) > 1 and self.cfg.write_files:
                 run_dir = pipeline.new_run_dir(self.cfg.output_dir or Settings().output_path(), f"batch_{len(inputs)}")
             if run_dir is not None:
-                results, run_dir = jobs.run_resumable(
-                    inputs or None, self.cfg, run_dir,
-                    progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
-                    on_result=self.molecule_done.emit, lanes=self._lanes(), keep_results=False)
+                lanes = self._lanes()
+                in_process = len(lanes) <= 1          # several lanes: this thread only hands out the molecules
+                with priority.thread_lowered(self.cfg.priority) if in_process else contextlib.nullcontext():
+                    results, run_dir = jobs.run_resumable(
+                        inputs or None, self.cfg, run_dir,
+                        progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
+                        on_result=self.molecule_done.emit, lanes=lanes, keep_results=False)
             else:
-                results, run_dir = pipeline.run(
-                    inputs, self.cfg,
-                    progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
-                    on_result=self.molecule_done.emit)
+                with priority.thread_lowered(self.cfg.priority):
+                    results, run_dir = pipeline.run(
+                        inputs, self.cfg,
+                        progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
+                        on_result=self.molecule_done.emit)
             self.finished.emit(results, run_dir)
         except Exception as exc:
             self.failed.emit(f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}")

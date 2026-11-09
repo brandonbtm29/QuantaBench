@@ -14,7 +14,8 @@ This module is the shared contract every external engine uses:
 ``program_env(threads)``    OpenMP/BLAS thread caps, ``OMP_STACKSIZE``, ``PSI_SCRATCH`` for the child
 ``work_dir(prefix)``        a scratch job folder, removed on success unless ``keep_scratch`` is set
 ``run_program(cmd, cwd)``   run, stream output to a log file, honour cancellation and timeouts,
-                            raise ``ExternalProgramError`` with the log tail on failure
+                            raise ``ExternalProgramError`` with the log tail on failure; the program runs at the
+                            run priority in force (``quantabench.priority``; ``popen_args`` builds the call)
 
 Engines pass **file names relative to ``cwd``** in ``cmd``, so the same command works natively and
 through WSL (where ``cwd`` is translated to ``/mnt/c/...``).
@@ -37,6 +38,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
+from .. import priority
 from .optimize import Cancelled
 
 IS_WINDOWS = sys.platform == "win32"
@@ -478,6 +480,30 @@ def work_dir(prefix: str, keep: bool | None = None) -> Iterator[Path]:
 
 # ----------------------------------------------------------------------------------- running
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
+CREATE_NO_WINDOW = 0x08000000           # subprocess has the constant only on Windows
+
+
+def popen_args(cmd: Sequence[str], *, via_wsl: bool = False, prio: priority.ChildPriority | None = None,
+               system: str | None = None) -> tuple[list[str], dict]:
+    """(argv, Popen keywords besides cwd/env/stdio) with which ``run_program`` starts ``cmd`` on ``system`` (default
+    this one) at the run priority ``prio`` (``priority.options_here``; None = unchanged).
+
+    Windows: no console window, and the priority class as a creation flag (``BELOW_NORMAL_PRIORITY_CLASS`` /
+    ``IDLE_PRIORITY_CLASS``; whatever the program starts inherits it); a ``wsl:`` program's wrapper gets ``nice`` and
+    ``ionice`` for the Linux side, which Windows priorities do not reach. POSIX: the program's own session (so a
+    cancel kills its process group) under ``sh -c STACK_WRAPPER``, with ``ionice``/``nice`` (Linux) or
+    ``taskpolicy -d``/``nice`` (macOS) before the exec. The I/O priority of a Windows program is set once it has
+    started (``priority.after_start``)."""
+    system = system or sys.platform
+    prio = prio or priority.ChildPriority()
+    argv = [str(c) for c in cmd]
+    if via_wsl:
+        argv = [prio.wrap(a) if a == WSL_WRAPPER else a for a in argv]
+    if system == "win32":
+        return argv, {"creationflags": CREATE_NO_WINDOW | prio.creationflags}
+    if not via_wsl:
+        argv = ["/bin/sh", "-c", prio.wrap(STACK_WRAPPER), *argv]
+    return argv, {"start_new_session": True}      # own process group, so cancellation kills children
 
 
 @dataclass
@@ -896,8 +922,8 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
         limit = float(getattr(_engine_settings(), "timeout_s", 0) or 0)
         timeout = limit if limit > 0 else None
     shown = cmd
-    if not IS_WINDOWS and not via_wsl:
-        cmd = ["/bin/sh", "-c", STACK_WRAPPER, *cmd]
+    prio = priority.options_here(via_wsl)          # the run priority in force in this thread (never raised)
+    cmd, start_kwargs = popen_args(cmd, via_wsl=via_wsl, prio=prio)
     log_file = cwd / log_name
     t0 = time.perf_counter()
     if log:
@@ -906,19 +932,16 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
     usage: tuple[float | None, float | None] = (None, None)
     with open(log_file, "wb") as out:
         kwargs: dict = {"cwd": str(cwd), "env": env, "stdout": out, "stderr": subprocess.STDOUT,
-                        "stdin": subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL}
-        if IS_WINDOWS:
-            kwargs["creationflags"] = _NO_WINDOW
-        else:
-            kwargs["start_new_session"] = True     # own process group, so cancellation kills children
-            if not Path(shown[0]).is_file() and shutil.which(shown[0]) is None:
-                raise ExternalProgramError(f"could not start {shown[0]}: no such program")
+                        "stdin": subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL, **start_kwargs}
+        if not IS_WINDOWS and not Path(shown[0]).is_file() and shutil.which(shown[0]) is None:
+            raise ExternalProgramError(f"could not start {shown[0]}: no such program")
         meter = _UsageMeter(via_wsl, launcher=IS_WINDOWS and Path(shown[0]).suffix.lower() in (".bat", ".cmd"))
         try:
             proc = subprocess.Popen(cmd, **kwargs)
         except OSError as exc:
             meter.finish()
             raise ExternalProgramError(f"could not start {shown[0]}: {exc}") from exc
+        priority.after_start(proc.pid, prio)     # Windows: the program's I/O priority
         meter.started(proc)
         record = _record_program(proc, cwd, via_wsl, shown)
         try:

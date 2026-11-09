@@ -32,6 +32,7 @@
 |---|---|
 | `quantabench.resources` | Hardware detection (CPU, RAM, WSL, PyTorch backend: ROCm/CUDA/MPS), thread caps for BLAS/OpenMP/PyTorch, device selection with memory cap, matmul benchmark. |
 | `quantabench.settings` | `Settings` dataclasses, JSON load/save, and the settings-folder pointer (env var, then repo-local pointer, then per-user config). |
+| `quantabench.priority` | Run priority (`normal`/`low`/`background`) and free threads, per machine: the thread budget and its cap for the auto plans and borrowed CREST threads, lowering a lane, CLI or worker process (`apply_to_process`) or the GUI's build thread (`thread_lowered`), and how `run_program` starts a program at that priority (`child_options`: Windows priority class and I/O priority, `nice`/`ionice` or `taskpolicy` in the POSIX and WSL wrappers). |
 | `quantabench.units` | Energy units and number format for the GUI (`Settings.display`): conversion factors (the computations' own), `EnergyDisplay` (unit per kind, text, headers). Display only: results and exports keep their units. |
 | `chem.inputs` | `MoleculeInput` records from SMILES, InChI, InChIKeys and PubChem names, structure files, CSV and Excel (CompTox-aware: DTXSID, preferred name, SMILES-column fallback per row, `ReadReport` of skipped rows). `read_raw` reads a file as it is; `read_file(..., options=)` applies the import options. |
 | `chem.formats`, `chem.import_options` | More structure formats (MOL2, Marvin, ChemDraw CDX/CDXML, CML, CIF, Gaussian/ORCA inputs; Open Babel for the rest) and the Spartan-style import options (2D to 3D, hydrogens, keep coordinates, data fields, filters, atom order, structures as conformers), with `survey` deciding whether File > Open asks. |
@@ -40,7 +41,7 @@
 | `chem.standardize` | RDKit cleanup, largest fragment, neutralize, and the pH protonation rule table (or Dimorphite-DL). |
 | `chem.conformers` | ETKDGv3 embedding, MMFF94s/UFF, energy-window plus RMSD pruning, Boltzmann weights. |
 | `chem.engines` | Engine registry and ASE calculator factory: `DxtbCalculator`, AIMNet2, and `register()` for plugin engines (`PLUGINS`), each with an availability check, a calculator factory, optional properties and native optimizer. `method_keys`, `auto_candidates` (solvent-aware). |
-| `chem.external` | External programs: discovery (settings, `QUANTABENCH_<NAME>`, PATH, conda envs, `wsl:`), `program_env` (threads, `OMP_STACKSIZE`, `PSI_SCRATCH`, `WSLENV`), `work_dir`, `run_program` (log file, timeout, process-tree cancellation). |
+| `chem.external` | External programs: discovery (settings, `QUANTABENCH_<NAME>`, PATH, conda envs, `wsl:`), `program_env` (threads, `OMP_STACKSIZE`, `PSI_SCRATCH`, `WSLENV`), `work_dir`, `run_program` (log file, timeout, process-tree cancellation, the run priority through `popen_args`). |
 | `chem.eng_xtb`, `chem.eng_tblite`, `chem.eng_mopac` | Plugin engines: the xtb program (GFN2/GFN1/GFN-FF), tblite in process, MOPAC PM7/PM6-D3H4X. |
 | `chem.solvents` | One canonical solvent name mapped to ALPB/GBSA, COSMO (ε) and PCM keywords. |
 | `chem.crest` | CREST conformer search into a `ConformerSet` (atom order and topology checked). |
@@ -143,7 +144,9 @@ GUI batch can be finished with Build > Resume run folder or `quantabench-cli bui
 A finished molecule becomes a row of the molecule list (`gui.molecule_list`); selecting one reads its result
 from its folder with a `FunctionWorker`, one read at a time. Callbacks become Qt
 signals (`progress`, `log`,
-`molecule_done`, `finished`). Cancel sets a `threading.Event` that is checked between conformers and
+`molecule_done`, `finished`). Work done in the GUI process (one lane) runs on that thread lowered to the run
+priority (`priority.thread_lowered`); lanes lower their own processes, and the GUI thread and process keep theirs.
+Cancel sets a `threading.Event` that is checked between conformers and
 at every optimizer step. PubChem lookups, file and Excel reading, hardware detection and the LAMMPS export also run in
 workers. Their callbacks must run on the GUI thread: PySide6 runs a closure or lambda connected to a
 worker signal in the *worker* thread, so `workers.start(..., on_done=, on_failed=)` routes them through

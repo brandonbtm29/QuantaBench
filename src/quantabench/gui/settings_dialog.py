@@ -75,10 +75,12 @@ class SettingsDialog(QDialog):
         # the lane plan depends on the threads, the GPU and the method (Build defaults tab)
         self.lanes.currentTextChanged.connect(self._update_lane_plan)
         self.threads.valueChanged.connect(self._update_lane_plan)
+        self.priority.currentIndexChanged.connect(self._update_priority)
+        self.free_threads.valueChanged.connect(self._update_priority)
         self.gpu.currentIndexChanged.connect(self._update_lane_plan)
         self.gpu_index.currentIndexChanged.connect(self._update_lane_plan)
         self.method.currentIndexChanged.connect(self._update_lane_plan)
-        self._update_lane_plan()
+        self._update_priority()
 
     #: suggestions in the editable "Parallel lanes" box
     LANE_PRESETS = ("1", "auto", "2", "4", "6", "gpu:1x4,cpu:5x2")
@@ -89,7 +91,22 @@ class SettingsDialog(QDialog):
         b = self.s.build
         return BuildConfig(method=self.method.currentData() or b.refine_method, threads=self.threads.value(),
                            gpu=self.gpu.currentText(), gpu_index=int(self.gpu_index.currentData() or 0),
-                           conformer_search=b.conformer_search, qm_method=b.qm_method, solvent=b.solvent)
+                           conformer_search=b.conformer_search, qm_method=b.qm_method, solvent=b.solvent,
+                           priority=self.priority.currentData() or "low", free_threads=self.free_threads.value())
+
+    def _update_priority(self, *_args) -> None:
+        """The one-line explanation of the run priority, the threads' "Auto" text and the lane plan."""
+        from .. import priority
+
+        level = self.priority.currentData() or "low"
+        free = self.free_threads.value()
+        logical = resources.logical_cores()
+        left = priority.effective_free_threads(free, level, logical)
+        note = (f" At this priority {left} threads stay free." if left > free else "")
+        self.priority_info.setText(priority.DESCRIPTIONS[level][0].upper() + priority.DESCRIPTIONS[level][1:] + "."
+                                   + note)
+        self.threads.setSpecialValueText(f"Auto ({priority.auto_thread_cap(free, level, logical)} of {logical})")
+        self._update_lane_plan()
 
     def _update_lane_plan(self, *_args) -> None:
         """Show what the lane spec means on this machine (no torch import: uses the detection report if any)."""
@@ -109,7 +126,30 @@ class SettingsDialog(QDialog):
         self.threads.setRange(0, logical)
         self.threads.setSpecialValueText(f"Auto ({resources.resolve_threads(0)} of {logical})")
         self.threads.setValue(r.threads)
+        self.threads.setToolTip("Threads of a run in one process. Auto: every logical thread but the ones left free")
         form.addRow("CPU threads", self.threads)
+        # run priority and free threads (quantabench.priority): this machine only, the settings file is shared
+        self.priority = QComboBox()
+        for key, label in (("normal", "Normal"), ("low", "Low (default)"), ("background", "Background")):
+            self.priority.addItem(label, key)
+        self.priority.setCurrentIndex(max(0, self.priority.findData(self.s.priority_for())))
+        self.priority.setToolTip("CPU and I/O priority of runs on this machine: the lanes, the programs they start\n"
+                                 "(xtb, CREST, MOPAC, Psi4, also through WSL) and in-process work, never the window.\n"
+                                 "Normal: as fast as possible. Low: below-normal CPU and low I/O priority, so the\n"
+                                 "run gives way to what you do. Background: idle CPU and very low I/O priority, and\n"
+                                 "at least a quarter of the threads (at least 2) stay free.")
+        form.addRow("Run priority", self.priority)
+        self.priority_info = QLabel()
+        self.priority_info.setWordWrap(True)
+        form.addRow("", self.priority_info)
+        self.free_threads = QSpinBox()
+        self.free_threads.setRange(0, max(0, logical - 1))
+        self.free_threads.setSuffix(" threads")
+        self.free_threads.setValue(min(self.s.free_threads_for(), max(0, logical - 1)))
+        self.free_threads.setToolTip("Logical threads left free for you, on this machine: CPU threads = Auto, the\n"
+                                     "'auto' lane plan and the threads dynamic CREST threads borrow never use them.\n"
+                                     "1 = all threads but one (as before). An explicit lane spec is used as given.")
+        form.addRow("Leave free", self.free_threads)
         self.gpu = QComboBox()
         self.gpu.addItems(["auto", "on", "off"])
         self.gpu.setCurrentText(r.gpu)
@@ -680,6 +720,8 @@ class SettingsDialog(QDialog):
         budget = float(self.memory_budget.value())
         s.resources.memory_budget_gb = -1.0 if budget < 0 else budget       # below 0 is off
         s.resources.molecule_timeout_s = float(self.molecule_timeout.value())
+        s.set_priority_for(self.priority.currentData() or "low")   # this machine only, as the lanes below
+        s.set_free_threads_for(self.free_threads.value())
         from ..dist import lanes as lanes_mod
 
         lanes = self.lanes.currentText().strip().lower() or "1"

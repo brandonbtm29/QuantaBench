@@ -497,3 +497,15 @@ quantabench-cli settings --set-dir "~/SyncThing/QuantaBench/Settings"
 This writes a git-ignored `settings_location.json` pointer in the repo, so every computer that clones
 the repo and has the SyncThing folder shares the same settings. The GUI offers the same choice under
 Settings > Folders, and the install scripts under `--settings-dir` (`-SettingsDir`).
+
+The file is shared, but some settings belong to one machine and are stored per machine: program paths
+(`--engine-path`), the parallel lanes, and the run priority and free threads. A run at the default priority,
+`low`, gives way to what you do on the PC. If even that is too heavy while you work, use `background` on that
+machine, and leave more threads free:
+
+```powershell
+quantabench-cli settings --priority background --free-threads 4    # this machine only (--machine NAME: another)
+quantabench-cli doctor                                              # "Run priority ..." shows what is in force
+```
+
+docs/ENGINES.md, "Run priority and free threads", has what each level does on Windows, Linux, WSL and macOS.

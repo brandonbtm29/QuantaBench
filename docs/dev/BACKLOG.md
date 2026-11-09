@@ -1100,6 +1100,34 @@ the code, but three things never arrived through it.
 - **Windows:** `qb/windows` has a native build (docs/WINDOWS.md there), but Brandon decided on WSL (ENG-2).
   Look at it again only if WSL becomes a problem.
 
+### PRIO-1: Runs that keep the PC responsive · done 2026-11-09 (branch `feat/prio1`)
+Brandon (2026-11-09): a 5-lane x 4-thread run on NOVA (below-normal CPU priority) made the PC hard to use, even
+deleting files; Psi4's scratch I/O probably made it worse. QuantaBench had no priority or reserved-threads setting.
+- Done: `quantabench/priority.py`; docs/ENGINES.md, "Run priority and free threads".
+  - Two per-machine settings (`resources.machine_priority`, `resources.machine_free_threads`; the shared
+    `resources.priority`/`free_threads` are only defaults):
+    - run priority `normal` | `low` (default) | `background`: Windows below-normal or idle class plus low or very
+      low I/O priority, POSIX nice 10/19 plus ionice best-effort 7 or idle, macOS disk I/O utility/throttle;
+    - free threads (default 1 = the old "all but one", so every plan is unchanged; `background` leaves at least
+      25 %, at least 2).
+  - Applied to the lane processes, a CLI `build`/`grid build`/`worker` process, the GUI's build thread (in-process
+    work only; never the GUI process), and every program `run_program` starts, through WSL too (`nice`/`ionice`
+    in the wrapper). Never raised.
+  - The auto thread budget, the lane plan and dynamic CREST threads leave the free threads alone.
+  - Surfaces: `--priority`/`--free-threads` on `build`, `grid build`, `worker` and `lanes`; `settings --priority
+    --free-threads [--machine]`; Settings > Compute "Run priority" and "Leave free"; `doctor`; run timings
+    (`config_json`).
+- Checked on NOVA (2026-11-09, a throwaway copy): a program started through `run_program` at `low` got
+  BELOW_NORMAL_PRIORITY_CLASS and low I/O priority, at `background` IDLE_PRIORITY_CLASS and very low I/O, and the
+  process it started inherited both.
+- Left (needs-Brandon):
+  - Time one CREST or Psi4 batch at `low` while using NOVA, against `normal`: is it fast enough when idle and
+    light enough while working? If not, try `background` or more free threads.
+  - WSL's VM (vmmem) runs at normal priority on Windows: niceness inside WSL does not make a CREST run through
+    WSL give way to Windows programs; only fewer threads do.
+  - Run the macOS path on the MacBook (`setiopolicy_np`, `taskpolicy -d`, the build thread's QoS class); it is
+    written to Apple's documentation but not run yet.
+
 ### SCHED-1: Runtime-aware scheduling of conformer searches (study) · proposed 2026-11-08
 Brandon (2026-11-08): choosing size-aware thread allocation could be a study in itself; also try moving small
 molecules up the queue when only a few threads are free and the next molecule is large (it would do better on more

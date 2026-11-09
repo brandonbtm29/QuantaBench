@@ -990,7 +990,7 @@ class MainWindow(QMainWindow):
     def _on_hardware(self, rep) -> None:
         self.report = rep
         gpu = rep.gpus[0] if rep.gpus else None
-        threads = resources.resolve_threads(self.s.resources.threads)
+        threads = self.s.thread_budget_for()
         gpu_text = f"{gpu.name} {gpu.total_memory_gb:.0f} GB ({gpu.backend.upper()})" if gpu else "no GPU (CPU only)"
         if self.s.resources.gpu == "off":
             gpu_text += " [disabled]"
@@ -1730,7 +1730,7 @@ class MainWindow(QMainWindow):
                 s = loaded
         self.s = s
         settings_mod.save(self.s)
-        resources.apply_thread_limits(self.s.resources.threads)
+        resources.apply_thread_limits(self.s.thread_budget_for())
         from ..chem import external, torch_compat
 
         torch_compat.apply_settings(self.s, strict=False)   # dxtb linear algebra / GPU modes (Settings > Compute)

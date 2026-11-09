@@ -362,7 +362,22 @@ COST_FIELDS = ("method", "conformer_search", "crest_method", "crest_quick", "sol
                "refine_top", "energy_window_kcal", "rmsd_threshold", "fmax", "max_steps", "optimizer", "batched",
                "xtb_properties", "frequencies", "freq_hessian", "qm_method", "qm_task", "qm_top", "qm_properties",
                "qm_frequencies", "qm_cubes", "threads", "gpu", "dxtb_gpu", "memory_budget_gb", "molecule_timeout_s",
-               "protonate", "protonation_method")
+               "protonate", "protonation_method", "priority", "free_threads")
+
+
+def priority_fields(cfg) -> dict:
+    """The run priority and free threads in force, for ``config_json`` next to ``priority`` and ``free_threads``
+    (``quantabench.priority``; no columns of their own, so the schema stays as it is): the free threads after the
+    background floor, and the level the work runs at (a priority is never raised: a run asked 'low' in a worker at
+    'background' runs at 'background')."""
+    try:
+        from .. import priority
+
+        level, free = priority.of(cfg)
+        return {"free_threads_effective": priority.effective_free_threads(free, level),
+                "priority_effective": priority.lower_of(level, priority.current_level())}
+    except Exception:  # noqa: BLE001 - recording never fails a run
+        return {}
 
 
 def outcome_of(res) -> str:
@@ -523,7 +538,8 @@ class RunTelemetry:
                        crest_quick=int(bool(cfg.crest_quick)) if level else None, crest_level=level or None,
                        solvent=cfg.solvent, max_conformers=cfg.max_conformers, refine_top=cfg.refine_top,
                        frequencies=int(bool(cfg.frequencies)), xtb_properties=int(bool(cfg.xtb_properties)),
-                       qm_method=cfg.qm_method, config_json={k: d.get(k) for k in COST_FIELDS},
+                       qm_method=cfg.qm_method, config_json={**{k: d.get(k) for k in COST_FIELDS},
+                                                             **priority_fields(cfg)},
                        run_folder=os.path.basename(os.path.normpath(str(run_dir))), chunk=chunk,
                        n_total=n_total, n_todo=n_todo, n_done_before=n_done_before)
             if hasattr(os, "getloadavg"):

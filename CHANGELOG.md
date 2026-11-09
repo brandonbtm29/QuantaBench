@@ -2,6 +2,32 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Run priority and free threads, PRIO-1 (2026-11-09)
+- **Runs give way to what you do on the PC.** A new run priority per machine: `normal`, `low` (the new default)
+  or `background`. `low` means below-normal CPU and low I/O priority on Windows (nice 10 and ionice best-effort 7
+  on Linux, nice 10 and the utility disk I/O policy on macOS). `background` means idle CPU and very low I/O
+  priority (nice 19 and the idle I/O class; the throttle policy on macOS), and at least 25 % of the threads left
+  free.
+  - It applies to the lane processes, a CLI `build`, `grid build` or `worker` process, and in the GUI only the
+    build thread of in-process work (never the window).
+  - It also applies to every program QuantaBench starts (xtb, CREST, MOPAC, Psi4), with what those start.
+    Through WSL, `nice`/`ionice` go into the wrapper, since Windows priorities do not reach the Linux VM.
+  - A priority is only ever lowered.
+  - Before, runs used normal priority, unless started from a lowered shell, and normal I/O priority.
+- **Free threads per machine** (default 1, the old "all threads but one", so every lane plan stays as it was):
+  the automatic thread budget, the `auto` lane plan and the threads dynamic CREST threads borrow leave them free.
+  An explicit thread count or lane spec is used as given.
+- Settings > Compute: "Run priority" and "Leave free". `quantabench-cli settings --priority/--free-threads
+  [--machine NAME]`; `--priority`/`--free-threads` on `build`, `grid build`, `worker` and `lanes`. `doctor`
+  prints this machine's values, and run timings record them in `telemetry_runs.config_json` (no schema change).
+- Both are stored per machine in the shared settings (`resources.machine_priority`,
+  `resources.machine_free_threads`), like the CREST path and the lanes; QuantaBench 0.3.0.dev3 and older drops
+  them when it saves the settings.
+- Checked on NOVA: programs at `low` and `background` and their children get the priority class and the I/O
+  priority. docs/ENGINES.md, "Run priority and free threads".
+- `quantabench-cli lanes` without a spec shows this machine's lane spec (`Settings.lanes_for`), not the shared
+  default.
+
 ### Conformer ranking benchmark, RANK-1b (2026-11-08)
 - docs/VALIDATION.md, "RANK-1b": RANK-1's cheap rankers on Brandon's non-fluorinated handbook molecules (12
   hydrocarbons, 28 polar organics, 8 ions) and a matched control of 20 neutral PFAS. All went through one protocol

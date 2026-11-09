@@ -245,7 +245,8 @@ own environment.
 
 Each run gets a scratch folder (Settings > Engines > Scratch folder; default `%TEMP%\QuantaBench` or
 `/tmp/QuantaBench`). It is deleted on success and kept on failure, and the error message gives its
-path. Threads come from the Compute settings; `OMP_STACKSIZE` (default 4G) avoids stack overflows in
+path. Programs run at this machine's run priority (Run priority and free threads, below). Threads come from the
+Compute settings; `OMP_STACKSIZE` (default 4G) avoids stack overflows in
 xtb and CREST.
 
 ## Solvents
@@ -511,6 +512,88 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   - A machine's own constants (since 2026-11-08): `quantabench-cli timings --fit` refits the cost model on the
     CREST searches its runs recorded (next section). When a fit is saved, the rule uses that machine's exponents
     instead of atoms^4 and ^0.6, and the log says so ("cost model: fit btm-nova gfnff quick (...)").
+- **Run priority and free threads** apply to every lane and to the CREST threads they borrow (next section).
+
+## Run priority and free threads
+
+A 5-lane x 4-thread run on NOVA (20 of 24 threads, below-normal CPU priority) made the PC hard to use, even for
+deleting files. CPU priority alone did not help: its disk I/O (Psi4's scratch files) ran at normal I/O priority.
+Since 2026-11-09 (PRIO-1, `quantabench/priority.py`) two settings decide how a run shares the machine:
+
+- **Run priority** (`normal`, `low`, `background`; default `low`): the CPU and I/O priority of the work.
+- **Free threads** (default 1): the logical threads the automatic thread budgets leave free for you.
+
+Both are **per machine**, like the CREST path and the lanes: the settings file is shared (SyncThing), so
+Settings > Compute ("Run priority", "Leave free") and `quantabench-cli settings --priority low --free-threads 2`
+store them for this machine only (`resources.machine_priority`, `resources.machine_free_threads`, keyed by the machine
+name as `dist.machine_lanes` is; `--machine NAME` sets another machine's, `default` goes back to the default).
+`resources.priority` and `resources.free_threads` are only the default of a machine without its own value, and
+QuantaBench never writes them. For one run: `build`, `grid build`, `worker` and `lanes` take `--priority` and
+`--free-threads`. `doctor` prints this machine's values ("Run priority ..."); every run logs them and records them in
+its timings (`telemetry_runs.config_json`: `priority`, `free_threads`, `free_threads_effective`,
+`priority_effective`). A QuantaBench from before this change (0.3.0.dev3 and older) drops the two per-machine tables
+when it saves the settings (its GUI saves at every Run): update every machine first.
+
+**Why `low` by default.** A below-normal process gets an otherwise idle CPU and disk all the same: Windows, Linux
+and macOS only put your programs first while they want the CPU or the disk. So a run at `low` should take about as
+long as at `normal` when you are not using the PC (not measured yet), and gives way when you are. `normal` is the old behaviour (the work competed with the desktop as an
+equal). `background` is for long runs while you work: idle-class CPU, very low I/O priority, and more threads left
+free. A run can only go lower than the machine it runs on: a priority is never raised (POSIX cannot raise a nice
+value without privileges). So `grid build --priority normal` on a worker started at `background` still runs at
+`background`.
+
+**What runs at the priority.** Never the GUI process:
+- each lane process lowers itself as it starts, before it imports anything (`dist/lanes.py`);
+- a CLI `build`, `grid build` (the local share) or `worker` process lowers itself, so its lanes and programs start
+  lower;
+- in the GUI, a run in one process (one molecule, or a batch with lanes = 1) works on the BuildWorker's thread,
+  and only that thread is lowered (`priority.thread_lowered`);
+- every program `external.run_program` starts (xtb, CREST, MOPAC, Psi4, also through WSL) is started at the
+  priority, and what it starts inherits it (CREST's xtb, Psi4's threads). Checked on NOVA on 2026-11-09 for the
+  program and its child.
+
+| | Windows | Linux, and inside WSL | macOS |
+|---|---|---|---|
+| `low` | BELOW_NORMAL_PRIORITY_CLASS, I/O priority low | nice 10, I/O best effort level 7 (`ionice -c 2 -n 7`) | nice 10, disk I/O policy utility |
+| `background` | IDLE_PRIORITY_CLASS, I/O priority very low | nice 19, I/O idle class (`ionice -c 3`) | nice 19, disk I/O policy throttle |
+| a lane, CLI build or worker | `SetPriorityClass` and the I/O priority of the process (psutil) | every thread's nice and I/O priority | `setpriority`, `setiopolicy_np` |
+| a program | the class as a creation flag, the I/O priority set just after it starts | `ionice`/`nice` in the `sh -c` wrapper before the `exec` | `nice` (and `taskpolicy -d` where it works) in the wrapper |
+| a `wsl:` program | wsl.exe as above; Windows priorities do not reach the Linux VM, so the WSL wrapper runs `ionice` and `nice` | | |
+| the GUI's build thread | thread priority LOWEST or IDLE (+ background I/O mode) | the thread's nice and I/O priority | utility QoS class, the thread's disk I/O policy |
+
+Limits:
+- **WSL.** Inside WSL the run is niced against other Linux processes. To Windows, the Linux VM is one process
+  (vmmem), whose priority a normal user cannot even read (access denied on NOVA), let alone lower. So a CREST run through WSL still competes
+  with Windows programs at normal priority. Fewer threads help there: free threads, or `background`, which leaves
+  25 % of the threads free.
+- **The GUI's in-process work.** On Windows and macOS only the build thread is lowered. Threads an engine started
+  before keep their priority (PyTorch's and OpenMP's pools, e.g. tblite's). A long batch in the GUI is best run
+  in lanes: each lane process is lowered as a whole. On Linux the thread's nice cannot be raised again afterwards,
+  but the thread ends with the run.
+- **Linux I/O priority** is honoured by the BFQ scheduler (and the old CFQ), not by `mq-deadline` or `none` (the
+  usual choice for NVMe). There only the nice value acts.
+- **macOS** does not get its own background policy (`taskpolicy -b`, `PRIO_DARWIN_BG`). On Apple Silicon that
+  policy keeps a process on the efficiency cores, which would make a CREST run several times slower even on an
+  idle Mac. The macOS path is written to Apple's documentation but not yet run on the MacBook.
+
+**Free threads.** With CPU threads = Auto (0, the default), the run's thread budget is the logical threads minus the
+free threads. The `auto` lane plan stays inside that budget, as do `1` (one process) and `N` lanes. Dynamic CREST
+threads never borrow beyond it: whatever a lane borrows comes out of the budget, so the free threads stay free.
+`background` leaves at least 25 % of the logical threads free (rounded up), and at least 2. An explicit CPU-thread
+count or lane spec (`--lanes 5x4`) is used as given, as before.
+
+The default, 1, is the old "all threads but one": every plan stays as it was.
+
+| Plan (`--lanes auto`) | NOVA, 24 threads: default | NOVA: `background` (6 free) | M3 Max, 14 threads: default | M3 Max: `background` (4 free) |
+|---|---|---|---|---|
+| thread budget (one process) | 23 | 18 | 13 | 10 |
+| CREST (`--conformers crest`) | 11 x 2 = 22 | 9 x 2 = 18 | 3 x 4 = 12 | 2 x 4 = 8 |
+| xtb program, MOPAC, Psi4 | 11 x 2 = 22 | 9 x 2 = 18 | 6 x 2 = 12 | 5 x 2 = 10 |
+| MMFF, tblite | 12 x 1 | 12 x 1 | 13 x 1 | 10 x 1 |
+| dxtb, AIMNet2 on the CPU | 6 x 2 | 6 x 2 | 6 x 2 | 5 x 2 |
+
+`--free-threads 4` on NOVA gives CREST 10 x 2 = 20; 2 free threads leave both machines' CREST plans as they are
+(11 x 2 and 3 x 4).
 
 ## Run timings (`quantabench-cli timings`)
 

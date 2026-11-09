@@ -1423,6 +1423,7 @@ def _build_args(b: argparse.ArgumentParser) -> None:
         out_help="this machine's output folder for the grid record, the merged tables and the local share "
                  "(default from settings)")
     cli_mod.add_build_science_args(b)
+    cli_mod.add_priority_args(b, where="each machine's")
 
 
 def _worker_opts(p: argparse.ArgumentParser) -> None:
@@ -1474,7 +1475,11 @@ def _cli_build(args) -> int:
         print(exc, file=sys.stderr)
         return 2
     cfg = cli_mod.config_from_args(args)
-    keep = tuple(name for name, value in (("threads", args.threads), ("gpu", args.gpu)) if value is not None)
+    # --threads/--gpu/--priority/--free-threads: the same on every machine; otherwise each machine's own settings
+    keep = tuple(name for name, value in (("threads", args.threads), ("gpu", args.gpu), ("priority", args.priority),
+                                          ("free_threads", args.free_threads)) if value is not None)
+    # this process runs the local share and follows the others: at this machine's (or the given) priority
+    print(f"Priority here: {cli_mod.lower_this_process(cfg.priority)}")
     machines = [m for m in (args.machines or "").split(",") if m.strip()]
     try:
         grid = grid_build(items, cfg, machines, args.weights, label=args.label, wait=args.wait,
@@ -1600,8 +1605,9 @@ def register_cli(subparsers) -> None:
 
     b = gs.add_parser("build", help="split a list across machines, run, follow and merge",
                       description="Same inputs and science options as `build`. Every machine gets the same "
-                                  "BuildConfig (set --method explicitly); threads and GPU follow each machine's "
-                                  "own settings unless --threads/--gpu are given.")
+                                  "BuildConfig (set --method explicitly); threads, GPU, run priority and free threads "
+                                  "follow each machine's own settings unless --threads/--gpu/--priority/"
+                                  "--free-threads are given (a worker never runs a job above its own priority).")
     _build_args(b)
     b.add_argument("--machines", help="comma list of worker names and/or 'local' (default: every reachable worker)")
     b.add_argument("--weights", default="auto", help="auto (measured throughput, else equal) or one number per "

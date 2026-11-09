@@ -50,7 +50,7 @@ from types import SimpleNamespace
 
 from rdkit import Chem
 
-from .. import __version__, resources
+from .. import __version__, priority, resources
 from . import export, pipeline, telemetry
 from .inputs import MoleculeInput, dedupe_ids
 from .pipeline import BuildConfig, MoleculeResult, ProgressFn
@@ -808,6 +808,8 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
         thread_budget = sum(x.threads for x in planned if x.device == "cpu")
         if todo:
             log_time_limit(cfg, len(lanes) > 1, log)
+            level, free = priority.of(cfg)
+            log(f"Run priority: {priority.describe(level, free)}")
         from ..dist import lanes as lanes_mod
         from ..dist import threads as threads_mod
 
@@ -818,16 +820,18 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
             aware = None
             if len(lanes) > 1:
                 aware = speed_aware if speed_aware is not None else lanes_mod.speed_aware_setting()
-            one = [lanes_mod.Lane("main", "auto", resources.resolve_threads(cfg.threads))]
+            one = [lanes_mod.Lane("main", "auto", priority.budget_of(cfg))]
             tm = telemetry.start_run(store, cfg, run_dir, lanes_planned=planned or one, lanes_used=lanes or one,
                                      thread_budget=max(thread_budget, sum(x.threads for x in lanes or one)),
                                      dynamic_budget=wide, speed_aware=aware, chunk=chunk,
                                      n_total=total, n_todo=len(todo), n_done_before=done_before,
                                      cost_model=cost_model, log=log)
         try:
-            results = _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, done_before, progress,
-                                should_stop, log, on_result, keep_results, speed_aware, handoff, dynamic_threads,
-                                thread_budget)
+            # programs started here (not in lanes) run at the run's priority; lanes lower their own process
+            with priority.children_at(cfg.priority):
+                results = _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, done_before,
+                                    progress, should_stop, log, on_result, keep_results, speed_aware, handoff,
+                                    dynamic_threads, thread_budget)
         finally:
             tm.close(store)          # never raises: an exception from the run itself stays the one raised
         counts = store.counts()
@@ -878,7 +882,7 @@ def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, don
             log(f"Dynamic threads: {todo[0][0]}: CREST with {wide} threads (borrowed {wide - threads} from "
                 "the lanes this run does not need)")
     else:
-        threads = resources.apply_thread_limits(cfg.threads)
+        threads = resources.apply_thread_limits(priority.budget_of(cfg))   # threads 0: all but the free ones
         cfg_run = cfg
         device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
         log(f"Resources: {threads} CPU threads, device {device}")

@@ -81,7 +81,8 @@ FINAL_STATES = ("done", "failed", "cancelled")
 #: BuildConfig fields that only say how fast this machine runs a job. A client normally leaves them out and
 #: the worker uses its own settings; the science fields must be the same on every machine.
 BENCH_MODES = ("auto", "always", "never")
-RESOURCE_FIELDS = ("threads", "gpu", "gpu_index", "gpu_memory_fraction", "linalg", "dxtb_gpu")
+RESOURCE_FIELDS = ("threads", "gpu", "gpu_index", "gpu_memory_fraction", "linalg", "dxtb_gpu", "priority",
+                   "free_threads")
 TAILSCALE_NET4 = ipaddress.ip_network("100.64.0.0/10")
 TAILSCALE_NET6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
 TAILSCALE_PATHS = {
@@ -112,6 +113,7 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "linalg": ("auto", "cpu", "device"),
     "dxtb_gpu": ("auto", "on", "off"),
     "radii_set": ("bondi", "spartan"),
+    "priority": ("normal", "low", "background"),
 }
 # Inclusive ranges of numeric BuildConfig fields; other numbers only need to be finite.
 RANGES: dict[str, tuple[float, float]] = {
@@ -119,7 +121,7 @@ RANGES: dict[str, tuple[float, float]] = {
     "energy_window_kcal": (0.0, 1e4), "rmsd_threshold": (0.0, 100.0), "fmax": (1e-6, 100.0),
     "max_steps": (0, 10_000_000), "temperature_k": (1e-3, 1e5), "symmetry_number": (0, 1000),
     "seed": (-(2**31), 2**31 - 1), "qm_top": (0, 10_000), "threads": (0, 4096), "gpu_index": (0, 64),
-    "gpu_memory_fraction": (0.01, 1.0), "sasa_probe_A": (0.0, 10.0),
+    "gpu_memory_fraction": (0.01, 1.0), "sasa_probe_A": (0.0, 10.0), "free_threads": (0, 4096),
 }
 _INPUT_LIMITS = {"id": 120, "smiles": 20_000, "name": 1_000, "source": 2_000, "molblock": 16_000_000}
 
@@ -346,15 +348,24 @@ def validate_config(data) -> dict:
     return out
 
 
-def build_config(config: dict, output_dir: Path, resources=None):
+def build_config(config: dict, output_dir: Path, resources=None, *, priority: str | None = None,
+                 free_threads: int | None = None):
     """The ``BuildConfig`` a worker runs: the client's science settings on ``BuildConfig`` defaults, this
-    machine's resource settings unless the client set them, and always this worker's output folder."""
+    machine's resource settings unless the client set them, and always this worker's output folder.
+
+    Run priority and free threads: the client's (``grid build --priority``), else ``priority``/``free_threads``
+    (the worker's ``--priority``/``--free-threads``), else this machine's settings (``Settings.priority_for``). A
+    job never runs above the worker process's own priority (``quantabench.priority`` only lowers)."""
     from ..chem.pipeline import BuildConfig
 
-    r = resources or settings_mod.load().resources
+    s = settings_mod.load() if resources is None else None
+    r = resources if resources is not None else s.resources
     values = {"threads": r.threads, "gpu": r.gpu, "gpu_index": r.gpu_index,
               "gpu_memory_fraction": r.gpu_memory_fraction, "linalg": getattr(r, "linalg", "auto"),
-              "dxtb_gpu": getattr(r, "dxtb_gpu", "auto")}
+              "dxtb_gpu": getattr(r, "dxtb_gpu", "auto"),
+              "priority": priority or (s.priority_for() if s is not None else getattr(r, "priority", "low")),
+              "free_threads": free_threads if free_threads is not None else
+              (s.free_threads_for() if s is not None else getattr(r, "free_threads", 1))}
     values.update(config)
     if "formats" in values:
         values["formats"] = tuple(values["formats"])
@@ -753,11 +764,14 @@ class JobManager:
 
     def __init__(self, output_dir: str | Path, name: str, state_dir: str | Path | None = None,
                  lanes: str | None = None, max_jobs: int = 1, log: Callable[[str], None] = _noop,
-                 awake: bool = True):
+                 awake: bool = True, priority: str | None = None, free_threads: int | None = None):
         self.output_dir = Path(output_dir).expanduser()
         self.name = name
         self.state_dir = Path(state_dir).expanduser() if state_dir else None
         self.lanes = lanes
+        # --priority / --free-threads of the worker: jobs that do not set their own use them (else the settings)
+        self.priority = priority
+        self.free_threads = free_threads
         self.max_jobs = max(1, int(max_jobs))
         self.environment: dict = {}
         self.paused = False
@@ -1082,7 +1096,8 @@ class JobManager:
             self._write_job_file(job)
             tables = None
             try:
-                cfg = build_config(job.config, self.output_dir)
+                cfg = build_config(job.config, self.output_dir, priority=self.priority,
+                                   free_threads=self.free_threads)
                 from .. import resources as resources_mod
 
                 resources_mod.set_molecule_limits(cfg)   # memory budget and time limit of embedding and Hessian
@@ -1484,7 +1499,8 @@ class Worker:
                  max_jobs: int = 1, allow_version_mismatch: bool = False,
                  max_request_bytes: int = MAX_REQUEST_BYTES, publish: bool | None = None,
                  log: Callable[[str], None] = _noop, awake: bool = True, bench: str = "never",
-                 bench_methods: Sequence[str] | None = None, bench_seconds: float | None = None):
+                 bench_methods: Sequence[str] | None = None, bench_seconds: float | None = None,
+                 priority: str | None = None, free_threads: int | None = None):
         from . import profile as profile_mod
 
         if bench not in BENCH_MODES:
@@ -1507,7 +1523,7 @@ class Worker:
         url_host = f"[{self.host}]" if ":" in self.host else self.host
         self.url = f"http://{url_host}:{self.port}"
         self.manager = JobManager(output_dir, self.name, state_dir=state_dir, lanes=lanes, max_jobs=max_jobs,
-                                  log=log, awake=awake)
+                                  log=log, awake=awake, priority=priority, free_threads=free_threads)
         self.commit = git_commit()
         prof = profile_mod.local_profile()
         if not prof.throughput and self.name != prof.name:   # --name: the registry keeps it under that name
@@ -1689,6 +1705,13 @@ def _cli_worker(args) -> int:
             "can submit jobs, and traffic is not encrypted")
     output = s.output_path()
     port = s.dist.worker_port if args.port is None else args.port
+    # this worker process (its jobs' lanes and programs inherit it) at this machine's run priority (PRIO-1)
+    from ..cli import lower_this_process
+
+    level = args.priority or s.priority_for()
+    free = args.free_threads if args.free_threads is not None else s.free_threads_for()
+    log(f"Run priority: {lower_this_process(level)}; {free} thread(s) left free by automatic budgets"
+        + ("" if args.priority is None and args.free_threads is None else " (--priority/--free-threads)"))
     if args.lanes:  # an explicit --lanes must fit this machine; the setting falls back to one lane per job
         from . import profile as profile_mod
 
@@ -1704,7 +1727,7 @@ def _cli_worker(args) -> int:
                       allow_version_mismatch=args.allow_version_mismatch,
                       max_request_bytes=int(args.max_request_mb * 1024 * 1024), publish=args.publish, log=log,
                       bench=args.bench, bench_methods=[m for m in (args.bench_methods or "").split(",") if m.strip()]
-                      or None)
+                      or None, priority=args.priority, free_threads=args.free_threads)
 
     tailscale = (args.bind or s.dist.worker_bind or "tailscale").strip() == "tailscale"
     try:
@@ -1762,6 +1785,9 @@ def register_cli(subparsers) -> None:
     w.add_argument("--tailscale-wait", type=float, default=120.0,
                    help="with --bind tailscale: seconds to wait for Tailscale to come up (autostart at login)")
     w.add_argument("--log-file", help="also append the worker log to this file")
+    from ..cli import add_priority_args
+
+    add_priority_args(w)
     w.set_defaults(func=_cli_worker)
 
 

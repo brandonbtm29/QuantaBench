@@ -45,6 +45,14 @@ class ResourceSettings:
     # wall-clock limit per molecule in a batch, s (0 = none): a lane past it is killed and restarted, one
     # process stops the molecule at its next checkpoint; the molecule is marked failed "time limit (N s)"
     molecule_timeout_s: float = 1800.0
+    # Run priority and free threads (quantabench.priority, docs/ENGINES.md). Per machine: ``machine_priority`` and
+    # ``machine_free_threads`` hold each machine's own value (keyed like dist.machine_lanes); ``priority`` and
+    # ``free_threads`` are only the default of a machine without one. Use ``Settings.priority_for`` /
+    # ``free_threads_for`` and the ``set_*_for`` methods; QuantaBench never writes the two defaults.
+    priority: str = "low"            # "normal" | "low" | "background": CPU and I/O priority of the work, never the GUI
+    free_threads: int = 1            # logical threads the automatic budgets leave free (1 = all but one, as before)
+    machine_priority: dict[str, str] = field(default_factory=dict)
+    machine_free_threads: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -237,6 +245,70 @@ class Settings:
             table[key] = entry
         self.engines.machine_paths = table
 
+    def priority_for(self, machine: str | None = None, *, scope: bool = False):
+        """The run priority of ``machine`` (default: this one): its ``resources.machine_priority`` entry, else
+        ``resources.priority`` (a value that is not a priority counts as unset). ``scope=True`` returns
+        (priority, "this machine" | "all machines")."""
+        from .priority import DEFAULT_PRIORITY, normalize
+
+        own = _machine_entry(self.resources.machine_priority, machine)
+        if own is not None and normalize(own, "") in ("normal", "low", "background"):
+            value, where = normalize(own), "this machine"
+        else:
+            value, where = normalize(self.resources.priority, DEFAULT_PRIORITY), "all machines"
+        return (value, where) if scope else value
+
+    def set_priority_for(self, level: str | None, machine: str | None = None) -> None:
+        """Set ``machine``'s (default: this one) run priority only; None, "" or "default" = back to the default of
+        every machine (``resources.priority``), as is a value equal to it."""
+        from .priority import check, normalize
+
+        key = machine_key(machine if machine is not None else _this_machine())
+        table = {k: v for k, v in self.resources.machine_priority.items() if machine_key(k) != key}
+        text = str(level or "").strip().lower()
+        if text not in ("", "default"):
+            text = check(text)
+            if text != normalize(self.resources.priority):
+                table[key] = text
+        self.resources.machine_priority = table
+
+    def free_threads_for(self, machine: str | None = None, *, scope: bool = False):
+        """The free threads of ``machine`` (default: this one): its ``resources.machine_free_threads`` entry, else
+        ``resources.free_threads``. ``scope=True`` returns (count, "this machine" | "all machines")."""
+        from .priority import DEFAULT_FREE_THREADS
+
+        own = _machine_entry(self.resources.machine_free_threads, machine)
+        value, where = self.resources.free_threads, "all machines"
+        if isinstance(own, (int, float)) and not isinstance(own, bool) and own >= 0:
+            value, where = own, "this machine"
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            value = DEFAULT_FREE_THREADS
+        value = value if value >= 0 else DEFAULT_FREE_THREADS
+        return (value, where) if scope else value
+
+    def set_free_threads_for(self, n: int | str | None, machine: str | None = None) -> None:
+        """Set ``machine``'s (default: this one) free threads only; None, "" or "default" = back to the default of
+        every machine (``resources.free_threads``), as is a value equal to it."""
+        key = machine_key(machine if machine is not None else _this_machine())
+        table = {k: v for k, v in self.resources.machine_free_threads.items() if machine_key(k) != key}
+        if str(n if n is not None else "").strip().lower() not in ("", "default"):
+            value = int(n)
+            if value < 0:
+                raise ValueError(f"free threads must be 0 or more, not {n!r}")
+            if value != self.resources.free_threads:
+                table[key] = value
+        self.resources.machine_free_threads = table
+
+    def thread_budget_for(self, machine: str | None = None, logical: int | None = None) -> int:
+        """CPU threads of in-process work on ``machine`` (default: this one): ``resources.threads``, where 0 (auto) is
+        the logical threads minus the machine's free threads (``priority.thread_budget``)."""
+        from .priority import thread_budget
+
+        return thread_budget(self.resources.threads, self.free_threads_for(machine), self.priority_for(machine),
+                             logical)
+
     def _machine_paths(self, machine: str | None = None) -> dict[str, str]:
         key = machine_key(machine if machine is not None else _this_machine())
         merged: dict[str, str] = {}
@@ -244,6 +316,15 @@ class Settings:
             if machine_key(name) == key and isinstance(entry, dict):
                 merged.update({str(k): str(v) for k, v in entry.items() if isinstance(v, str)})
         return merged
+
+
+def _machine_entry(table: dict, machine: str | None):
+    """``table``'s value for ``machine`` (default: this one), names compared by ``machine_key``; None if absent."""
+    key = machine_key(machine if machine is not None else _this_machine())
+    for name, value in table.items():
+        if machine_key(name) == key:
+            return value
+    return None
 
 
 def machine_key(name: str) -> str:
@@ -360,7 +441,8 @@ def set_settings_dir(new_dir: str | Path | None, pointer_place: Path | None = No
 
 #: (section, field) of the settings that hold one entry per machine (machine name -> value). The file is shared
 #: by every machine, so ``save`` writes only the entries this process changed and keeps the others' from disk.
-PER_MACHINE_TABLES = (("engines", "machine_paths"), ("dist", "machine_lanes"))
+PER_MACHINE_TABLES = (("engines", "machine_paths"), ("dist", "machine_lanes"), ("resources", "machine_priority"),
+                      ("resources", "machine_free_threads"))
 _AS_LOADED = "_per_machine_as_loaded"     # attribute (not a dataclass field: never written) set by load/save
 
 
