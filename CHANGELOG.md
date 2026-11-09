@@ -28,6 +28,31 @@
 - `quantabench-cli lanes` without a spec shows this machine's lane spec (`Settings.lanes_for`), not the shared
   default.
 
+### Live machine metrics, MON-1 (2026-11-09)
+- **What the machine is doing while a job runs** (`quantabench/sensors.py`): CPU utilization (total and per logical
+  CPU), the effective CPU clock as Task Manager shows it (average, min-max over the cores) and the base clock, CPU
+  temperature and package power, GPU utilization, temperature, clock, power and VRAM, RAM, fans where cheap.
+  Windows: the performance counters through ctypes (no new dependency) and LibreHardwareMonitor's web server for
+  temperatures and power; macOS: macmon (`brew install macmon`); Linux: cpufreq, hwmon, RAPL, amdgpu sysfs and
+  nvidia-smi; WSL2 says the sensors are on the Windows side. A read never raises and takes about a second at most;
+  whatever is missing says why and how to enable it.
+- **GUI: a machine monitor strip** in the Pipeline dock, above the Run buttons: this computer and every worker, with
+  CPU %, effective clock, temperatures, GPU % and VRAM, RAM, 10-minute sparklines and colours by threshold. It
+  samples on background threads and folds to one line. The Machines dock's worker status shows each worker's load
+  and temperature too.
+- **`quantabench-cli monitor [--interval 2] [--count N]`** prints one line per sample (`--per-cpu`, `--json`,
+  `--worker NAME`); `monitor --set lhm_url=... [--machine NAME]` stores this machine's sensor settings.
+  `quantabench-cli doctor` has a Sensors section.
+- **Workers** answer `GET /v1/sensors` and add the latest sample to `/v1/info`; older workers answer 404 and are shown
+  as "older worker without sensors".
+- **Run timings:** the job table's schema is 5: the 60 s load samples also hold the effective clock, CPU temperature
+  and power, and GPU utilization, temperature and power (older tables get the columns on their next run).
+  `quantabench-cli timings` prints mean/max temperature and clock per run and flags likely thermal throttling
+  (a clock well below the run's typical clock under the same load, at >= 85 °C).
+- **Settings:** `sensors.enabled`, `sensors.interval_s` and `sensors.lhm_url`, each also per machine in
+  `sensors.machine` (the file is shared by SyncThing); the defaults need no configuration. docs/ENGINES.md, Live
+  machine metrics.
+
 ### Conformer ranking benchmark, RANK-1b (2026-11-08)
 - docs/VALIDATION.md, "RANK-1b": RANK-1's cheap rankers on Brandon's non-fluorinated handbook molecules (12
   hydrocarbons, 28 polar organics, 8 ions) and a matched control of 20 neutral PFAS. All went through one protocol

@@ -127,7 +127,8 @@ Every request needs `Authorization: Bearer <settings.dist.worker_token>`.
 
 | Request | Answer |
 |---|---|
-| `GET /v1/info` | name, URL, QuantaBench version and commit, machine profile, queue (`running`, `queued`, `paused`) |
+| `GET /v1/info` | name, URL, QuantaBench version and commit, machine profile, queue (`running`, `queued`, `paused`), and since MON-1 the latest sensor sample (`sensors`, without the per-CPU lists; null before the first) |
+| `GET /v1/sensors` | since MON-1: live machine metrics `{sensors: a sensors.Sample dict or null, why, interval_s, machine}` (CPU and GPU load, effective clock, temperatures, power, VRAM, RAM; docs/ENGINES.md, Live machine metrics). The worker samples while requests keep coming and stops after 2 minutes without one; older workers answer 404 |
 | `GET /v1/jobs` | every job, newest first |
 | `POST /v1/jobs` | body `{inputs: [jobs.input_to_json(...)], config: {BuildConfig fields}, label, chunk?, lanes?, client?, allow_version_mismatch?}`; header `X-QuantaBench-Version`. 201 `{id, job}` |
 | `GET /v1/jobs/<id>?tail=20` | state (`queued`, `running`, `done`, `failed`, `cancelled`, `interrupted`), counts from the run folder's job table, `run_dir`, `run_folder`, progress, log tail |

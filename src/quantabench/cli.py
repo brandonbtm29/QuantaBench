@@ -20,6 +20,7 @@
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
     quantabench-cli update [--check] [--upgrade-packages]                       # git pull + reinstall if needed
     quantabench-cli sketcher [--install [--from-zip ZIP]] [--use DIR]            # the Sketch dock's editor files
+    quantabench-cli monitor [--interval 2] [--count N] [--worker NAME]         # live load, clocks, temperatures
 
 Splitting work (``quantabench.dist``):
 
@@ -66,6 +67,9 @@ def _doctor(args) -> int:
             prof = profile.local_profile()
         out["profile"] = prof.to_dict()
         out["run_priority"] = priority_info(settings_mod.load(), rep.logical_cores)
+        from . import sensors
+
+        out["sensors"] = sensors.read().to_dict()
         print(json.dumps(out, indent=2))
         return 0
     print(f"QuantaBench {__version__}")
@@ -127,6 +131,10 @@ def _doctor(args) -> int:
         print(f"  Run priority  {priority_lines(settings_mod.load(), None, rep.logical_cores)}")
     except Exception as exc:  # noqa: BLE001 - doctor reports, never fails on settings
         print(f"  Run priority  unknown ({type(exc).__name__}: {exc})")
+    from . import sensors
+
+    for line in sensors.doctor_lines():   # what is measured live, and how to enable what is missing (MON-1)
+        print(line)
     for note in rep.notes:
         print(f"  note: {note}")
     if args.bench:
@@ -1179,6 +1187,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_methods import register as register_methods
 
     register_methods(sub)       # methods [NAME]: the methods guide (quantabench.chem.method_guide)
+    from .cli_monitor import register as register_monitor
+
+    register_monitor(sub)       # monitor: live CPU/GPU load, clocks, temperatures, power (quantabench.sensors)
 
     se = sub.add_parser("settings", help="show settings, or move them (e.g. into a synced folder)")
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")

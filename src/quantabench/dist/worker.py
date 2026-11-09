@@ -8,7 +8,9 @@ or through ``GET /v1/jobs/<id>/archive`` where there is no synced folder.
 
 API (version 1; every request needs ``Authorization: Bearer <settings.dist.worker_token>``)::
 
-    GET  /v1/info                    machine profile, versions, queue
+    GET  /v1/info                    machine profile, versions, queue, latest sensor sample ("sensors", MON-1)
+    GET  /v1/sensors                 live machine metrics: {"sensors": sensors.Sample dict | null, "why", "interval_s"}
+                                     (since MON-1; older workers answer 404, which clients take as "no sensors")
     GET  /v1/jobs                    every job (newest first)
     POST /v1/jobs                    {inputs, config, label, chunk?, lanes?, client?, allow_version_mismatch?}
                                      -> 201 {id, job}; needs X-QuantaBench-Version equal to the worker's
@@ -1235,6 +1237,7 @@ class _Server(ThreadingHTTPServer):
 
 _ROUTES = (
     ("GET", re.compile(r"/v1/info"), "info"),
+    ("GET", re.compile(r"/v1/sensors"), "sensors"),
     ("GET", re.compile(r"/v1/jobs"), "list_jobs"),
     ("POST", re.compile(r"/v1/jobs"), "submit"),
     ("GET", re.compile(r"/v1/jobs/([0-9a-f]{12})"), "job"),
@@ -1394,6 +1397,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _r_info(self, query) -> None:
         self._json(200, self.server.worker.info())
 
+    def _r_sensors(self, query) -> None:
+        self._json(200, self.server.worker.sensors_reply())
+
     def _r_list_jobs(self, query) -> None:
         mgr = self.server.worker.manager
         self._json(200, {"jobs": [mgr.public(j, tail=0) for j in mgr.list()]})
@@ -1540,12 +1546,43 @@ class Worker:
                                     "platform": sys.platform, "profile": prof.to_dict()}
         self._thread: threading.Thread | None = None
         self._started = False
+        self._sensors = None                  # sensors.Monitor, made on the first request for it
+        self._sensors_lock = threading.Lock()
 
     def info(self) -> dict:
-        return {"api": API_VERSION, "name": self.name, "url": self.url, "quantabench_version": __version__,
-                "commit": self.commit, "python": sys.version.split()[0], "platform": sys.platform,
-                "output_dir": str(self.manager.output_dir), "lanes": self.lanes_spec(),
-                "queue": self.manager.queue_state(), "profile": self.profile.to_dict()}
+        out = {"api": API_VERSION, "name": self.name, "url": self.url, "quantabench_version": __version__,
+               "commit": self.commit, "python": sys.version.split()[0], "platform": sys.platform,
+               "output_dir": str(self.manager.output_dir), "lanes": self.lanes_spec(),
+               "queue": self.manager.queue_state(), "profile": self.profile.to_dict()}
+        with contextlib.suppress(Exception):      # optional: a client that does not know the key ignores it
+            s = self._sensor_monitor().latest()
+            out["sensors"] = s.to_dict(per_cpu=False) if s is not None else None
+        return out
+
+    # -------------------------------------------------------------- live machine metrics (MON-1)
+    SENSOR_IDLE_S = 120.0     # no request for this long: the monitor stops sampling (and stops macmon)
+
+    def _sensor_monitor(self):
+        from .. import sensors
+
+        with self._sensors_lock:
+            if self._sensors is None:
+                self._sensors = sensors.Monitor(idle_stop_s=self.SENSOR_IDLE_S)
+            return self._sensors
+
+    def sensors_reply(self) -> dict:
+        """``GET /v1/sensors``: the latest sample of this machine (sampled while requests keep coming; the first
+        request after a quiet spell waits up to 2 s for a fresh one)."""
+        try:
+            m = self._sensor_monitor()
+            s = m.latest(wait=2.0)
+        except Exception as exc:  # noqa: BLE001
+            return {"sensors": None, "why": f"sensors failed ({type(exc).__name__}: {exc})", "interval_s": None}
+        why = "" if s is not None else (m.error or "no sample yet")
+        if s is not None and not m.config.enabled:
+            why = "sensors are turned off in this machine's settings (utilization and RAM only)"
+        return {"sensors": None if s is None else s.to_dict(), "why": why, "interval_s": m.interval_s,
+                "machine": self.name}
 
     def lanes_spec(self) -> str:
         """The lane spec jobs without their own run with: ``--lanes``, else this machine's setting."""
@@ -1637,6 +1674,10 @@ class Worker:
 
     def stop(self, timeout: float = 60.0) -> None:
         self._bench_stop.set()
+        with self._sensors_lock:
+            monitor, self._sensors = self._sensors, None
+        if monitor is not None:
+            monitor.stop()
         if self._bench_thread is not None:
             self._bench_thread.join(min(timeout, 120.0))
             self._bench_thread = None

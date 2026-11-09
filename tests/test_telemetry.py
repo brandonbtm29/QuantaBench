@@ -153,7 +153,7 @@ def test_an_old_job_table_gets_the_new_tables_and_resumes(tmp_path):
     run_dir = old_run_folder(tmp_path, c, inputs())
     with jobs.JobStore(run_dir) as store:
         assert telemetry.has_tables(store.conn)
-        assert store.conn.execute("PRAGMA user_version").fetchone()[0] == jobs.SCHEMA_VERSION == 4
+        assert store.conn.execute("PRAGMA user_version").fetchone()[0] == jobs.SCHEMA_VERSION == 5
         assert store.get_run()["version"] == "0.3.0.dev3" and store.counts()["ok"] == 1
     # read-only opens of an old table (status, merge) never create anything; a resume records its timings
     assert jobs.open_run(run_dir).counts["pending"] == 3
@@ -464,6 +464,142 @@ def test_the_load_sampler_samples_and_stops():
     if hasattr(os, "getloadavg"):
         assert all(x["load1"] >= 0 for x in got)
     assert s.take() == []
+
+
+# ------------------------------------------------------------------- machine sensors (MON-1, schema 5)
+V4_LOAD = ("CREATE TABLE telemetry_load (run_id TEXT NOT NULL, t_unix REAL, t_rel_s REAL, load1 REAL, load5 REAL, "
+           "load15 REAL, cpu_percent REAL, own_cpu_percent REAL, mem_percent REAL)")
+
+
+def v4_run_folder(tmp_path, c, mols):
+    """A run folder as QuantaBench left it with schema 4 (telemetry tables, no sensor columns), one load row."""
+    run_dir = old_run_folder(tmp_path, c, mols)
+    con = sqlite3.connect(run_dir / jobs.DB_NAME)
+    telemetry.create_tables(con)
+    con.execute("DROP TABLE telemetry_load")
+    con.execute(V4_LOAD)
+    con.execute("CREATE INDEX telemetry_load_run ON telemetry_load(run_id)")
+    con.execute("INSERT INTO telemetry_runs (run_id, machine, started) VALUES ('old', 'nova', '2026-11-08T00:00:00')")
+    con.execute("INSERT INTO telemetry_load (run_id, t_unix, cpu_percent, mem_percent) VALUES ('old', 1.0, 97.0, 40.0)")
+    con.execute("PRAGMA user_version=4")
+    con.commit()
+    con.close()
+    return run_dir
+
+
+def test_schema_4_gets_the_sensor_columns(tmp_path, monkeypatch):
+    c = cfg(tmp_path)
+    run_dir = v4_run_folder(tmp_path, c, inputs())
+    # read-only opens (status, timings on another machine) of a v4 table work and change nothing
+    got = timings.read_rows([run_dir])
+    assert got.loads["old"][0]["cpu_percent"] == 97.0 and got.loads["old"][0].get("cpu_temp_c") is None
+    assert timings.sensor_summary(got) == []
+    con = sqlite3.connect(run_dir / jobs.DB_NAME)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == 4
+    con.close()
+    with jobs.JobStore(run_dir) as store:
+        cols = {r[1] for r in store.conn.execute("PRAGMA table_info(telemetry_load)")}
+        assert {name for name, _ in telemetry.SENSOR_COLUMNS} <= cols
+        assert store.conn.execute("PRAGMA user_version").fetchone()[0] == jobs.SCHEMA_VERSION == 5
+        old = dict(store.conn.execute("SELECT * FROM telemetry_load WHERE run_id = 'old'").fetchone())
+        assert old["cpu_percent"] == 97.0 and old["cpu_temp_c"] is None and old["sensor_source"] is None
+    # a resume records sensors into the migrated table
+    from quantabench import sensors
+
+    fake = sensors.Sample(cpu_clock_mhz=4650.0, cpu_temp_c=71.5, cpu_power_w=120.0, gpu_percent=3.0, gpu_temp_c=40.0,
+                          gpu_power_w=18.0, source="test sensors")
+    monkeypatch.setattr(sensors, "read", lambda *a, **k: fake)
+    monkeypatch.setattr(telemetry, "LOAD_INTERVAL_S", 0.2)
+    real_sampler = telemetry.LoadSampler
+    monkeypatch.setattr(telemetry, "LoadSampler", lambda: real_sampler(interval=0.2, first=0.05, sensors=True))
+    jobs.run_resumable(None, c, run_dir, force=True)
+    new = [r for r in rows(run_dir, "telemetry_load") if r["run_id"] != "old"]
+    assert new and all(r["cpu_temp_c"] == 71.5 and r["cpu_clock_mhz"] == 4650.0 and r["gpu_power_w"] == 18.0
+                       and r["sensor_source"] == "test sensors" for r in new)
+
+
+def test_the_load_sampler_records_sensors_or_skips_them(monkeypatch):
+    from quantabench import sensors
+
+    fake = sensors.Sample(cpu_clock_mhz=5000.0, cpu_temp_c=60.0, source="fake")
+    monkeypatch.setattr(sensors, "read", lambda *a, **k: fake)
+    s = telemetry.LoadSampler(interval=0.1, first=0.02, sensors=True)
+    s.start()
+    threading.Event().wait(0.35)
+    s.stop()
+    got = s.take()
+    assert got and all(x["cpu_temp_c"] == 60.0 and x["cpu_clock_mhz"] == 5000.0 and x["sensor_source"] == "fake"
+                       and "gpu_temp_c" not in x for x in got)
+    off = telemetry.LoadSampler(interval=0.1, first=0.02, sensors=False)
+    off.start()
+    threading.Event().wait(0.25)
+    off.stop()
+    plain = off.take()
+    assert plain and all("cpu_temp_c" not in x and "sensor_source" not in x for x in plain)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("sensor bus error")
+
+    monkeypatch.setattr(sensors, "read", broken)
+    assert telemetry.sensor_fields() == {}          # a failing read gives nothing, never an error
+    monkeypatch.setenv("QUANTABENCH_SENSORS", "0")
+    assert telemetry._sensors_on() is False
+
+
+def sensor_run(run_dir, machine, samples, run_id=None):
+    """A job table with one run of one CREST molecule and load samples [(cpu %, clock MHz, CPU °C, GPU °C)]."""
+    run_dir.mkdir(parents=True)
+    run_id = run_id or f"r-{run_dir.name}"
+    with jobs.JobStore(run_dir) as store, store.conn:
+        telemetry._insert(store.conn, "telemetry_runs", {"run_id": run_id, "machine": machine,
+                                                          "started": "2026-11-09T01:00:00", "run_folder": run_dir.name})
+        key = {"run_id": run_id, "mol_id": "PFOA", "attempt": 1}
+        telemetry._insert(store.conn, "telemetry_attempts", {**key, "outcome": "ok", "size": 26})
+        telemetry._insert(store.conn, "telemetry_stages", {**key, "stage": "conformers", "engine": "crest gfnff",
+                                                            "outcome": "ok", "wall_s": 100.0, "threads_given": 4,
+                                                            "t_start_unix": 0.0, "t_end_unix": 100.0})
+        for i, (cpu, clock, temp, gtemp) in enumerate(samples):
+            telemetry._insert(store.conn, "telemetry_load", {"run_id": run_id, "t_unix": 60.0 * i, "cpu_percent": cpu,
+                                                              "cpu_clock_mhz": clock, "cpu_temp_c": temp,
+                                                              "gpu_temp_c": gtemp, "gpu_percent": 5.0,
+                                                              "cpu_power_w": 140.0, "sensor_source": "test"})
+    return run_id
+
+
+def test_timings_summarizes_sensors_and_flags_throttling(tmp_path, capsys):
+    root = tmp_path / "Runs"
+    steady = [(97.0, 5200.0, 88.0, 50.0)] * 8                                   # hot, but the clock holds
+    throttled = [(97.0, 5200.0, 89.0, 50.0)] * 5 + [(98.0, 3900.0, 95.0, 52.0)] * 3 + [(20.0, 3000.0, 60.0, 40.0)]
+    cool_dip = [(96.0, 5100.0, 70.0, 45.0)] * 5 + [(96.0, 3800.0, 72.0, 45.0)] * 3     # slow, but not hot
+    other_band = [(97.0, 5200.0, 90.0, 50.0)] * 4 + [(60.0, 4200.0, 90.0, 50.0)] * 4   # lower clock at lower load
+    ids = {name: sensor_run(root / name, f"m-{name}", s) for name, s in
+           (("steady", steady), ("throttled", throttled), ("cool", cool_dip), ("bands", other_band))}
+    got = timings.read_rows(timings.find_job_tables([root]))
+    by = {r["machine"]: r for r in timings.sensor_summary(got)}
+    assert set(by) == {"m-steady", "m-throttled", "m-cool", "m-bands"}
+    t = by["m-throttled"]
+    assert t["run_id"] == ids["throttled"] and t["samples"] == 9
+    assert t["cpu_temp_c_max"] == 95.0 and t["cpu_temp_c_mean"] == pytest.approx((89 * 5 + 95 * 3 + 60) / 9)
+    assert t["cpu_clock_mhz_max"] == 5200.0 and t["cpu_clock_mhz_min"] == 3000.0
+    assert t["throttle_throttling"] and t["throttle_flagged"] == 3 and t["throttle_loaded"] == 8
+    assert t["throttle_typical_mhz"] == 5200.0 and t["throttle_low_mhz"] == 3900.0
+    assert not by["m-steady"]["throttle_throttling"] and by["m-steady"]["throttle_flagged"] == 0
+    assert not by["m-cool"]["throttle_throttling"]          # below 85 °C: slow, not throttled
+    assert not by["m-bands"]["throttle_throttling"]         # each load band has its own typical clock
+    assert timings.throttle_check([]) == {"loaded": 0, "flagged": 0, "throttling": False, "typical_mhz": None,
+                                          "low_mhz": None}
+    from quantabench import cli
+
+    assert cli.main(["timings", str(root), "-o", str(tmp_path / "t.csv")]) == 0
+    out = capsys.readouterr().out
+    assert "Machine sensors per run" in out
+    section = out.split("Machine sensors per run", 1)[1].splitlines()
+    line = next(ln for ln in section if ln.startswith("m-throttled"))
+    assert "LIKELY: 3 of 8 loaded samples at >= 85 °C ran below 85% of the typical 5.20 GHz (lowest 3.90 GHz)" in line
+    assert "88 / 95" in line and "4.52 / 5.20 (min 3.00)" in line          # CPU °C and clock: mean / max
+    assert "no (0 of 8 loaded samples)" in next(ln for ln in section if ln.startswith("m-steady"))
+    header = (tmp_path / "t.csv").read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert {"cpu_temp_c", "cpu_clock_mhz", "gpu_power_w"} <= set(header)
 
 
 # ------------------------------------------------------------------------------------ aggregator

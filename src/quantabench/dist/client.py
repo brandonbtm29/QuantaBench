@@ -353,6 +353,11 @@ class WorkerClient:
     def info(self, timeout: float | None = None) -> dict:
         return self._json("GET", "/v1/info", timeout=timeout)
 
+    def sensors(self, timeout: float | None = None) -> dict:
+        """The worker's live machine metrics: {"sensors": a ``sensors.Sample`` dict or None, "why": ...,
+        "interval_s": ...}. A worker from before MON-1 answers 404 (``WorkerError.status``)."""
+        return self._json("GET", "/v1/sensors", timeout=timeout)
+
     def submit_body(self, body: dict) -> dict:
         return self._json("POST", "/v1/jobs", body, timeout=max(self.timeout, 120.0))
 

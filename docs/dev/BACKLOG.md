@@ -223,7 +223,8 @@ Depends on: UI-1.
 - **Recipes**: named multi-level protocols saved in settings (e.g. "Screen: MMFF conformers → GFN2 →
   AIMNet2"), mapped onto `BuildConfig`. Ship 3 sensible presets.
 - **Job monitor** dock: queued/running/done jobs, per-job progress and log, cancel, open output folder,
-  CPU threads and GPU memory in use.
+  CPU threads and GPU memory in use. The live machine metrics exist since MON-1 (the machine monitor strip in the
+  Pipeline dock, `sensors.Monitor`): move or mirror them into this dock.
 - Acceptance: tests that each preset produces the right `BuildConfig`; queue runs jobs in order with
   cancellation; screenshot.
 
@@ -658,6 +659,35 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
   auto"; auto picks by engine availability and throughput.
 - 2026-11-05: minimal Machines dock (registry, worker status on demand, this computer's lane plan). Left:
   the "Run on" choice, which belongs in UI-5's job dialog.
+
+### MON-1: Live machine metrics while jobs run · done 2026-11-09 (branch `feat/machine-monitor`; the Mac's temperatures need-Brandon: `brew install macmon`)
+Brandon (2026-11-09): "during the submit job page, we could monitor other PC metrics like what the current actual
+thread speed is and the temperature of the PC."
+- Done: `quantabench/sensors.py` (`read()` never raises, about a second at most; `Monitor` samples in a thread),
+  per OS: Windows performance counters through ctypes (Task Manager's effective clock, per logical CPU; GPU Engine
+  and Adapter Memory) + LibreHardwareMonitor's web server (`/data.json`: CPU Tctl/Tdie and package power, GPU
+  temperature, clock, power, VRAM); macOS macmon (a kept-running `macmon pipe`); Linux cpufreq, hwmon, RAPL, amdgpu
+  sysfs, nvidia-smi; WSL2 says the sensors are on the Windows side. `quantabench-cli monitor` (`--per-cpu`, `--json`,
+  `--worker`, `--set`), a Sensors section in `doctor`, the GUI's machine monitor strip in the Pipeline dock (this
+  computer and the workers, sparklines, colours by threshold), `GET /v1/sensors` on workers (and `sensors` in
+  `/v1/info`; older peers answer 404 and are left alone), `settings.sensors` with per-machine entries. Run timings:
+  job table schema 5 adds the clock, CPU temperature and power, and GPU utilization, temperature and power to the
+  60 s load samples; `timings` prints them per run with a likely-throttling flag (docs/ENGINES.md, Live machine
+  metrics; UI_PLAN.md, job monitor).
+- Checked on NOVA (2026-11-09, from a scratch copy, LHM's web server already on): every metric but the fans
+  (LHM reads 0 RPM on all of the ASUS B650E's headers); effective clock 4.9-5.0 GHz at idle against a 4,701 MHz
+  base, CPU 52-58 °C, 62-83 W, RX 9060 XT 36 °C, VRAM 2.0/15.9 GB; a read takes 25-50 ms (the first 0.3 s). The
+  WMI namespace `root\LibreHardwareMonitor` is absent there, so only the web server is used.
+- Left:
+  - needs-Brandon: `brew install macmon` on the MacBook (not installed on 2026-11-09; the Mac reports utilization
+    and RAM until then), then check the parser against its real JSON (`macmon pipe -s 1`; the fields the parser
+    expects are in docs/ENGINES.md) and restart the worker so `/v1/sensors` includes temperatures.
+  - Fans on NOVA: the board's fan headers read 0 RPM in LHM; HWiNFO may read them, LHM may need a newer version.
+  - With UI-5's job monitor dock: per-job markers on the sparklines, the run's own CPU share next to the machine's,
+    a throttling banner during a run (UI_PLAN.md).
+  - Use the sensor columns in the CREST cost-model fit (SCHED-1): leave out or down-weight runs flagged as
+    throttling or busy.
+  - Intel hybrid CPUs (P- and E-cores) and multi-GPU machines: the strip shows the GPU with the most memory only.
 
 ### DIST-5: Speed-aware lanes at the end of a batch · done 2026-11-05 (NOVA measurement needs-Brandon)
 - `lanes auto` for AIMNet2 on NOVA gives 1 GPU lane + 4 CPU lanes, and the GPU is ~10x faster per molecule.

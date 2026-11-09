@@ -10,6 +10,11 @@ row with its attempt and run (machine, CPU, lane plan, settings) and the load sa
 twice (a worker's synced folder and its downloaded copy) is read once, from the copy with the most rows. Job
 tables from before the telemetry tables existed are counted and skipped.
 
+Machine sensors (``sensor_summary``, since job table schema 5): per run the mean/max CPU temperature, effective
+clock, CPU power, GPU temperature and utilization of its load samples, and ``throttle_check``: likely thermal
+throttling when at least ``THROTTLE_MIN_SAMPLES`` samples under load ran below ``THROTTLE_CLOCK_FRACTION`` of the
+run's typical clock under the same load, at ``THROTTLE_TEMP_C`` or hotter.
+
 The fit (``fit_cost_model``): CREST time = A x atoms^p x threads^-q on the ``conformers`` rows of CREST runs that
 ended ok, per machine and CREST level (``threads.crest_level``: method and --quick), by least squares on the logs.
 It is saved (``save_fit``, ``threads.cost_model_path``) only with at least ``MIN_MOLECULES`` molecules over at
@@ -52,7 +57,16 @@ STAGE_FIELDS = ("stage", "seq", "engine", "threads_planned", "threads_borrowed",
                 "t_end_unix", "wall_s", "cpu_s", "child_cpu_s", "cpu_total_s", "cpu_efficiency", "programs",
                 "program_wall_s", "peak_rss_mb", "child_peak_rss_mb", "predicted_s", "predicted_cost", "outcome",
                 "n_in", "n_out")
-LOAD_FIELDS = ("load1", "cpu_percent", "own_cpu_percent", "mem_percent")
+LOAD_FIELDS = ("load1", "cpu_percent", "own_cpu_percent", "mem_percent", "cpu_clock_mhz", "cpu_temp_c",
+               "cpu_power_w", "gpu_percent", "gpu_temp_c", "gpu_power_w")
+#: likely thermal throttling (``throttle_check``): a load sample at >= LOADED_PCT machine CPU whose effective clock
+#: is below THROTTLE_CLOCK_FRACTION of the run's typical clock under the same load (the median of its samples in
+#: the same LOAD_BANDS band) while the CPU is at >= THROTTLE_TEMP_C
+LOADED_PCT = 50.0
+LOAD_BANDS = (50.0, 75.0, 90.0, 101.0)
+THROTTLE_CLOCK_FRACTION = 0.85
+THROTTLE_TEMP_C = 85.0
+THROTTLE_MIN_SAMPLES = 2
 CSV_FIELDS = ("run_id", "run_started", "mol_id", "attempt", "lane", *STAGE_FIELDS, *ATTEMPT_FIELDS, *RUN_FIELDS,
               *LOAD_FIELDS, "run_dir")
 
@@ -110,6 +124,7 @@ class Collected:
     without: list[Path] = field(default_factory=list)    # job tables from before the telemetry tables
     unreadable: list[tuple[Path, str]] = field(default_factory=list)
     duplicates: int = 0                                  # runs read once although found in several copies
+    loads: dict[str, list[dict]] = field(default_factory=dict)   # run_id -> its load samples (telemetry_load)
 
 
 def _derive(row: dict) -> None:
@@ -179,6 +194,7 @@ def read_rows(run_dirs: Iterable[str | Path], log: Callable[[str], None] = _noop
     for run_id, (_n, d, run, rows, loads) in found.items():
         run = {**run, "run_dir": str(d)}
         out.runs[run_id] = run
+        out.loads[run_id] = loads
         times = [s.get("t_unix") or 0.0 for s in loads]
         for r in rows:
             t = r.get("t_start_unix")
@@ -252,6 +268,87 @@ def summary_lines(summary: list[dict]) -> list[str]:
         lines.append(f"{s['machine'][:16]:<16} {s['stage']:<12} {s['engine']:<{w}} {s['molecules']:>9} "
                      f"{_g(s['median_s']):>9} {_g(s['median_s_per_atom_p']):>9} {s['p']:>4g} "
                      f"{_g(s['cpu_efficiency'], '.2f'):>7} {s['threads']:>7g}")
+    return lines
+
+
+# ---------------------------------------------------------------------------------------- sensors
+def _band(cpu_percent: float) -> int:
+    return next((i for i, top in enumerate(LOAD_BANDS[1:]) if cpu_percent < top), len(LOAD_BANDS) - 2)
+
+
+def throttle_check(samples: list[dict]) -> dict:
+    """Likely thermal throttling in one run's load samples: {"loaded": samples at >= LOADED_PCT CPU with a clock,
+    "flagged": those below THROTTLE_CLOCK_FRACTION of the median clock of their load band (all loaded samples when
+    a band has fewer than 3) at >= THROTTLE_TEMP_C, "throttling": at least THROTTLE_MIN_SAMPLES flagged, "typical_mhz":
+    the median loaded clock, "low_mhz": the lowest flagged clock}."""
+    loaded = [s for s in samples if (s.get("cpu_percent") or 0) >= LOADED_PCT and s.get("cpu_clock_mhz")]
+    out = {"loaded": len(loaded), "flagged": 0, "throttling": False, "typical_mhz": None, "low_mhz": None}
+    if not loaded:
+        return out
+    every = statistics.median(s["cpu_clock_mhz"] for s in loaded)
+    bands: dict[int, list[float]] = {}
+    for s in loaded:
+        bands.setdefault(_band(s["cpu_percent"]), []).append(s["cpu_clock_mhz"])
+    typical = {b: statistics.median(v) if len(v) >= 3 else every for b, v in bands.items()}
+    flagged = [s for s in loaded if s.get("cpu_temp_c") is not None and s["cpu_temp_c"] >= THROTTLE_TEMP_C
+               and s["cpu_clock_mhz"] < THROTTLE_CLOCK_FRACTION * typical[_band(s["cpu_percent"])]]
+    out.update(flagged=len(flagged), throttling=len(flagged) >= THROTTLE_MIN_SAMPLES, typical_mhz=every,
+               low_mhz=min((s["cpu_clock_mhz"] for s in flagged), default=None))
+    return out
+
+
+def sensor_summary(got: Collected) -> list[dict]:
+    """One row per run with sensor samples: mean/max CPU temperature and effective clock (and min clock), mean/max
+    GPU temperature and utilization, mean CPU power, and ``throttle_check``."""
+    out = []
+    for run_id, samples in got.loads.items():
+        with_sensors = [s for s in samples if any(s.get(k) is not None for k in ("cpu_clock_mhz", "cpu_temp_c",
+                                                                                 "gpu_temp_c", "gpu_percent"))]
+        if not with_sensors:
+            continue
+        run = got.runs.get(run_id, {})
+
+        def stats(key: str, vals=with_sensors) -> tuple[float | None, float | None, float | None]:
+            xs = [s[key] for s in vals if s.get(key) is not None]
+            return (sum(xs) / len(xs), max(xs), min(xs)) if xs else (None, None, None)
+
+        row = {"run_id": run_id, "machine": run.get("machine") or "?", "started": run.get("started") or "",
+               "run_folder": run.get("run_folder") or "", "samples": len(with_sensors),
+               "source": next((s.get("sensor_source") for s in with_sensors if s.get("sensor_source")), "")}
+        for key in ("cpu_temp_c", "cpu_clock_mhz", "cpu_power_w", "gpu_temp_c", "gpu_percent", "gpu_power_w"):
+            row[f"{key}_mean"], row[f"{key}_max"], row[f"{key}_min"] = stats(key)
+        row.update({f"throttle_{k}": v for k, v in throttle_check(with_sensors).items()})
+        out.append(row)
+    out.sort(key=lambda r: (r["machine"], r["started"]))
+    return out
+
+
+def sensor_lines(rows: list[dict]) -> list[str]:
+    if not rows:
+        return []
+    lines = ["", "Machine sensors per run (load samples every 60 s; mean / max):",
+             f"{'machine':<16} {'started':<20} {'samples':>7} {'CPU °C':>11} {'clock GHz':>15} {'CPU W':>6} "
+             f"{'GPU °C':>11} {'GPU %':>9}  throttling"]
+
+    def pair(r, key, fmt=".0f", scale=1.0) -> str:
+        m, x = r[f"{key}_mean"], r[f"{key}_max"]
+        return "-" if m is None else f"{m / scale:{fmt}} / {x / scale:{fmt}}"
+
+    for r in rows:
+        if r["throttle_throttling"]:
+            flag = (f"LIKELY: {r['throttle_flagged']} of {r['throttle_loaded']} loaded samples at >= "
+                    f"{THROTTLE_TEMP_C:.0f} °C ran below {THROTTLE_CLOCK_FRACTION:.0%} of the typical "
+                    f"{r['throttle_typical_mhz'] / 1000:.2f} GHz (lowest {r['throttle_low_mhz'] / 1000:.2f} GHz)")
+        elif r["throttle_loaded"]:
+            flag = f"no ({r['throttle_flagged']} of {r['throttle_loaded']} loaded samples)"
+        else:
+            flag = "- (no samples under load with a clock)"
+        clock = pair(r, "cpu_clock_mhz", ".2f", 1000.0)
+        if r["cpu_clock_mhz_min"] is not None:
+            clock += f" (min {r['cpu_clock_mhz_min'] / 1000:.2f})"
+        lines.append(f"{r['machine'][:16]:<16} {r['started'][:19]:<20} {r['samples']:>7} {pair(r, 'cpu_temp_c'):>11} "
+                     f"{clock:>15} {_g(r['cpu_power_w_mean'], '.0f'):>6} {pair(r, 'gpu_temp_c'):>11} "
+                     f"{pair(r, 'gpu_percent'):>9}  {flag}")
     return lines
 
 
@@ -460,6 +557,8 @@ def _cli(args) -> int:
     except OSError as exc:
         print(f"Could not write {out} ({exc})", file=sys.stderr)
     for line in summary_lines(summarize(got.rows, args.power)):
+        print(line)
+    for line in sensor_lines(sensor_summary(got)):
         print(line)
     if not args.fit:
         return 0

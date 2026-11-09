@@ -6,7 +6,9 @@ from quantabench import cli
 
 def test_doctor(capsys):
     assert cli.main(["doctor"]) == 0
-    assert "Engines" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Engines" in out
+    assert "Sensors" in out and "CPU utilization" in out and "CPU temperature" in out     # MON-1
 
 
 def test_build_and_slab(tmp_path, capsys):

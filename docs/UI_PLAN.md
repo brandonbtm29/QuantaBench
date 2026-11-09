@@ -90,6 +90,35 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
   worker such as BTM NOVA or the MacBook, or auto (DIST-3 in the backlog, PLATFORMS.md). Jobs run in a queue shown in the
   job monitor and can be resumed.
 
+## Job monitor: live machine metrics (MON-1, 2026-11-09)
+
+Brandon (2026-11-09): "during the submit job page, we could monitor other PC metrics like what the current actual
+thread speed is and the temperature of the PC."
+
+- **Today: the machine monitor strip** (`gui.machine_monitor`), in the Pipeline dock just above Run all / Run
+  selected / Cancel, so it is in view while a run is set up and while it runs. A "Machine monitor" header folds it
+  to one summary line (remembered per machine). One block per machine, this computer first, then every worker that
+  answers `GET /v1/sensors` (the MacBook's `quantabench-cli worker`):
+  - **CPU** utilization, effective clock (average and the fastest core, as Task Manager's "Speed"), temperature and
+    package power;
+  - **GPU** utilization, temperature and VRAM used / total (the line is hidden on machines without GPU sensors);
+  - **RAM** used / total and percent;
+  - sparklines of the last 10 minutes: utilization and temperature for CPU and GPU, RAM percent.
+- **Colours:** temperatures amber from 80 °C and red from 90 °C; RAM and VRAM amber from 85 % and red from 95 %; the
+  clock amber when the CPU runs below 80 % of its base clock at >= 50 % load (likely throttling). Units always shown
+  (%, GHz/MHz, °C, W, GB).
+- **Tooltips** say where each number comes from (Windows performance counters, LibreHardwareMonitor, macmon,
+  sysfs) and why a missing one is missing; a grey note next to the machine's name says how to get temperatures
+  ("brew install macmon", "turn on LibreHardwareMonitor's web server").
+- **Never blocks the window:** this computer is sampled by a `sensors.Monitor` thread and the workers by one polling
+  thread (every 5 s, 2.5 s timeout; unreachable workers again after a minute, older ones without sensors after ten);
+  a QTimer only copies their latest samples. Both stop while the strip is hidden and when the window closes.
+- The Machines dock's worker status also shows each worker's latest CPU load, clock and temperature (from
+  `/v1/info`).
+- **Later, with UI-5's job monitor dock:** the same blocks next to the job list, per-job markers on the sparklines
+  (when a stage or molecule started), the run's own CPU share (the run timings' `own_cpu_percent`) against the
+  machine's, and a throttling banner from `timings`' rule while a run is going.
+
 ## Priorities
 
 - **Tier 1:** app shell (UI-1), project document (UI-2), spreadsheet/plots/formulas (UI-3), structure
