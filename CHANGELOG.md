@@ -101,6 +101,8 @@
 - Run timings on Windows (Python 3.12): the load sampler's stop event was called `_stop`, which hides
   `threading.Thread._stop()`, so stopping it raised and the run row was never closed (no end time, an interrupted
   molecule left as "running"). Renamed.
+- `tests/test_sensors.py::test_linux_sysfs_provider` skips on Windows: its fake sysfs needs names like `intel-rapl:0`,
+  which Windows forbids.
 - A program's CPU time on Windows counts the processes it starts (a job object, as `getrusage` does on POSIX):
   a venv's `python.exe` is a launcher, and its own time was all that was recorded.
 

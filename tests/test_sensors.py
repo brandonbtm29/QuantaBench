@@ -508,6 +508,7 @@ def fake_sys(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake sysfs needs names like intel-rapl:0, which Windows forbids")
 def test_linux_sysfs_provider(tmp_path, monkeypatch):
     import psutil
 
