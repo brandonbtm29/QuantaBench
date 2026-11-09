@@ -560,6 +560,79 @@ costs about 0.3 % of a run (below). Old run folders get the tables the next time
   missing (a run with fixed lanes has one width: dynamic threads or runs with other lane plans add more).
   `--no-save` only prints. Runs on that machine then use its exponents, and its scale for the predicted
   seconds in the attempt rows.
+- **Machine sensors in the load samples** (since 2026-11-09, job table schema 5). Each 60 s load sample also holds
+  the effective CPU clock (averaged over the minute on Windows), CPU temperature and package power, and GPU
+  utilization, temperature and power, from the next section's sources (NULL where the machine has none; old job
+  tables get the columns the next time a run opens them). `timings` then prints one line per run with the mean
+  and max CPU temperature and clock, CPU power, GPU temperature and utilization, and a **throttling** flag:
+  "LIKELY" when at least 2 samples taken at >= 50 % machine CPU ran below 85 % of the run's typical clock under
+  the same load (the median clock of its samples in the same load band: 50-75, 75-90, 90-100 %) while the CPU
+  was at >= 85 °C. A clock that drops at a lower load, or while the CPU is cool, is not throttling. The CSV gets
+  the same six columns from the load sample nearest each stage.
+
+## Live machine metrics (`quantabench-cli monitor`, the machine monitor strip)
+
+What the machine is doing while a job runs: CPU utilization (total and per logical CPU), the **effective CPU clock**
+(the "actual speed" Task Manager shows: average, and min-max over the cores), the base clock, CPU package
+temperature and power, GPU utilization, temperature, clock, power and VRAM, RAM in use, and fan speed where it is
+cheap (`quantabench/sensors.py`, MON-1). The same numbers appear in three places:
+
+- **`quantabench-cli monitor [--interval 2] [--count N] [--per-cpu] [--json]`**: one line per sample, e.g.
+  `14:02:11  CPU 37 % | 4.62 GHz avg (3.85-5.49) | 61 °C | 88 W  ||  GPU 9 % | 1.35 GHz | 36 °C | 16 W | VRAM
+  2.0/15.9 GB  ||  RAM 16.8/31.2 GB (54 %)`. `--worker NAME` shows a worker's (its `GET /v1/sensors`).
+  `quantabench-cli doctor` lists every metric with its source, or why it is missing and how to enable it.
+- **The GUI's machine monitor strip**, in the Pipeline dock above Run all / Run selected / Cancel: this computer and
+  every worker that answers, with 10-minute sparklines (UI_PLAN.md, job monitor).
+- **Run timings**: the 60 s load samples of every batch (previous section).
+
+| | CPU utilization, RAM | Effective clock | CPU temperature, power | GPU |
+|---|---|---|---|---|
+| **Windows** | psutil | performance counters (ctypes, PDH): `\Processor Information(_Total)\Processor Frequency` x `% Processor Performance` / 100; per logical CPU the `(0,N)` instances | LibreHardwareMonitor's web server (`Core (Tctl/Tdie)` or `CPU Package`; `Package` power) | LibreHardwareMonitor (`GPU Core` load, temperature and clock, `GPU Package` power, `GPU Memory Used/Total`); without it the counters' `GPU Engine` (Task Manager's rule: the busiest engine, summed over processes) and `GPU Adapter Memory` |
+| **macOS (Apple Silicon)** | psutil | macmon: P and E cluster clocks, weighted by their cores | macmon (`temp.cpu_temp_avg`, `cpu_power`) | macmon (`gpu_usage`, `temp.gpu_temp_avg`, `gpu_power`); the GPU shares the RAM |
+| **Linux** | psutil | psutil `cpu_freq(percpu=True)` (cpufreq); base from `base_frequency` | psutil `sensors_temperatures` (k10temp `Tctl`, zenpower `Tdie`, coretemp `Package id 0`); RAPL `energy_uj` (root only on most systems) | amdgpu sysfs (`gpu_busy_percent`, hwmon `temp1`, `power1_average`, `freq1`, `mem_info_vram_*`); `nvidia-smi` |
+| **WSL2** | psutil (the VM's view) | not visible in the VM | on the Windows side: LibreHardwareMonitor's web server at the configured URL, when WSL can reach it | `nvidia-smi`; AMD GPUs only from Windows |
+
+psutil's `cpu_freq()` gives only the nominal clock on Windows (4701 MHz on NOVA, idle or busy) and macOS (4056 on
+the M3 Max), so it is not used there. `sensors.read()` never raises and returns within about a second; a source that
+fails is retried after 30 s and its reason goes to the sample (`missing`), which `doctor`, the strip's tooltip and
+`monitor`'s header show.
+
+**LibreHardwareMonitor on Windows** (the one source of temperatures and power there; Brandon's NOVA runs it). It
+has to be running, with its web server on:
+
+1. Options > Remote Web Server > **Run** (LibreHardwareMonitor 0.9.5 or later; default port 8085). Check it at
+   http://127.0.0.1:8085/data.json in a browser.
+2. Options > **Run On Windows Startup** and Start Minimized keep it there after a restart (it runs as administrator,
+   which its CPU and motherboard sensors need).
+3. Another port or machine: `quantabench-cli monitor --set lhm_url=http://127.0.0.1:8086` (this machine only). With
+   its web server's authentication on, put the user name and password in that URL
+   (`http://user:password@127.0.0.1:8085`); `monitor` and `doctor` print the URL without the password.
+
+QuantaBench reads `/data.json` (about 80 KB, a few ms) at each sample, never through a proxy, with a 0.6 s timeout.
+The WMI namespace (`root\LibreHardwareMonitor`) is not used: it is absent on NOVA (2026-11-09; only an empty
+`root\OpenHardwareMonitor` exists there) and slower. Fans: LHM reports 0 RPM for every header of NOVA's ASUS B650E
+(its NCT6701D chip), so the fan reading is left out there rather than shown as 0.
+
+**macmon on macOS** (`brew install macmon`; MIT, no sudo, uses the same private IOReport interface as Activity
+Monitor). The strip and `monitor` keep one `macmon pipe -i <ms>` running and use its newest JSON line; a single
+`sensors.read()` (the run timings' 60 s samples) runs `macmon pipe -s 1 -i 250` once. A worker's monitor stops
+sampling, and stops macmon, after 2 minutes without a `/v1/sensors` request. Without macmon the Mac reports
+utilization and RAM, and every other metric says "install macmon for clocks and temperatures: brew install
+macmon". The parser reads macmon 0.3-0.6's fields (`temp.cpu_temp_avg`, `gpu_temp_avg`, `ecpu_usage` /
+`pcpu_usage` / `gpu_usage` as `[MHz, fraction]`, `cpu_power`, `gpu_power`, `memory.ram_usage` / `ram_total`) and
+the `*_freq_mhz` / per-core list variants; check them against the Mac's macmon once it is installed (MON-1 in the
+backlog).
+
+**Settings** (`settings.json` > `sensors`, shared by every machine; per machine in `sensors.machine`, as with
+`engines.machine_paths`): `enabled` (true: read temperatures, clocks and power; false: utilization and RAM only),
+`interval_s` (2: the strip's and `monitor`'s sampling interval, 0.5-60 s; the run timings keep 60 s), `lhm_url`
+(`http://127.0.0.1:8085`). The defaults need no configuration. `quantabench-cli monitor --set KEY=VALUE [--machine
+NAME]` writes one machine's entry; `QUANTABENCH_SENSORS=0` turns the sensors off for one process.
+
+**Workers.** `quantabench-cli worker` answers `GET /v1/sensors` (the latest sample; the first request after a quiet
+spell waits up to 2 s) and adds the latest sample to `GET /v1/info` (`"sensors"`, without the per-CPU lists). An
+older worker answers 404; the GUI then shows "older worker without sensors" and asks again after 10 minutes.
+Clients that do not know the `sensors` key ignore it.
 
 ## tblite (`tblite-gfn2`, `tblite-gfn1`)
 

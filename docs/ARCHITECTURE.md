@@ -32,6 +32,7 @@
 |---|---|
 | `quantabench.resources` | Hardware detection (CPU, RAM, WSL, PyTorch backend: ROCm/CUDA/MPS), thread caps for BLAS/OpenMP/PyTorch, device selection with memory cap, matmul benchmark. |
 | `quantabench.settings` | `Settings` dataclasses, JSON load/save, and the settings-folder pointer (env var, then repo-local pointer, then per-user config). |
+| `quantabench.sensors` | Live machine metrics (MON-1): `read()` (never raises, about a second at most) and `Monitor` (a sampling thread with 10 minutes of history) over per-OS providers: psutil, Windows performance counters (ctypes PDH) and LibreHardwareMonitor's web server, macmon on macOS, cpufreq/hwmon/RAPL/amdgpu sysfs and nvidia-smi on Linux. Used by `cli_monitor` (`monitor`, `doctor`), `gui.machine_monitor`, the worker's `/v1/sensors` and the run timings' load samples. |
 | `quantabench.units` | Energy units and number format for the GUI (`Settings.display`): conversion factors (the computations' own), `EnergyDisplay` (unit per kind, text, headers). Display only: results and exports keep their units. |
 | `chem.inputs` | `MoleculeInput` records from SMILES, InChI, InChIKeys and PubChem names, structure files, CSV and Excel (CompTox-aware: DTXSID, preferred name, SMILES-column fallback per row, `ReadReport` of skipped rows). `read_raw` reads a file as it is; `read_file(..., options=)` applies the import options. |
 | `chem.formats`, `chem.import_options` | More structure formats (MOL2, Marvin, ChemDraw CDX/CDXML, CML, CIF, Gaussian/ORCA inputs; Open Babel for the rest) and the Spartan-style import options (2D to 3D, hydrogens, keep coordinates, data fields, filters, atom order, structures as conformers), with `survey` deciding whether File > Open asks. |
@@ -68,9 +69,10 @@
 | `gui.spectra_panel`, `gui.surface_panel`, `gui.import_action` | Optional panels installed by `MainWindow._install_panels`; they follow `MainWindow.resultChanged` (and `displayChanged` for energy units). |
 | `gui.clipboard` | Edit > Paste (ChemDraw CDX, CDXML, MOL, MDLCT, text, in that order; the macOS pasteboard is also read directly for ChemDraw's type) and Copy as SMILES / MOL / CDXML; drops on the window (files, folders, text). |
 | `gui.sketcher_dock`, `gui.sketcher_view`, `gui.sketcher_web` | The Sketch dock (UI-6): Schrödinger's Sketcher (WebAssembly) in a `QWebEngineView`, served from a `qb-sketcher://` URL scheme registered before the QApplication; buttons hand MOL V3000 to `chem.sketch` (RDKit checks, `MoleculeInput`). Qt WebEngine is optional and loaded only when the dock opens. `sketcher_assets` fetches the editor's files (pinned sha256) into the programs folder. |
+| `gui.machine_monitor` | The machine monitor strip in the Pipeline dock, above the Run buttons: this computer (`sensors.Monitor`) and the workers (`RemotePoller`, `/v1/sensors`), sparklines, colours by threshold; a QTimer only copies the threads' latest samples. |
 | `gui.surface_dialog`, `gui.settings_dialog`, `gui.workers` | Dialogs and `QThread` workers. |
 | `gui.energy_widgets` | `EnergySpinBox`: an energy input shown in the display unit and stored in a fixed one (the energy window in kcal/mol), returning the stored value exactly until it is edited. |
-| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`); `sketcher` (`cli_sketcher`). |
+| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`); `sketcher` (`cli_sketcher`); `monitor` (`cli_monitor`: live machine metrics). |
 
 ## Key decisions
 
