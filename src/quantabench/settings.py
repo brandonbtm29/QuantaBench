@@ -146,6 +146,25 @@ class ImportSettings:
 
 
 @dataclass
+class SensorSettings:
+    """Live machine metrics (``quantabench.sensors``, MON-1): ``quantabench-cli monitor``, the GUI's machine strip,
+    a worker's ``/v1/sensors`` and the load samples of run timings. The defaults need no configuration.
+
+    The settings file is shared by every machine, but LibreHardwareMonitor's URL belongs to one machine:
+    ``machine`` holds each machine's own values (keyed by ``machine_key`` of its name; keys ``enabled``,
+    ``interval_s``, ``lhm_url``), which win over the shared ones there. Use ``Settings.sensors_for`` /
+    ``set_sensors_for``."""
+    enabled: bool = True              # read temperatures, clocks and power (utilization and RAM always)
+    interval_s: float = 2.0           # live sampling interval of the monitor and the GUI strip, s (0.5-60)
+    lhm_url: str = "http://127.0.0.1:8085"   # LibreHardwareMonitor's web server (Windows; http://user:pw@... = auth)
+    machine: dict[str, dict] = field(default_factory=dict)   # machine name -> {enabled, interval_s, lhm_url}
+
+
+#: per-machine sensor keys and their types (``SensorSettings.machine`` entries)
+SENSOR_KEYS: dict[str, type] = {"enabled": bool, "interval_s": float, "lhm_url": str}
+
+
+@dataclass
 class Settings:
     output_dir: str = ""              # "" = Documents/QuantaBench/Runs
     resources: ResourceSettings = field(default_factory=ResourceSettings)
@@ -155,6 +174,7 @@ class Settings:
     surfaces: SurfaceSettings = field(default_factory=SurfaceSettings)
     display: DisplaySettings = field(default_factory=DisplaySettings)
     import_: ImportSettings = field(default_factory=ImportSettings)     # "import" is a Python keyword
+    sensors: SensorSettings = field(default_factory=SensorSettings)
     recent_files: list[str] = field(default_factory=list)
 
     # ---------------------------------------------------------------- paths
@@ -182,7 +202,7 @@ class Settings:
                 merged = asdict(current)
                 for k, v in value.items():
                     if k in merged:
-                        ok, v = _coerce(merged[k], v, tables=(f.name, k) in NESTED_TABLES)
+                        ok, v = _coerce(merged[k], v, tables=NESTED_TABLES.get((f.name, k)))
                         if ok:
                             merged[k] = v
                 setattr(s, f.name, type(current)(**merged))
@@ -237,6 +257,55 @@ class Settings:
             table[key] = entry
         self.engines.machine_paths = table
 
+    def sensors_for(self, machine: str | None = None) -> SensorSettings:
+        """The sensor settings of ``machine`` (default: this one): ``sensors`` with its ``sensors.machine`` entry
+        applied (values of the wrong type are ignored), the interval kept in 0.5-60 s. ``machine`` is empty."""
+        key = machine_key(machine if machine is not None else _this_machine())
+        out = SensorSettings(enabled=self.sensors.enabled, interval_s=self.sensors.interval_s,
+                             lhm_url=self.sensors.lhm_url)
+        for name, entry in self.sensors.machine.items():
+            if machine_key(name) != key or not isinstance(entry, dict):
+                continue
+            for k, v in entry.items():
+                kind = SENSOR_KEYS.get(k)
+                if kind is bool and isinstance(v, bool):
+                    out.enabled = v
+                elif kind is float and isinstance(v, (int, float)) and not isinstance(v, bool):
+                    out.interval_s = float(v)
+                elif kind is str and isinstance(v, str) and v.strip():
+                    out.lhm_url = v.strip()
+        try:
+            out.interval_s = min(60.0, max(0.5, float(out.interval_s)))
+        except (TypeError, ValueError):
+            out.interval_s = 2.0
+        return out
+
+    def set_sensors_for(self, key: str, value, machine: str | None = None) -> None:
+        """Set one sensor setting (``SENSOR_KEYS``) for ``machine`` (default: this one) only; ``None`` removes it
+        (the shared value applies again)."""
+        if key not in SENSOR_KEYS:
+            raise ValueError(f"unknown sensor setting {key!r} (one of {', '.join(SENSOR_KEYS)})")
+        mkey = machine_key(machine if machine is not None else _this_machine())
+        entry: dict = {}
+        for name, e in self.sensors.machine.items():
+            if machine_key(name) == mkey and isinstance(e, dict):
+                entry.update(e)
+        if value is None:
+            entry.pop(key, None)
+        else:
+            kind = SENSOR_KEYS[key]
+            if kind is bool and not isinstance(value, bool):
+                raise ValueError(f"{key} must be true or false")
+            if kind is float:
+                value = float(value)
+            if kind is str:
+                value = str(value).strip()
+            entry[key] = value
+        table = {k: v for k, v in self.sensors.machine.items() if machine_key(k) != mkey}
+        if entry:
+            table[mkey] = entry
+        self.sensors.machine = table
+
     def _machine_paths(self, machine: str | None = None) -> dict[str, str]:
         key = machine_key(machine if machine is not None else _this_machine())
         merged: dict[str, str] = {}
@@ -263,13 +332,16 @@ def _this_machine() -> str:
     return machine_name()
 
 
-#: (section, field) of the settings whose values are tables of strings (machine -> {program: path})
-NESTED_TABLES = {("engines", "machine_paths")}
+#: (section, field) of the settings whose values are tables of tables (machine -> {name: value}), with the value
+#: types an inner table keeps (engines: program paths; sensors: enabled, interval_s, lhm_url)
+NESTED_TABLES: dict[tuple[str, str], tuple[type, ...]] = {("engines", "machine_paths"): (str,),
+                                                          ("sensors", "machine"): (str, bool, int, float)}
 
 
-def _coerce(default, value, tables: bool = False) -> tuple[bool, object]:
+def _coerce(default, value, tables: tuple[type, ...] | None = None) -> tuple[bool, object]:
     """(accepted, value) for a JSON value replacing ``default``: same type, or an int where a float goes.
-    ``tables``: a dict of string tables (``NESTED_TABLES``) instead of a dict of strings and numbers."""
+    ``tables``: a dict of tables (``NESTED_TABLES``) whose inner values must be of these types, instead of a dict
+    of strings and numbers."""
     if isinstance(default, bool):
         return isinstance(value, bool), value
     if isinstance(default, float):
@@ -281,7 +353,8 @@ def _coerce(default, value, tables: bool = False) -> tuple[bool, object]:
     for kind in (str, dict, list):
         if isinstance(default, kind):
             if kind is dict and isinstance(value, dict) and tables:
-                return True, {str(k): {str(a): b for a, b in v.items() if isinstance(b, str)}
+                return True, {str(k): {str(a): b for a, b in v.items() if isinstance(b, tables)
+                                       and not (isinstance(b, float) and b != b)}
                               for k, v in value.items() if isinstance(v, dict)}
             if kind is dict and isinstance(value, dict):
                 # string values (paths, lane specs, URLs) and numbers (per-element radii); nothing else
@@ -360,7 +433,7 @@ def set_settings_dir(new_dir: str | Path | None, pointer_place: Path | None = No
 
 #: (section, field) of the settings that hold one entry per machine (machine name -> value). The file is shared
 #: by every machine, so ``save`` writes only the entries this process changed and keeps the others' from disk.
-PER_MACHINE_TABLES = (("engines", "machine_paths"), ("dist", "machine_lanes"))
+PER_MACHINE_TABLES = (("engines", "machine_paths"), ("dist", "machine_lanes"), ("sensors", "machine"))
 _AS_LOADED = "_per_machine_as_loaded"     # attribute (not a dataclass field: never written) set by load/save
 
 

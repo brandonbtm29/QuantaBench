@@ -43,6 +43,23 @@ def _throughput(p) -> str:
     return ", ".join(f"{k} {float(v):,.0f}" for k, v in items[:4]) + (" ..." if len(items) > 4 else "")
 
 
+def _sensor_text(raw) -> str:
+    """"; CPU 37 % 4.62 GHz 61 °C" from a worker's /v1/info "sensors" (MON-1 workers; older ones have none)."""
+    if not isinstance(raw, dict):
+        return ""
+    from .. import sensors
+
+    s = sensors.Sample.from_dict(raw)
+    parts = [f"CPU {s.cpu_percent:.0f} %"] if s.cpu_percent is not None else []
+    if s.cpu_clock_mhz is not None:
+        parts.append(sensors.fmt_clock(s.cpu_clock_mhz))
+    if s.cpu_temp_c is not None:
+        parts.append(f"{s.cpu_temp_c:.0f} °C")
+    if s.gpu_percent is not None:
+        parts.append(f"GPU {s.gpu_percent:.0f} %")
+    return "; " + " ".join(parts) if parts else ""
+
+
 def _age(p) -> str:
     from ..dist import profile
 
@@ -171,7 +188,7 @@ class MachinesPanel(QWidget):
 
         version = (ref.info or {}).get("quantabench_version", "")
         mismatch = f", version {version} (here {__version__})" if version and version != __version__ else ""
-        return f"{state}{extra}{mismatch}"
+        return f"{state}{extra}{mismatch}{_sensor_text((ref.info or {}).get('sensors'))}"
 
     # ------------------------------------------------------------------ actions
     def check_workers(self) -> None:

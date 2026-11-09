@@ -12,7 +12,9 @@ first time a run opens them, and columns added later are added the same way):
                         machine, OS, CPU, cores, RAM, thread budget, lane plan, dynamic threads, the cost model in
                         force, engines and their versions, the settings that change the cost, start and end
     telemetry_load      the machine's load at the start and every ``LOAD_INTERVAL_S``: load average (POSIX), CPU
-                        percent of the whole machine and of this run's processes, memory in use
+                        percent of the whole machine and of this run's processes, memory in use, and (schema 5,
+                        MON-1) the machine's sensors: effective clock, CPU temperature and power, GPU utilization,
+                        temperature and power (``SENSOR_COLUMNS``, ``quantabench.sensors``; NULL where unknown)
     telemetry_attempts  one row per molecule attempt: lane and its threads, CREST threads given and borrowed,
                         queue wait, wall, outcome, the molecule's features, the cost model's prediction
     telemetry_stages    one row per attempt and stage (prepare, conformers, refine, descriptors, properties,
@@ -72,9 +74,16 @@ RUN_COLUMNS: tuple[tuple[str, str], ...] = (
     ("n_done_before", "INTEGER"), ("load_start", "REAL"),
     ("n_ok", "INTEGER"), ("n_failed", "INTEGER"), ("n_attempts", "INTEGER"),
 )
+#: the machine's sensors in each load sample (``quantabench.sensors``; schema 5, all nullable): effective CPU clock
+#: (MHz), CPU package temperature (°C) and power (W), GPU utilization (%), temperature (°C) and power (W)
+SENSOR_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("cpu_clock_mhz", "REAL"), ("cpu_temp_c", "REAL"), ("cpu_power_w", "REAL"), ("gpu_percent", "REAL"),
+    ("gpu_temp_c", "REAL"), ("gpu_power_w", "REAL"), ("sensor_source", "TEXT"),
+)
 LOAD_COLUMNS: tuple[tuple[str, str], ...] = (
     ("run_id", "TEXT NOT NULL"), ("t_unix", "REAL"), ("t_rel_s", "REAL"), ("load1", "REAL"), ("load5", "REAL"),
     ("load15", "REAL"), ("cpu_percent", "REAL"), ("own_cpu_percent", "REAL"), ("mem_percent", "REAL"),
+    *SENSOR_COLUMNS,
 )
 FEATURES = ("n_atoms", "n_heavy", "n_rotatable", "n_rings", "formal_charge", "n_F", "n_O", "n_S", "n_N")
 ATTEMPT_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -380,18 +389,46 @@ def outcome_of(res) -> str:
 
 
 # ------------------------------------------------------------------------------------- load sampler
+def sensor_fields(read: Callable[[], object] | None = None) -> dict:
+    """The ``SENSOR_COLUMNS`` of one sensor reading (``quantabench.sensors.read``: the effective clock is averaged
+    since the previous reading, the rest is the moment's value); {} when sensors are off or the reading fails."""
+    try:
+        from .. import sensors
+
+        s = (read or sensors.read)()
+        out = {k: getattr(s, k, None) for k, _ in SENSOR_COLUMNS if k != "sensor_source"}
+        out = {k: v for k, v in out.items() if v is not None}
+        if out:
+            out["sensor_source"] = str(getattr(s, "source", "") or "")[:120] or None
+        return out
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _sensors_on() -> bool:
+    try:
+        from .. import sensors
+
+        return sensors.load_config().enabled
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class LoadSampler(threading.Thread):
     """Samples the machine's load at the start (after 1 s) and every ``interval`` s, in a thread of its own; the
     samples wait in memory until the run's writer takes them (``take``). Load average on POSIX, the CPU percent
-    of the whole machine (all OSes, psutil) and of this process and its children, memory in use."""
+    of the whole machine (all OSes, psutil) and of this process and its children, memory in use, and the machine's
+    sensors (``SENSOR_COLUMNS``: effective clock, CPU and GPU temperature and power, GPU utilization) unless they
+    are off (``settings.sensors.enabled``, ``QUANTABENCH_SENSORS=0``)."""
 
-    def __init__(self, interval: float = LOAD_INTERVAL_S, first: float = 1.0):
+    def __init__(self, interval: float = LOAD_INTERVAL_S, first: float = 1.0, sensors: bool | None = None):
         super().__init__(daemon=True, name="quantabench-load")
         self.interval, self.first = float(interval), float(first)
         self.t0 = time.time()
         self._samples: list[dict] = []
         self._lock = threading.Lock()
         self._halt = threading.Event()   # not _stop: Thread._stop() is a method on Python <= 3.12
+        self.sensors = sensors           # None: from the settings, in the sampler's thread
 
     def take(self) -> list[dict]:
         with self._lock:
@@ -411,6 +448,8 @@ class LoadSampler(threading.Thread):
             ncpu = psutil.cpu_count() or 1
             psutil.cpu_percent(None)
             last = (time.monotonic(), self._own_cpu(me))
+            if self.sensors is None:
+                self.sensors = _sensors_on()
             wait = self.first
             while not self._halt.wait(wait):
                 wait = self.interval
@@ -424,6 +463,8 @@ class LoadSampler(threading.Thread):
                 if hasattr(os, "getloadavg"):
                     with contextlib.suppress(OSError):
                         sample["load1"], sample["load5"], sample["load15"] = os.getloadavg()
+                if self.sensors and not self._halt.is_set():
+                    sample.update(sensor_fields())
                 with self._lock:
                     self._samples.append(sample)
         except Exception:  # noqa: BLE001, S110 - a sampler that fails just stops sampling

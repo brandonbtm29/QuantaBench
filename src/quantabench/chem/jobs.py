@@ -57,7 +57,8 @@ from .pipeline import BuildConfig, MoleculeResult, ProgressFn
 
 DB_NAME = "jobs.sqlite"
 LOCK_NAME = "jobs.lock"
-SCHEMA_VERSION = 4                 # 2: molecules.crashes, 3: run.accepted, 4: telemetry_* tables
+SCHEMA_VERSION = 5                 # 2: molecules.crashes, 3: run.accepted, 4: telemetry_* tables,
+                                   # 5: telemetry_load sensor columns (clock, temperatures, power, GPU %)
 STATUSES = ("pending", "running", "ok", "failed", "cancelled", "moved")   # moved: handed to another machine
 MAX_CRASHES = 2                    # a molecule that killed the process this often is marked failed
 
@@ -412,7 +413,9 @@ class JobStore:
             if "accepted" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(run)")}:
                 # newest version a forced resume accepted results from (version_differences); NULL = none
                 self.conn.execute("ALTER TABLE run ADD COLUMN accepted TEXT")
-            telemetry.create_tables(self.conn)      # version 4: what each run measured (chem.telemetry)
+            # version 4: what each run measured (chem.telemetry); 5: the sensor columns of telemetry_load (added to
+            # older tables here, NULL in their rows)
+            telemetry.create_tables(self.conn)
             self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def close(self) -> None:

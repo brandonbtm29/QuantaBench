@@ -20,6 +20,7 @@
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
     quantabench-cli update [--check] [--upgrade-packages]                       # git pull + reinstall if needed
     quantabench-cli sketcher [--install [--from-zip ZIP]] [--use DIR]            # the Sketch dock's editor files
+    quantabench-cli monitor [--interval 2] [--count N] [--worker NAME]         # live load, clocks, temperatures
 
 Splitting work (``quantabench.dist``):
 
@@ -65,6 +66,9 @@ def _doctor(args) -> int:
         else:
             prof = profile.local_profile()
         out["profile"] = prof.to_dict()
+        from . import sensors
+
+        out["sensors"] = sensors.read().to_dict()
         print(json.dumps(out, indent=2))
         return 0
     print(f"QuantaBench {__version__}")
@@ -122,6 +126,10 @@ def _doctor(args) -> int:
     from .dist import profile
 
     print(f"  Machine       {profile.machine_name()} (registry {profile.registry_dir()}: `quantabench-cli machines`)")
+    from . import sensors
+
+    for line in sensors.doctor_lines():   # what is measured live, and how to enable what is missing (MON-1)
+        print(line)
     for note in rep.notes:
         print(f"  note: {note}")
     if args.bench:
@@ -1091,6 +1099,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_methods import register as register_methods
 
     register_methods(sub)       # methods [NAME]: the methods guide (quantabench.chem.method_guide)
+    from .cli_monitor import register as register_monitor
+
+    register_monitor(sub)       # monitor: live CPU/GPU load, clocks, temperatures, power (quantabench.sensors)
 
     se = sub.add_parser("settings", help="show settings, or move them (e.g. into a synced folder)")
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")

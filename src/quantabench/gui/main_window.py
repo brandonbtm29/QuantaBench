@@ -188,6 +188,7 @@ class MainWindow(QMainWindow):
         from . import (
             clipboard,
             import_action,
+            machine_monitor,
             machines_panel,
             sketcher_dock,
             spectra_panel,
@@ -195,8 +196,8 @@ class MainWindow(QMainWindow):
             update_action,
         )
 
-        for panel in (spectra_panel, surface_panel, import_action, machines_panel, update_action, clipboard,
-                      sketcher_dock):
+        for panel in (spectra_panel, surface_panel, import_action, machines_panel, machine_monitor, update_action,
+                      clipboard, sketcher_dock):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
