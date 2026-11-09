@@ -76,6 +76,24 @@ def isolated_settings(tmp_path, monkeypatch):
     yield tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _keep_the_test_process_priority(monkeypatch):
+    """``build``, ``grid build`` and ``worker`` lower their own process (``priority.apply_to_process``); in a test that
+    process is pytest's, and a lowered nice value cannot be raised again. Here it only records the level (which
+    ``run_program`` then uses for its programs) and forgets it after the test. Lanes are child processes and still
+    lower themselves for real; tests/test_priority.py checks the real thing in a child process."""
+    from quantabench import priority
+
+    monkeypatch.setattr(priority, "_process_level", None)
+
+    def record_only(level) -> str:
+        priority._process_level = priority.lower_of(priority.normalize(level), priority.current_level())
+        return f"{priority._process_level} (not applied to the test process)"
+
+    monkeypatch.setattr(priority, "apply_to_process", record_only)
+    yield
+
+
 PFOA = "OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"
 K_PFOS = "[K+].[O-]S(=O)(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"
 FBSA = "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)S(=O)(=O)N"

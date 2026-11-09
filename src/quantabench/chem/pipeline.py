@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 from rdkit import Chem
 
-from .. import resources
+from .. import priority, resources
 from ..settings import Settings
 from . import batch_opt, engines, export, properties, telemetry
 from . import conformers as confs
@@ -81,7 +81,11 @@ class BuildConfig:
     qm_frequencies: bool = False          # QM Hessian + IR + thermochemistry of the best QM conformer
     qm_cubes: bool = False                # density + ESP cubes and molecular-surface descriptors (best conformer)
     qm_program: str = "psi4"
-    threads: int = 0
+    threads: int = 0                      # 0 = auto: the logical threads minus free_threads (quantabench.priority)
+    # this machine's run priority ("normal" | "low" | "background") and the logical threads the automatic budgets
+    # leave free (quantabench.priority; Settings.priority_for / free_threads_for). Resources, not science
+    priority: str = "low"
+    free_threads: int = 1
     gpu: str = "auto"
     gpu_index: int = 0
     gpu_memory_fraction: float = 0.9
@@ -106,7 +110,8 @@ class BuildConfig:
         cfg = cls(method=b.refine_method, ph=b.ph, protonate=b.protonate, keep_largest_fragment=b.keep_largest_fragment,
                   max_conformers=b.max_conformers, energy_window_kcal=b.energy_window_kcal,
                   rmsd_threshold=b.rmsd_threshold, fmax=b.fmax, max_steps=b.max_steps, temperature_k=b.temperature_k,
-                  seed=b.random_seed, batched=b.batched, frequencies=b.frequencies, threads=r.threads, gpu=r.gpu, gpu_index=r.gpu_index,
+                  seed=b.random_seed, batched=b.batched, frequencies=b.frequencies, threads=r.threads,
+                  priority=s.priority_for(), free_threads=s.free_threads_for(), gpu=r.gpu, gpu_index=r.gpu_index,
                   gpu_memory_fraction=r.gpu_memory_fraction, linalg=r.linalg, dxtb_gpu=r.dxtb_gpu,
                   memory_budget_gb=r.memory_budget_gb, molecule_timeout_s=r.molecule_timeout_s,
                   output_dir=str(s.output_path()),
@@ -341,7 +346,7 @@ def _properties_plan(numbers, charge: int, multiplicity: int, cfg: BuildConfig) 
 
 def calculator_options(result: MoleculeResult, cfg: BuildConfig) -> dict:
     """Options every engine factory receives (see ``engines`` module docstring)."""
-    return {"solvent": result.solvent, "threads": resources.resolve_threads(cfg.threads)}
+    return {"solvent": result.solvent, "threads": priority.budget_of(cfg)}
 
 
 def surface_options(cfg: BuildConfig) -> desc.SurfaceOptions:
@@ -983,10 +988,15 @@ def run(inputs: list[MoleculeInput], cfg: BuildConfig, progress: ProgressFn = _n
         should_stop: Callable[[], bool] = lambda: False, log: Callable[[str], None] = _noop,
         run_dir: Path | None = None,
         on_result: Callable[[MoleculeResult], None] = _noop) -> tuple[list[MoleculeResult], Path | None]:
-    threads = resources.apply_thread_limits(cfg.threads)
+    threads = resources.apply_thread_limits(priority.budget_of(cfg))   # threads 0: all but the free ones
     device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
     log(f"Resources: {threads} CPU threads, device {device}")
     cfg = replace(cfg, memory_budget_gb=resolved_budget(cfg, 1, log))
+    with priority.children_at(cfg.priority):          # xtb, CREST, Psi4 started here run at the run's priority
+        return _run_inputs(inputs, cfg, device, threads, progress, should_stop, log, run_dir, on_result)
+
+
+def _run_inputs(inputs, cfg, device, threads, progress, should_stop, log, run_dir, on_result):
     if cfg.write_files and run_dir is None:
         label = inputs[0].id if len(inputs) == 1 else f"batch_{len(inputs)}"
         run_dir = new_run_dir(cfg.output_dir or Settings().output_path(), label)

@@ -34,6 +34,7 @@ before starting the second, or both will generate a token and SyncThing will rep
 quantabench-cli worker [--bind tailscale|localhost|ADDR] [--port 8765] [--lanes SPEC] [--max-jobs 1]
                        [--name NAME] [--state-dir DIR] [--log-file FILE] [--tailscale-wait 120]
                        [--allow-any-address] [--allow-version-mismatch]
+                       [--priority normal|low|background] [--free-threads N]
 quantabench-cli grid machines [--worker NAME=URL]
 quantabench-cli grid build <same inputs and science options as build> --method M
                        [--machines btm-nova,brandons-macbook-pro,local] [--weights auto|3,1] [--wait]
@@ -74,6 +75,10 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
   Weights still decide the first split, so good weights mean fewer moves.
 - **Threads and GPU** come from each machine's own settings. `--threads`/`--gpu` on `grid build` override
   them everywhere.
+- **Run priority and free threads** (docs/ENGINES.md) are each machine's too: a worker lowers its own process
+  at start to its `--priority` (else that machine's setting, default `low`), and its jobs' lanes and programs run
+  there. `grid build --priority`/`--free-threads` send the values to every machine, but a job never runs above its
+  worker's own priority.
 - `local` runs its share inside the `grid build` process, so that command stays open until the local share
   is done (with `--wait`, until everything is done and merged). Ctrl+C stops following; remote shares keep
   running (`grid status`, then `grid merge`).

@@ -65,6 +65,7 @@ def _doctor(args) -> int:
         else:
             prof = profile.local_profile()
         out["profile"] = prof.to_dict()
+        out["run_priority"] = priority_info(settings_mod.load(), rep.logical_cores)
         print(json.dumps(out, indent=2))
         return 0
     print(f"QuantaBench {__version__}")
@@ -122,6 +123,10 @@ def _doctor(args) -> int:
     from .dist import profile
 
     print(f"  Machine       {profile.machine_name()} (registry {profile.registry_dir()}: `quantabench-cli machines`)")
+    try:
+        print(f"  Run priority  {priority_lines(settings_mod.load(), None, rep.logical_cores)}")
+    except Exception as exc:  # noqa: BLE001 - doctor reports, never fails on settings
+        print(f"  Run priority  unknown ({type(exc).__name__}: {exc})")
     for note in rep.notes:
         print(f"  note: {note}")
     if args.bench:
@@ -225,6 +230,7 @@ def _config(args, base=None, **extra):
         "qm_task": getattr(args, "qm_task", None), "qm_top": getattr(args, "qm_top", None),
         "memory_budget_gb": getattr(args, "memory_budget", None),
         "molecule_timeout_s": getattr(args, "molecule_timeout", None),
+        "priority": getattr(args, "priority", None), "free_threads": getattr(args, "free_threads", None),
     }.items() if v is not None}
     if getattr(args, "crest_full", False):
         overrides["crest_quick"] = False
@@ -248,6 +254,14 @@ def _config(args, base=None, **extra):
 
 read_inputs = _read_inputs      # public names for quantabench.dist (grid build)
 config_from_args = _config
+
+
+def lower_this_process(level: str) -> str:
+    """Lower this CLI process (a build, a grid build, a worker; never the GUI) to the run priority ``level``, so its
+    lanes and the programs it starts run there too (``priority.apply_to_process``). Returns the log line."""
+    from . import priority
+
+    return priority.apply_to_process(level)
 
 
 def _progress(i, n, stage, ident):
@@ -293,6 +307,7 @@ def _build(args) -> int:
             return 2
 
     resources.set_molecule_limits(cfg)   # memory budget and time limit of the embedding and the Hessian
+    print(f"Priority: {lower_this_process(cfg.priority)}")    # this process, its lanes and programs (PRIO-1)
 
     resumable = bool(run_dir or chunk or args.retry_failed or len(items) > 1)
     if not resumable:
@@ -674,12 +689,23 @@ def _settings(args) -> int:
     s = settings_mod.load()
     if args.init and not path.exists():
         settings_mod.save(s)
+    # --machine NAME: that machine; no --machine, or --machine with no name: this one
+    machine = settings_mod.machine_key(args.machine) if (args.machine or "").strip() else settings_mod.this_machine()
+    changed = False
+    if args.priority is not None or args.free_threads is not None:
+        try:
+            if args.priority is not None:
+                s.set_priority_for(args.priority, machine)
+            if args.free_threads is not None:
+                s.set_free_threads_for(args.free_threads, machine)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        changed = True
     if args.engine_path:
         from .chem import external
 
         known = (*external.PROGRAMS, "psi4_python")
-        # --machine NAME: that machine; no --machine, or --machine with no name: this one
-        machine = settings_mod.machine_key(args.machine) if (args.machine or "").strip() else settings_mod.this_machine()
         for item in args.engine_path:
             name, sep, value = item.partition("=")
             if not sep or name.strip() not in known:
@@ -688,10 +714,48 @@ def _settings(args) -> int:
                 return 2
             s.set_engine_path_for(name.strip(), value.strip(), machine)
             print(f"{name.strip()} on {machine}: {value.strip() or 'automatic'}")
+        changed = True
+    if changed:
         settings_mod.save(s)
     print(f"# {path}{'' if path.exists() else ' (not created yet: defaults shown)'}")
     print(json.dumps(s.to_dict(), indent=2))
+    logical = None
+    if machine != settings_mod.this_machine():      # another machine: its threads from the registry, if known
+        with contextlib.suppress(Exception):
+            from .dist import profile as profile_mod
+
+            prof = profile_mod.load_profile(machine)
+            logical = int(prof.logical_cores) if prof is not None and prof.logical_cores else None
+    print(f"# run priority and free threads on {machine} (per machine: --priority/--free-threads [--machine NAME])")
+    print(f"#   {priority_lines(s, machine, logical)}")
     return 0
+
+
+def priority_info(s, logical: int | None = None) -> dict:
+    """This machine's run priority and free threads, effective values included (``doctor --json``)."""
+    from . import priority
+
+    level, where_p = s.priority_for(scope=True)
+    free, where_f = s.free_threads_for(scope=True)
+    return {"machine": settings_mod.this_machine(), "priority": level, "priority_scope": where_p,
+            "free_threads": free, "free_threads_scope": where_f,
+            "free_threads_effective": priority.effective_free_threads(free, level, logical),
+            "auto_thread_budget": priority.auto_thread_cap(free, level, logical)}
+
+
+def priority_lines(s, machine: str | None = None, logical: int | None = None) -> str:
+    """'priority low (default of every machine); free threads 1 (default of every machine): ...' for ``settings``
+    and ``doctor``. ``logical``: the machine's logical threads (default: this machine's)."""
+    from . import priority
+
+    level, where_p = s.priority_for(machine, scope=True)
+    free, where_f = s.free_threads_for(machine, scope=True)
+
+    def scope(where: str) -> str:
+        return "set for this machine" if where == "this machine" else "default of every machine"
+
+    return (f"priority {level} ({scope(where_p)}); free threads {free} ({scope(where_f)}): "
+            f"{priority.describe(level, free, logical)}")
 
 
 def _update(args) -> int:
@@ -773,9 +837,32 @@ def add_engine_args(q: argparse.ArgumentParser, *, method_help: str | None = Non
     q.add_argument("--optimizer", choices=["lbfgs", "fire", "native"],
                    help="native = the engine's own optimizer (xtb, MOPAC) when it has one")
     q.add_argument("--fmax", type=float, help="force convergence, eV/Å")
-    q.add_argument("--threads", type=int, help=threads_help or "CPU threads (0 = all but one)")
+    q.add_argument("--threads", type=int, help=threads_help or "CPU threads (0 = all but the free threads, "
+                                                               "--free-threads; default from settings)")
     q.add_argument("--gpu", choices=["auto", "on", "off"], help=gpu_help)
     q.add_argument("--out", help=out_help or "output folder (default from settings)")
+
+
+def free_threads_arg(text: str) -> int:
+    """argparse type of ``--free-threads``: a count of 0 or more."""
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of threads: {text!r}") from None
+    if n < 0:
+        raise argparse.ArgumentTypeError("free threads must be 0 or more")
+    return n
+
+
+def add_priority_args(q: argparse.ArgumentParser, *, where: str = "this machine's") -> None:
+    """``--priority`` and ``--free-threads`` (``quantabench.priority``) of ``build``, ``grid build`` and ``worker``."""
+    q.add_argument("--priority", choices=["normal", "low", "background"],
+                   help="CPU and I/O priority of the work (lanes, xtb/CREST/Psi4, this process; never the GUI): normal, "
+                        "low (below normal, low I/O) or background (idle, very low I/O, at least 25 %% of the threads "
+                        f"left free); default {where} setting (low)")
+    q.add_argument("--free-threads", type=free_threads_arg, metavar="N",
+                   help="logical threads the automatic thread budget, the auto lane plan and dynamic CREST threads "
+                        f"leave free (default {where} setting, 1 = all but one)")
 
 
 def add_freq_args(q: argparse.ArgumentParser) -> None:
@@ -979,6 +1066,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="wall-clock limit per molecule, s (0 = none; default from settings, 1800): a lane past it is "
                         "killed and restarted, one process stops at the next checkpoint; the molecule is marked "
                         "failed 'time limit (S s)' and --retry-failed redoes it")
+    add_priority_args(b)
     b.set_defaults(func=_build)
 
     st = sub.add_parser("status", help="progress of a (resumable) run folder")
@@ -1099,9 +1187,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="path of an external program (xtb, crest, mopac, psi4, psi4_python) for this machine only, "
                          "or for the machine --machine NAME names (engines.machine_paths; the settings file is "
                          "shared); NAME= finds it automatically again")
+    se.add_argument("--priority", choices=["normal", "low", "background", "default"],
+                    help="run priority of this machine only, or of --machine NAME (resources.machine_priority; "
+                         "default = back to the default of every machine, low)")
+    se.add_argument("--free-threads", metavar="N",
+                    help="logical threads the automatic budgets leave free, this machine only or --machine NAME "
+                         "(resources.machine_free_threads; default = back to the default of every machine, 1)")
     se.add_argument("--machine", nargs="?", const="", metavar="NAME",
-                    help="with --engine-path: the machine to set the path for. Without --machine, or with "
-                         "--machine and no name, it is this machine")
+                    help="with --engine-path, --priority or --free-threads: the machine to set them for. Without "
+                         "--machine, or with --machine and no name, it is this machine")
     se.set_defaults(func=_settings)
     return p
 

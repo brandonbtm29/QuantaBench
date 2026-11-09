@@ -13,7 +13,7 @@ def main() -> int:
 
     s = settings_mod.load()
     # Thread caps must be in the environment before NumPy/PyTorch load their thread pools.
-    resources.apply_thread_limits(s.resources.threads)
+    resources.apply_thread_limits(s.thread_budget_for())    # threads 0: all but this machine's free threads
     from ..chem import torch_compat
 
     torch_compat.apply_settings(s, strict=False)       # dxtb linear algebra / GPU modes for everything the GUI runs
