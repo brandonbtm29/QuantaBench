@@ -8,7 +8,9 @@ from quantabench.chem.inputs import from_smiles
 
 
 def cfg(tmp_path, **kw):
-    base = dict(method="mmff", max_conformers=4, refine_top=2, xtb_properties=False, output_dir=str(tmp_path / "runs"),
+    # rank_method refine: these tests are not about the rank step, whose auto level depends on what is installed
+    # (AIMNet2 on NOVA adds a rank stage and a model load)
+    base = dict(method="mmff", rank_method="refine", max_conformers=4, refine_top=2, xtb_properties=False, output_dir=str(tmp_path / "runs"),
                 formats=("xyz", "sdf", "extxyz", "lammps", "pdb", "xyz-all", "mol"))
     base.update(kw)
     return pipeline.BuildConfig(**base)
