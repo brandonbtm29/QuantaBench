@@ -873,7 +873,7 @@ thread speed is and the temperature of the PC."
   probably in `Archive.carc`); (6) ambiguous structures (an anion under the CAS numbers of its salts): share
   the result with all its labels in the wide table, or leave it out (now); (7) a full-run timing on NOVA.
 
-### QSAR-1: The PFAS QSAR cohorts in staged batches · b01/b02 staged 2026-11-11 (branch `feat/batches`); runs wait for RANK-2
+### QSAR-1: The PFAS QSAR cohorts in staged batches · b01/b02 run 2026-11-11; b03 and the tranches b04-b08 staged 2026-11-11 (branch `feat/b03`); the b03 run needs-Brandon (an evening)
 Decided 2026-11-11 (Brandon): no single run over all 14,223 molecules (`data_engineering/Cohort */*.sdf`: C4A 9,052,
 C1A 2,492, C5A 930, C1B 409, C4B 376, C3A 341, C2A 331, C2B 193, C3B 80, C6A 19). Batches, each analysed before
 the next. Inputs and selections in `Runs/batches/<batch>/` (input.csv, selection.csv, selection.md, design.json);
@@ -909,28 +909,73 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   target: a text scrape of the CRC surface-tension pages matched by name prefix, which mixes γ at other
   temperatures and of other compounds, water's σ and molecular weights (not parachors). `Runs/batches/
   gamma25_check.md` has the breakdown; b02 uses QuantaBench's PubChem pull instead.
-- **Next batches** (proposal, needs-Brandon): 100 is right for the two checks above, but too small for the rest.
-  - **b03: a stratified 1,000**, a mini-version of the whole list: proportional to cohort x charge class x size bin
-    (<= 10, 11-20, 21-35, > 35 heavy atoms), at least 20 of every cohort x charge class (all of C3B cations, C6A),
-    seeded, without the b01/b02 molecules. About 25-35 min per phase on both machines (the 300-molecule validation
-    took 7.1 min per phase with frequencies; the full list is smaller on average, median 14 heavy atoms, but has
-    1,100 molecules above 35). It checks what 100 cannot: the failure rate per cohort, time and memory limits on
-    the large molecules (about 80 above 35 heavy atoms), the per-size timings that forecast the rest, the rank
-    step on the C3 ions in water, and `validate` against PM6 (neutral cohorts) and B3LYP/C-PCM (C3).
-  - **b04-b08: five tranches of about 2,600**, a seeded stratified partition of the remaining ~12,950, so every
-    tranche is representative (about 15 C3B and 4 C6A molecules each). About 1-1.5 h per phase at full speed,
-    2-3 h for both phases at background priority: one evening or night each. A generic `analyze_tranche.py`
-    (coverage and failures per cohort, timings per size bin, throttling, rank-change rate per phase and charge
-    class, `validate` against v6, descriptor distributions against the earlier tranches, outliers such as
-    imaginary frequencies or dipoles above 30 D) writes the report automatically at the end of each.
-  - Why not 100 throughout: ~140 batches with ~10-15 min of fixed cost each (grid start, Mac sync, merge, pair,
-    analysis, review) and per-batch statistics too thin to compare cohorts. Why not one run: no checkpoint.
-  - Rough total: 14,223 molecules x 7.1 min / 300, scaled by size, is about 3-4 h per phase at full speed on
-    both machines (+5-10 % for the rank step's single points); b03 measures it.
+- **b01 and b02 ran** 2026-11-11 (both machines, `--rank auto`): 76/76 and 100/100 ok in both phases, 4 and 3 min
+  per phase. The E76 again with 20 refined conformers (`_rt20`, NOVA alone, 12 lanes): 3.7 min gas, 4.6 min water;
+  the same lowest conformer as Spartan 11/63 (10/63 with 5), search misses 18 (37), conformer dipole MAE 1.21 D (1.39).
+- **Decided 2026-11-11** (Brandon): "a stratified batch of 1000", batches scheduled for the evenings.
+- **The partition** (`b03_select.py`; `Runs/batches/partition/`: records.csv with every record and where it went,
+  excluded.csv, partition.md): all 14,223 SD records (C6A_P1.sdf as fixed on 2026-11-11), the structure as drawn
+  (canonical isomeric SMILES, R/S and E/Z from the record's 3D geometry, charges as drawn: `--no-protonate`), CAS
+  ids (the title in cohorts 1-3, CAS_RN in 4-6). Left out, first reason: more than one fragment 459, elements
+  outside AIMNet2's (the gas rank level) 85, unpaired electrons 11, more than 60 heavy atoms 152, refused by
+  `standardize` 3, unreadable or no InChIKey 4; the same structure as a kept record 266 (computed once); already in
+  b01 86 and b02 100 records (by InChIKey). Eligible: 13,057. Could still run later (a decision, in no tranche): 405
+  multi-fragment records as their largest fragment, 78 with elements outside AIMNet2 only, 152 above 60 heavy atoms
+  only. Seed 20261111.
+  - **b03-strat1000** (1,000): proportional to cohort x charge class x size bin (<= 10, 11-20, 21-35, > 35 heavy
+    atoms) with a floor of 20 per cohort x charge class (C2B, C3A and C3B anions and cations, C6A at the floor or
+    whole), the rest shared in proportion, then over the size bins; a seeded shuffle per stratum. 41 anions, 44
+    cations; 102 above 35 heavy atoms (flag `large_gt35`; the floors of the long cohorts push it above the ~80 of a
+    proportional sample), 64 above 60 atoms, 4 above 100 (155 at most); 833 with PM6 and 50 with DFT-water values
+    in the v6 table. Input order: size bin ascending, the groups interleaved, so `-First 5` is a cheap mixed smoke
+    test.
+  - **b04-tranche1 ... b08-tranche5** (2,411-2,412 each): the other 12,057 dealt stratum by stratum (seeded), so
+    every tranche has the same mix within one molecule per stratum (C3B 4-5 each; C6A is all in b03).
+  - C6A: the v6 table has no C6A rows (no Spartan document), and none of the six records fixed on 2026-11-11 joins
+    a v6 row by the old or the new structure, CAS or title; b03 has all six with the fixed structures.
+  - 49 records of the PFAS cohorts have no fluorine (C3A cations 32, C1A 8, C2A 8, C3B 1: probably a salt's
+    counter-ion or the wrong fragment): kept, flagged `pfas_cohort_without_F`; 13 are in b03, 10 of its 20 C3A
+    cations (needs-Brandon).
+- **Evening runs** (`scratch/batches/run_tranche.ps1` + `run_tranche.py`, `run_b03.ps1`, `start_tranche.ps1`): the
+  protocol above; before each attempt the MacBook is asked and joins when its worker answers, is idle and on this
+  commit, else NOVA runs alone. A deadline (default 07:00) cancels the remote shares and stops NOVA's at its next
+  molecule; `-Resume` (or the same command the same day) runs only the molecules no run folder of the phase has
+  finished, as a new grid in the same phase folder. Exit 0 done, 5 stopped (deadline or Ctrl+C, resumable).
+  `qb_grid.py` wraps `grid build` for the deadline and the watch below. `analyze_tranche.py` (generic) writes
+  `analysis/report.md` and a short `summary.md`: coverage and failures per cohort x charge class (errors grouped),
+  molecule and stage times per machine and size bin from the run telemetry, machine sensors and throttling, the
+  rank step's pick changes by phase and charge class, `validate` against v6 by cohort, outliers (imaginary
+  frequencies, dipoles > 30 D, CPK > 15 % off Spartan or between phases, solvation energies out of range), and
+  drift against b01/b02 and the earlier tranches (KS tests within fluorinated/non-F x charge class). Tested on the
+  b01, b02 and E76-rt20 runs (rt20 against b01: the descriptors agree, p ~ 1; the time per molecule differs).
+- **`grid build --wait` hangs when a worker goes away** (main, 27a73bd): `follow` waits for an unreachable worker
+  ("may come back"). Tested with a throwaway local worker frozen mid-share (SIGSTOP, like a sleeping MacBook):
+  the local share finished, the frozen share stayed `running` at 0/17, "cannot reach ... (retrying)", no return;
+  work sharing cannot help (the frozen worker cannot release its molecules, and it has no rate before 3 are done).
+  DIST-7 (`feat/machine-control`) handles it in the client. Until that is on NOVA and the Mac, `qb_grid.py` stops
+  following once NOVA has nothing left and the remote worker has not answered for 10 min, copies what the remote
+  share finished from its synced run folder (a private copy of its job table), and the next attempt runs the
+  rest; the orphaned job is cancelled when its worker answers again. Tested with the throwaway worker (frozen:
+  rescue on NOVA; deadline: stop and resume; Ctrl+C: stop and resume), all 30 molecules paired each time.
+  Related: `grid merge --partial` and `grid status` look for a remote share's synced copy beside the grid folder
+  (`<grid folder>/../<run folder>`), so with `--out <run root>/<phase>` (the batch scripts) they miss the Mac's
+  folder in `Runs/` (for DIST-7).
+- **Lanes:** NOVA's `auto` (`dist.machine_lanes`) gives 12 CPU lanes x 1 thread for tblite-gfn2 at every priority
+  on 27a73bd (not 6 x 2); the Mac runs 10 x 1.
+- **Time estimate for b03** (per-stage power laws in atoms from the b01/b02 telemetry, the Mac at 10 lanes and
+  refine top 5, and the E76-rt20 telemetry, NOVA at 12 lanes; refine and rank scaled by the conformers refined;
+  the 64 molecules above 60 atoms extrapolated): gas + water about 0.6 h on both machines or 1.5-1.7 h on NOVA
+  alone with refine top 5; 1.2 h or 3.1-3.3 h with refine top 20. A tranche: 1.2 h or 3.1-3.3 h (top 5), 2.4 h or
+  6.4-6.6 h (top 20). The slowest molecule on a NOVA lane: 14-27 min (top 5), 23-40 min (top 20, near the 1800 s
+  molecule time limit). b03 measures it.
+- **Smoke test** 2026-11-11 (the first 5 of b03, gas, NOVA alone, background, `--rank auto`): 5/5 ok in 0.5 min
+  (12 lanes; the AIMNet2 load is about 14 s per lane), the report in 0.1 min.
 - Open (needs-Brandon): TFA and PFPrA (recompute Spartan's conformers or leave them out, VAL-2); whether b02's σ
   should include values of gases above their boiling point (left out now; DESC-2: Sugden reproduces them within
-  0-3 mN/m and adding them moves the CV error by < 0.1 mN/m, so leaving them out costs nothing); ids of the baseline cohorts (Spartan
-  labels now, PubChem titles and CAS in selection.csv; QSAR-2); the b03 and tranche sizes above.
+  0-3 mN/m and adding them moves the CV error by < 0.1 mN/m, so leaving them out costs nothing); ids of the baseline
+  cohorts (CAS now in b03-b08, Spartan labels in the v6 table, PubChem titles and CAS in selection.csv; QSAR-2);
+  refine top 5 or 20 for b03; the 49 fluorine-free PFAS cohort records; whether the excluded salts (405), the
+  elements outside AIMNet2 (78) and the molecules above 60 heavy atoms (152) get a batch of their own.
 - Acceptance (unchanged): one merged table for all 14,223 molecules, no manual recombination, and the overlap with
   the Spartan results compared.
 
