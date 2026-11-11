@@ -144,6 +144,12 @@ compound's (a salt).
    with the compound's own dσ/dT where several temperatures exist (else −0.1 mN/m/K). Add Jasper, ThermoML and
    curated literature values with the same provenance columns. Per compound, take the median of independent
    sources; flag spreads above 2 mN/m; exclude `needs_review` records until checked.
+   `quantabench-cli pubchem targets experimental.csv --out st25.csv` does this for the PubChem records
+   (docs/ENGINES.md, "One target value per molecule"): it also leaves out estimated values, repairs N/m-for-mN/m
+   slips, and prefers compilations (CRC, Riddick, Jasper, DIPPR) over other references and the CHRIS manual.
+   Two checks it does not make, and that a selection should: a value in water's range (about 65-73 mN/m) for an
+   organic liquid is most likely an aqueous solution, and a value far (> 30 %) from the Sugden parachor estimate
+   with a measured density is most likely another quantity or another compound (BACKLOG QSAR-1, batch b02).
 4. Target table for model (2): γ_CMC and CMC per PFAS, counter-ion and electrolyte, from the curated
    literature. PubChem's unclassified PFAS values such as PFOA's 15.2 mN/m are candidates for review, not data.
 

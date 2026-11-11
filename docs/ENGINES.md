@@ -1057,6 +1057,41 @@ quantabench-cli pubchem lookup 335-67-1 --experimental                          
 - `chem.inputs.lookup_name` (names typed in the GUI or CLI) goes through the same client, so its lookups are
   rate-limited and cached too.
 
+### One target value per molecule (`pubchem targets`)
+
+```
+quantabench-cli pubchem targets experimental.csv --out st25.csv                    # σ at 25 °C from 20-30 °C records
+quantabench-cli pubchem targets experimental.csv --out st25.csv --window 20,25     # only 20-25 °C records
+quantabench-cli pubchem targets experimental.csv --out rho25.csv --heading Density
+```
+
+`chem/pubchem_targets.py` turns the long-form records of `enrich --records` into a training table, one row per
+molecule (docs/SURFACE_TENSION.md, "Data assembly", step 3):
+
+- **Records used:** the heading (default Surface Tension), the condition classes (`--class`, default
+  `pure_liquid`), a stated temperature within `--window` (default 20-30 °C). Left out and counted per molecule:
+  `needs_review` records (`--include-review`), estimated, calculated or predicted values (`--include-estimated`),
+  records without a temperature (`--allow-no-temperature` takes them as at the target, flagged), other classes,
+  and implausible values.
+- **Unit slips:** a surface tension outside 5-80 mN/m is repaired when a factor 1000 brings it inside and the text
+  names N/m (HSDB prints CRC values as "38.00 N/m at 25 °C"; "43.55 dynes/cm; 0.04355 Newtons/meter" is read as
+  0.04355 dyn/cm), flagged `unit_repaired`; otherwise it is left out (`excluded_implausible`).
+- **To the target temperature** (`--t`, default 25 °C): value + slope x (target - T). The slope is the molecule's
+  own when its usable records span at least 10 K within 75 K of the target and the fit lies in the plausible range
+  (surface tension -0.3 to -0.02 mN/m per K; `--slope-range`), else the default (`--slope`; -0.1 mN/m per K,
+  density -0.001 g/cm³ per K). `slope_source` says which.
+- **One value per reference** (its record nearest the target), tiered by the reference text: `compilation` (CRC
+  Handbook, Riddick's Organic Solvents, Jasper, Daubert & Danner/DIPPR, Lange, Yaws, TRC, Landolt-Börnstein),
+  `other`, `chris` (the U.S. Coast Guard's CHRIS manual, whose values are rounded and sometimes estimated). The
+  `value` is the median over the best tier present; `value_all_median`, `spread_all` and `references` keep every
+  reference, and a spread above `--spread-flag` (2) is flagged.
+- **Every molecule with a record of the heading gets a row:** `status` is `ok` or why there is no value; the raw
+  value, its temperature and the correction stay in the row.
+
+On the 2026-11-05 pull (391 molecules with a surface-tension record): 213 get a σ(25 °C) from 20-25 °C records
+(80 from compilations, 81 other, 52 CHRIS), 25 of them with their own slope; 4 had a unit slip repaired, and 2 had
+only implausible values.
+
 ## Not available yet
 
 - NMR shieldings (Psi4 has none; planned through PySCF).
