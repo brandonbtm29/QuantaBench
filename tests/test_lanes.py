@@ -688,7 +688,10 @@ def test_lane_past_the_time_limit_is_killed_and_restarted(tmp_path, monkeypatch)
     again, _ = jobs.run_resumable(None, c, out, lanes=L.parse_lanes("2", c))
     assert again == []
     monkeypatch.delenv(L.TEST_DELAY_ENV)
-    redone, _ = jobs.run_resumable(None, c, out, retry_failed=True, lanes=L.parse_lanes("2", c))
+    # a roomier limit for the redo: a lane's first molecule may import torch (D4 polarizability, DESC-2), which takes
+    # longer than 2 s on a machine that has it (NOVA)
+    roomy = cfg(tmp_path, molecule_timeout_s=120.0)
+    redone, _ = jobs.run_resumable(None, roomy, out, retry_failed=True, lanes=L.parse_lanes("2", roomy))
     assert sorted(r.status for r in redone) == ["ok"] * 3
     assert jobs.open_run(out).counts["ok"] == 3 and lane_processes() == []
 
