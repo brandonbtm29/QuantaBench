@@ -40,6 +40,7 @@ FAMILIES: tuple[str, ...] = (
     "Implicit solvation",
     "Optimizers",
     "Spartan's levels",
+    "Property estimates",
     "Concepts",
 )
 
@@ -249,11 +250,33 @@ R_LBFGS = _ref("Liu, Nocedal", "On the limited memory BFGS method for large scal
                1989, "45", "503-528", "10.1007/BF01589116")
 R_FIRE = _ref("Bitzek, Koskinen, Gähler, Moseler, Gumbsch", "Structural relaxation made simple", "Phys. Rev. Lett.",
               2006, "97", "170201", "10.1103/PhysRevLett.97.170201")
+R_GIROLAMI = _ref("Girolami", "A simple \"back of the envelope\" method for estimating the densities and molecular "
+                 "volumes of liquids and solids", "J. Chem. Educ.", 1994, "71", "962", "10.1021/ed071p962")
+R_BONDI = _ref("Bondi", "van der Waals volumes and radii", "J. Phys. Chem.", 1964, "68", "441-451",
+               "10.1021/j100785a001")
+R_GCVOL = _ref("Elbro, Fredenslund, Rasmussen", "Group contribution method for the prediction of liquid densities as "
+               "a function of temperature for solvents, oligomers, and polymers", "Ind. Eng. Chem. Res.", 1991, "30",
+               "2576-2582", "10.1021/ie00060a011")
+R_BOSQUE = _ref("Bosque, Sales", "Polarizabilities of solvents from the chemical composition", "J. Chem. Inf. Comput. Sci.",
+                2002, "42", "1154-1163", "10.1021/ci025528x")
+R_CRIPPEN = _ref("Wildman, Crippen", "Prediction of physicochemical parameters by atomic contributions",
+                 "J. Chem. Inf. Comput. Sci.", 1999, "39", "868-873", "10.1021/ci990307l")
+R_MILLER = _ref("Miller", "Additivity methods in molecular polarizability", "J. Am. Chem. Soc.", 1990, "112",
+                "8533-8542", "10.1021/ja00179a044")
+R_D4 = _ref("Caldeweyher, Ehlert, Hansen, Neugebauer, Spicher, Bannwarth, Grimme", "A generally applicable "
+            "atomic-charge dependent London dispersion correction", "J. Chem. Phys.", 2019, "150", "154122",
+            "10.1063/1.5090222")
+R_SVPD = _ref("Rappoport, Furche", "Property-optimized Gaussian basis sets for molecular response calculations",
+              "J. Chem. Phys.", 2010, "133", "134105", "10.1063/1.3484283")
+R_SUGDEN = _ref("Sugden", "A relation between surface tension, density, and chemical composition",
+                "J. Chem. Soc., Trans.", 1924, "125", "1177-1189", "10.1039/CT9242501177")
+R_QUAYLE = _ref("Quayle", "The parachors of organic compounds. An interpretation and catalogue", "Chem. Rev.", 1953,
+                "53", "439-589", "10.1021/cr60166a003")
 
 
 # ============================================================================== entries
 _FAMILY_ML, _FAMILY_TB, _FAMILY_NDDO, _FAMILY_FF, _FAMILY_CONF, _FAMILY_DFT, _FAMILY_BASIS, _FAMILY_SOLV, \
-    _FAMILY_OPT, _FAMILY_SPARTAN, _FAMILY_CONCEPTS = FAMILIES
+    _FAMILY_OPT, _FAMILY_SPARTAN, _FAMILY_EST, _FAMILY_CONCEPTS = FAMILIES
 
 _HYBRID_COST = ("Hybrid DFT: minutes per conformer for PFAS. QuantaBench measured ωB97X-D/def2-SVP on PFHpA (23 atoms, "
                 "313 basis functions): SCF 101 s; with properties, cubes and the polarizability 507 s (2 threads, "
@@ -1350,6 +1373,143 @@ _ENTRIES: tuple[Entry, ...] = (
         aliases=("auto (best available)", "best available"),
         see_also=("aimnet2", "gfn2-xtb", "gfn1-xtb", "mmff94s"),
     ),
+    Entry(
+        "density-girolami", "Girolami liquid density", _FAMILY_EST,
+        "A graph-only liquid density from relative atom volumes, for every molecule: `density_girolami_g_cm3`.",
+        "Girolami's rule sums relative atomic volumes (H 1, Li-F 2, Na-Cl 4, K-Br 5, Rb-I 7.5, Cs-Bi 9) and divides "
+        "the molar mass by five times the sum, giving g/cm³. The density is raised 10 % for each OH, COOH, primary or "
+        "secondary amine, amide, sulfoxide and ring, 20 % for a sulfone and 7.5 % per ring of a fused system, at most "
+        "30 % in all. QuantaBench writes the density and the molar volume M/ρ (`molar_volume_girolami_cm3`, cm³/mol) "
+        "of every neutral molecule in the descriptors step.",
+        "A density where none is measured, as a cross-check of [[density-packing|the packing density]], and the "
+        "molar volume V_m that a parachor model σ = (P/V_m)⁴ needs.",
+        "QuantaBench measured 5.3 % mean error on 237 PubChem test liquids, 6.4 % on fluorinated liquids (≥ 3 F) and "
+        "13 % on phosphorus compounds (docs/VALIDATION.md, DESC-2). Fluorine counts as any second-row atom. Not "
+        "defined for ions (no value, with a note).",
+        "None: it reads the molecular graph.",
+        "Not applicable.",
+        "None: a pure-liquid property at room temperature.",
+        (R_GIROLAMI,),
+        aliases=("girolami", "density_girolami_g_cm3", "molar_volume_girolami_cm3", "girolami density"),
+        see_also=("density-packing", "parachor-sugden"),
+    ),
+    Entry(
+        "density-packing", "Packing-coefficient liquid density", _FAMILY_EST,
+        "Liquid density from the computed van der Waals volume and a fitted packing coefficient: `density_packing_g_cm3`.",
+        "The liquid's molar volume is the molecules' van der Waals volume divided by how densely they pack: V_m = "
+        "N_A V_vdW / k. QuantaBench computes V_vdW with Bondi's radii at the best conformer and takes k (about 0.52-"
+        "0.64) from a linear model in the inverse number of heavy atoms, the fractions of F, Cl, Br, I, Si, S, P, N "
+        "and O, the H-bond donors and the ring and aromatic atoms, fitted on 831 PubChem/HSDB liquid densities near "
+        "25 °C (DESC-2). It writes the density and `molar_volume_packing_cm3` (cm³/mol) for every neutral molecule.",
+        "The molar volume of a parachor model when no density is measured, PFAS included; the best of the cheap "
+        "estimates.",
+        "QuantaBench measured 2.7 % mean error on 237 test liquids it was not fitted to, 3.2 % on 26 fluorinated "
+        "liquids and 2.9 % above 1.6 g/cm³ (docs/VALIDATION.md, DESC-2). Fitted for H, C, N, O, F, Si, P, S, Cl, Br, "
+        "I only (other elements get no value), on neutral liquids at 1 atm; with non-default radii it computes its "
+        "own Bondi volume.",
+        "One grid volume of the best conformer: milliseconds.",
+        "Not applicable.",
+        "None: a pure-liquid property at room temperature.",
+        (R_BONDI, R_GCVOL),
+        aliases=("packing density", "density_packing_g_cm3", "molar_volume_packing_cm3", "packing coefficient"),
+        see_also=("density-girolami", "parachor-sugden"),
+    ),
+    Entry(
+        "polarizability-bosque", "Bosque-Sales additive polarizability", _FAMILY_EST,
+        "Static polarizability from the composition alone: `polarizability_bosque_A3`.",
+        "Bosque and Sales fitted average atomic polarizabilities to the experimental polarizabilities of 340 "
+        "solvents: α (Å³) = 0.32 + 1.51 n_C + 0.17 n_H + 0.57 n_O + 1.05 n_N + 2.99 n_S + 2.48 n_P + 0.22 n_F + "
+        "2.16 n_Cl + 3.29 n_Br + 5.45 n_I. It ignores structure and charge.",
+        "An absolute polarizability that scales with size, for dispersion terms of a QSPR (α/V, the quantum "
+        "parachor); PFAS included.",
+        "QuantaBench measured 2.8 % mean error against Lorentz-Lorenz polarizabilities of 696 PubChem liquids, 3.5 % "
+        "against ωB97X-D/def2-SVPD (3.7 % for PFAS) and 4.8 % against 27 experimental values (water 18 % off) "
+        "(docs/VALIDATION.md, DESC-2). No value for other elements (Si, B, metals) or isomers' differences.",
+        "None.",
+        "Not applicable.",
+        "None: a gas-phase molecular property.",
+        (R_BOSQUE, R_MILLER),
+        aliases=("bosque", "bosque-sales", "polarizability_bosque_A3", "additive polarizability"),
+        see_also=("polarizability-crippen", "polarizability-d4", "polarizability-xtb"),
+    ),
+    Entry(
+        "polarizability-crippen", "Crippen molar-refractivity polarizability", _FAMILY_EST,
+        "Polarizability from Wildman-Crippen atom-type refractivities: `polarizability_crippen_A3`.",
+        "RDKit's Wildman-Crippen molar refractivity MR is a sum of atom-type contributions fitted to measured molar "
+        "refractivities. Lorentz-Lorenz turns it into a polarizability: α = 3 MR / (4π N_A), 0.3964 Å³ per cm³/mol. "
+        "It is an optical (589 nm) polarizability, a few percent above the static one.",
+        "Like [[polarizability-bosque|Bosque-Sales]], with atom types (hybridization, neighbours) instead of plain "
+        "element counts.",
+        "QuantaBench measured 1.7 % against Lorentz-Lorenz values of PubChem liquids (it was fitted to that kind of "
+        "data), 4.3 % against ωB97X-D/def2-SVPD (3.5 % for PFAS) and 3.8 % against 27 experimental values "
+        "(docs/VALIDATION.md, DESC-2). Only H, C, N, O, F, P, S, Cl, Br and I have their own types: other elements "
+        "get no value.",
+        "None.",
+        "Not applicable.",
+        "None: a gas-phase molecular property.",
+        (R_CRIPPEN,),
+        aliases=("crippen", "wildman-crippen", "molar refractivity", "polarizability_crippen_A3", "crippen mr"),
+        see_also=("polarizability-bosque", "polarizability-d4"),
+    ),
+    Entry(
+        "polarizability-d4", "D4-model polarizability", _FAMILY_EST,
+        "The D4 dispersion model's static polarizability with EEQ charges at the best conformer: `polarizability_d4_A3`.",
+        "D4 (the [[dispersion]] correction) weights TD-DFT reference polarizabilities of each element by the atom's "
+        "coordination number and its electronegativity-equalization (EEQ) charge. The sum over atoms is a molecular "
+        "static polarizability that responds to the environment and the charge, with no SCF. QuantaBench computes it "
+        "with tad-dftd4 (or the copy inside the dxtb fork) when PyTorch is installed; without them the column is "
+        "absent.",
+        "A geometry- and charge-aware polarizability for every element up to Rn, silicon and metals included.",
+        "QuantaBench measured 1.02 x DFT (ωB97X-D/def2-SVPD) for non-fluorinated molecules but 1.11 x DFT for PFAS, "
+        "and 0.96 x Lorentz-Lorenz (r 0.991) for PubChem liquids (docs/VALIDATION.md, DESC-2): rescale it before "
+        "mixing fluorinated and other molecules. It is not the xTB response ([[polarizability-xtb]]).",
+        "Milliseconds after PyTorch is loaded.",
+        "Not applicable.",
+        "None: the gas-phase EEQ charges.",
+        (R_D4,),
+        aliases=("polarizability_d4_A3", "d4 polarizability", "d4 alpha", "dftd4 polarizability"),
+        see_also=("dispersion", "polarizability-bosque", "polarizability-xtb"),
+    ),
+    Entry(
+        "polarizability-xtb", "xTB response polarizability (GFN1, GFN2)", _FAMILY_EST,
+        "The SCF response of GFN1-/GFN2-xTB to a field: `xtb_polarizability_iso_A3`, `tblite_gfn2_polarizability_iso_A3`.",
+        "The static polarizability of the [[gfn1-xtb|GFN1-xTB]] and [[gfn2-xtb|GFN2-xTB]] Hamiltonians: dxtb's "
+        "autograd or tblite's finite field (six SCFs in ±field), with the run's solvent when it has one. Every run "
+        "with tblite now writes both, whatever engine refined the conformers. The minimal valence basis cannot "
+        "polarize much, so the values are well below experiment.",
+        "Relative trends within one class, solvent shifts (water − gas), and recalibrated (one scale factor per "
+        "class) when DFT is too expensive.",
+        "QuantaBench measured GFN2-xTB at 0.66 x and GFN1-xTB at 0.60 x ωB97X-D/def2-SVPD, with ratios from 0.45 to "
+        "1.4 (high for bromine and iodine), and 0.65 x / 0.56 x Lorentz-Lorenz (docs/VALIDATION.md, DESC-2). As the "
+        "α of a parachor model it fails without a volume term (b02). Gas-phase multiply charged anions can have "
+        "unphysical values (discarded with a note).",
+        "Six or seven SCFs: milliseconds to a second.",
+        "Not applicable.",
+        "The run's solvent (ALPB by default) in the same SCF as the field.",
+        (R_GFN2, R_GFN1),
+        aliases=("xtb polarizability", "xtb_polarizability_iso_A3", "tblite_gfn2_polarizability_iso_A3",
+                 "gfn2 polarizability", "gfn1 polarizability"),
+        see_also=("gfn1-xtb", "gfn2-xtb", "polarizability-d4", "polarizability-bosque"),
+    ),
+    Entry(
+        "parachor-sugden", "Sugden parachor", _FAMILY_EST,
+        "Sugden's group parachor P, with σ ≈ (P ρ / M)⁴ for a pure liquid: `parachor_sugden`.",
+        "The parachor P = M σ^¼ / (ρ_l − ρ_v) is nearly additive over atoms and bonds. QuantaBench sums Sugden's "
+        "values as Quayle tabulated them (C 4.8, H 17.1, O 20.0, F 25.7, Cl 54.3, Br 68.0, ...; a double bond "
+        "23.2, a six-ring 6.1, an ester group 60.0), in cm³ mol⁻¹ (mN/m)^¼. With a liquid density, measured or "
+        "[[density-packing|estimated]], it predicts the surface tension with no fit.",
+        "A surface-tension baseline for any liquid with C, H, N, O, F, Si, P, S, Cl, Br, I or B.",
+        "QuantaBench measured on b02 (80 non-fluorinated liquids): 1.7 mN/m mean error with the measured density, "
+        "3.1 with the packing density, 6.7 with Girolami's (docs/SURFACE_TENSION.md, docs/VALIDATION.md, DESC-2). "
+        "Errors in P or ρ count four times in σ. Pure liquids only: not the surface tension of a surfactant "
+        "solution.",
+        "None: it reads the molecular graph.",
+        "Not applicable.",
+        "None: a pure-liquid property.",
+        (R_SUGDEN, R_QUAYLE),
+        aliases=("sugden", "parachor", "parachor_sugden"),
+        see_also=("density-packing", "density-girolami"),
+    ),
 )
 
 #: What each method or correction is for, one line each: (corrects, use for, avoid for). The model advisor
@@ -1476,6 +1636,35 @@ DECISIONS: dict[str, tuple[str, str, str]] = {
               "Large batches of large flexible molecules at GFN2 (hours each)."),
     "rdkit-etkdg": ("", "Fast, reproducible conformer pools.",
                     "Ions in water with few conformers refined: the pool is ranked by gas-phase MMFF94s."),
+    "density-girolami": (
+        "The missing liquid density, from the graph alone.",
+        "A quick density and molar volume where none is measured; a cross-check of the packing density.",
+        "Final densities of fluorinated or phosphorus compounds (6-13 % off, DESC-2)."),
+    "density-packing": (
+        "The gap between the van der Waals volume and the liquid's molar volume (V_vdW is 50-66 % of V_m), with a "
+        "packing coefficient fitted to measured densities.",
+        "V_m of a parachor model with no measured density, PFAS included (2.7 % mean error, DESC-2).",
+        "Ions, elements it was not fitted for, liquids far from 25 °C and 1 atm."),
+    "polarizability-bosque": (
+        "The low absolute polarizability of the minimal-basis xTB response.",
+        "Absolute α for dispersion descriptors (α/V, the quantum parachor).",
+        "Si, B, metals (no parameters); isomers (it sees only the composition)."),
+    "polarizability-crippen": (
+        "The low xTB response, with atom types fitted to measured refractivities.",
+        "Absolute α where the atom types matter.",
+        "Elements outside H C N O F P S Cl Br I."),
+    "polarizability-d4": (
+        "The low xTB response, with no SCF; responds to geometry and charge.",
+        "Molecules with elements the additive tables lack (Si, metals).",
+        "Mixing PFAS and other molecules without a rescale (11 % high for PFAS, DESC-2)."),
+    "polarizability-xtb": (
+        "",
+        "Trends within a class and solvent shifts of α.",
+        "Absolute polarizabilities: half of DFT's for many molecules (DESC-2)."),
+    "parachor-sugden": (
+        "",
+        "A no-fit surface-tension baseline, with a measured or estimated density.",
+        "Surfactant solutions (γ at the CMC) and ions."),
 }
 
 

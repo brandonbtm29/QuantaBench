@@ -64,6 +64,27 @@ def tblite_polarizability_A3(numbers, positions_ang, charge: int = 0, multiplici
     return calc.polarizability_au(np.asarray(positions_ang, float)) * BOHR3_A3
 
 
+def tblite_gfn2_polarizability(numbers, positions_ang, charge: int = 0, multiplicity: int = 1, *,
+                               solvent: str = "", solvation_model: str = "alpb"
+                               ) -> tuple[float | None, float | None, list[str]]:
+    """GFN2-xTB static polarizability from tblite (finite field, the field and ``solvent`` in one SCF): (isotropic,
+    anisotropy) in Å^3 and notes; (None, None, [why]) when the tensor is unphysical (an unbound gas-phase anion).
+    Like GFN1-xTB's it is the response of a minimal valence basis: smaller than DFT's (docs/VALIDATION.md, DESC-2)."""
+    from .eng_tblite import TBLiteCalculator
+
+    pos = np.asarray(positions_ang, float)
+    calc = TBLiteCalculator(numbers, "GFN2-xTB", charge, multiplicity, solvent=solvent or "",
+                            solvation_model=solvation_model or "alpb")
+    calc.singlepoint(pos)
+    alpha_au = calc.polarizability_au(pos)
+    eig = np.linalg.eigvalsh(0.5 * (alpha_au + alpha_au.T)) * AU_POLARIZABILITY_A3
+    notes = list(calc.notes)
+    why = unphysical_polarizability(eig, numbers, charge)
+    if why:
+        return None, None, notes + [f"GFN2-xTB polarizability discarded: {why}"]
+    return float(eig.mean()), float(eig.max() - eig.min()), notes
+
+
 def tblite_xtb_properties(numbers, positions_ang, masses, charge: int = 0, multiplicity: int = 1, *,
                           solvent: str = "", solvation_model: str = "alpb", polarizability: bool = True) -> dict:
     """``xtb_properties`` from tblite's GFN1-xTB in ``solvent`` (canonical name, "" = gas phase): Mulliken charges,

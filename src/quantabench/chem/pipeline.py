@@ -31,7 +31,7 @@ from rdkit import Chem
 
 from .. import priority, resources
 from ..settings import Settings
-from . import batch_opt, engines, export, properties, telemetry
+from . import batch_opt, engines, estimates, export, properties, telemetry
 from . import conformers as confs
 from . import descriptors as desc
 from . import import_options as imp
@@ -733,6 +733,46 @@ def _xtb_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult
     return True
 
 
+def _estimates(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,
+               log: Callable[[str], None]) -> None:
+    """The cheap estimates of ``chem.estimates`` (liquid density and molar volume, additive and D4
+    polarizabilities, Sugden parachor) of the best conformer, in every phase. A method without parameters for an
+    element gives no column and a note; an estimate never fails a molecule."""
+    vdw = result.descriptors.get("vdw_volume_A3_best") if surface_options(cfg) == desc.DEFAULT_SURFACE else None
+    try:
+        values, notes = estimates.estimate(mol, best.conf_id, vdw_volume_bondi_A3=vdw)
+    except Cancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 - estimates are extras: note and go on
+        result.notes.append(f"estimates skipped ({type(exc).__name__}: {exc})")
+        return
+    result.descriptors.update(values)
+    result.notes.extend(notes)
+
+
+def _gfn2_polarizability(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,
+                         log: Callable[[str], None]) -> None:
+    """GFN2-xTB's static polarizability (``tblite_gfn2_polarizability_*``) of the best conformer when the
+    refinement engine did not report one (AIMNet2, dxtb, MOPAC, ...), with tblite and the run's solvent, so a
+    table has both the GFN1-xTB (``xtb_*``) and the GFN2-xTB response whatever refined it."""
+    if "tblite_gfn2_polarizability_iso_A3" in result.descriptors or not properties.tblite_available():
+        return
+    atoms = export.mol_to_atoms(mol, best.conf_id)
+    try:
+        iso, aniso, notes = properties.tblite_gfn2_polarizability(atoms.numbers, atoms.positions, result.charge,
+                                                                  result.multiplicity, solvent=result.solvent)
+    except Cancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 - an extra column: note and go on
+        result.notes.append(f"GFN2-xTB polarizability skipped ({type(exc).__name__}: {exc})")
+        return
+    result.notes.extend(notes)
+    if iso is not None:
+        result.descriptors["tblite_gfn2_polarizability_iso_A3"] = iso
+        result.descriptors["tblite_gfn2_polarizability_aniso_A3"] = aniso
+        log(f"  GFN2-xTB polarizability (tblite{', ' + result.solvent if result.solvent else ''}): {iso:.2f} Å^3")
+
+
 def _qm_stage(result: MoleculeResult, cs: confs.ConformerSet, cfg: BuildConfig, threads: int,
               should_stop: Callable[[], bool], log: Callable[[str], None]) -> None:
     """QM (DFT) calculations on the lowest conformers; a failure becomes a note, not a failed molecule."""
@@ -1020,6 +1060,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             dips = [c.dipole_debye for c in kept]
             if all(d is not None for d in dips):
                 result.descriptors["dipole_debye_boltz"] = float(np.dot(weights, dips))
+        _estimates(result, cs.mol, kept[0], cfg, log)
         result.descriptors["method"] = method
         result.descriptors["rank_method"] = (result.rank or {}).get("level", "refine")   # the level that ranked
         if method == "mmff" and result.forcefield == "UFF":
@@ -1038,18 +1079,21 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         if solvent and engine_props is not None:
             steps["properties"] = (("skipped (see notes)" if not engine_props else solvation_label(method, result.solvent))
                                    if result.solvent else _gas_reason(method, solvent))
-        # in a solvent, the GFN1-xTB properties come from tblite with the same solvation (dxtb has none)
+        # in a solvent, the GFN1-xTB properties come from tblite with the same solvation (dxtb has none); in the gas
+        # phase from dxtb, or from tblite where dxtb is not installed
         solvated_props = bool(result.solvent) and properties.tblite_available()
-        if cfg.xtb_properties and (solvated_props or properties.available()):
+        tblite_props = solvated_props or (not properties.available() and properties.tblite_available())
+        if cfg.xtb_properties and (tblite_props or properties.available()):
             clock.stop(n_out=len(kept))
             stage("properties")
             clock.start("properties", engine="tblite gfn1" + (f" ({result.solvent})" if result.solvent else "")
-                        if solvated_props else "dxtb gfn1", n_in=1)
-            done = _xtb_properties(result, cs.mol, kept[0], cfg, solvated_props, log)
+                        if tblite_props else "dxtb gfn1", n_in=1)
+            done = _xtb_properties(result, cs.mol, kept[0], cfg, tblite_props, log)
+            _gfn2_polarizability(result, cs.mol, kept[0], cfg, log)
             if solvent:
                 steps["xtb_properties"] = (
                     "skipped (see notes)" if not done else
-                    f"{solvation_label('tblite-gfn1', result.solvent)}, tblite GFN1-xTB" if solvated_props
+                    f"{solvation_label('tblite-gfn1', result.solvent)}, tblite GFN1-xTB" if tblite_props
                     else "gas (the refinement ran in the gas phase)" if not result.solvent
                     else "gas (dxtb GFN1-xTB has no implicit solvent; install tblite for solvated xTB properties)")
                 if done and result.solvent and not solvated_props:
