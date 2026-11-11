@@ -8,8 +8,8 @@
 #   --with-engines       also set up the external programs: Miniforge (only if no conda, mamba or
 #                        micromamba is found), then the conda environments envs/tools.yml (xtb, CREST,
 #                        MOPAC) and envs/psi4.yml (Psi4), created or updated, and the fork builds listed
-#                        in scripts/fork-packages.json ("macos" > "programs": CREST, once one is
-#                        released), set as this machine's paths in the settings
+#                        in scripts/fork-packages.json ("macos" > "programs": CREST, and the official
+#                        g-xTB build for the rank step), set as this machine's paths in the settings
 #   --settings-dir DIR   keep settings in DIR, e.g. ~/SyncThing/QuantaBench/Settings
 #   --gpu auto|mps|cpu   accepted for symmetry with the other installers: PyPI's macOS PyTorch is one build
 #                        that runs on the CPU and on the Apple GPU (mps)
@@ -111,6 +111,32 @@ program_value() {                         # program_value NAME KEY: scripts/fork
 entry = (json.load(open(sys.argv[1], encoding="utf-8"))["macos"].get("programs") or {}).get(sys.argv[2]) or {}
 print(entry.get(sys.argv[3]) or "")' "$REPO/scripts/fork-packages.json" "$1" "$2"
 }
+program_list() {                          # program_list NAME KEY: a list value of macos.programs.NAME, one per line
+  "$ANYPY" -c 'import json, sys
+entry = (json.load(open(sys.argv[1], encoding="utf-8"))["macos"].get("programs") or {}).get(sys.argv[2]) or {}
+print("\n".join(entry.get(sys.argv[3]) or []))' "$REPO/scripts/fork-packages.json" "$1" "$2"
+}
+fix_missing_libs() {                      # fix_missing_libs NAME DEST: libraries a build needs but does not ship
+  local rel lib prefix src
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    [ -f "$2/$rel" ] && continue
+    lib=${rel##*/}
+    src=""
+    for prefix in "$(env_prefix qb-tools)" "$(env_prefix qb-psi4)"; do
+      if [ -n "$prefix" ] && [ -f "$prefix/lib/$lib" ]; then src="$prefix/lib/$lib"; break; fi
+    done
+    if [ -z "$src" ] && [ -f "/opt/homebrew/opt/gcc/lib/gcc/current/$lib" ]; then
+      src="/opt/homebrew/opt/gcc/lib/gcc/current/$lib"
+    fi
+    if [ -n "$src" ]; then
+      run cp "$src" "$2/$rel"
+      ok "$1: $lib (which its build does not ship) from $src"
+    else
+      info "$1: its build needs $lib, and no conda environment or Homebrew gcc has it; brew install gcc, then rerun"
+    fi
+  done <<< "$(program_list "$1" missing_libs)"
+}
 install_program() {                       # install_program NAME: a fork build of an external program, if released
   local name=$1 url sha exe release dest archive
   url=$(program_value "$name" url) || die "scripts/fork-packages.json is missing or not valid (error above)"
@@ -137,6 +163,7 @@ install_program() {                       # install_program NAME: a fork build o
     run tar -xzf "$archive" -C "$dest"
     run rm -f "$archive"
   fi
+  fix_missing_libs "$name" "$dest"
   # this machine only (engines.machine_paths): the settings file is shared, and the other machines keep theirs
   run_quiet "$VENV/bin/quantabench-cli" settings --engine-path "$name=$dest/$exe"
 }
@@ -398,6 +425,7 @@ if [ "$WITH_ENGINES" = 1 ]; then
   setup_env "$REPO/envs/tools.yml"
   setup_env "$REPO/envs/psi4.yml"
   install_program crest
+  install_program gxtb        # the rank step's g-xTB (GPL-3.0, run as a separate program; docs/ENGINES.md)
   info "QuantaBench finds these environments by itself; \`quantabench-cli doctor\` below lists the programs"
 fi
 

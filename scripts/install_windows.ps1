@@ -7,7 +7,9 @@ Install or update QuantaBench on Windows 11. Safe to rerun: every step that is a
 
     -WithEngines        also set up the external programs: Miniforge (only if no conda, mamba or micromamba
                         is found), then the conda environments envs\tools-windows.yml (xtb, MOPAC) and
-                        envs\psi4.yml (Psi4), created or updated
+                        envs\psi4.yml (Psi4), created or updated, and the official g-xTB build for the rank
+                        step (scripts\fork-packages.json "windows" > "programs", checked by SHA-256, set as
+                        this machine's path)
     -SettingsDir DIR    keep settings in DIR, e.g. "$HOME\SyncThing\QuantaBench\Settings"
     -Gpu cpu|rocm|cuda|auto
                         cpu (default): PyPI's PyTorch, which is the CPU build on Windows and the fastest
@@ -403,8 +405,49 @@ function Set-CondaEnv([string]$Tool, [string]$File) {
     }
     if (-not $DryRun -and $prefix) { [IO.File]::WriteAllText((Join-Path $prefix ".quantabench-env.sha256"), $hash + "`r`n", (New-Object Text.ASCIIEncoding)) }
 }
+# A pinned build of an external program (fork-packages.json "windows" > "programs"): download, check the SHA-256,
+# unpack under %LOCALAPPDATA%\QuantaBench\programs, set as this machine's engine path (engines.machine_paths).
+function Install-Program([string]$Name) {
+    $entry = $null
+    if ($Forks.programs) { $entry = $Forks.programs.$Name }
+    if ($null -eq $entry -or -not $entry.url) { Info "${Name}: no build listed in fork-packages.json"; return }
+    if (-not $entry.sha256 -or -not $entry.exe) { Fail "fork-packages.json: windows > programs > $Name needs sha256 and exe" }
+    $release = $entry.release
+    if (-not $release) { $release = $entry.sha256.Substring(0, 12) }
+    $dest = Join-Path $env:LOCALAPPDATA "QuantaBench\programs\$Name-$release"
+    $exe = Join-Path $dest ($entry.exe -replace "/", "\")
+    if (Test-Path $exe) {
+        Ok "${Name}: $exe"
+    } else {
+        $archive = Join-Path $env:TEMP "qb-$Name-$PID.zip"
+        Show-Command "Invoke-WebRequest" @("-UseBasicParsing", "-Uri", $entry.url, "-OutFile", $archive)
+        Show-Command "Expand-Archive" @("-Force", $archive, "-DestinationPath", $dest)
+        if (-not $DryRun) {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $ProgressPreference = "SilentlyContinue"
+            Invoke-WebRequest -UseBasicParsing -Uri $entry.url -OutFile $archive
+            $got = Get-Sha256 $archive
+            if ($got -ne $entry.sha256.ToLower()) {
+                Remove-Item -Force $archive -ErrorAction SilentlyContinue
+                Fail "${Name}: the file at $($entry.url) does not have the sha256 in fork-packages.json"
+            }
+            New-Item -ItemType Directory -Force $dest | Out-Null
+            Expand-Archive -Force $archive -DestinationPath $dest
+            Remove-Item -Force $archive -ErrorAction SilentlyContinue
+        }
+    }
+    # this machine only: the settings file is shared, and the other machines keep theirs
+    $cli = Join-Path $Venv "Scripts\quantabench-cli.exe"
+    Show-Command $cli @("settings", "--engine-path", "$Name=$exe")
+    if (-not $DryRun) {
+        $ErrorActionPreference = "Continue"
+        & $cli settings --engine-path "$Name=$exe" | Out-Null
+        if ($LASTEXITCODE -ne 0) { Warn "quantabench-cli settings --engine-path $Name=... failed: set it in Settings > Engines" }
+        $ErrorActionPreference = "Stop"
+    }
+}
 if ($WithEngines) {
-    Step "External programs: xtb, MOPAC, Psi4 (conda environments)"
+    Step "External programs: xtb, MOPAC, Psi4 (conda environments), g-xTB"
     $tool = Find-Conda
     if ($tool) {
         Ok "using $tool"
@@ -432,6 +475,7 @@ if ($WithEngines) {
     }
     Set-CondaEnv $tool (Join-Path $Repo "envs\tools-windows.yml")
     Set-CondaEnv $tool (Join-Path $Repo "envs\psi4.yml")
+    Install-Program "gxtb"    # the rank step's g-xTB (GPL-3.0, run as a separate program; docs\ENGINES.md)
     Info "CREST has no Windows build: run it through WSL (docs\ENGINES.md). QuantaBench finds the rest by itself."
 }
 

@@ -166,6 +166,11 @@ def test_macos_dry_run_installs_released_fork_programs(tmp_path):
     assert "curl -fsSL --retry 3 -o" in out and entry["url"] in out
     assert "tar -xzf" in out and "settings --engine-path" in out
     assert f"'crest={dest}/crest-macos-arm64/bin/crest'" in out
+    # the rank step's g-xTB: the official arm64 build, pinned, and the libgcc_s it does not ship
+    gx = json.loads(forks_file.read_text(encoding="utf-8"))["macos"]["programs"]["gxtb"]
+    gdest = f"{tmp_path / 'home'}/Library/Application Support/QuantaBench/programs/gxtb-v2.0.1"
+    assert gx["url"] in out and f"'gxtb={gdest}/xtb-bleed-macos-arm64/bin/xtb'" in out
+    assert "libgcc_s.1.1.dylib" in out
     # an entry without a release yet (a future program) is skipped with a message
     forks = json.loads(forks_file.read_text(encoding="utf-8"))
     forks["macos"]["programs"]["crest"]["url"] = ""
@@ -173,7 +178,7 @@ def test_macos_dry_run_installs_released_fork_programs(tmp_path):
     cp = run_script(cmd, tmp_path, **env)
     out = cp.stdout + cp.stderr
     assert cp.returncode == 0, out
-    assert "crest: no fork build released yet" in out and "--engine-path" not in out
+    assert "crest: no fork build released yet" in out and "'crest=" not in out
     assert not (tmp_path / "home" / "Library").exists()                                # a dry run writes nothing
 
 
@@ -327,3 +332,33 @@ def test_windows_launcher_hides_the_console():
     assert "install_windows.ps1" in bat
     text = PS1.read_text(encoding="ascii")
     assert 'Scripts\\quantabench.exe' in text            # pip's GUI launcher (pythonw), not quantabench-cli
+
+
+def test_every_platform_pins_gxtb_by_url_and_sha256():
+    """g-xTB (the rank step) for every installer: the official v2.0.1 asset, the archive's SHA-256 and the
+    executable's, which chem.eng_gxtb.KNOWN_BUILDS knows."""
+    from quantabench.chem import eng_gxtb
+
+    forks = json.loads((SCRIPTS / "fork-packages.json").read_text(encoding="utf-8"))
+    for platform, exe_name in (("windows", "xtb.exe"), ("macos", "xtb"), ("linux", "xtb")):
+        e = forks[platform]["programs"]["gxtb"]
+        assert e["url"].startswith("https://github.com/grimme-lab/g-xtb/releases/download/v2.0.1/xtb-6.7.1-gxtb-140526-")
+        assert re.fullmatch(r"[0-9a-f]{64}", e["sha256"]) and e["exe"].endswith("/bin/" + exe_name)
+        assert eng_gxtb.KNOWN_BUILDS[e["exe_sha256"]][0] == "2.0.1"
+        assert "GPL-3.0" in e["_why"]
+    assert "Install-Program \"gxtb\"" in PS1.read_text(encoding="ascii")
+    assert "install_program gxtb" in (SCRIPTS / "install_linux.sh").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(sys.platform != "linux" or BASH is None, reason="runs the Linux installer's dry run")
+def test_linux_dry_run_installs_gxtb(tmp_path):
+    repo = copy_repo(tmp_path)
+    cmd = [BASH, str(repo / "scripts" / "install_linux.sh"), "--dry-run", "--python", sys.executable,
+           "--with-engines", "--conda", shutil.which("true")]
+    cp = run_script(cmd, tmp_path, HOME=str(tmp_path / "home"))
+    out = cp.stdout + cp.stderr
+    assert cp.returncode == 0, out
+    dest = f"{tmp_path / 'xdg'}/QuantaBench/programs/gxtb-v2.0.1"
+    assert "xtb-6.7.1-gxtb-140526-linux-x86_64.tar.xz" in out and "tar -xJf" in out
+    assert f"gxtb={dest}/xtb-6.7.1/bin/xtb" in out
+    assert not (tmp_path / "xdg" / "QuantaBench").exists()                     # a dry run writes nothing
