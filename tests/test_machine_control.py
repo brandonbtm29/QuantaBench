@@ -771,6 +771,10 @@ def test_priority_applied_to_running_processes():
 
     if sys.platform == "win32":
         pytest.skip("POSIX nice values")
+    import os
+
+    if os.nice(0) >= priority.NICE["low"]:          # e.g. the suite itself runs under `nice -n 10`
+        pytest.skip("this process is already at or below the 'low' nice value")
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         note = priority.apply_to_pids([proc.pid], "low")
