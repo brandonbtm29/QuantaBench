@@ -19,10 +19,11 @@ Mac: quantabench-cli grid build --file pfas.csv --method gfn2-xtb --machines btm
 
 | Where | What |
 |---|---|
-| `~/SyncThing/QuantaBench/Settings/settings.json` (synced) | `dist.worker_token` (the shared secret), `dist.worker_port`, `dist.worker_bind`, `dist.workers` (name -> URL overrides), `dist.machine_lanes` (each machine's own lane spec, by machine name) and `dist.lanes` (the default for a machine without one) |
+| `~/SyncThing/QuantaBench/Settings/settings.json` (synced) | `dist.worker_token` (the shared secret), `dist.worker_port`, `dist.worker_bind`, `dist.workers` (name -> URL overrides), `dist.machine_lanes` (each machine's own lane spec, by machine name) and `dist.lanes` (the default for a machine without one); since DIST-7 each machine's split choice and pause-on-battery (`dist.machine_control`), when each per-machine value was set (`dist.machine_updated`) and the away times (`dist.away_after_s`, `away_running_after_s`, `rejoin_wait_s`) |
 | `~/SyncThing/QuantaBench/Settings/machines/<name>.json` (synced) | each machine's profile; a running worker writes its URL into `address`, which is how `grid` finds it |
+| `~/SyncThing/QuantaBench/Settings/machines/status/<name>.json` (synced) | DIST-7: what that machine's worker last said about itself (paused, last wake, battery); written only by that worker, so the Machines dock can show a closed laptop as paused |
 | `~/SyncThing/QuantaBench/Runs/` (synced) | run folders. Each one has a single writer: the worker that runs it |
-| Per-machine state folder (not synced) | the worker's job list and queued inputs: `%LOCALAPPDATA%\QuantaBench\worker` on Windows, `~/Library/Application Support/QuantaBench/worker` on macOS (`--state-dir` to change) |
+| Per-machine state folder (not synced) | the worker's job list and queued inputs: `%LOCALAPPDATA%\QuantaBench\worker` on Windows, `~/Library/Application Support/QuantaBench/worker` on macOS (`--state-dir` to change); since DIST-7 also `pause.json`, this machine's pause, which its worker, a `grid build`'s local share and the GUI's own batch follow |
 
 The token is generated the first time a worker starts (`secrets.token_urlsafe(32)`) and saved in
 `settings.json`. Start the first worker on one machine and let SyncThing copy the settings to the other
@@ -35,10 +36,16 @@ quantabench-cli worker [--bind tailscale|localhost|ADDR] [--port 8765] [--lanes 
                        [--name NAME] [--state-dir DIR] [--log-file FILE] [--tailscale-wait 120]
                        [--allow-any-address] [--allow-version-mismatch]
                        [--priority normal|low|background] [--free-threads N]
+quantabench-cli worker pause [NAME] [--drain|--now]   (no NAME: this machine)   DIST-7
+quantabench-cli worker resume [NAME]
+quantabench-cli machines set [NAME] [--priority normal|low|background|default] [--free-threads N|default]
+                       [--max-cpu PCT] [--lanes SPEC|default] [--split auto|manual|off] [--weight W]
+                       [--[no-]pause-on-battery]
 quantabench-cli grid machines [--worker NAME=URL]
 quantabench-cli grid build <same inputs and science options as build> --method M
-                       [--machines btm-nova,brandons-macbook-pro,local] [--weights auto|3,1] [--wait]
-                       [--no-share-work] [--label L] [--worker NAME=URL] [--sync-wait 60]
+                       [--machines btm-nova,brandons-macbook-pro,local]
+                       [--weights auto|measured|equal|benchmark|NAME=W,...|3,1] [--exclude NAME] [--wait]
+                       [--no-share-work] [--label L] [--worker NAME=URL] [--sync-wait 60] [--away-after S]
 quantabench-cli grid status [GRID_ID]          (no id: recent grid runs)
 quantabench-cli grid cancel GRID_ID
 quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
@@ -47,12 +54,23 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
 - **`--method` must be explicit.** `auto` picks the engine per machine (AIMNet2 on NOVA's GPU, something
   else on the Mac), which would mix levels of theory in one table; `grid build` refuses it unless
   `--allow-auto-method`.
-- **Weights** follow `build --chunk-weights` (`dist.plan`): `auto` uses each machine's measured throughput
-  for the method (`throughput` in the profile its worker reports, else the registry copy), an estimate from
-  its core count when it has no benchmark for that method, and 0 where the method is unavailable; a machine
-  with no profile at all gets the mean of the others. `3,1` gives one weight per machine in the order of
-  `--machines`; `btm-nova=3,local=1` names them. The split is deterministic (SHA-256 of the molecule id), so
-  re-running a list puts every molecule on the same machine again.
+- **Weights** (DIST-7; the split is deterministic, SHA-256 of the molecule id, so re-running a list puts every
+  molecule on the same machine again):
+  - `auto` (the default): each machine as its split setting says (the Machines dock's Split column, or
+    `machines set NAME --split auto|manual|off --weight W`): *Auto (measured speed)*, *Manual weight* (on the scale
+    where 1 is the mean of the Auto machines) or *Off* (left out of the grid). With no setting every machine is
+    Auto, i.e. `measured`.
+  - `measured`: each machine's molecules/hour in the newest grid of the same protocol that ran on all of them
+    (method, solvent, conformer search, conformers, refine-top, frequencies, QM, rank; `grid.json` `rates`, written
+    at the end of every followed grid), else its benchmark (`benchmark`). The log says which grid it used.
+  - `benchmark`: the old `auto`: `throughput` in the profile its worker reports (else the registry copy), an
+    estimate from its core count when it has no benchmark for that method, 0 where the method is unavailable; a
+    machine with no profile gets the mean of the others.
+  - `equal`; `3,1` (one weight per machine in the order of `--machines`); `btm-nova=3,local=1` (named).
+  - `--exclude NAME` (repeatable or a comma list; `local` = this machine) leaves a machine out; with `3,1` each
+    weight stays with its machine.
+  - At the end of a grid, `grid build --wait` and `grid status` print the molecules each machine contributed to
+    the merged tables, what moved and why, and each machine's measured rate.
 - **Largest molecules first.** Each share's list is sorted by size (atoms with hydrogens) before it is
   submitted, so the end of every queue holds short, cheap molecules.
 - **Work sharing** (on by default; `--no-share-work` turns it off). While `grid build` follows the grid
@@ -121,6 +139,130 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
   (`parts/<machine>/...`), and `timings` on the output folder reads the synced ones; a run found in both is
   read once.
 
+## Pausing a machine, a closing laptop (DIST-7)
+
+Brandon (2026-11-11): "I'm often opening and closing my laptop throughout the day. Is there a way we include a pause
+button on a machine and the work is redistributed?" Code: `dist/control.py`, `worker.JobManager` (pause, wake, sync),
+`client.MachineWatch` (what the grid does), `jobs.BatchControl` (what a batch does).
+
+### Pausing by hand
+
+- **Where:** the Machines dock (a Pause / Resume button per machine; its arrow has *Pause now*),
+  `quantabench-cli worker pause [NAME] [--drain|--now]` and `worker resume [NAME]`, or `POST /v1/pause`.
+- **What it means:** the machine takes no new molecules.
+  - `--drain` (the default) lets the molecules in progress finish.
+  - `--now` stops them at their next checkpoint (between conformers, at an optimizer step). They are recorded as not
+    started, so they can move too.
+  - A worker's batch then ends as `paused`: its lanes exit and its memory and GPU are freed. The molecules it has
+    not started stay in its job table. Resume queues the paused jobs again, first, and they go on from their job
+    tables (new lanes, so new lane settings apply).
+- **Which machine:**
+  - No NAME means this machine. The pause is written to its pause file (`<worker state folder>/pause.json`), and to
+    its worker if one runs here. The worker, the local share of a `grid build` running here and the GUI's own batch
+    all follow that file. The GUI's batch holds and goes on at resume; it is not split anywhere else.
+  - NAME means that machine's worker, over Tailscale.
+- **It lasts:** a paused worker stays paused across restarts until it is resumed. `grid machines` shows
+  `PAUSED (drain since ...)`, and the dock shows `paused (drain)`. For a worker that does not answer, the dock shows
+  what its status file last said (`machines/status/<name>.json`).
+- **What a grid does:**
+  - A `grid build` that follows the grid (`--wait`, or while its local share runs) sees the pause in the next status
+    poll (every 5 s).
+  - It takes every molecule of that machine's shares that has not started: from the draining batch between
+    molecules, or from the stopped job's table.
+  - It splits them between the other machines by their rate in this grid (else the split's weights) and submits
+    them as new shares (`reason: paused`).
+  - With no other machine to take them, they wait for the resume.
+  - This is DIST-6 work sharing with a paused machine's rate counted as zero. Work sharing itself stays on.
+- **On battery:** `pause_on_battery` (on by default; `machines set NAME --no-pause-on-battery`, or the dock's budget
+  box) pauses a laptop's worker while it runs on battery (`psutil.sensors_battery`, checked every 30 s) and resumes
+  it on power. A pause by hand is never lifted by the power coming back. A desktop has no battery, so it never
+  pauses.
+
+### A machine that stops answering (the lid closes)
+
+When the lid closes, the Mac sleeps: its worker stops answering and ssh times out. Nothing has to be pressed:
+
+1. **Away.** A machine whose worker has not answered a status poll for `dist.away_after_s` (default **120 s**;
+   `grid build --away-after S`) is *away*.
+   - Its molecules that had not started at the client's last look are given to the other machines (`reason:
+     away`). The client fetches `GET /v1/jobs/<id>/molecules` each time a share's counts change, at most every 10 s.
+   - After `dist.away_running_after_s` (default **600 s**), the molecules it was running are given away too.
+   - Each share records what was given away in `grid.json` (`reassigned`).
+2. **`--wait` never hangs on it.** A share whose machine is away and whose unfinished molecules have all gone
+   elsewhere is not waited for. With no other machine to take them, it is not waited for after the longer grace
+   either: its molecules are reported missing, and `grid merge <id> --partial` adds them later. The grid then
+   merges what it has, from the synced copy of the away machine's run folder for what it finished before the lid
+   closed. The end of the log lists what moved (`Moved: 17 molecule(s) brandons-macbook-pro -> btm-nova (away)`).
+3. **Back.**
+   - The worker notices the sleep itself: a watcher thread checks every 2 s, and a wall-clock jump of more than
+     30 s against its own sleep is a wake (`control.ClockWatch`). It works on every OS: macOS and Linux stop the
+     monotonic clock while asleep, and elsewhere the check simply comes late.
+   - It also notices when a grid client that followed a job stops asking for `away_after_s` (its network went
+     away, or ours did).
+   - Either way, a job that a client was following starts no new molecule (`rejoin`) and asks the client what is
+     still its own. The client sees `rejoin: true` (or simply that the machine answers again) and sends
+     `POST /v1/jobs/<id>/sync` with the molecules it gave away; the worker drops those it has not started and goes
+     on with the rest.
+   - If the client is gone (the grid has finished), the worker reads the grid's `grid.json` in the synced Runs
+     folder instead and drops the molecules listed there. If neither answers within `dist.rejoin_wait_s` (default
+     600 s), it goes on.
+4. **No double counting.**
+   - A molecule both machines finished (the away machine was still computing, or finished the one it was running
+     when it woke) is merged once, from the machine that finished it first (an `ok` before a `failed`), and listed
+     in `grid.json` `duplicates`.
+   - `quantabench-cli timings` marks the dropped result's rows `duplicate=1`, leaves them out of the stage summary
+     and prints the molecules per machine with each molecule counted once.
+
+Tested in the cloud with fake workers (tests/test_machine_control.py) and on NOVA with two throwaway workers, one of
+them frozen for 55 s (`psutil` suspend, which is what a sleep looks like to the other side); see the backlog
+(DIST-7).
+
+### Settings that change while a job runs
+
+- **Who writes `settings.json`:** only a person does, through the Machines dock, `machines set` or
+  Settings > Compute (and `ensure_token` once). Workers never write it: their own state goes to the per-machine
+  pause file and the status file above. Every per-machine value is written with a fresh read, the change and a
+  write (`settings.update_machine`), and stamped in `dist.machine_updated`.
+- **Saves merge and skip:** every save merges with the file as it is now. Per-machine tables merge entry by entry,
+  and other values key by key: what this process did not change comes from the file. A save that would not change
+  the file does not write it (the GUI saves at every Run).
+- **SyncThing conflicts:** if two machines still write within the same minute, SyncThing keeps one version and
+  renames the other `settings.sync-conflict-*.json`. `load` then merges back every per-machine entry of the copy
+  that is newer than the file's (by its stamp), and the next save writes it. The copy can be deleted afterwards.
+- **A worker reads its machine's values at job start**, and re-reads the settings every 15 s:
+  - The **run priority** of a job that takes it from the settings is applied to its running lanes at once
+    (`priority.apply_to_pids`). Lowering works everywhere. Raising works on Windows only; macOS and Linux cannot
+    raise a nice value without privileges, so there it applies to the next worker start.
+  - **Lanes and free threads** apply with the machine's next job, or after a pause and resume, which restarts the
+    job's lanes. A running pool is not resized.
+- **Max CPU %** (dock, `machines set --max-cpu 50`) sets the free threads from the machine's thread count, e.g.
+  12 of 24 on NOVA.
+
+### Keeping the Mac's worker running (and not draining its battery)
+
+Found on 2026-11-11 (read-only look over ssh):
+
+- The worker had been started with `nohup` over ssh, and no LaunchAgent was installed (`~/Library/LaunchAgents`
+  has none, `launchctl list` shows none).
+- Its log shows a clean stop at 2026-11-09 20:10:21 ("Stopping: ..."): macOS sends SIGTERM at a restart or logout.
+  The Mac then rebooted (boot time 20:14:57), and nothing started the worker again until it was started by hand on
+  11-11 at 14:35.
+- Sleep does not kill it: the worker started at 14:35 survived a 14-minute sleep (15:21-15:35) and kept its process.
+
+So: install the LaunchAgent of the setup section below. `RunAtLoad` starts it at every login, and `KeepAlive` with
+`SuccessfulExit false` restarts it after a crash but not after a clean stop. With it:
+
+- **Lid closed:** the Mac sleeps (on battery always; on power unless it has an external display), the worker
+  freezes with it, and a grid treats it as away (above). It does not keep the Mac awake: `caffeinate -i` is held only
+  while a job runs, and only prevents *idle* sleep, never the lid's.
+- **Battery:** `pause_on_battery` is on by default, so on battery the worker takes no work and holds no
+  `caffeinate`. Plugged in, it resumes. To let it work on battery: `quantabench-cli machines set
+  brandons-macbook-pro --no-pause-on-battery`.
+- **Wake:** launchd keeps the same process across sleep. The worker notices the wake and checks with its grid client
+  before it starts another molecule.
+
+The LaunchAgent is for Brandon to install; QuantaBench does not install services itself.
+
 ## API (version 1)
 
 Every request needs `Authorization: Bearer <settings.dist.worker_token>`.
@@ -131,11 +273,13 @@ Every request needs `Authorization: Bearer <settings.dist.worker_token>`.
 | `GET /v1/sensors` | since MON-1: live machine metrics `{sensors: a sensors.Sample dict or null, why, interval_s, machine}` (CPU and GPU load, effective clock, temperatures, power, VRAM, RAM; docs/ENGINES.md, Live machine metrics). The worker samples while requests keep coming and stops after 2 minutes without one; older workers answer 404 |
 | `GET /v1/jobs` | every job, newest first |
 | `POST /v1/jobs` | body `{inputs: [jobs.input_to_json(...)], config: {BuildConfig fields}, label, chunk?, lanes?, client?, allow_version_mismatch?}`; header `X-QuantaBench-Version`. 201 `{id, job}` |
-| `GET /v1/jobs/<id>?tail=20` | state (`queued`, `running`, `done`, `failed`, `cancelled`, `interrupted`), counts from the run folder's job table, `run_dir`, `run_folder`, progress, log tail |
+| `GET /v1/jobs/<id>?tail=20[&follow=1]` | state (`queued`, `running`, `paused`, `done`, `failed`, `cancelled`, `interrupted`), counts from the run folder's job table, `run_dir`, `run_folder`, progress, log tail; since DIST-7 `machine_paused` and `rejoin` (the job holds after a wake until its grid client syncs). `follow=1`: a grid client that follows the job (the worker then notices when its polls stop) |
 | `POST /v1/jobs/<id>/cancel` | a queued job is dropped; a running one stops after the current molecule (its run folder stays resumable) |
-| `POST /v1/jobs/<id>/release` `{"max": N, "to": "machine"}` | work sharing: up to N molecules the running job has not started, from the end of its queue, become `moved` there; 200 `{ids, job}` (`ids` empty when the job is not running or has none left). The batch answers between molecules: within 0.1 s with lanes, after the current molecule in one process (the request gives up after 30 s and then moves nothing) |
+| `POST /v1/jobs/<id>/release` `{"max": N, "to": "machine"}` | work sharing: up to N molecules the job has not started, from the end of its queue, become `moved` there; 200 `{ids, job}` (`ids` empty when it has none left). A running batch answers between molecules: within 0.1 s with lanes, after the current molecule in one process (the request gives up after 30 s and then moves nothing); a paused or queued job (DIST-7) is changed at once, and a paused job left with nothing is finished |
 | `GET /v1/jobs/<id>/archive` | zip stream of the run folder (finished jobs; 409 while running); its last member, `<run folder>/.qb-archive.json`, lists every other member and its size |
-| `POST /v1/pause` `{"paused": true}` | running jobs finish, new ones wait (keeps the machine responsive) |
+| `GET /v1/jobs/<id>/molecules` | DIST-7: `{"molecules": {id: status}}` (the job table, or the queued inputs of a job that has not run): which molecules it has not started |
+| `POST /v1/jobs/<id>/sync` `{"revoke": [ids], "following": bool}` | DIST-7: the grid client gave these molecules to another machine while this one was away: those not started here become `moved`; ends a wake-up hold. `following: false`: the client stopped following (no lost-contact hold). 200 `{moved, done, running, job}` |
+| `POST /v1/pause` `{"paused": bool, "mode": "drain"\|"now", "by"?}` | DIST-7: pause this machine (no new molecules; `drain`, the default, lets the running ones finish, `now` stops them at their next checkpoint) or resume it; saved, so a restart stays paused. 200 = the queue state (`paused`, `pause`, `paused_jobs`, `rejoin`, `last_wake`) |
 
 `chunk` is `{"index": i}` for a share the client already split (recorded only), `{"index": i, "count": n}`
 for a `jobs.chunk_index` chunk, or `{"index": i, "weights": [...]}` for a `plan.weighted_index` share of a full
@@ -281,7 +425,10 @@ still running), 411/413/415 (body).
 4. **Sleep:** while a job runs the worker keeps `caffeinate -i` going, so the Mac does not idle-sleep. Closing
    the lid still sleeps it unless it is on power with an external display. To keep the worker reachable when
    idle, enable *Prevent automatic sleeping on power adapter when the display is off* (System Settings,
-   Battery, Options).
+   Battery, Options). A grid treats a sleeping Mac as away and moves its work (Pausing a machine, a closing laptop,
+   above); on battery the worker pauses itself (`pause_on_battery`, on by default). Prefer this LaunchAgent to a
+   `nohup` start over ssh: a restart or logout ends a `nohup` worker (that is how it was found gone on
+   2026-11-09), and launchd starts it again at login.
 
 ## Trying it
 
@@ -299,7 +446,7 @@ refuses jobs from another version (`--allow-version-mismatch` on either side ove
 - One lane (the default) runs molecules in the worker process: a segfault in a native library ends the worker.
   launchd restarts it on the Mac; on Windows the Task Scheduler restart is unverified (see the setup section),
   so check `grid machines`. `jobs.py` marks a molecule failed after it has crashed the process twice. Several lanes (`--lanes`, see `dist.lanes`) run molecules in child processes.
-- Work sharing needs a `grid build` that follows the grid. Without `--wait` it only runs while the local
-  share does. A worker in one lane hands molecules over only between molecules, so a release can wait for
+- Work sharing, and moving a paused or away machine's molecules (DIST-7), need a `grid build` that follows the
+  grid. Without `--wait` they only run while the local share does. A worker in one lane hands molecules over only between molecules, so a release can wait for
   the molecule in progress (up to 30 s, then it tries again at a later poll).
 - The archive of a large run folder (cubes, trajectories) is a large download; prefer the synced folder.

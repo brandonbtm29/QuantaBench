@@ -17,7 +17,12 @@ API (version 1; every request needs ``Authorization: Bearer <settings.dist.worke
     GET  /v1/jobs/<id>[?tail=N]      state, counts from the run folder's job table, run folder, log tail
     POST /v1/jobs/<id>/cancel        stop a running job (it stays resumable) or drop a queued one
     GET  /v1/jobs/<id>/archive       zip stream of the run folder (finished jobs)
-    POST /v1/pause                   {"paused": true|false}: hold new jobs so this machine stays responsive
+    GET  /v1/jobs/<id>/molecules     {"molecules": {id: status}}: which molecules this job has not started (DIST-7)
+    POST /v1/jobs/<id>/sync          {"revoke": [ids], "following": bool}: the grid client takes back molecules it gave
+                                     another machine while this one was away; ends a wake-up hold (DIST-7)
+    POST /v1/pause                   {"paused": true|false, "mode": "drain"|"now"}: pause this machine (DIST-7): it
+                                     takes no new molecules; "drain" lets the running ones finish, "now" stops them
+                                     at their next checkpoint. Saved, so a restart stays paused until resumed.
 
 Safety: binds the Tailscale address (or loopback) only and refuses 0.0.0.0 unless told otherwise; constant
 time token check; size-limited, strictly validated requests (known ``BuildConfig`` fields only, the output
@@ -78,7 +83,8 @@ ARCHIVE_MANIFEST = ".qb-archive.json"      # last member of an archive: every ot
 #: appear and vanish while it pulls, so they never go into an archive
 SYNC_TEMP_PREFIXES = ("~syncthing~", ".syncthing.")
 _ADDR_NOT_AVAILABLE = {errno.EADDRNOTAVAIL, 10049}   # 10049: WSAEADDRNOTAVAIL (address not on this machine yet)
-STATES = ("queued", "running", "done", "failed", "cancelled", "interrupted")
+#: "paused": the machine was paused (DIST-7) and this job's batch stopped with molecules left; it runs on at resume
+STATES = ("queued", "running", "done", "failed", "cancelled", "interrupted", "paused")
 FINAL_STATES = ("done", "failed", "cancelled")
 #: BuildConfig fields that only say how fast this machine runs a job. A client normally leaves them out and
 #: the worker uses its own settings; the science fields must be the same on every machine.
@@ -353,7 +359,7 @@ def validate_config(data) -> dict:
 
 
 def build_config(config: dict, output_dir: Path, resources=None, *, priority: str | None = None,
-                 free_threads: int | None = None):
+                 free_threads: int | None = None, machine: str | None = None):
     """The ``BuildConfig`` a worker runs: the client's science settings on ``BuildConfig`` defaults, this
     machine's resource settings unless the client set them, and always this worker's output folder.
 
@@ -367,9 +373,9 @@ def build_config(config: dict, output_dir: Path, resources=None, *, priority: st
     values = {"threads": r.threads, "gpu": r.gpu, "gpu_index": r.gpu_index,
               "gpu_memory_fraction": r.gpu_memory_fraction, "linalg": getattr(r, "linalg", "auto"),
               "dxtb_gpu": getattr(r, "dxtb_gpu", "auto"),
-              "priority": priority or (s.priority_for() if s is not None else getattr(r, "priority", "low")),
+              "priority": priority or (s.priority_for(machine) if s is not None else getattr(r, "priority", "low")),
               "free_threads": free_threads if free_threads is not None else
-              (s.free_threads_for() if s is not None else getattr(r, "free_threads", 1))}
+              (s.free_threads_for(machine) if s is not None else getattr(r, "free_threads", 1))}
     values.update(config)
     if "formats" in values:
         values["formats"] = tuple(values["formats"])
@@ -749,6 +755,14 @@ class Job:
     log: collections.deque = field(default_factory=lambda: collections.deque(maxlen=LOG_TAIL), repr=False)
     progress: dict = field(default_factory=dict, repr=False)
     handoff: object = field(default=None, repr=False)     # jobs.Handoff of the running batch (work sharing)
+    control: object = field(default=None, repr=False)     # jobs.BatchControl of the running batch (DIST-7)
+    # DIST-7: a hold after this machine slept, or lost its grid client, until the client says what is still ours
+    rejoin: dict | None = field(default=None, repr=False)
+    last_poll: float = field(default=0.0, repr=False)     # wall time of the grid client's last status request
+    last_sync: float = field(default=0.0, repr=False)     # wall time of the grid client's last sync
+    polls: int = field(default=0, repr=False)
+    following: bool = field(default=False, repr=False)    # a grid client follows this job (it polls with follow=1)
+    live_priority: str = field(default="", repr=False)    # the run priority applied to its lanes while it runs
 
     RECORD = ("id", "label", "run_dir", "config", "state", "created", "started", "finished", "error", "chunk",
               "lanes", "client", "client_version", "n_inputs", "counts", "resumed", "cancel_requested")
@@ -766,12 +780,36 @@ class JobManager:
     ``jobs.run_resumable``, persists the job list in ``state_dir`` and resumes unfinished jobs on start.
     Used by the HTTP worker and, without a ``state_dir``, by ``grid build`` for the local share."""
 
+    #: seconds between the watcher's checks (pause file, sleep, the grid client's polls) and settings re-reads
+    WATCH_S = 2.0
+    SETTINGS_S = 15.0
+    BATTERY_S = 30.0
+
     def __init__(self, output_dir: str | Path, name: str, state_dir: str | Path | None = None,
                  lanes: str | None = None, max_jobs: int = 1, log: Callable[[str], None] = _noop,
-                 awake: bool = True, priority: str | None = None, free_threads: int | None = None):
+                 awake: bool = True, priority: str | None = None, free_threads: int | None = None,
+                 pause_dir: str | Path | None = None, on_change: Callable[[str], None] | None = None,
+                 watch: bool = True):
+        """``pause_dir``: the folder of this machine's pause file (``dist.control``; default ``state_dir``, else the
+        per-user worker state folder, which the GUI and ``worker pause`` use too). ``on_change(what)``: called after
+        a pause, resume, wake or contact change (the HTTP worker publishes its status file). ``watch``: run the
+        watcher thread (pause file, sleep and wake, the grid client's polls, live run priority, battery)."""
         self.output_dir = Path(output_dir).expanduser()
         self.name = name
         self.state_dir = Path(state_dir).expanduser() if state_dir else None
+        from . import control as control_mod
+
+        self.pause_dir = Path(pause_dir).expanduser() if pause_dir else (self.state_dir or control_mod.state_dir())
+        self.pause_info: dict = {"paused": False, "mode": "drain", "since": "", "by": "", "reason": ""}
+        self.pause_mode = "drain"
+        self._on_change = on_change
+        self._watch_on = watch
+        self._clock = control_mod.ClockWatch(interval=self.WATCH_S)
+        self.last_wake: dict = {}
+        self.battery: dict = {}
+        self.away_after_s = 120.0
+        self.rejoin_wait_s = 600.0
+        self.pause_on_battery = False
         self.lanes = lanes
         # --priority / --free-threads of the worker: jobs that do not set their own use them (else the settings)
         self.priority = priority
@@ -790,9 +828,23 @@ class JobManager:
         self._threads: list[threading.Thread] = []
         self._stopping = False
         self._locked = False
+        self._watch_stop = threading.Event()
+        self._watch_thread: threading.Thread | None = None
+        self._pause_key: tuple = (False, "drain", "")
 
     # -------------------------------------------------------------- lifecycle
     def start(self) -> None:
+        from . import control as control_mod
+
+        st = control_mod.read_pause(self.pause_dir)     # a pause lasts across restarts until resumed (DIST-7)
+        self._pause_key = (st["paused"], st["mode"], st["since"])     # the watcher acts when the file changes
+        if st["paused"]:
+            self.paused, self.pause_mode, self.pause_info = True, st["mode"], st
+        if st["paused"]:
+            self._log(f"Paused since {st['since'] or '?'}" + (f" by {st['by']}" if st["by"] else "")
+                      + (" (on battery)" if st["reason"] == "battery" else "")
+                      + f": no job starts until `quantabench-cli worker resume` ({control_mod.pause_path(self.pause_dir)})")
+        self._read_settings()
         if self.state_dir is not None:
             self._take_state_lock()
             self._load_state()
@@ -800,16 +852,23 @@ class JobManager:
             t = threading.Thread(target=self._runner, name=f"qb-job-{k}", daemon=True)
             t.start()
             self._threads.append(t)
+        if self._watch_on:
+            self._watch_thread = threading.Thread(target=self._watch, name="qb-worker-watch", daemon=True)
+            self._watch_thread.start()
 
     def stop(self, timeout: float = 60.0) -> None:
         """Stop running jobs at the next molecule boundary (they become 'interrupted' and resume on the next
         start) and end the runner threads."""
+        self._watch_stop.set()
         with self._cond:
             self._stopping = True
             for job in self._jobs.values():
                 if job.state == "running":
                     job.stop.set()
             self._cond.notify_all()
+        if self._watch_thread is not None:
+            self._watch_thread.join(10)
+            self._watch_thread = None
         deadline = time.monotonic() + timeout
         for t in self._threads:
             t.join(max(0.1, deadline - time.monotonic()))
@@ -873,7 +932,10 @@ class JobManager:
                 if job.state not in STATES:
                     continue
                 self._jobs[job.id] = job
-                if job.state not in ("running", "interrupted", "queued"):
+                if job.state == "paused" and self.paused:
+                    self._log(f"Job {job.id} ({job.label}) stays paused until this machine is resumed")
+                    continue
+                if job.state not in ("running", "interrupted", "queued", "paused"):
                     continue
                 if job.cancel_requested:  # cancelled, then the worker stopped before the molecule ended
                     job.state, job.finished = "cancelled", job.finished or _now()
@@ -881,7 +943,7 @@ class JobManager:
                     self._drop_inputs(job.id)
                     self._finish_run_folder(job)
                     continue
-                if job.state != "queued":
+                if job.state not in ("queued", "paused"):
                     job.resumed += 1
                     self._log(f"Resuming job {job.id} ({job.label}) in {job.run_dir}")
                 job.state = "queued"
@@ -1009,27 +1071,133 @@ class JobManager:
         self._log(f"Job {job_id}: cancel requested")
         return job
 
-    def release(self, job_id: str, n: int, dest: str = "", timeout: float = 30.0) -> list[str] | None:
-        """Work sharing: up to ``n`` molecules of a running job that it has not started, now 'moved' in its job
-        table and for the caller to run elsewhere (``jobs.Handoff``). [] when the job is not running (or none
-        are left); None when there is no such job."""
+    def release(self, job_id: str, n: int, dest: str = "", timeout: float = 30.0,
+                want: Sequence[str] | None = None) -> list[str] | None:
+        """Work sharing: up to ``n`` molecules of a job that it has not started (``want``: exactly those of these ids),
+        now 'moved' in its job table and for the caller to run elsewhere. A running job's batch hands them over
+        between molecules (``jobs.Handoff``); a paused or queued one is changed here (DIST-7: a paused machine's
+        molecules move to the others). [] when none are left; None when there is no such job."""
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 return None
-            handoff = job.handoff if job.state == "running" else None
-        if handoff is None:
-            return []
-        ids = handoff.request(n, dest, timeout)
+            if job.state in ("paused", "queued", "interrupted"):
+                # under the lock: the runner cannot start this job meanwhile
+                ids = self._release_idle(job, n, dest, want)
+                handoff = None
+            else:
+                ids = None
+                handoff = job.handoff if job.state == "running" else None
+        if ids is None:
+            if handoff is None:
+                return []
+            ids = handoff.request(n, dest, timeout, want=want)
         if ids:
             self._log(f"Job {job_id}: {len(ids)} molecule(s) not started here moved to {dest or 'another machine'}")
+            if self._on_change is not None:
+                self._on_change("release")
         return ids
 
-    def set_paused(self, paused: bool) -> None:
+    def _release_idle(self, job: Job, n: int, dest: str, want: Sequence[str] | None) -> list[str]:
+        """``release`` for a job whose batch does not run (the caller holds the lock). A job with a job table (it has
+        run before) moves them there; a queued job that never ran loses them from its queued inputs. A paused job
+        left with nothing to do is finished (its run folder gets its tables and final worker.json)."""
+        from ..chem import jobs as jobs_mod
+
+        run_dir = Path(job.run_dir)
+        if (run_dir / jobs_mod.DB_NAME).is_file():
+            try:
+                ids = jobs_mod.release_unstarted(run_dir, n, dest, ids=want)
+            except jobs_mod.RunInUseError as exc:
+                self._log(f"Job {job.id}: cannot hand molecules over ({exc})")
+                return []
+            job.counts = self._counts(job)
+            left = int(job.counts.get("pending", 0)) + int(job.counts.get("running", 0)) \
+                + int(job.counts.get("cancelled", 0))
+        else:
+            inputs = self._load_inputs(job.id) or []
+            if want is not None:
+                wanted = set(want)
+                ids = [x.id for x in inputs if x.id in wanted]
+            else:
+                ids = [x.id for x in inputs[-int(n):]][::-1] if n and n > 0 else []
+            gone = set(ids)
+            keep = [x for x in inputs if x.id not in gone]
+            if ids:
+                self._save_inputs(job.id, keep)
+                job.n_inputs = len(keep)
+                job.counts = {**job.counts, "moved": int(job.counts.get("moved", 0)) + len(ids),
+                              "pending": len(keep)}
+            left = len(keep)
+        if ids and left == 0 and job.state in ("paused", "queued"):
+            with contextlib.suppress(ValueError):
+                self._queue.remove(job.id)
+            job.state, job.finished = "done", _now()
+            self._log(f"Job {job.id} ({job.label}): every molecule it had not started went to other machines; done")
+            self._drop_inputs(job.id)
+            self._finish_run_folder(job)
+        self._persist()
+        return ids
+
+    def _mode_of(self, job: Job) -> str:
+        """The batch mode a job should run in: paused machine -> drain, waiting for its grid client -> hold."""
+        if self.paused:
+            return "drain"
+        if job.rejoin is not None:
+            return "hold"
+        return "run"
+
+    def _apply_mode(self, job: Job, interrupt: bool = False) -> None:
+        ctl = job.control
+        if ctl is not None and job.state == "running":
+            ctl.set(mode=self._mode_of(job), interrupt=interrupt if self._mode_of(job) != "run" else False)
+
+    def set_paused(self, paused: bool, mode: str = "drain", by: str = "", reason: str = "user",
+                   persist: bool = True) -> dict:
+        """Pause (DIST-7) or resume this machine. Paused, no job starts and running batches start no new molecule:
+        ``mode`` "drain" lets the molecules in progress finish, "now" stops them at their next checkpoint (they count
+        as not started); then each batch ends as 'paused', with what it had not started still in its job table (and
+        free for ``release``). Resume queues the paused jobs again, first. Saved in the pause file unless
+        ``persist`` is False (the watcher applying the file). Returns the pause state."""
+        from . import control as control_mod
+
+        mode = mode if mode in control_mod.PAUSE_MODES else "drain"
         with self._cond:
+            was = self.paused
             self.paused = bool(paused)
+            self.pause_mode = mode
+            if persist:
+                try:
+                    self.pause_info = control_mod.write_pause(self.pause_dir, self.paused, mode, by, reason)
+                    self._pause_key = (self.paused, mode, self.pause_info["since"])
+                except OSError as exc:
+                    self._log(f"Could not save the pause state in {self.pause_dir} ({exc}); it lasts until a restart")
+                    self.pause_info = {"paused": self.paused, "mode": mode, "since": _now(), "by": by, "reason": reason}
+            else:
+                self.pause_info = control_mod.read_pause(self.pause_dir)
+            requeued = []
+            for job in self._jobs.values():
+                if job.state == "running":
+                    self._apply_mode(job, interrupt=self.paused and mode == "now")
+                elif job.state == "paused" and not self.paused:
+                    requeued.append(job)
+            for job in sorted(requeued, key=lambda j: j.created, reverse=True):
+                job.state = "queued"
+                if job.id not in self._queue:
+                    self._queue.appendleft(job.id)
+            if requeued or was != self.paused:
+                self._persist()
             self._cond.notify_all()
-        self._log("Paused: running jobs finish, new ones wait" if paused else "Resumed")
+        if paused:
+            self._log(("Paused now: molecules in progress stop at their next checkpoint" if mode == "now" else
+                       "Paused: molecules in progress finish") + "; no new molecule starts"
+                      + (f" (by {by})" if by else "") + (" (on battery)" if reason == "battery" else ""))
+        elif was:
+            self._log("Resumed" + (f" (by {by})" if by else "") + (f"; {len(requeued)} paused job(s) go on"
+                                                                   if requeued else ""))
+        if self._on_change is not None and was != self.paused:
+            self._on_change("pause")
+        return dict(self.pause_info)
 
     def set_hold(self, reason: str) -> None:
         """Hold new jobs for ``reason`` (running ones finish), or release with ""; separate from a user's pause."""
@@ -1041,7 +1209,211 @@ class JobManager:
         with self._lock:
             running = [j.id for j in self._jobs.values() if j.state == "running"]
             return {"running": running, "queued": list(self._queue), "paused": self.paused,
-                    "max_jobs": self.max_jobs, "hold": self.hold}
+                    "max_jobs": self.max_jobs, "hold": self.hold,
+                    "pause": dict(self.pause_info) if self.paused else None,
+                    "paused_jobs": [j.id for j in self._jobs.values() if j.state == "paused"],
+                    "rejoin": [j.id for j in self._jobs.values() if j.rejoin is not None],
+                    "last_wake": dict(self.last_wake) or None}
+
+    # -------------------------------------------------------------- DIST-7: the grid client, sleep and wake
+    def note_poll(self, job: Job, follow: bool) -> None:
+        """A status request for ``job``; ``follow``: from a grid client that follows it (``follow=1``)."""
+        if follow:
+            job.last_poll = time.time()
+            job.polls += 1
+            job.following = True
+
+    def molecule_states(self, job_id: str) -> dict[str, str] | None:
+        """{molecule id: status} of a job (its job table, or its queued inputs before it ran); None: no such job."""
+        from ..chem import jobs as jobs_mod
+
+        job = self.get(job_id)
+        if job is None:
+            return None
+        run_dir = Path(job.run_dir)
+        if (run_dir / jobs_mod.DB_NAME).is_file():
+            with contextlib.suppress(Exception):
+                with jobs_mod.JobStore(run_dir, read_only=True) as store:
+                    return store.statuses()
+        return {x.id: "pending" for x in (self._load_inputs(job.id) or [])}
+
+    def sync(self, job_id: str, revoke: Sequence[str] = (), following: bool | None = None) -> dict | None:
+        """The grid client's answer to "what is still mine?" (``POST /v1/jobs/<id>/sync``): the molecules of
+        ``revoke`` (it gave them to another machine while this one was away) that have not started here become
+        'moved'; a wake-up or lost-contact hold ends. Returns {"moved", "done", "running", "job"}; None: no such job."""
+        job = self.get(job_id)
+        if job is None:
+            return None
+        moved = self.release(job_id, len(revoke), "another machine (grid client)", want=list(revoke)) if revoke else []
+        states = self.molecule_states(job_id) or {}
+        with self._cond:
+            if following is not None:
+                job.following = bool(following)
+            held = job.rejoin is not None
+            job.rejoin = None
+            job.last_sync = time.time()
+            self._apply_mode(job)
+            self._cond.notify_all()
+        done = [i for i in revoke if states.get(i) in ("ok", "failed")]
+        running = [i for i in revoke if states.get(i) == "running"]
+        if held or revoke:
+            self._log(f"Job {job_id}: the grid client answered: {len(moved or [])} molecule(s) it gave to other machines "
+                      f"handed back, {len(done)} were done here already, {len(running)} running; the rest goes on here")
+        if held and self._on_change is not None:
+            self._on_change("rejoin")
+        return {"moved": list(moved or []), "done": done, "running": running}
+
+    def on_wake(self, away_s: float, asleep_from: float | None = None) -> list[str]:
+        """This machine slept ``away_s`` s: every job a grid client was following (it polled within the 2 minutes
+        before the sleep) holds its next molecules until the client says which are still its own (``sync``) or
+        ``rejoin_wait_s`` has passed. Returns the job ids that hold."""
+        before = asleep_from if asleep_from is not None else time.time() - away_s
+        held = []
+        with self._cond:
+            self.last_wake = {"at": _now(), "away_s": round(away_s, 1)}
+            for job in self._jobs.values():
+                if job.state not in ("running", "queued") or not job.following:
+                    continue
+                if job.last_poll and before - job.last_poll > 120.0:
+                    continue
+                if job.last_sync > before:      # the client was quicker than this watcher: it has said already
+                    continue
+                job.rejoin = {"since": time.monotonic(), "at": _now(), "why": f"asleep {away_s:.0f} s"}
+                self._apply_mode(job)
+                held.append(job.id)
+            self._cond.notify_all()
+        self._log(f"This machine was asleep for about {away_s / 60:.1f} min"
+                  + (f"; {len(held)} grid job(s) wait for their grid client before starting another molecule "
+                     f"(at most {self.rejoin_wait_s / 60:.0f} min)" if held else ""))
+        if self._on_change is not None:
+            self._on_change("wake")
+        return held
+
+    def _check_contact(self) -> None:
+        """A followed job whose grid client has not asked for ``away_after_s`` (its network went away, or ours did):
+        hold its next molecules, as after a sleep (the client gives them to other machines once we are away). The
+        hold ends when the client is back (``sync``) or after ``rejoin_wait_s``."""
+        now_wall, now = time.time(), time.monotonic()
+        changed = False
+        for job in self.list():
+            r = job.rejoin
+            if r is not None and now - r.get("grid_checked", 0.0) >= self.SETTINGS_S:
+                r["grid_checked"] = now
+                changed |= self._check_grid_file(job)
+        with self._cond:
+            for job in self._jobs.values():
+                if job.rejoin is not None:
+                    if now - job.rejoin["since"] > self.rejoin_wait_s:
+                        self._log(f"Job {job.id}: no word from its grid client for {self.rejoin_wait_s / 60:.0f} min; "
+                                  "going on with its molecules here")
+                        job.rejoin = None
+                        job.following = False
+                        self._apply_mode(job)
+                        changed = True
+                    continue
+                if (job.state in ("running", "queued") and job.following and job.polls >= 3
+                        and now_wall - job.last_poll > self.away_after_s):
+                    job.rejoin = {"since": now, "at": _now(),
+                                  "why": f"no word from the grid client for {now_wall - job.last_poll:.0f} s"}
+                    self._apply_mode(job)
+                    self._log(f"Job {job.id}: its grid client has not asked for {now_wall - job.last_poll:.0f} s; "
+                              "no new molecule starts until it is back (it may have given them to another machine)")
+                    changed = True
+            if changed:
+                self._cond.notify_all()
+        if changed and self._on_change is not None:
+            self._on_change("contact")
+
+    def _check_grid_file(self, job: Job) -> bool:
+        """While a job waits for its grid client: the grid's record, ``<output folder>/<grid id>/grid.json``, if
+        SyncThing has brought it (the client writes it in the same synced Runs folder). Molecules it lists as given
+        to other machines (``reassigned``) are dropped here; once that grid is merged (its client has finished) the
+        hold ends. True when the hold ended."""
+        grid_id = (job.chunk or {}).get("grid") if isinstance(job.chunk, dict) else None
+        if not grid_id:
+            return False
+        try:
+            data = json.loads((self.output_dir / grid_id / "grid.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        share = next((s for s in data.get("shares") or [] if isinstance(s, dict) and s.get("job_id") == job.id), None)
+        if share is None:
+            return False
+        revoke = [i for i in share.get("reassigned") or [] if isinstance(i, str)]
+        if revoke:
+            self.release(job.id, len(revoke), "another machine (grid record)", want=revoke)
+        if data.get("state") in ("merged", "finished", "failed"):
+            with self._cond:
+                job.rejoin = None
+                job.following = False
+                self._apply_mode(job)
+                self._cond.notify_all()
+            self._log(f"Job {job.id}: its grid {grid_id} has ended (grid.json); {len(revoke)} molecule(s) it gave to "
+                      "other machines dropped here, the rest goes on")
+            return True
+        return False
+
+    def _read_settings(self) -> None:
+        """This machine's DIST-7 settings (re-read by the watcher): away and rejoin times, pause on battery, and the
+        run priority, which is applied live to the lanes of running jobs that take it from the settings."""
+        try:
+            s = settings_mod.load()
+        except Exception:  # noqa: BLE001 - keep the last values
+            return
+        self.away_after_s = max(10.0, float(s.dist.away_after_s or 120.0))
+        self.rejoin_wait_s = max(10.0, float(s.dist.rejoin_wait_s or 600.0))
+        self.pause_on_battery = bool(s.machine_control_for(self.name)["pause_on_battery"])
+        level = s.priority_for(self.name) if self.priority is None else None
+        if level is None:
+            return
+        with self._lock:
+            for job in self._jobs.values():
+                if job.state != "running" or job.control is None or job.config.get("priority"):
+                    continue
+                if job.live_priority and job.live_priority != level:
+                    job.control.priority = level
+                    self._log(f"Job {job.id}: run priority {job.live_priority} -> {level} (settings)")
+                job.live_priority = level
+
+    def _check_battery(self) -> None:
+        from . import control as control_mod
+
+        self.battery = control_mod.battery()
+        on_battery = self.battery.get("on_battery")
+        if not self.pause_on_battery or on_battery is None:
+            return
+        if on_battery and not self.paused:
+            self.set_paused(True, "drain", by="battery", reason="battery")
+        elif not on_battery and self.paused and self.pause_info.get("reason") == "battery":
+            self.set_paused(False, by="power")
+
+    def _watch(self) -> None:
+        """The watcher thread: the pause file (``worker pause`` with the worker running elsewhere writes it), sleep and
+        wake, the grid client's polls, the settings (live run priority) and the battery."""
+        from . import control as control_mod
+
+        last_settings = last_battery = time.monotonic()
+        while not self._watch_stop.wait(self.WATCH_S):
+            try:
+                st = control_mod.read_pause(self.pause_dir)
+                key = (st["paused"], st["mode"], st["since"])
+                if key != self._pause_key:              # written by `worker pause`, the GUI, another process
+                    self._pause_key = key
+                    if st["paused"] != self.paused or (st["paused"] and st["mode"] != self.pause_mode):
+                        self.set_paused(st["paused"], st["mode"], by=st["by"], reason=st["reason"], persist=False)
+                away = self._clock.check()
+                if away:
+                    self.on_wake(away, self._clock.asleep_from)
+                self._check_contact()
+                now = time.monotonic()
+                if now - last_settings >= self.SETTINGS_S:
+                    last_settings = now
+                    self._read_settings()
+                if now - last_battery >= self.BATTERY_S:
+                    last_battery = now
+                    self._check_battery()
+            except Exception as exc:  # noqa: BLE001 - the watcher must outlive anything it checks
+                self._log(f"Watcher: {type(exc).__name__}: {exc}")
 
     def wait_idle(self, timeout: float = 60.0) -> bool:
         """Block until no job is queued or running (tests and the local grid share)."""
@@ -1057,7 +1429,8 @@ class JobManager:
     def _runner(self) -> None:
         while True:
             with self._cond:
-                while not self._stopping and (self.paused or self.hold or not self._queue):
+                while not self._stopping and (self.paused or self.hold or not self._queue
+                                              or self._jobs[self._queue[0]].rejoin is not None):
                     self._cond.wait(1.0)
                 if self._stopping:
                     return
@@ -1071,10 +1444,14 @@ class JobManager:
                 job.state, job.error = "failed", f"{type(exc).__name__}: {exc}"
                 self._log(f"Job {job.id} failed: {job.error}")
             try:
-                with self._lock:
+                with self._cond:
                     job.finished = _now() if job.state in FINAL_STATES else job.finished
                     if job.state in FINAL_STATES:
                         self._drop_inputs(job.id)
+                    if job.state == "paused" and not self.paused:   # resumed while its batch was stopping: go on
+                        job.state = "queued"
+                        self._queue.appendleft(job.id)
+                        self._cond.notify_all()
                     self._persist()
             except Exception as exc:  # bookkeeping must not end this thread: the queue would stall silently
                 self._log(f"Job {job.id}: could not record its end ({type(exc).__name__}: {exc})")
@@ -1101,7 +1478,8 @@ class JobManager:
             tables = None
             try:
                 cfg = build_config(job.config, self.output_dir, priority=self.priority,
-                                   free_threads=self.free_threads)
+                                   free_threads=self.free_threads, machine=self.name)
+                job.live_priority = cfg.priority
                 from .. import resources as resources_mod
 
                 resources_mod.set_molecule_limits(cfg)   # memory budget and time limit of embedding and Hessian
@@ -1110,15 +1488,20 @@ class JobManager:
                 chunk = (job.chunk["index"], job.chunk["count"]) if job.chunk and "count" in job.chunk else None
                 inputs = self._load_inputs(job.id)
                 job.handoff = jobs_mod.Handoff()
+                job.control = jobs_mod.BatchControl()
+                with self._lock:
+                    self._apply_mode(job, interrupt=self.paused and self.pause_mode == "now")
                 with keep_awake(log) if self._awake else contextlib.nullcontext():
                     jobs_mod.run_resumable(inputs or None, cfg, run_dir, progress=progress,
                                            should_stop=job.stop.is_set, log=log, lanes=lanes, chunk=chunk,
-                                           keep_results=False, handoff=job.handoff)
+                                           keep_results=False, handoff=job.handoff, control=job.control)
                 # final counts before the state changes, so no client sees "done" with old counts
                 job.counts = self._counts(job)
+                left = sum(int(job.counts.get(k, 0)) for k in ("pending", "running", "cancelled"))
                 tables = self._final_tables(run_dir)
                 self._checkpoint(run_dir)
                 job.state = ("cancelled" if job.cancel_requested else "interrupted" if job.stop.is_set()
+                             else "paused" if left and (job.control.drained or job.control.mode == "drain")
                              else "done")
             except Exception as exc:
                 job.counts = self._counts(job)
@@ -1215,7 +1598,8 @@ class JobManager:
             lines = _tail(Path(job.run_dir) / JOB_LOG, tail)
         return {**{k: v for k, v in job.to_record().items() if k != "config"},
                 "method": job.config.get("method", ""), "run_folder": Path(job.run_dir).name,
-                "worker": self.name, "counts": counts, "progress": dict(job.progress), "log_tail": lines}
+                "worker": self.name, "counts": counts, "progress": dict(job.progress), "log_tail": lines,
+                "machine_paused": self.paused, "rejoin": job.rejoin is not None}
 
 
 # ======================================================================================== server
@@ -1246,6 +1630,8 @@ _ROUTES = (
     ("POST", re.compile(r"/v1/jobs/([0-9a-f]{12})/cancel"), "cancel"),
     ("POST", re.compile(r"/v1/jobs/([0-9a-f]{12})/release"), "release"),
     ("GET", re.compile(r"/v1/jobs/([0-9a-f]{12})/archive"), "archive"),
+    ("GET", re.compile(r"/v1/jobs/([0-9a-f]{12})/molecules"), "molecules"),
+    ("POST", re.compile(r"/v1/jobs/([0-9a-f]{12})/sync"), "sync"),
     ("POST", re.compile(r"/v1/pause"), "pause"),
 )
 
@@ -1425,7 +1811,9 @@ class _Handler(BaseHTTPRequestHandler):
             tail = max(0, min(LOG_TAIL, int(query.get("tail", ["20"])[0])))
         except ValueError:
             raise RequestError(400, "tail must be an integer") from None
-        self._json(200, self.server.worker.manager.public(job, tail=tail))
+        mgr = self.server.worker.manager
+        mgr.note_poll(job, query.get("follow", ["0"])[0] == "1")
+        self._json(200, mgr.public(job, tail=tail))
 
     def _r_cancel(self, job_id: str, query) -> None:
         self._body()
@@ -1450,12 +1838,42 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"ids": ids or [], "job": mgr.public(mgr.get(job_id), tail=0)})
 
     def _r_pause(self, query) -> None:
+        """{"paused": bool, "mode"?: "drain" | "now", "by"?: machine}: pause or resume this machine (DIST-7)."""
         body = self._body()
-        if set(body) - {"paused"} or not isinstance(body.get("paused"), bool):
-            raise RequestError(400, 'body must be {"paused": true|false}')
+        if set(body) - {"paused", "mode", "by"} or not isinstance(body.get("paused"), bool):
+            raise RequestError(400, 'body must be {"paused": true|false, "mode": "drain"|"now"}')
+        mode = body.get("mode", "drain")
+        if mode not in ("drain", "now"):
+            raise RequestError(400, 'mode must be "drain" or "now"')
+        by = _check_str("by", body.get("by", ""), 120)
+        if _CONTROL.search(by):
+            raise RequestError(400, "by contains control characters")
         mgr = self.server.worker.manager
-        mgr.set_paused(body["paused"])
+        mgr.set_paused(body["paused"], mode, by=by or self.client_address[0])
         self._json(200, mgr.queue_state())
+
+    def _r_molecules(self, job_id: str, query) -> None:
+        """{"molecules": {id: status}}: what the grid client needs to know which molecules have not started here."""
+        self._job_or_404(job_id)
+        self._json(200, {"molecules": self.server.worker.manager.molecule_states(job_id) or {}})
+
+    def _r_sync(self, job_id: str, query) -> None:
+        """{"revoke": [ids], "following": bool}: the grid client gave these molecules to another machine while this
+        one was away; those not started here become 'moved', and a wake-up hold ends."""
+        body = self._body()
+        if set(body) - {"revoke", "following"}:
+            raise RequestError(400, 'body must be {"revoke": [molecule ids], "following": true|false}')
+        revoke = body.get("revoke", [])
+        if not isinstance(revoke, list) or len(revoke) > MAX_INPUTS or not all(isinstance(i, str) and len(i) <= 120
+                                                                                for i in revoke):
+            raise RequestError(400, "revoke must be a list of molecule ids")
+        following = body.get("following")
+        if following is not None and not isinstance(following, bool):
+            raise RequestError(400, "following must be true or false")
+        self._job_or_404(job_id)
+        mgr = self.server.worker.manager
+        got = mgr.sync(job_id, revoke, following) or {}
+        self._json(200, {**got, "job": mgr.public(mgr.get(job_id), tail=0)})
 
     def _r_archive(self, job_id: str, query) -> None:
         job = self._job_or_404(job_id)
@@ -1531,7 +1949,8 @@ class Worker:
         url_host = f"[{self.host}]" if ":" in self.host else self.host
         self.url = f"http://{url_host}:{self.port}"
         self.manager = JobManager(output_dir, self.name, state_dir=state_dir, lanes=lanes, max_jobs=max_jobs,
-                                  log=log, awake=awake, priority=priority, free_threads=free_threads)
+                                  log=log, awake=awake, priority=priority, free_threads=free_threads,
+                                  on_change=self._publish_status)
         self.commit = git_commit()
         prof = profile_mod.local_profile()
         if not prof.throughput and self.name != prof.name:   # --name: the registry keeps it under that name
@@ -1551,11 +1970,36 @@ class Worker:
         self._sensors = None                  # sensors.Monitor, made on the first request for it
         self._sensors_lock = threading.Lock()
 
+    def _publish_status(self, what: str = "") -> None:
+        """``machines/status/<name>.json`` (DIST-7): this worker's pause state and last wake, for machines that cannot
+        reach it (a closed laptop shows as paused or away in their Machines dock). Never raises."""
+        if not self.publish:
+            return
+        from . import control as control_mod
+
+        with contextlib.suppress(Exception):
+            q = self.manager.queue_state()
+            control_mod.publish_status(self.name, {"url": self.url, "event": what, "paused": q["paused"],
+                                                   "pause": q["pause"], "last_wake": q["last_wake"],
+                                                   "battery": self.manager.battery or None,
+                                                   "running": q["running"], "queued": len(q["queued"]),
+                                                   "quantabench_version": __version__})
+
     def info(self) -> dict:
+        from .. import priority as priority_mod
+
         out = {"api": API_VERSION, "name": self.name, "url": self.url, "quantabench_version": __version__,
                "commit": self.commit, "python": sys.version.split()[0], "platform": sys.platform,
                "output_dir": str(self.manager.output_dir), "lanes": self.lanes_spec(),
-               "queue": self.manager.queue_state(), "profile": self.profile.to_dict()}
+               "queue": self.manager.queue_state(), "profile": self.profile.to_dict(),
+               "battery": self.manager.battery or None}
+        with contextlib.suppress(Exception):      # DIST-7: what this worker's jobs run with now
+            s = settings_mod.load()
+            out["controls"] = {"priority": self.manager.priority or s.priority_for(self.name),
+                               "free_threads": self.manager.free_threads if self.manager.free_threads is not None
+                               else s.free_threads_for(self.name),
+                               "process_priority": priority_mod.current_level(),
+                               **s.machine_control_for(self.name)}
         with contextlib.suppress(Exception):      # optional: a client that does not know the key ignores it
             s = self._sensor_monitor().latest()
             out["sensors"] = s.to_dict(per_cpu=False) if s is not None else None
@@ -1656,6 +2100,7 @@ class Worker:
         self.manager.start()
         self._started = True
         self._publish_profile()
+        self._publish_status("start")
         self._start_benchmark()
         self._thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.2},
                                         name="qb-worker-http", daemon=True)
@@ -1666,6 +2111,7 @@ class Worker:
         self.manager.start()
         self._started = True
         self._publish_profile()
+        self._publish_status("start")
         self._start_benchmark()
         try:
             self.server.serve_forever(poll_interval=0.5)
@@ -1691,6 +2137,7 @@ class Worker:
         if self._started:
             self._started = False
             self.manager.stop(timeout)
+            self._publish_status("stop")
 
     def __enter__(self) -> Worker:
         return self.start()
@@ -1832,6 +2279,9 @@ def register_cli(subparsers) -> None:
 
     add_priority_args(w)
     w.set_defaults(func=_cli_worker)
+    from . import control as control_mod
+
+    control_mod.add_worker_pause(w)
 
 
 __all__ = ("API_VERSION", "Job", "JobManager", "JobSpec", "RequestError", "VERSION_HEADER",

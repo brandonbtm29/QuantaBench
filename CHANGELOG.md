@@ -2,6 +2,42 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Machine control: the split, each machine's budget, and pausing a machine, DIST-7 (2026-11-11)
+- **Pause a machine** (the Machines dock's Pause / Resume per machine, `quantabench-cli worker pause [NAME]
+  [--drain|--now]`, `worker resume`, `POST /v1/pause {"paused", "mode"}`): it takes no new molecules; `drain` (the
+  default) lets the running ones finish, `now` stops them at their next checkpoint (they count as not started). A
+  worker's batch then ends as `paused`, freeing its lanes, and goes on at resume. The pause is saved in the worker
+  state folder (`pause.json`), so a restart stays paused; this machine's worker, a `grid build`'s local share and the
+  GUI's own batch (which holds and goes on) all follow it. `grid machines` and the dock show it.
+- **The work moves:** while `grid build` follows a grid, a paused machine's unstarted molecules go to the other
+  machines by their rate (DIST-6 work sharing stays on). A worker that stops answering (a closed laptop) is away after
+  `dist.away_after_s` (120 s): its unstarted molecules go to the others, after `dist.away_running_after_s` (600 s)
+  the running ones too, and `--wait` stops waiting for it. When it answers again, or notices its own sleep (a
+  wall-clock jump) or that its client stopped polling, it holds new molecules until the client says which are still
+  its own (`POST /v1/jobs/<id>/sync`; the synced `grid.json` if the client is gone; at most `dist.rejoin_wait_s`).
+  `GET /v1/jobs/<id>/molecules` gives the client each molecule's status; `release` now works on paused and queued
+  jobs.
+- **No double counting:** a molecule two machines finished is merged once, from the first to finish
+  (`grid.json` `duplicates`); `timings` marks the dropped rows `duplicate=1` and prints the molecules per machine.
+  `grid build --wait` and `grid status` end with the molecules each machine contributed, the moves and the
+  measured rates.
+- **The split:** `grid build --weights auto` (default) follows each machine's split setting (the dock's *Auto
+  (measured speed)* / *Manual weight* / *Off*; `machines set NAME --split ... --weight W`); `measured` uses the
+  molecules/hour of the last grid of the same protocol (`grid.json` `rates`, written at the end of each followed
+  grid; paused or away machines are not recorded), else the benchmark; `equal`; `benchmark` (the old `auto`);
+  `--exclude NAME`. The dock shows each machine's share of the current molecule list.
+- **Processing budget per machine, also remote:** the dock's budget box and `quantabench-cli machines set NAME
+  --priority --free-threads --max-cpu --lanes --[no-]pause-on-battery`. A running worker re-reads its values every
+  15 s: the run priority is applied to its running lanes at once (`priority.apply_to_pids`), lanes and free threads
+  with its next job. `pause_on_battery` (on by default) pauses a laptop's worker on battery and resumes it on power.
+- **Settings are merged, not overwritten:** every save merges with the file as it is now (per-machine tables entry
+  by entry, the rest key by key) and does not write when nothing changes (the GUI saves at every Run); per-machine
+  values are stamped (`dist.machine_updated`) and a newer entry in a SyncThing conflict copy
+  (`settings.sync-conflict-*.json`) is merged back on load. Workers never write settings.json: their state goes to
+  `pause.json` and `Settings/machines/status/<name>.json`.
+- **The Mac's worker** was found gone on 2026-11-09 because a restart ended its `nohup` process (sleep does not):
+  docs/WORKERS.md now says to run it from the LaunchAgent and why.
+
 ### The rank step: g-xTB + CPCM and AIMNet2 rank the conformers, RANK-2 (2026-11-11)
 - **A rank step between the refinement and the descriptors** (`chem/rank.py`): every refined conformer gets a single
   point at the rank level at its refined geometry, and those energies set the lowest conformer, the window and the

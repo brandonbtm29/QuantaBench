@@ -112,6 +112,22 @@ class DistSettings:
     worker_bind: str = "tailscale"    # "tailscale" (this machine's 100.x address) | "localhost" | an address
     worker_token: str = ""            # shared secret for workers; generated on first `worker` start
     workers: dict[str, str] = field(default_factory=dict)   # machine name -> URL override
+    # DIST-7, machine control (docs/WORKERS.md, "Pausing a machine, a closing laptop"): each machine's own entry
+    # (keys in MACHINE_CONTROL_KEYS): its part of a grid split ("auto" = measured speed, "manual" with "weight",
+    # "off"), "pause_on_battery" (a laptop's worker pauses itself while it runs on battery; on by default) and "max_cpu" (the
+    # Machines dock's percent, kept as the free threads it set). Use ``Settings.machine_control_for`` and
+    # ``update_machine``.
+    machine_control: dict[str, dict] = field(default_factory=dict)
+    # when each machine's per-machine values were last set (machine -> {"section.field": ISO time}): a SyncThing
+    # conflict copy of settings.json whose entry is newer is merged back on load (``load``, ``conflict_copies``)
+    machine_updated: dict[str, dict] = field(default_factory=dict)
+    # a worker that stops answering (a closed laptop) is "away" after away_after_s: the grid client gives its
+    # molecules that have not started to the other machines, and after away_running_after_s also the ones it was
+    # running. A worker that wakes up holds its next molecules for up to rejoin_wait_s, until its grid client has
+    # said which of them are still its own.
+    away_after_s: float = 120.0
+    away_running_after_s: float = 600.0
+    rejoin_wait_s: float = 600.0
 
 
 @dataclass
@@ -174,6 +190,9 @@ class SensorSettings:
 
 #: per-machine sensor keys and their types (``SensorSettings.machine`` entries)
 SENSOR_KEYS: dict[str, type] = {"enabled": bool, "interval_s": float, "lhm_url": str}
+#: per-machine machine-control keys (``DistSettings.machine_control`` entries, DIST-7) and their types
+MACHINE_CONTROL_KEYS: dict[str, type] = {"split": str, "weight": float, "pause_on_battery": bool, "max_cpu": float}
+SPLIT_MODES = ("auto", "manual", "off")
 
 
 @dataclass
@@ -382,6 +401,71 @@ class Settings:
             table[mkey] = entry
         self.sensors.machine = table
 
+    def machine_control_for(self, machine: str | None = None) -> dict:
+        """``machine``'s (default: this one) DIST-7 controls: ``split`` ("auto" | "manual" | "off"), ``weight`` (the
+        manual weight, 1 by default), ``pause_on_battery`` (True: a laptop's worker takes no work on battery; it
+        never matters on a machine without one) and ``max_cpu`` (percent, 0 = not set); values of the wrong type are
+        ignored."""
+        out = {"split": "auto", "weight": 1.0, "pause_on_battery": True, "max_cpu": 0.0}
+        entry = _machine_entry(self.dist.machine_control, machine)
+        if isinstance(entry, dict):
+            for k, kind in MACHINE_CONTROL_KEYS.items():
+                v = entry.get(k)
+                if kind is bool and isinstance(v, bool):
+                    out[k] = v
+                elif kind is float and isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v >= 0:
+                    out[k] = float(v)
+                elif kind is str and isinstance(v, str) and v.strip().lower() in SPLIT_MODES:
+                    out[k] = v.strip().lower()
+        return out
+
+    def set_machine_control_for(self, key: str, value, machine: str | None = None) -> None:
+        """Set one DIST-7 control (``MACHINE_CONTROL_KEYS``) for ``machine`` (default: this one); ``None`` removes it."""
+        if key not in MACHINE_CONTROL_KEYS:
+            raise ValueError(f"unknown machine control {key!r} (one of {', '.join(MACHINE_CONTROL_KEYS)})")
+        kind = MACHINE_CONTROL_KEYS[key]
+        if value is not None:
+            if kind is bool and not isinstance(value, bool):
+                raise ValueError(f"{key} must be true or false")
+            if kind is float:
+                value = float(value)
+                if not value >= 0:
+                    raise ValueError(f"{key} must be 0 or more")
+            if kind is str:
+                value = str(value).strip().lower()
+                if value not in SPLIT_MODES:
+                    raise ValueError(f"split must be one of {', '.join(SPLIT_MODES)}, not {value!r}")
+        mkey = machine_key(machine if machine is not None else _this_machine())
+        entry: dict = {}
+        for name, e in self.dist.machine_control.items():
+            if machine_key(name) == mkey and isinstance(e, dict):
+                entry.update(e)
+        if value is None:
+            entry.pop(key, None)
+        else:
+            entry[key] = value
+        table = {k: v for k, v in self.dist.machine_control.items() if machine_key(k) != mkey}
+        if entry:
+            table[mkey] = entry
+        self.dist.machine_control = table
+
+    def stamp_machine(self, machine: str | None, fields_changed, when: str | None = None) -> None:
+        """Record that ``machine``'s entries of the per-machine tables ``fields_changed`` ("section.field") were set now
+        (``dist.machine_updated``; ``load`` uses it to merge a newer entry back from a SyncThing conflict copy)."""
+        from datetime import UTC, datetime
+
+        when = when or datetime.now(UTC).isoformat(timespec="seconds")
+        mkey = machine_key(machine if machine is not None else _this_machine())
+        entry: dict = {}
+        for name, e in self.dist.machine_updated.items():
+            if machine_key(name) == mkey and isinstance(e, dict):
+                entry.update(e)
+        for f in fields_changed:
+            entry[str(f)] = when
+        table = {k: v for k, v in self.dist.machine_updated.items() if machine_key(k) != mkey}
+        table[mkey] = entry
+        self.dist.machine_updated = table
+
     def _machine_paths(self, machine: str | None = None) -> dict[str, str]:
         key = machine_key(machine if machine is not None else _this_machine())
         merged: dict[str, str] = {}
@@ -420,7 +504,9 @@ def _this_machine() -> str:
 #: (section, field) of the settings whose values are tables of tables (machine -> {name: value}), with the value
 #: types an inner table keeps (engines: program paths; sensors: enabled, interval_s, lhm_url)
 NESTED_TABLES: dict[tuple[str, str], tuple[type, ...]] = {("engines", "machine_paths"): (str,),
-                                                          ("sensors", "machine"): (str, bool, int, float)}
+                                                          ("sensors", "machine"): (str, bool, int, float),
+                                                          ("dist", "machine_control"): (str, bool, int, float),
+                                                          ("dist", "machine_updated"): (str,)}
 
 
 def _coerce(default, value, tables: tuple[type, ...] | None = None) -> tuple[bool, object]:
@@ -519,8 +605,15 @@ def set_settings_dir(new_dir: str | Path | None, pointer_place: Path | None = No
 #: (section, field) of the settings that hold one entry per machine (machine name -> value). The file is shared
 #: by every machine, so ``save`` writes only the entries this process changed and keeps the others' from disk.
 PER_MACHINE_TABLES = (("engines", "machine_paths"), ("dist", "machine_lanes"), ("resources", "machine_priority"),
-                      ("resources", "machine_free_threads"), ("sensors", "machine"))
+                      ("resources", "machine_free_threads"), ("sensors", "machine"), ("dist", "machine_control"),
+                      ("dist", "machine_updated"))
 _AS_LOADED = "_per_machine_as_loaded"     # attribute (not a dataclass field: never written) set by load/save
+_ALL_AS_LOADED = "_all_as_loaded"         # the whole file as loaded (the base of the merge on save)
+#: per-machine values that ``update_machine`` sets, as "section.field" (``Settings.stamp_machine``)
+MACHINE_VALUE_FIELDS = {"priority": "resources.machine_priority", "free_threads": "resources.machine_free_threads",
+                        "lanes": "dist.machine_lanes", **dict.fromkeys(MACHINE_CONTROL_KEYS, "dist.machine_control")}
+#: SyncThing's copy of a file two machines changed at about the same time (the other machine's change)
+CONFLICT_GLOB = "settings.sync-conflict-*.json"
 
 
 def _machine_tables(s: Settings) -> dict[tuple[str, str], dict]:
@@ -542,37 +635,165 @@ def _merge_machine_table(disk: dict, before: dict, mine: dict) -> dict:
     return out
 
 
+def conflict_copies(folder: Path | None = None) -> list[Path]:
+    """SyncThing conflict copies of settings.json in the settings folder (``settings.sync-conflict-<date>-<time>-
+    <device>.json``): what one machine wrote while the other machine's change had not arrived yet."""
+    folder = settings_dir() if folder is None else Path(folder)
+    try:
+        return sorted(folder.glob(CONFLICT_GLOB))
+    except OSError:
+        return []
+
+
+def _stamp(s: Settings, machine: str, field_name: str) -> str:
+    entry = _machine_entry(s.dist.machine_updated, machine)
+    value = entry.get(field_name) if isinstance(entry, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def _recover_conflicts(s: Settings, folder: Path) -> list[str]:
+    """Merge into ``s`` the per-machine entries of SyncThing conflict copies that were set later than ``s``'s
+    (``dist.machine_updated``): the change of the machine that lost the conflict is kept, not dropped. Returns one
+    line per recovered entry ("btm-nova resources.machine_priority from settings.sync-conflict-...json")."""
+    out: list[str] = []
+    for copy_path in conflict_copies(folder):
+        try:
+            other = Settings.from_dict(json.loads(copy_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+        for machine, stamps in other.dist.machine_updated.items():
+            if not isinstance(stamps, dict):
+                continue
+            for field_name, when in stamps.items():
+                if not isinstance(when, str) or when <= _stamp(s, machine, field_name):
+                    continue
+                sec, _, name = field_name.partition(".")
+                if (sec, name) not in PER_MACHINE_TABLES:
+                    continue
+                theirs = getattr(getattr(other, sec), name)
+                mkey = machine_key(machine)
+                table = {k: v for k, v in getattr(getattr(s, sec), name).items() if machine_key(k) != mkey}
+                value = _machine_entry(theirs, machine)
+                if value is not None:
+                    table[mkey] = copy.deepcopy(value)
+                setattr(getattr(s, sec), name, table)
+                s.stamp_machine(machine, [field_name], when)
+                out.append(f"{machine} {field_name} from {copy_path.name}")
+    return out
+
+
 def load() -> Settings:
-    path = settings_dir() / SETTINGS_FILE
+    """The settings (defaults where the file has none). Per-machine values that a SyncThing conflict copy holds in a
+    newer version (``_recover_conflicts``) are merged in; ``recovered_conflicts`` on the result lists them, and the
+    next ``save`` writes them into settings.json."""
+    folder = settings_dir()
+    path = folder / SETTINGS_FILE
     try:
         s = Settings.from_dict(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError):   # FileNotFoundError included: defaults
         s = Settings()
     setattr(s, _AS_LOADED, _machine_tables(s))
+    setattr(s, _ALL_AS_LOADED, copy.deepcopy(s.to_dict()))
+    s.recovered_conflicts = _recover_conflicts(s, folder) if path.is_file() else []   # not a field: never written
     return s
 
 
+_MISSING = object()
+
+
+def _merge3(base, mine, disk):
+    """Three-way merge of one value: what this process changed since it loaded (``mine`` != ``base``) wins, the rest
+    comes from the file as it is now (``disk``). Dicts merge key by key, other values whole."""
+    if mine == base:
+        return disk
+    if isinstance(mine, dict) and isinstance(base, dict) and isinstance(disk, dict):
+        out = dict(disk)
+        for k in set(base) | set(mine):
+            if k not in mine:
+                out.pop(k, None)
+                continue
+            got = _merge3(base.get(k, _MISSING), mine[k], disk.get(k, _MISSING))
+            if got is _MISSING:
+                out.pop(k, None)
+            else:
+                out[k] = got
+        return out
+    return mine
+
+
 def save(settings: Settings) -> Path:
-    """Write ``settings``. The per-machine tables (``PER_MACHINE_TABLES``) of settings that came from ``load``
-    are merged with the file as it is now: an entry this process did not change is taken from the file, so a
-    GUI that stayed open for hours does not write back its old copy of another machine's CREST path or lanes.
+    """Write ``settings``, merged with the file as it is now, and only when that changes the file.
+
+    Settings that came from ``load`` write only what this process changed since: the per-machine tables
+    (``PER_MACHINE_TABLES``) entry by entry (an entry this process did not change is taken from the file, so a GUI
+    that stayed open for hours does not write back its old copy of another machine's CREST path or lanes), every
+    other value key by key (``_merge3``). A save that would leave the file as it is does not write it: the GUI saves
+    at every Run, and two machines writing the synced file within a minute make SyncThing keep only one version.
     Settings made in code (no ``load``) are written as they are."""
     folder = settings_dir()
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / SETTINGS_FILE
     before = getattr(settings, _AS_LOADED, None)
-    if before is not None and path.is_file():
+    base_all = getattr(settings, _ALL_AS_LOADED, None)
+    disk_text = None
+    if path.is_file():
         try:
-            disk = _machine_tables(Settings.from_dict(json.loads(path.read_text(encoding="utf-8"))))
-        except (OSError, ValueError):
-            disk = None
-        if disk is not None:
-            for sec, name in PER_MACHINE_TABLES:
-                mine = getattr(getattr(settings, sec), name)
+            disk_text = path.read_text(encoding="utf-8")
+        except OSError:
+            disk_text = None
+    if before is not None and disk_text is not None:
+        try:
+            disk_settings = Settings.from_dict(json.loads(disk_text))
+        except ValueError:
+            disk_settings = None
+        if disk_settings is not None:
+            disk = _machine_tables(disk_settings)
+            tables = {(sec, name): getattr(getattr(settings, sec), name) for sec, name in PER_MACHINE_TABLES}
+            if base_all is not None:
+                fresh = Settings.from_dict(_merge3(base_all, settings.to_dict(), disk_settings.to_dict()))
+                for f in fields(Settings):
+                    setattr(settings, f.name, getattr(fresh, f.name))
+            for (sec, name), mine in tables.items():
                 setattr(getattr(settings, sec), name,
                         _merge_machine_table(disk[(sec, name)], before.get((sec, name), {}), mine))
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(settings.to_dict(), indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    text = json.dumps(settings.to_dict(), indent=2) + "\n"
+    if text != disk_text:
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
     setattr(settings, _AS_LOADED, _machine_tables(settings))
+    setattr(settings, _ALL_AS_LOADED, copy.deepcopy(settings.to_dict()))
     return path
+
+
+def update_machine(machine: str | None = None, **values) -> Settings:
+    """Set per-machine values of ``machine`` (default: this one) in the settings file right away: a fresh ``load``,
+    the change, ``save`` (milliseconds between the read and the write), each change stamped for the SyncThing
+    conflict merge. Keys: ``priority``, ``free_threads`` (None or "default" = back to the shared default),
+    ``lanes`` ("" or None = the shared default) and the ``MACHINE_CONTROL_KEYS`` (None removes one). Returns the
+    settings as saved. The Machines dock and ``quantabench-cli machines set`` use it; a running worker reads the new
+    values at its next check (``dist.control``)."""
+    unknown = sorted(set(values) - set(MACHINE_VALUE_FIELDS))
+    if unknown:
+        raise ValueError(f"unknown machine value(s) {', '.join(unknown)} (known: {', '.join(MACHINE_VALUE_FIELDS)})")
+    name = machine_key(machine if machine is not None else _this_machine())
+    s = load()
+    changed: list[str] = []
+    for key, value in values.items():
+        if key == "priority":
+            s.set_priority_for(value, name)
+        elif key == "free_threads":
+            s.set_free_threads_for(value, name)
+        elif key == "lanes":
+            spec = str(value or "").strip()
+            if spec:
+                s.set_lanes_for(spec, name)
+            else:
+                s.dist.machine_lanes = {k: v for k, v in s.dist.machine_lanes.items() if machine_key(k) != name}
+        else:
+            s.set_machine_control_for(key, value, name)
+        changed.append(MACHINE_VALUE_FIELDS[key])
+    if changed:
+        s.stamp_machine(name, sorted(set(changed)))
+        save(s)
+    return s

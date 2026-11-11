@@ -835,6 +835,10 @@ class StopEvent:
     def set(self) -> None:
         self._flag.value = 1
 
+    def clear(self) -> None:
+        """Only while no lane runs a molecule (a pause "now" that has stopped them all): idle lanes do not read it."""
+        self._flag.value = 0
+
     def is_set(self) -> bool:
         return bool(self._flag.value)
 
@@ -1016,7 +1020,7 @@ def dynamic_threads_for(cfg, lanes: list[Lane], enabled: bool | None = None, bud
 def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, done_before: int,
                  progress, should_stop, log, on_result, keep_results: bool = True,
                  speed_aware: bool | None = None, handoff=None, dynamic_threads: bool | None = None,
-                 thread_budget: int = 0, telemetry=None, cost_model=None) -> list:
+                 thread_budget: int = 0, telemetry=None, cost_model=None, control=None) -> list:
     """Run ``todo`` ([(id, MoleculeInput)], from ``JobStore.todo``) in ``lanes`` worker processes. The
     calling thread is the only one that writes ``store`` and calls the callbacks. Returns the results in
     ``todo`` order (molecules not started because of a cancel are absent).
@@ -1035,7 +1039,14 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     ``telemetry`` (``chem.telemetry.RunTelemetry``): the run's timing rows; each lane sends its stage numbers with
     the result, and this process writes them next to the result (a lane that dies or is killed gets a partial row
     from its last stage). ``cost_model`` (``threads.CostModel``): the CREST cost model of the dynamic threads;
-    None = this machine's fitted one, else the built-in."""
+    None = this machine's fitted one, else the built-in.
+
+    ``control`` (``jobs.BatchControl``, DIST-7): while its mode is "hold" or "drain" no molecule is handed out (the
+    lanes stay up; releases are still served); "drain" returns once no lane is busy. With ``interrupt`` the lanes'
+    molecules stop at their next checkpoint (the shared stop flag, cleared again once every lane is idle) and are
+    recorded 'cancelled', i.e. not started: a hold puts them back at the front of the queue. A new ``priority`` is
+    applied to the running lane processes and the programs they started (``priority.apply_to_pids``) and to lanes
+    started later."""
     from dataclasses import replace
 
     from ..chem import jobs
@@ -1075,6 +1086,8 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     results: dict[int, MoleculeResult] = {}
     n_done = 0
     stopping = False
+    interrupting = False          # a pause "now" (control.interrupt): the stop flag is set until every lane is idle
+    paused_logged = False
     t0 = time.perf_counter()
     announced = False
     held_logged = False
@@ -1119,9 +1132,17 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             return speed.STARTING           # first start: counted on (a restart is not: it may never come back)
         return speed.DOWN
 
-    def take(n: int, dest: str) -> list[str]:
-        """``Handoff``: up to ``n`` molecules from the end of the queue (none of them started)."""
-        picked = [queue.pop() for _ in range(min(n, len(queue)))]
+    def take(n: int, dest: str, want=None) -> list[str]:
+        """``Handoff``: up to ``n`` molecules from the end of the queue (none of them started); ``want``: exactly
+        those of these ids that are still queued."""
+        if want is not None:
+            wanted = set(want)
+            picked = [item for item in queue if item[1] in wanted]
+            for item in picked:
+                queue.remove(item)
+            picked.reverse()
+        else:
+            picked = [queue.pop() for _ in range(min(n, len(queue)))]
         moved = set(store.mark_moved([mol_id for _, mol_id, _ in picked], dest))
         queue.extend(item for item in reversed(picked) if item[1] not in moved)   # could not move: kept
         if moved:
@@ -1252,6 +1273,16 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             _, _, k, mol_id, res, result_dir = msg
             w.busy = None
             threads_back(w)
+            if interrupting and not stopping and res.status == "cancelled":
+                # stopped by a pause "now": recorded as not started, and back at the front of the queue
+                if policy is not None:
+                    policy.lost(w.lane.name)
+                tm.end_attempt(mol_id, res, stage=w.stage, stage_since=w.stage_since)
+                store.record(res, "")
+                queue.appendleft((k, mol_id, inputs[mol_id]))
+                progress(done_before + k, total, "queued", mol_id)
+                log(f"[{w.lane.name}] {mol_id}: stopped at a checkpoint (paused now); it starts again on resume")
+                return
             if policy is not None:
                 policy.finished(w.lane.name, ok=res.status == "ok")
             finish(w, k, mol_id, res, result_dir)
@@ -1287,7 +1318,38 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                 log(f"Cancelling: {busy} running molecule(s) stop after their current step")
             if handoff is not None and not stopping:
                 handoff.serve(take)
-            if not stopping:
+            mode = control.poll() if control is not None else "run"
+            if control is not None and not stopping:
+                busy_now = sum(w.busy is not None for w in pool.workers)
+                if control.priority and control.priority != control.applied_priority:
+                    from .. import priority as priority_mod
+
+                    level = control.priority
+                    note = priority_mod.apply_to_pids(pool.pids(), level, children=True)
+                    pool.cfg_dict["priority"] = priority_mod.normalize(level)    # lanes started from now on
+                    control.applied_priority = level
+                    log(f"Run priority of the lanes: {note}")
+                if mode != "run" and control.interrupt and busy_now and not interrupting:
+                    interrupting = True
+                    pool.stop_event.set()
+                    log(f"Pausing now: {busy_now} running molecule(s) stop at their next checkpoint")
+                if interrupting and not busy_now:
+                    pool.stop_event.clear()
+                    interrupting = False
+                    control.interrupt = False
+                elif mode != "run" and control.interrupt and not busy_now:
+                    control.interrupt = False
+                if mode != "run" and not paused_logged:
+                    paused_logged = True
+                    log(f"Paused ({mode}): no new molecule starts; {len(queue)} waiting, {busy_now} running")
+                elif mode == "run" and paused_logged:
+                    paused_logged = False
+                    log("Resumed")
+                if mode == "drain" and not busy_now:
+                    log(f"Paused: {len(queue)} molecule(s) not started stay in the job table")
+                    control.drained = True
+                    break
+            if not stopping and mode == "run" and not interrupting:
                 states, held = None, []
                 for w in pool.workers:
                     if queue and w.ready and w.busy is None and w.conn is not None and w.alive:

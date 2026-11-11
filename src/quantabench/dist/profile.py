@@ -896,3 +896,6 @@ def register_cli(subparsers) -> None:
     m.add_argument("--wsl", action="store_true", help="also probe versions of programs run through WSL (slow)")
     m.add_argument("--json", action="store_true")
     m.set_defaults(func=_machines_cli)
+    from . import control
+
+    control.add_machines_set(m)          # machines set NAME --priority ... (DIST-7)
