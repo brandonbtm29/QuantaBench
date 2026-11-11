@@ -1636,9 +1636,9 @@ the H-bond donors and the ring and aromatic atoms, fitted on 831 PubChem/HSDB li
 - **Good for:** The molar volume of a parachor model when no density is measured, PFAS included; the best of
   the cheap estimates.
 - **Watch out:** QuantaBench measured 2.7 % mean error on 237 test liquids it was not fitted to, 3.2 % on 26
-  fluorinated liquids and 2.9 % above 1.6 g/cm³ (docs/VALIDATION.md, DESC-2). Fitted for H, C, N, O, F, Si, P,
-  S, Cl, Br, I only (other elements get no value), on neutral liquids at 1 atm; with non-default radii it
-  computes its own Bondi volume.
+  fluorinated liquids (3.8 % on the 11 it was not fitted to) and 3.0 % above 1.6 g/cm³ (docs/VALIDATION.md,
+  DESC-2). Fitted for H, C, N, O, F, Si, P, S, Cl, Br, I only (other elements get no value), on neutral
+  liquids at 1 atm; with non-default radii it computes its own Bondi volume.
 - **Cost:** One grid volume of the best conformer: milliseconds.
 - **Dispersion:** Not applicable.
 - **Solvation:** None: a pure-liquid property at room temperature.

@@ -131,7 +131,8 @@ class PackingModel:
 #: beyond 5 robust SDs left out), V_vdW the Bondi union volume (grid 0.15 Å) of an MMFF94s conformer, V_m from the
 #: median PubChem/HSDB pure-liquid density record at 10-40 °C moved to 25 °C (liquefied gases, bp < 30 °C, left
 #: out). On 237 test liquids it was never fitted to: 2.7 % mean absolute density error (Girolami 5.3 %);
-#: fluorinated liquids with >= 3 F 3.2 % (Girolami 6.4 %). docs/VALIDATION.md, DESC-2.
+#: fluorinated liquids with >= 3 F 3.2 % (Girolami 6.4 %), 3.8 % on the 11 of them it never saw (Girolami
+#: 6.8 %). docs/VALIDATION.md, DESC-2.
 PACKING = PackingModel(
     coefficients=(("const", 0.59592), ("inv_heavy", -0.41099), ("f", -0.05547), ("cl", 0.05421), ("br", 0.11663),
                   ("i", 0.20968), ("si", -0.22943), ("s", 0.08746), ("p", -0.07605), ("n", 0.07483), ("o", 0.11410),

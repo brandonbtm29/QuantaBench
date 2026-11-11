@@ -88,8 +88,9 @@ def test_sugden_parachor():
     assert p is None and "Sn" in note
 
 
-def test_packing_density_of_liquids_it_was_not_fitted_to_check():
-    # measured at 25 °C (CRC Handbook): hexane 0.655, perfluorohexane 1.669, ethanol 0.785, chlorobenzene 1.101
+def test_packing_density_of_common_liquids():
+    # measured at 25 °C (CRC Handbook): hexane 0.655, perfluorohexane 1.669, ethanol 0.785, chlorobenzene 1.101. Some
+    # may be among the PubChem liquids of the fit; its test-set errors are in docs/VALIDATION.md (DESC-2)
     for smiles, rho in (("CCCCCC", 0.655), ("FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F", 1.669),
                         ("CCO", 0.785), ("Clc1ccccc1", 1.101)):
         d, notes = est.estimate(_mol(smiles), d4=False)
