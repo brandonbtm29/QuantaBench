@@ -1124,6 +1124,8 @@ class MachineWatch:
 
     def _from_paused(self, share: Share) -> None:
         pending = WorkSharing.not_started(share)
+        if not pending and share.state == "queued" and not share.finished:
+            pending = share.n                     # it never started: no counts yet, every molecule is unstarted
         if pending < 1 or not self.receivers(share.machine):
             if pending and share.machine + "/paused" not in self._noted:
                 self._noted.add(share.machine + "/paused")

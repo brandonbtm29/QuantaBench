@@ -539,6 +539,24 @@ def test_grid_moves_a_paused_machines_molecules(make_worker, qb_settings, monkey
     assert any(line.startswith("Moved:") and "(paused)" in line for line in logs)
 
 
+def test_grid_skips_a_machine_paused_before_it_starts(make_worker, qb_settings, monkeypatch):
+    stoppable(monkeypatch, 0.05)
+    out = Path(qb_settings.output_dir)
+    w1, w2 = make_worker("w1", output=out), make_worker("w2", output=out)
+    WorkerClient(w1.url, TOKEN).pause(True)                      # the lid is open, but the laptop is not to work
+    logs: list[str] = []
+    grid = client_mod.grid_build(_items(), _grid_cfg(out), ["w1", "w2"], "1,1", label="pb", wait=True,
+                                 extra_workers=[f"w1={w1.url}", f"w2={w2.url}"], poll=0.2, sync_wait=0,
+                                 log=logs.append)
+    merged = summary_ids(grid.folder)
+    assert sorted(merged) == sorted(i for i, _ in MOLS) and grid.missing == [], logs
+    assert grid.by_machine == {"w2": len(MOLS)} and grid.moves and grid.moves[0]["why"] == "paused"
+    first = grid.shares[0]
+    st = WorkerClient(w1.url, TOKEN).status(first.job_id)
+    assert first.machine == "w1" and st["state"] == "done" and st["counts"]["moved"] == grid.moves[0]["n"] > 0
+    assert first.n == 0 and first.ids == []                    # every molecule left w1's queued job; it never ran
+
+
 def test_grid_away_machine_reassigned_deduped_and_wait_finishes(make_worker, qb_settings, monkeypatch):
     """w1 keeps computing but stops answering (its network is gone): after away_after_s its unstarted molecules go
     to w2, later the running ones too; --wait finishes; when w1 answers again the client syncs; molecules done on

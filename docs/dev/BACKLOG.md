@@ -1103,6 +1103,9 @@ pause button on a machine and the work is redistributed?"
   - A running lane pool is not resized when its lanes or free threads change; they apply with the next job. A
     "restart lanes now" (drain, then requeue the job) is a small step on top of the pause.
   - Raising a run priority live works on Windows only (POSIX cannot lower a nice value without privileges).
+  - A machine named in `--machines` that is already asleep when `grid build` starts is still an error ("not
+    reachable"); leaving it out with a note (as if it were away from the start) would be friendlier. Without
+    `--machines` only the reachable workers are used, as before.
   - With UI-5: "Run on" picks machines from the dock's rows; a tray icon with Pause / Resume on the laptop.
 
 ### DIST-6: Grid weights from measured throughput · done 2026-11-06 (work sharing; learned weights optional)
