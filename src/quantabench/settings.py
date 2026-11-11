@@ -64,6 +64,10 @@ class BuildDefaults:
     energy_window_kcal: float = 6.0
     rmsd_threshold: float = 0.5
     refine_method: str = "auto"       # "none" | "mmff" | "gfn1-xtb" | "gfn2-xtb" | "aimnet2" | "auto"
+    # the conformer rank step (chem.rank): "auto" (by phase) | "refine" | "gxtb+cpcm" | "gxtb" | "aimnet2" |
+    # "aimnet2+cpcm" | "qm"; its window in kJ/mol (shown in the display unit)
+    rank_method: str = "auto"
+    rank_window_kj: float = 30.0
     fmax: float = 0.03                # eV/Å convergence for the refinement optimizer
     max_steps: int = 500
     temperature_k: float = 298.15

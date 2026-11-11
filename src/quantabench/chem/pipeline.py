@@ -51,7 +51,13 @@ class BuildConfig:
     keep_largest_fragment: bool = True
     max_conformers: int = 50
     refine_top: int = 20                  # refine at most this many force-field conformers
+    # the refinement level's window: the force-field pool keeps this + 4 kcal/mol, and with rank_method "refine" the
+    # refined conformers are pruned with it; a rank step prunes with rank_window_kj instead (chem.rank)
     energy_window_kcal: float = 6.0
+    # the level that ranks the refined conformers (chem.rank.RANK_METHODS): "auto" (by phase), "refine" (the
+    # refinement's energies, as before RANK-2), "gxtb+cpcm", "gxtb", "aimnet2", "aimnet2+cpcm", "qm"
+    rank_method: str = "auto"
+    rank_window_kj: float = 30.0          # the rank step keeps conformers within this of its lowest (kJ/mol)
     rmsd_threshold: float = 0.5
     fmax: float = 0.03
     max_steps: int = 500
@@ -109,6 +115,7 @@ class BuildConfig:
         b, r = s.build, s.resources
         cfg = cls(method=b.refine_method, ph=b.ph, protonate=b.protonate, keep_largest_fragment=b.keep_largest_fragment,
                   max_conformers=b.max_conformers, energy_window_kcal=b.energy_window_kcal,
+                  rank_method=b.rank_method, rank_window_kj=b.rank_window_kj,
                   rmsd_threshold=b.rmsd_threshold, fmax=b.fmax, max_steps=b.max_steps, temperature_k=b.temperature_k,
                   seed=b.random_seed, batched=b.batched, frequencies=b.frequencies, threads=r.threads,
                   priority=s.priority_for(), free_threads=s.free_threads_for(), gpu=r.gpu, gpu_index=r.gpu_index,
@@ -133,6 +140,16 @@ class ConformerResult:
     steps: int = 0
     charges: list[float] | None = None
     dipole_debye: float | None = None
+    # the rank step (chem.rank): this conformer's energy at the rank level (eV; None when the refinement ranked) and
+    # its refinement energy relative to the refinement's lowest of the pool (kcal/mol). energy_ev stays the
+    # refinement's; rel_kcal and weight follow the rank level
+    rank_energy_ev: float | None = None
+    refine_rel_kcal: float | None = None
+
+    @property
+    def ranking_energy_ev(self) -> float:
+        """The energy that orders the conformers: the rank level's, else the refinement's."""
+        return self.energy_ev if self.rank_energy_ev is None else self.rank_energy_ev
 
 
 @dataclass
@@ -168,6 +185,9 @@ class MoleculeResult:
     phase: str = ""                    # the phase the run asked for: "gas" or the solvent (BuildConfig.solvent)
     solvation_model: str = ""          # model of ``solvent`` ("alpb", "cosmo", ...); "" = gas phase
     phase_steps: dict = field(default_factory=dict)   # step -> where it was computed ("ALPB(water)", "gas (why)")
+    # the rank step (chem.rank.record): the level asked for and used, the pool with every conformer's refinement and
+    # rank energies, the pick and whether it changed; None before the ranking (and in results from before RANK-2)
+    rank: dict | None = None
     # the stage timings, threads and CPU time of this attempt (chem.telemetry.StageClock), for the job table's
     # telemetry rows; not a result, so not in to_dict() and not in the molecule's files
     telemetry: dict = field(default_factory=dict)
@@ -199,8 +219,18 @@ class MoleculeResult:
             "best_energy_eV": best.energy_ev if best else "", "best_converged": best.converged if best else "",
             "dipole_debye": best.dipole_debye if best and best.dipole_debye is not None else "",
             "qm_method": (self.qm or {}).get("level", ""), "qm_energy_eV": (self.qm or {}).get("energy_ev", ""),
+            **self._rank_fields(best),
             "seconds": round(sum(self.timings.values()), 2), "notes": " | ".join(self.notes),
         } | self._posted_fields()
+
+    def _rank_fields(self, best: ConformerResult | None) -> dict:
+        """The rank step's summary columns: the method asked for, the level used, the best conformer's rank energy,
+        whether the pick differs from the refinement's, and the conformers before the rank window."""
+        r = self.rank or {}
+        return {"rank_method": r.get("method", ""), "rank_level": r.get("level", ""),
+                "rank_energy_eV": best.rank_energy_ev if best is not None and best.rank_energy_ev is not None else "",
+                "rank_pick_changed": r.get("pick_changed", "") if r.get("level", "refine") != "refine" else "",
+                "rank_n_pool": r.get("n_pool", "") if r else ""}
 
     def _posted_fields(self) -> dict:
         """The input's fields posted on import (``import_options.FIELDS``: SD properties, table columns) as extra
@@ -218,7 +248,7 @@ SUMMARY_COLUMNS = frozenset(
     ("id name status error input_smiles smiles inchikey canonical_smiles input_inchikey input_charge charge "
      "multiplicity removed_fragments method forcefield device phase solvent solvation_model phase_notes "
      "conformer_search conformer_fallback n_embedded n_conformers best_energy_eV best_converged dipole_debye "
-     "qm_method qm_energy_eV seconds notes").split())
+     "qm_method qm_energy_eV rank_method rank_level rank_energy_eV rank_pick_changed rank_n_pool seconds notes").split())
 
 ProgressFn = Callable[[int, int, str, str], None]   # (molecule index, total, stage, message)
 BATCHED_MODES = ("auto", "on", "off")
@@ -718,6 +748,111 @@ def _qm_stage(result: MoleculeResult, cs: confs.ConformerSet, cfg: BuildConfig, 
         log(f"  {result.notes[-1]}")
 
 
+def _rank_step(result: MoleculeResult, cs: confs.ConformerSet, refined: list[ConformerResult], cfg: BuildConfig,
+               solvent: str, device: str, threads: int, clock, should_stop: Callable[[], bool],
+               log: Callable[[str], None], stage: Callable[[str], None]) -> list[ConformerResult]:
+    """The conformers to keep, lowest first by the level that ranks them (``chem.rank``), with ``rank_energy_ev``
+    and ``refine_rel_kcal`` set when a rank step ran; ``result.rank`` and the phase note record it.
+
+    ``rank_method`` "refine" (or a level that cannot run here): RMSD and ``energy_window_kcal`` pruning at the
+    refinement energies, as before RANK-2. Any other level: RMSD pruning only, a single point of every pooled
+    conformer at the rank level, then ``rank_window_kj`` around the rank level's lowest. A failed rank step is noted
+    and the molecule ranked at the refinement level; it never fails the molecule."""
+    from . import rank as rank_mod
+
+    mol = cs.mol
+    numbers = [a.GetAtomicNum() for a in mol.GetAtoms()]
+    ids = [c.conf_id for c in refined]
+    e_kcal = [c.energy_ev * KCAL_PER_EV for c in refined]
+    by_id = {c.conf_id: c for c in refined}
+    steps = result.phase_steps
+    plan = rank_mod.resolve(cfg.rank_method, numbers, result.charge, result.multiplicity, solvent, cfg.qm_method)
+    refine_label = engines.all_engines()[result.method].label if result.method in engines.all_engines() \
+        else result.method
+
+    def at_refinement(why: str = "") -> list[ConformerResult]:
+        if why:
+            plan.notes.append(why)
+            plan.level = "refine"
+        note = rank_mod.summary(plan)
+        if note and note not in result.notes:
+            result.notes.append(note)
+            log(f"  {note}")
+        keep_ids, _ = confs.prune(mol, ids, e_kcal, cfg.energy_window_kcal, cfg.rmsd_threshold)
+        kept = sorted((by_id[i] for i in keep_ids), key=lambda c: c.energy_ev)
+        for c in refined:
+            c.rank_energy_ev = c.refine_rel_kcal = None
+        result.rank = {"method": plan.requested, "level": "refine",
+                       "label": rank_mod.label("refine", solvent, refine_label), "n_pool": len(refined),
+                       "n_kept": len(kept), "window_kcal": float(cfg.energy_window_kcal), "notes": list(plan.notes)}
+        if solvent:
+            steps["rank"] = f"refinement ({steps.get('refine', 'gas')})"
+        return kept
+
+    if plan.level == "refine":
+        return at_refinement()
+    stage("rank")
+    t0 = time.perf_counter()
+    keep_ids, _ = confs.prune(mol, ids, e_kcal, None, cfg.rmsd_threshold)      # duplicates only: no window here
+    pool = sorted((by_id[i] for i in keep_ids), key=lambda c: c.energy_ev)
+    level_label = rank_mod.label(plan.level, solvent, refine_label, cfg.qm_method)
+    clock.start("rank", engine=level_label, n_in=len(pool))
+    log(f"  rank: {len(pool)} conformer(s) at {level_label}")
+    try:
+        if plan.level == "qm":
+            ranked = rank_mod.qm_ranked(result, cs, pool, cfg, threads=threads, should_stop=should_stop, log=log)
+        else:
+            cache = rank_mod.SinglePointCache()
+            try:
+                ranked = rank_mod.compute(plan.level, mol, pool, charge=result.charge,
+                                          multiplicity=result.multiplicity, solvent=solvent,
+                                          refine_method=result.method, device=device, threads=threads, cache=cache,
+                                          should_stop=should_stop, log=log, job_name=result.input.id)
+            finally:
+                cache.close()
+    except Cancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the rank step falls back to the refinement level, noted
+        clock.abort("failed")
+        first = str(exc).splitlines()[0][:300] if str(exc) else ""
+        return at_refinement(f"rank {plan.level}: failed ({type(exc).__name__}: {first}); ranked at the refinement "
+                             "level")
+    energies = {cid: e for cid, e in ranked.energies_ev.items() if e is not None}
+    for note in ranked.notes:
+        if note not in result.notes:
+            result.notes.append(note)
+    if not energies:
+        clock.abort("failed")
+        return at_refinement(f"rank {plan.level}: no conformer got an energy; ranked at the refinement level")
+    kept_ids = rank_mod.window_keep(energies, cfg.rank_window_kj)
+    e_ref0 = pool[0].energy_ev
+    for c in refined:
+        c.rank_energy_ev = ranked.energies_ev.get(c.conf_id)
+        c.refine_rel_kcal = (c.energy_ev - e_ref0) * KCAL_PER_EV
+    kept = [by_id[i] for i in kept_ids]
+    seconds = time.perf_counter() - t0
+    result.timings["rank"] = seconds
+    result.rank = rank_mod.record(plan, pool, ranked, kept_ids, cfg.rank_window_kj, solvent=solvent,
+                                  refine_label=refine_label, qm_method=cfg.qm_method, seconds=seconds, threads=threads)
+    result.rank["qm_done"] = ranked.qm_done
+    note = rank_mod.summary(plan)
+    if note and note not in result.notes:
+        result.notes.append(note)
+        log(f"  {note}")
+    if solvent:
+        steps["rank"] = level_label
+        if ranked.qm_done and result.qm is not None:
+            qm_solvent = result.qm.get("solvent") or ""
+            steps["qm"] = (f"PCM({qm_solvent})" if qm_solvent else "gas (see the QM notes)") + " (the rank step)"
+    r = result.rank
+    log(f"  rank: {len(kept)} of {len(pool)} within {cfg.rank_window_kj:g} kJ/mol; "
+        + (f"the pick changed: refinement's #{r['pick_refine_order'] + 1}, {r['pick_refine_rel_kj']:+.1f} kJ/mol "
+           "above its lowest" if r["pick_changed"] else "the same pick as the refinement")
+        + f" [{seconds:.1f} s]")
+    clock.stop(n_out=len(kept), engine=rank_mod.engine_label(ranked))
+    return kept
+
+
 def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", threads: int = 1,
                  should_stop: Callable[[], bool] = lambda: False,
                  log: Callable[[str], None] = _noop, stage: Callable[[str], None] = _noop) -> MoleculeResult:
@@ -864,18 +999,14 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                                        "conformer pool in every phase)")
             steps["refine"] = solvation_label(method, result.solvent) if result.solvent else _gas_reason(method, solvent)
 
-        # re-prune on refined energies/geometries, rank, weight
-        ids = [c.conf_id for c in refined]
-        e_kcal = [c.energy_ev * KCAL_PER_EV for c in refined]
-        keep_ids, _ = confs.prune(cs.mol, ids, e_kcal, cfg.energy_window_kcal, cfg.rmsd_threshold)
-        by_id = {c.conf_id: c for c in refined}
-        kept = sorted((by_id[i] for i in keep_ids), key=lambda c: c.energy_ev)
-        e0 = kept[0].energy_ev
-        weights = confs.boltzmann_weights([(c.energy_ev - e0) * KCAL_PER_EV for c in kept], cfg.temperature_k)
-        for rank, (c, w) in enumerate(zip(kept, weights)):
-            c.rank, c.rel_kcal, c.weight = rank, (c.energy_ev - e0) * KCAL_PER_EV, float(w)
-        result.conformers = kept
+        # re-prune on refined geometries, rank (the refinement's energies or the rank step's, chem.rank), weight
         result.mol = cs.mol
+        kept = _rank_step(result, cs, refined, cfg, solvent, device, threads, clock, should_stop, log, stage)
+        e0 = kept[0].ranking_energy_ev
+        weights = confs.boltzmann_weights([(c.ranking_energy_ev - e0) * KCAL_PER_EV for c in kept], cfg.temperature_k)
+        for rank, (c, w) in enumerate(zip(kept, weights)):
+            c.rank, c.rel_kcal, c.weight = rank, (c.ranking_energy_ev - e0) * KCAL_PER_EV, float(w)
+        result.conformers = kept
 
         stage("descriptors")
         t = time.perf_counter()
@@ -890,6 +1021,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             if all(d is not None for d in dips):
                 result.descriptors["dipole_debye_boltz"] = float(np.dot(weights, dips))
         result.descriptors["method"] = method
+        result.descriptors["rank_method"] = (result.rank or {}).get("level", "refine")   # the level that ranked
         if method == "mmff" and result.forcefield == "UFF":
             result.descriptors["method"] = "UFF"      # MMFF94s had no parameters: the energies are UFF's
         if method == "mmff" and result.forcefield.startswith("CREST"):
@@ -937,7 +1069,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                                         else _gas_reason(method, solvent))
             result.timings["frequencies"] = time.perf_counter() - t
             clock.stop(n_out=int(bool(done)))
-        if cfg.qm_method:
+        if cfg.qm_method and not (result.rank or {}).get("qm_done"):   # rank level "qm" ran the QM stage
             stage("qm")
             t = time.perf_counter()
             clock.start("qm", engine=f"{cfg.qm_program or 'psi4'} {cfg.qm_method} {cfg.qm_task}",
@@ -952,7 +1084,8 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                        engine=f"{qm_done.get('program') or cfg.qm_program or 'psi4'} "
                               f"{qm_done.get('program_version') or ''} {cfg.qm_method} {cfg.qm_task}".replace("  ", " "))
         result.status = "ok"
-        log(f"  done: {len(kept)} conformer(s), best E = {e0:.5f} eV")
+        log(f"  done: {len(kept)} conformer(s), best E = {kept[0].energy_ev:.5f} eV"
+            + (f" (rank {kept[0].rank_energy_ev:.5f} eV)" if kept[0].rank_energy_ev is not None else ""))
     except Cancelled:
         result.status = "cancelled"
         result.error = "cancelled"

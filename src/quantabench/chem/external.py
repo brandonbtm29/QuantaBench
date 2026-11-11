@@ -72,6 +72,12 @@ PROGRAMS: dict[str, ProgramSpec] = {
                        "https://github.com/grimme-lab/xtb/releases"),
     "crest": ProgramSpec("crest", ("crest",), ("--version",), r"Version (\d[\w.]*)",
                          "Linux/WSL/macOS: conda install -c conda-forge crest (no Windows build: use WSL)"),
+    # g-xTB (chem.eng_gxtb): the official g-xtb build of xtb, also named xtb, so only a path in the settings, the
+    # QUANTABENCH_GXTB variable or a program called gxtb finds it (never the regular xtb on PATH). GPL-3.0: run as
+    # the user's own program, never bundled
+    "gxtb": ProgramSpec("gxtb", ("gxtb",), ("--version",), r"xtb version (\S+(?: \(\w+\))?)",
+                        "the official build from https://github.com/grimme-lab/g-xtb/releases (v2.0.1; the installers' "
+                        "--with-engines fetch it), then: quantabench-cli settings --engine-path gxtb=/path/to/bin/xtb"),
     "mopac": ProgramSpec("mopac", ("mopac", "MOPAC2016"), ("--version",), r"MOPAC version (\S+)",
                          "conda install -c conda-forge mopac, or the installer from https://openmopac.net"),
     "psi4": ProgramSpec("psi4", ("psi4",), ("--version",), r"(\d+\.\d+(?:\.\d+)?)",

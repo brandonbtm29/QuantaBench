@@ -369,7 +369,7 @@ _ENTRIES: tuple[Entry, ...] = (
     ),
     Entry(
         "g-xtb", "g-xTB", _FAMILY_TB,
-        "Grimme's general tight binding (2025, preliminary), fitted toward ωB97M-V; not a QuantaBench engine yet.",
+        "Grimme's general tight binding (2025, preliminary), fitted toward ωB97M-V; the rank step's gas-phase level.",
         "g-xTB (2025) is a tight-binding method from Grimme's group fitted toward ωB97M-V/def2-TZVPPD energies for the "
         "elements H to Lr (Z = 1-103). It keeps the minimal-basis tight-binding form of the GFN methods with new, "
         "charge-dependent terms. The official build of the xtb program runs it with `--gxtb` (`--chrg` and `--uhf` "
@@ -378,15 +378,19 @@ _ENTRIES: tuple[Entry, ...] = (
         "4 kJ/mol of r2SCAN-3c's lowest in 40 of 40 non-fluorinated neutrals and 18 of 20 neutral PFAS. With a "
         "GFN1-xTB CPCM solvation term at the same geometry it did so in water in 38 of 40 neutrals and 12 of 13 PFAS "
         "ions, and in 13 of 17 PFAS ions against ωB97X-D/def2-SVP (docs/VALIDATION.md, RANK-1 and RANK-1b).",
-        "Not yet an engine or a rank level in QuantaBench: the rank step that will use it is BACKLOG RANK-2. Its own "
-        "solvation models (generalized Born `--gbe` and COSMO) are provisional per its README and ranked worse than "
-        "the GFN1-xTB CPCM term (RANK-1). Pin the binary (its SHA-256) for a production run.",
-        "About 0.16 s per single point for neutral PFAS; with the CPCM term about 0.1 % of a ωB97X-D/def2-SVP single "
-        "point for PFAS ions (QuantaBench measured, RANK-1).",
+        "A rank level only (`--rank gxtb`, `gxtb+cpcm`, and `auto` in water), not a refinement engine: QuantaBench "
+        "runs the official build of xtb (`xtb --gxtb`, its own program entry `gxtb`). v2.0.1 is a "
+        "preliminary release whose parameters are still being optimized: QuantaBench records the build's SHA-256 "
+        "with every molecule, and the installers pin it. Its own solvation models (generalized Born `--gbe` and COSMO) "
+        "are provisional per its README and ranked worse than the GFN1-xTB CPCM term (RANK-1), so in water the rank "
+        "step adds that term. The macOS arm64 build ships without libgcc_s.1.1.dylib (install_macos.sh supplies it).",
+        "About 0.1 s per single point for 20-40 atoms on one thread (the program's start included); with the GFN1-xTB "
+        "CPCM term 0.3-1.3 s per conformer (median 0.8), about 0.1 % of a ωB97X-D/def2-SVP single point for PFAS ions "
+        "(QuantaBench measured, RANK-1, RANK-2).",
         "Yes, part of the method.",
-        "Limited and provisional (generalized Born, COSMO); QuantaBench measured it with a GFN1-xTB CPCM term.",
+        "Limited and provisional (generalized Born, COSMO); the rank step adds a GFN1-xTB CPCM term instead.",
         (R_GXTB,),
-        aliases=("gxtb", "--gxtb", "g xtb"),
+        aliases=("gxtb", "--gxtb", "g xtb", "gxtb+cpcm"),
         see_also=("gfn2-xtb", "gfn1-xtb", "conformer-ranking", "pcm"),
     ),
     # ------------------------------------------------------------------ semi-empirical NDDO
@@ -1279,27 +1283,36 @@ _ENTRIES: tuple[Entry, ...] = (
     Entry(
         "conformer-ranking", "Ranking conformers (which level picks the lowest)", _FAMILY_CONCEPTS,
         "Which method decides the lowest conformer: QuantaBench's measured choices by phase and molecule class.",
-        "The pipeline ranks the refined conformers by the refinement method's energies: the lowest conformer, the "
-        "energy window and the Boltzmann weights all follow that ranking, and so does every descriptor taken from "
-        "the lowest conformer. A method can give good geometries and still rank conformers poorly, because conformer "
-        "energy differences are a few kJ/mol and its errors can be larger. QuantaBench measured cheap rankers "
-        "against DFT references on conformer pools of PFAS and non-fluorinated molecules (RANK-1, RANK-1b).",
-        "Choosing the refinement method, and whether a DFT re-rank is needed. Measured picks within 4 kJ/mol of the "
-        "reference's lowest: pure hydrocarbons, every cheap method (GFN2-xTB 12 of 12 in both phases); neutrals in "
-        "the gas phase, AIMNet2 (39 of 40 non-fluorinated, 18 of 20 PFAS) or [[g-xtb|g-xTB]] (40 of 40, 18 of 20); "
-        "molecules in water, g-xTB gas + a GFN1-xTB CPCM term (38 of 40 neutrals, 12 of 13 PFAS ions) "
-        "(docs/VALIDATION.md, RANK-1b).",
+        "After the refinement, the rank step (`--rank`, Settings: the Conformer ranking page) gives every refined "
+        "conformer a single point at the rank level, at its refined geometry. Those energies set the lowest conformer, "
+        "the rank window (30 kJ/mol by default) and the Boltzmann weights, and so every descriptor taken from the "
+        "lowest conformer or the ensemble (dipole, `xtb_*`, frequencies, the QM stage's conformers). Before the rank "
+        "step only RMSD duplicates are pruned, never by refinement energy. A method can give good geometries and "
+        "still rank conformers poorly, because conformer energy differences are a few kJ/mol and its errors can be "
+        "larger. QuantaBench measured cheap rankers against DFT references on conformer pools of PFAS and "
+        "non-fluorinated molecules (RANK-1, RANK-1b), and the rank step reproduces those picks (RANK-2).",
+        "Choosing the rank level. `auto` (the default) ranks by phase: in water [[g-xtb|g-xTB]] gas + a GFN1-xTB "
+        "CPCM ΔG_solv (`gxtb+cpcm`; 38 of 40 neutrals and 12 of 13 PFAS ions within 4 kJ/mol of r2SCAN-3c/PCM), "
+        "falling back to AIMNet2 + that term and then the refinement; in the gas phase AIMNet2 (39 of 40 "
+        "non-fluorinated neutrals, 18 of 20 PFAS), else g-xTB (40 of 40, 18 of 20), else the refinement. `refine` "
+        "keeps the refinement's energies (fine for pure hydrocarbons: GFN2-xTB 12 of 12); `qm` ranks every conformer "
+        "at the QM stage's level (docs/VALIDATION.md, RANK-1b; docs/CHOOSING_METHODS.md).",
         "GFN2-xTB ranks polar molecules poorly in water (16 of 28 polar organics, 14 of 20 neutral PFAS with ALPB) "
         "and PFAS ions no better than a random pick in every solvent model (0 of 13 against r2SCAN-3c, 4 of 17 "
-        "against ωB97X-D/def2-SVP); its 6 kcal/mol window dropped DFT's lowest in 6 of 17 ions (RANK-1). Until the "
-        "rank step (BACKLOG RANK-2) exists, re-rank a wide pool with the QM stage in PCM, with a diffuse basis.",
-        "A single point per conformer at the rank level: about 0.1 % of a DFT single point for g-xTB + CPCM, minutes "
-        "per conformer for DFT.",
+        "against ωB97X-D/def2-SVP); its 6 kcal/mol window dropped DFT's lowest in 6 of 17 ions (RANK-1), so do not "
+        "rank polar molecules with `refine`. No cheap ranker did well on non-fluorinated ions in water (5 of 8, flat "
+        "pools). Where descriptors must be at DFT quality, a QM stage on the rank step's lowest conformers checks it "
+        "(r2SCAN-3c or a diffuse basis in PCM, not def2-SVP; RANK-1b).",
+        "A single point per conformer at the rank level: in water 0.3-1.3 s per conformer on one thread for "
+        "g-xTB + CPCM (most of it the CPCM SCF), about 0.1 % of a DFT single point; in the gas phase 0.1 s for g-xTB "
+        "and 0.01 s for AIMNet2 (after a few seconds to load its model once per process); minutes per conformer for "
+        "DFT (RANK-2).",
         "Not applicable.",
         "In water the rank level needs a solvation term: g-xTB in the gas phase alone picked within 4 kJ/mol in 11 of "
         "17 PFAS ions, with the GFN1-xTB CPCM term 13 (RANK-1).",
         (),
-        aliases=("conformer ranking", "ranking", "rank step", "rank-2", "lowest conformer"),
+        aliases=("conformer ranking", "ranking", "rank step", "rank-2", "lowest conformer", "rank method",
+                 "rank_method", "rank window"),
         see_also=("gfn2-xtb", "aimnet2", "g-xtb", "pcm", "boltzmann"),
     ),
     Entry(
@@ -1452,8 +1465,8 @@ DECISIONS: dict[str, tuple[str, str, str]] = {
         "Ranking the conformers of ions and polar molecules, in any solvent model (RANK-1, RANK-1b)."),
     "gfn1-xtb": ("Halogen bonds, with an extra term.",
                  "The CPCM solvation term of a conformer ranking (RANK-1); the `xtb_*` properties.", ""),
-    "g-xtb": ("", "Ranking conformers, with a GFN1-xTB CPCM term in water (RANK-1, RANK-1b).",
-              "QuantaBench today: not an engine yet (BACKLOG RANK-2)."),
+    "g-xtb": ("", "Ranking conformers: the rank step, gas phase, and with a GFN1-xTB CPCM term in water (RANK-1, "
+                  "RANK-1b).", "Geometries (not a refinement engine here); its own provisional solvation models."),
     "aimnet2": (
         "", "Neutral molecules in the gas phase: geometries and conformer ranking (RANK-1, RANK-1b).",
         "Open shells (a closed-shell model), elements outside its 14, solvent runs (no implicit solvent)."),
@@ -1589,12 +1602,14 @@ COVERAGE: dict[str, Coverage] = {c.key: c for c in (
     Coverage("gfn2-xtb", "GFN2-xTB", Z_H_RN, solvation="ALPB, GBSA, CPCM (tblite, xtb); none in dxtb",
              source="Bannwarth, Ehlert, Grimme, J. Chem. Theory Comput. 2019, 15, 1652 (H to Rn)",
              verified=_XTB_VERIFIED),
-    Coverage("g-xtb", "g-xTB", _z((1, 103)), solvation="limited (generalized Born, COSMO; provisional)",
-             available="not an engine in QuantaBench yet (BACKLOG RANK-2); the official xtb build runs it "
-                       "(`xtb --gxtb`)",
+    Coverage("g-xtb", "g-xTB", _z((1, 103)), solvation="limited (generalized Born, COSMO; provisional); the rank "
+                                                         "step adds a GFN1-xTB CPCM term (Z = 1-86)",
+             available="the rank step only (rank_method gxtb, gxtb+cpcm, auto), not a refinement engine; the "
+                       "official xtb build runs it (`xtb --gxtb`)",
              source="Froitzheim, Müller, Hansen, Grimme, ChemRxiv 2025 (H to Lr, Z = 1-103); grimme-lab/g-xtb README "
                     "(preliminary version; --chrg, --uhf)",
-             verified="not run here: RANK-1 used the official Windows build (v2.0.1)"),
+             verified="QuantaBench ran the v2.0.1 builds for Windows, Linux and macOS arm64 (2026-11-11; the same "
+                      "energies to 1e-12 Eh); elements beyond the test molecules not checked"),
     Coverage("aimnet2", "AIMNet2", Z_AIMNET2, open_shell="no", solvation="none (gas phase)",
              note="validated up to about 100 heavy atoms",
              source="Anstine, Zubatyuk, Isayev, Chem. Sci. 2025, 16, 10228; the aimnet model card (isayevlab."

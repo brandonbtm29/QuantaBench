@@ -1161,6 +1161,12 @@ def grid_build(items: Sequence, cfg, machines: Sequence[str] = (), weights: str 
         if not allow_auto_method:
             raise GridError(msg + " (or pass --allow-auto-method)")
         log("Warning: " + msg)
+    if getattr(cfg, "rank_method", "refine") == "auto" and len(names) > 1:
+        # rank 'auto' picks by phase and falls back when a machine lacks g-xTB or AIMNet2 (chem.rank): each
+        # molecule's rank_level column says which level ranked it
+        log("Note: rank 'auto' needs the same rank engines on every machine (g-xTB and tblite for a solvent, AIMNet2 "
+            "for the gas phase; `quantabench-cli doctor`), or a machine falls back to another level; summary.csv "
+            "rank_level shows the level of each molecule, and --rank fixes one")
     commit = profile.git_commit()
     commits: dict[str, str] = {LOCAL: commit}
     for n in names:

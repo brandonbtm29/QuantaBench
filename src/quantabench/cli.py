@@ -116,6 +116,13 @@ def _doctor(args) -> int:
                 problem = crest.build_problem(info.path)
                 if problem:
                     print(f"    !!  {'':30s} {problem}")
+            if name == "gxtb":           # which g-xTB build (the rank step records it in every molecule's notes)
+                from .chem import eng_gxtb
+
+                b = eng_gxtb.build_info(info)
+                if b is not None:
+                    print(f"        {'':30s} {b.label()}" + ("" if b.known else
+                                                            ": not a pinned build (scripts/fork-packages.json)"))
     py = external.find_python_with("psi4", "psi4_python")
     print(f"    {'OK ' if py else '-- '} {'psi4 Python':30s} {py or 'no interpreter that can import psi4'}")
     print("  Optional      " + ", ".join(f"{k}={'yes' if v else 'no'}" for k, v in rep.optional_packages.items()))
@@ -228,6 +235,7 @@ def _config(args, base=None, **extra):
     overrides = {k: v for k, v in {
         "method": args.method, "ph": getattr(args, "ph", None), "max_conformers": getattr(args, "max_confs", None),
         "refine_top": getattr(args, "refine_top", None), "energy_window_kcal": getattr(args, "window", None),
+        "rank_method": getattr(args, "rank_method", None), "rank_window_kj": getattr(args, "rank_window", None),
         "threads": getattr(args, "threads", None), "gpu": getattr(args, "gpu", None),
         "fmax": getattr(args, "fmax", None), "output_dir": getattr(args, "out", None),
         "protonation_method": getattr(args, "protonation", None), "batched": getattr(args, "batched", None),
@@ -298,7 +306,7 @@ def _build(args) -> int:
     base = None
     if args.resume:  # continue with the science settings the run was started with; options given now still win
         stored = jobs.open_run(args.resume).config
-        known = {k: stored[k] for k in jobs.SCIENCE_FIELDS if k in stored}
+        known = jobs.stored_science(stored)     # a run from before the rank step resumes with rank_method "refine"
         base = replace(BuildConfig.from_settings(settings_mod.load()), **known)
         if "formats" in stored:
             base = replace(base, formats=tuple(stored["formats"]))
@@ -797,6 +805,11 @@ def _update(args) -> int:
     return 0 if res.ok else 1
 
 
+def rank_choices() -> list[str]:
+    # kept in sync with chem.rank.RANK_METHODS by tests/test_rank.py; not imported here (as export_formats)
+    return ["auto", "refine", "gxtb+cpcm", "gxtb", "aimnet2", "aimnet2+cpcm", "qm"]
+
+
 def export_formats() -> list[str]:
     # kept in sync with chem.export.FORMATS by tests/test_cli.py; not imported here so that `doctor`
     # still starts when RDKit or ASE cannot load
@@ -912,7 +925,15 @@ def add_build_science_args(q: argparse.ArgumentParser) -> None:
     q.add_argument("--protonation", choices=["rules", "dimorphite"])
     q.add_argument("--max-confs", type=int)
     q.add_argument("--refine-top", type=int)
-    q.add_argument("--window", type=float, help="energy window, kcal/mol")
+    q.add_argument("--window", type=float, help="energy window at the refinement level, kcal/mol (the force-field "
+                                                "pool keeps it + 4; with --rank refine the refined conformers too)")
+    q.add_argument("--rank", dest="rank_method", choices=rank_choices(),
+                   help="the level that ranks the refined conformers (lowest, window, Boltzmann weights, every "
+                        "descriptor): auto (default: g-xTB + GFN1-xTB CPCM in a solvent, AIMNet2 in the gas phase, "
+                        "falling back when one is not installed), refine (the refinement's energies, as before), "
+                        "gxtb+cpcm, gxtb, aimnet2, aimnet2+cpcm, qm (the --qm level on every conformer)")
+    q.add_argument("--rank-window", dest="rank_window", type=float, metavar="KJ",
+                   help="keep conformers within this of the rank level's lowest, kJ/mol (default 30)")
     q.add_argument("--formats", help="comma list: " + ",".join(export_formats()))
     q.add_argument("--batched", choices=["auto", "on", "off"],
                    help="refine all conformers in one torch batch (auto: only on a GPU)")

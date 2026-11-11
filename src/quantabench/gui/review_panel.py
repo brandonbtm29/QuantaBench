@@ -95,6 +95,10 @@ def apply_changes(win, changes: dict) -> list[str]:
             win.w_refine_top.setValue(int(value))
         elif key == "energy_window_kcal":
             win.w_window.set_stored(float(value))
+        elif key == "rank_method":
+            ok = _set_combo(win.w_rank_method, value)
+        elif key == "rank_window_kj":
+            win.w_rank_window.set_stored(float(value))
         elif key == "qm_method":
             win.w_qm_on.setChecked(bool(value))
             if value:
@@ -123,6 +127,8 @@ def apply_changes(win, changes: dict) -> list[str]:
         win._update_crest_widgets()
         win._update_qm_widgets()
         win._update_engine_info()
+    if hasattr(win, "_update_rank_info"):
+        win._update_rank_info()
     return skipped
 
 
