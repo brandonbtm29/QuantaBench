@@ -855,13 +855,65 @@ thread speed is and the temperature of the PC."
   probably in `Archive.carc`); (6) ambiguous structures (an anion under the CAS numbers of its salts): share
   the result with all its labels in the wide table, or leave it out (now); (7) a full-run timing on NOVA.
 
-### QSAR-1: First real test: the PFAS QSAR cohorts · after SCALE-1 and IMPORT-2
-- Input: the 14,223 molecules of cohorts 1-6 (`data_engineering/Cohort */*.sdf`, CAS-labelled), one run per
-  cohort or one run for all, split across NOVA and the MacBook with `grid build`.
-- Protocol to agree with Brandon: conformers (RDKit or CREST) -> GFN2-xTB or AIMNet2 refinement in water ->
-  QSAR descriptors for all; the QM stage (Psi4, his Spartan level) on a validated subset (VAL-1/VAL-2).
-- Acceptance: one merged table for all 14,223 molecules, no manual recombination, and the overlap with the
-  Spartan results compared.
+### QSAR-1: The PFAS QSAR cohorts in staged batches · b01/b02 staged 2026-11-11 (branch `feat/batches`); runs wait for RANK-2
+Decided 2026-11-11 (Brandon): no single run over all 14,223 molecules (`data_engineering/Cohort */*.sdf`: C4A 9,052,
+C1A 2,492, C5A 930, C1B 409, C4B 376, C3A 341, C2A 331, C2B 193, C3B 80, C6A 19). Batches, each analysed before
+the next. Inputs and selections in `Runs/batches/<batch>/` (input.csv, selection.csv, selection.md, design.json);
+scripts in `scratch/batches/` on NOVA (not in the repository).
+- **Protocol** (`run_batch.ps1`, per batch `run_b01.ps1`, `run_b02.ps1`): scratch/full_run.ps1's settings (RDKit
+  ETKDG 50 + MMFF94s, the 5 lowest refined with GFN2-xTB/tblite, 6 kcal/mol window, `--freq`, `--no-protonate`)
+  plus `--rank auto`; gas, then ALPB water, then `pair`; `grid build --wait --machines brandons-macbook-pro,local
+  --priority background` (work sharing on). Each run goes to `Runs/<date>_<batch>/` with timing.txt, run.json and
+  the grid logs, and ends with the batch's analysis (`analysis/report.md`). The script stops before starting when
+  the installed QuantaBench has no `--rank` (exit 3) or a remote worker is unreachable or on another commit (exit
+  4); `-NoRank` runs without the rank step (smoke tests), `-First N -Phases gas -Machines local` a smoke test.
+- **b01-essential76** (76): every Essential 76 PFAS, as Spartan drew them (its import's canonical SMILES and R/S;
+  CompTox's salt SMILES for 2806-15-7, which has no Spartan structure). Charges drawn: 75 neutral, PFOS
+  (45298-90-6) as the anion; QuantaBench computes 74 neutral and 2 anions (Na removed from 2806-15-7). At pH 7
+  QuantaBench's rules give 27 others charged (`charge_ph7`, a record only; notes where the rules are off:
+  phosphonic acids -1/-2, fluorinated beta-diketones are enolates, the amidine is likely neutral). Flags: 13
+  without a Spartan ωB97X-D reference (6 iodides, 3 silanes, 2 phosphonic acids, the Na salt, PFOS), TFA and PFPrA
+  (Spartan's anti acid), 10 with R/S from Spartan's geometry, 6 that hydrolyze in water.
+  `analyze_b01.py`: `validate` against the E76 import and the v6 table, `conformers compare` against Spartan's
+  ωB97X-D/6-31G* conformers (gas; the 2026-11-06 common-level cache, so only QuantaBench's conformers are
+  computed), the rank step's pick changes, run timings and machine sensors, flagged molecules.
+- **b02-st100** (100, 20 holdout): non-fluorinated, neutral, single-component organics (H C N O S P Cl Br I Si,
+  <= 40 heavy atoms) with a pure-liquid σ at 20-25 °C from PubChem/HSDB (`pubchem targets --window 20,25`, moved
+  to 25 °C), liquid at 1 atm at the record's temperature, within 30 % of the Sugden parachor estimate with a
+  measured density and below 65 mN/m. 199 eligible; 16 functional classes by priority, equal quotas (water
+  filling), compilation-tier values first, a seeded max-min spread over σ and size (seed 20261111); 65 values from
+  compilations, 22 other, 13 CHRIS. Left out: 5 suspect values (water's range, or > 30 % from the Sugden
+  estimate) and 5 compounds that are gases at 1 atm (selection.md lists them). `analyze_b02.py`: σ against α, V,
+  μ, area, polar area (TPSA: the protocol has no QM surfaces) and ratios; Sugden parachor and volume parachor
+  (measured density); the quantum parachor σ = ((a·α + b·μ + c)/V)^4 with and without a polar-area term; 5-fold
+  and leave-class-out CV on the training set, the holdout once; parity plots.
+- The `gamma_25` column of the data_engineering CRC extraction (`Cohort4_Merged_Extraction.csv`) is not usable as a
+  target: a text scrape of the CRC surface-tension pages matched by name prefix, which mixes γ at other
+  temperatures and of other compounds, water's σ and molecular weights (not parachors). `Runs/batches/
+  gamma25_check.md` has the breakdown; b02 uses QuantaBench's PubChem pull instead.
+- **Next batches** (proposal, needs-Brandon): 100 is right for the two checks above, but too small for the rest.
+  - **b03: a stratified 1,000**, a mini-version of the whole list: proportional to cohort x charge class x size bin
+    (<= 10, 11-20, 21-35, > 35 heavy atoms), at least 20 of every cohort x charge class (all of C3B cations, C6A),
+    seeded, without the b01/b02 molecules. About 25-35 min per phase on both machines (the 300-molecule validation
+    took 7.1 min per phase with frequencies; the full list is smaller on average, median 14 heavy atoms, but has
+    1,100 molecules above 35). It checks what 100 cannot: the failure rate per cohort, time and memory limits on
+    the large molecules (about 80 above 35 heavy atoms), the per-size timings that forecast the rest, the rank
+    step on the C3 ions in water, and `validate` against PM6 (neutral cohorts) and B3LYP/C-PCM (C3).
+  - **b04-b08: five tranches of about 2,600**, a seeded stratified partition of the remaining ~12,950, so every
+    tranche is representative (about 15 C3B and 4 C6A molecules each). About 1-1.5 h per phase at full speed,
+    2-3 h for both phases at background priority: one evening or night each. A generic `analyze_tranche.py`
+    (coverage and failures per cohort, timings per size bin, throttling, rank-change rate per phase and charge
+    class, `validate` against v6, descriptor distributions against the earlier tranches, outliers such as
+    imaginary frequencies or dipoles above 30 D) writes the report automatically at the end of each.
+  - Why not 100 throughout: ~140 batches with ~10-15 min of fixed cost each (grid start, Mac sync, merge, pair,
+    analysis, review) and per-batch statistics too thin to compare cohorts. Why not one run: no checkpoint.
+  - Rough total: 14,223 molecules x 7.1 min / 300, scaled by size, is about 3-4 h per phase at full speed on
+    both machines (+5-10 % for the rank step's single points); b03 measures it.
+- Open (needs-Brandon): TFA and PFPrA (recompute Spartan's conformers or leave them out, VAL-2); whether b02's σ
+  should include values of gases above their boiling point (left out now); ids of the baseline cohorts (Spartan
+  labels now, PubChem titles and CAS in selection.csv; QSAR-2); the b03 and tranche sizes above.
+- Acceptance (unchanged): one merged table for all 14,223 molecules, no manual recombination, and the overlap with
+  the Spartan results compared.
 
 ### QSAR-2: Follow-ups from the 325-molecule stress sample (2026-11-05) · ready (decisions: needs-Brandon)
 Fixed on `fix/stress-sample`: metal complexes refused instead of computed without their metal, Hg/Sn bonds
@@ -937,6 +989,9 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   coefficients (via the MIT `chemicals` package) and NIST ThermoML (free bulk download) for pure liquids, and
   curated literature γ(c) data for PFAS (Brusseau 2019 Table S1 sources), each with the same provenance columns
   as the PubChem records.
+  - Done 2026-11-11: the PubChem pull is in `Runs/pubchem-2026-11-05`; `pubchem targets` makes the σ(25 °C) table
+    (step 3 of the data assembly). Its first use is batch b02 of QSAR-1 (100 non-fluorinated organics, 20
+    holdout), whose analysis script fits the parachor baselines and the quantum parachor.
 - Baselines: group-contribution parachor and a parachor fitted on QuantaBench volumes, σ = (Pρ/M)⁴; TEST
   predictions from CompTox.
 - QSPR: α, α/V, vdW volume, SASA, μ, μ²/V, ESP (GIPF) descriptors, polar surface, F/C and fluorinated surface
@@ -980,6 +1035,16 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   - Next: a list of the 436 `different_structure` molecules by cohort for Brandon (curation decision), the 68
     unclassified surface tensions, and a look at whether the 836 stereo differences matter (most PFAS
     descriptors here are stereo-blind).
+- **Parser slips seen while building the b02 targets (2026-11-11; `pubchem targets` repairs or leaves out the
+  surface-tension ones, the parser itself is unchanged):**
+  - "X dynes/cm = Y N/m" and "X dynes/cm; Y Newtons/meter" strings read as Y with the dyn/cm unit (0.025 for 25);
+    HSDB's CRC values printed as "N/m" for mN/m (x1000 too high); a few plain typos (322.4 for 32.24).
+  - Density: CHRIS strings that list several quantities ("Liquid heat capacity = 0.520 BTU/lb-F ...; Saturated
+    vapor density ...") give a "density" from the first number; "Relative density (water = 1): 0.99" is read as
+    1.0; a refractive index (1.515) filed under Density. `pubchem_density_g_cm3` in the enriched table is
+    therefore unreliable for those; b02 takes the median of plain density records instead (scratch).
+  - Fix in `chem.pubchem`: pair each number with its own unit, skip multi-quantity CHRIS strings for Density, and
+    read "Relative density (water = 1): x" as x.
 - **CompTox (CTX API):** the same enrichment by DTXSID (batch POSTs of 1,000; free key): TEST's predicted
   surface tension and the experimental physchem values. Check the property names on the workstation first
   (api-ccte.epa.gov is blocked in the cloud environment).
