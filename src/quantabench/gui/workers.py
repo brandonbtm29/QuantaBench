@@ -29,6 +29,7 @@ class BuildWorker(QObject):
         self.lanes = lanes
         self.run_dir = run_dir
         self._stop = threading.Event()
+        self.control = None          # jobs.BatchControl of a running batch: this machine's pause (DIST-7)
 
     def cancel(self) -> None:
         self._stop.set()
@@ -71,13 +72,17 @@ class BuildWorker(QObject):
             if run_dir is None and inputs is not None and len(inputs) > 1 and self.cfg.write_files:
                 run_dir = pipeline.new_run_dir(self.cfg.output_dir or Settings().output_path(), f"batch_{len(inputs)}")
             if run_dir is not None:
+                from ..dist import control as control_mod
+
                 lanes = self._lanes()
                 in_process = len(lanes) <= 1          # several lanes: this thread only hands out the molecules
+                # this machine's pause (Machines dock, `worker pause`): the batch holds and goes on at resume
+                self.control = jobs.BatchControl(source=control_mod.pause_gate)
                 with priority.thread_lowered(self.cfg.priority) if in_process else contextlib.nullcontext():
                     results, run_dir = jobs.run_resumable(
                         inputs or None, self.cfg, run_dir,
                         progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
-                        on_result=self.molecule_done.emit, lanes=lanes, keep_results=False)
+                        on_result=self.molecule_done.emit, lanes=lanes, keep_results=False, control=self.control)
             else:
                 with priority.thread_lowered(self.cfg.priority):
                     results, run_dir = pipeline.run(
