@@ -157,7 +157,10 @@ compound's (a salt).
 - **Sugden parachor.** σ = (P ρ_l / M)⁴ with P from group contributions (Sugden, Quayle, Mumford-Phillips;
   van Krevelen's group values) and ρ_l measured (ITRC, PubChem) or estimated. Errors are amplified fourfold:
   2 % in P or ρ gives 8 % in σ. The enrichment computes an experimental parachor (`pubchem_parachor`, from a
-  pure-liquid σ and a liquid density within 10 K) to check group-contribution parachors against.
+  pure-liquid σ and a liquid density within 10 K) to check group-contribution parachors against. Every run now
+  writes Sugden's parachor (`parachor_sugden`) and two density estimates (`density_packing_g_cm3`,
+  `density_girolami_g_cm3`), so the baseline needs no measured density ("Density and polarizability estimates"
+  below).
 - **Parachor from QuantaBench volumes.** The parachor is close to additive in volume, so fit P ≈ a + b·V_vdW
   (+ c·α) on compounds with known σ and ρ. That replaces group counting with computed volumes, which works for
   any structure, including the branched and ether PFAS that group tables cover poorly.
@@ -202,9 +205,125 @@ nonlinearity. Report against the parachor and TEST baselines in MAE and RMSE (mN
   separately, with a few descriptors (fluorinated tail volume, head group, counter-ion), following Brusseau's
   molar-volume result. Validate leave-one-out within classes.
 
+## Density and polarizability estimates: the options (DESC-2)
+
+Batch b02 showed why the quantum parachor σ = ((a·α + b·μ + c)/V)⁴ failed: the parachor follows the liquid's molar
+volume V_m (r 0.998), the computed van der Waals volume V is only 50-66 % of V_m, and the minimal-basis xTB
+polarizability tracks size poorly (r 0.69 with the parachor). A parachor model needs a liquid density and a
+polarizability that scales with size. These are the options, with the accuracy the literature reports and what
+QuantaBench measured (docs/VALIDATION.md, DESC-2: densities on 237 PubChem test liquids and 26 fluorinated liquids;
+polarizabilities against Lorentz-Lorenz values from PubChem's n_D and ρ and against ωB97X-D/def2-SVPD).
+
+**Density or molar volume**
+
+| option | what it is | accuracy: literature → here | cost | elements, PFAS | needs, license | in QuantaBench |
+|---|---|---|---|---|---|---|
+| Girolami (J. Chem. Educ. 1994, 71, 962) | relative atom volumes (H 1, Li-F 2, Na-Cl 4, K-Br 5, Rb-I 7.5), +10 % per OH, COOH, NH, amide, sulfoxide or ring, +20 % per sulfone, +7.5 % per fused ring, at most +30 % | RMS 0.049 g/cm³ on 166 liquids → 5.3 % mean error (test set), 6.4 % for liquids with ≥ 3 F, 13 % for P compounds | none (graph) | H-Bi; fluorine is "a second-row atom", no F-specific term | RDKit; a published rule | `density_girolami_g_cm3`, `molar_volume_girolami_cm3` |
+| packing coefficient on the vdW volume (DESC-2) | V_m = N_A V_vdW / k, V_vdW the Bondi volume of the best conformer, k linear in 1/n_heavy, element fractions, H-bond donors, ring and aromatic atoms (14 coefficients, fitted on 831 PubChem liquids) | 2.7 % (237 test liquids); 3.2 % for 26 liquids with ≥ 3 F, 3.8 % for the 11 of them the fit never saw (Girolami 6.8 %), 3.0 % above 1.6 g/cm³ | one grid volume (ms) | H C N O F Si P S Cl Br I; 37 fluorinated liquids in its data | RDKit; in the repository (MIT) | `density_packing_g_cm3`, `molar_volume_packing_cm3` |
+| GCVOL (Elbro, Fredenslund, Rasmussen, Ind. Eng. Chem. Res. 1991, 30, 2576; extended by Ihmels & Gmehling 2003, 42, 408) | group volumes with a temperature polynomial | the papers report percent-level errors for the classes they cover | none (graph) | the original has no fluorinated groups; check the 2003 table for CF2/CF3 before relying on it | the papers' tables, typed in and checked | not implemented: the tables could not be checked in this session |
+| van Krevelen / Bondi group volumes | additive group V_vdW (Bondi 1964) times a packing coefficient | the same idea as the packing model, with tabulated instead of computed volumes | none | Bondi has CF2/CF3 increments | published tables | not implemented: the computed V_vdW does the same job for any structure |
+| ML density models | — | no open, pretrained and independently validated model was found (search 2026-11-11); EPA's TEST (public domain) has a density QSAR whose predictions are on the CompTox Dashboard: use it as an external baseline | — | — | — | — |
+| COSMO volume | the cavity volume of a COSMO calculation (MOPAC PM7, openCOSMO-RS), then a packing correlation like the one above | about as good as the packing model once calibrated (it is a different volume, not more information) | seconds (MOPAC) | MOPAC's elements | MOPAC (Apache-2.0) | not wired: the COSMO volume is not parsed into descriptors |
+| MD of the bulk liquid | NPT simulation of a box of molecules: OpenMM with OpenFF Sage or GAFF2, or LAMMPS | a few percent for organics in published force-field benchmarks (OpenFF fits liquid densities); fluorocarbons are a known weak spot | about 0.5-2 h per molecule on a GPU | the force field's | OpenMM (MIT), OpenFF (MIT), AmberTools | later (the Simulate track) |
+
+**Polarizability**
+
+| option | what it is | accuracy: literature → here | cost | elements, PFAS | needs, license | in QuantaBench |
+|---|---|---|---|---|---|---|
+| GFN2-xTB response (tblite) | finite-field SCF response of the minimal valence basis | 0.69 × DFT (0.41-2.31: too large for Br, I), r 0.57; 0.65 × Lorentz-Lorenz | 7 SCFs (ms-s) | H-Rn | tblite (LGPL-3.0) | `tblite_gfn2_polarizability_iso_A3`, now in every run with tblite (before: only when tblite-gfn2 refined) |
+| GFN1-xTB response (dxtb, tblite) | the same with GFN1-xTB | 0.59 × DFT (0.35-1.47), r 0.72; 0.56 × Lorentz-Lorenz, r 0.85 | 7 SCFs or one autograd pass | H-Rn | dxtb (Apache-2.0) or tblite | `xtb_polarizability_iso_A3` (now also from tblite where dxtb is not installed) |
+| D4 model, EEQ charges (Caldeweyher et al., J. Chem. Phys. 2019, 150, 154122) | sum of atomic reference polarizabilities (TD-DFT) scaled by coordination number and charge | 1.01 × DFT for non-fluorinated, 1.11 × DFT for PFAS (r 0.99); 0.96 × Lorentz-Lorenz, r 0.991 | ms | Z ≤ 86 | PyTorch + tad-dftd4 (Apache-2.0) or the dxtb fork; optional | `polarizability_d4_A3` |
+| Bosque & Sales (J. Chem. Inf. Comput. Sci. 2002, 42, 1154) | α = 0.32 + Σ n_Z α_Z from the composition | 2.3 % on 340 solvents, 1.9 % on 86 test solvents → 2.8 % against Lorentz-Lorenz (696 PubChem liquids), 4.2 % against DFT (PFAS 3.4 %, r 0.996), 4.8 % against 27 CCCBDB experimental values (water 18 % off) | none | C H N O S P F Cl Br I | a published table | `polarizability_bosque_A3` |
+| Wildman-Crippen molar refractivity → α = 3 MR / (4π N_A) (J. Chem. Inf. Comput. Sci. 1999, 39, 868) | atom-type refractivities fitted to measured molar refractivities | 1.7 % against Lorentz-Lorenz (PubChem; it was fitted to that kind of data), 5.0 % against DFT (PFAS 3.5 %, r 0.998), 3.8 % against CCCBDB | none | typed for H C N O F P S Cl Br I (other elements fall into a generic type: no value) | RDKit (BSD) | `polarizability_crippen_A3` |
+| Miller's atomic hybrid polarizabilities (J. Am. Chem. Soc. 1990, 112, 8533) | atom-hybrid components (ahc, ahp) | a few percent for organics | none | C N O S P halogens H by hybridization | a published table | not implemented: the table could not be checked in this session; Bosque-Sales and Crippen cover the same ground |
+| Lorentz-Lorenz from n_D and ρ | the experimental molar refraction, α = 3/(4π N_A)·(n²−1)/(n²+2)·M/ρ | an optical (589 nm) value, 2-4 % above the static one | data | any liquid with both | PubChem records | the reference of the DESC-2 analysis, not a descriptor |
+| DFT in Psi4 (QM stage) | analytic CPKS for RHF/RKS, range-separated hybrids included (ωB97X-D); finite field for meta-GGAs, VV10 and PCM | hybrids with a diffuse basis are within a few percent of experiment; here ωB97X-D/def2-SVPD 0.95 × Lorentz-Lorenz | 3 s to 8 min per molecule of 3-26 atoms at 8 threads (48 in 48 min, DESC-2) | H-Rn with def2 bases; anions need diffuse functions (def2-SVPD, aug-cc-pVDZ) and, in water, the finite field (PCM) | Psi4 (LGPL-3.0) | `--qm wb97x-d/def2-svpd` → `qm_polarizability_iso_A3` |
+| ML polarizability models | — | AIMNet2 gives no α; research models for QM9-size molecules exist, none is packaged and validated for PFAS | — | — | — | — |
+| Spartan's EST_POLARIZ | Spartan's empirical estimate | trends only | — | — | Spartan | read by the Spartan import and `validate` |
+
+**What to use.** For the liquid density, the packing model (2.7 %; about 4 % for fluorinated liquids it was not
+fitted to); Girolami as a graph-only cross-check. For the polarizability, Bosque-Sales or Crippen for absolute
+values (within 3-5 % of experiment and of DFT, r ≥ 0.995, PFAS included), D4 where the elements fall outside them (Si, metals) or
+a geometry dependence matters (it reads about 10 % high for perfluorinated chains), and the xTB responses only as
+relative descriptors or recalibrated. In the b02 surface-tension fits the choice of α moves the cross-validated
+error by about 0.4 mN/m once a volume term is in the model, and the density matters more than the α (below).
+
+### b02 v2: the surface tension with the estimates
+
+`Runs/2026-11-11_b02-st100/analysis/report_v2.md` (script `scratch/batches/analyze_b02_v2.py` on NOVA): the 80
+training molecules of b02, 5-fold and leave-class-out cross-validation, the 20 holdout molecules predicted once at
+the end. Mean absolute errors in mN/m (σ from 16 to 58 mN/m):
+
+| model | needs a measured density | 5-fold CV | leave-class-out | holdout (once) |
+|---|---|---|---|---|
+| training mean | - | 6.13 | 6.21 | 6.37 |
+| Sugden parachor, measured ρ (no fit) | yes | 1.74 | 1.74 | 2.05 |
+| quantum parachor (a·α + b·μ² + e·V + c)/V_m, α Bosque-Sales, measured ρ | yes | 1.65 | 1.79 | 1.39 (19: no Si) |
+| volume parachor (a·V + c)/V_m, measured ρ | yes | 2.60 | 2.63 | - |
+| Sugden parachor, packing ρ (no fit) | no | 3.06 | 3.06 | 3.86 |
+| Sugden recalibrated (a·P + b·μ² + c)/V_m, packing ρ | no | 2.87 | 3.00 | 3.01 |
+| quantum parachor, α GFN1-xTB, packing ρ | no | 3.05 | 3.12 | 3.51 |
+| Sugden parachor, Girolami ρ (no fit) | no | 6.67 | 6.67 | - |
+| first report's best density-free form (ln σ on α/V, μ²/V, ...) | no | 4.65 | - | - |
+
+- **With a measured density** the quantum parachor σ^¼ = (a·α + b·μ² + e·V + c)/V_m (V_m = M/ρ) is as good as
+  Sugden's group parachor: the α hardly matters once the volume term is in (Bosque-Sales 1.65, GFN1-xTB 1.83, D4
+  2.07 in CV). Without the V term, (a·α + b·μ² + c)/V_m fails with every α (CV 7.7 or worse): the parachor is
+  mostly a volume.
+- **With no measured density** every input comes from the structure. The packing density brings the best
+  density-free model from 4.65 (first report, explore_forms.md) to about 2.9 mN/m; Girolami's density is too rough
+  for it (Sugden with Girolami's ρ: 6.7). The error that remains is about four times the density error (2.3 % on
+  b02's liquids), so a better density, not a better α, is the next step.
+
+## Which surface tension values to train on (DESC-2)
+
+PubChem's surface-tension records come from three kinds of reference, and `pubchem targets` ranks them
+(`pubchem_targets.TIERS`): **tier 1**, evaluated compilations (CRC Handbook, Riddick's *Organic Solvents*, Jasper,
+DIPPR, Lange, Yaws, TRC); **tier 2**, other HSDB references (encyclopedias, monographs, dossiers); **tier 3**, the
+U.S. Coast Guard's CHRIS manual (rounded values, some estimated). The evidence from b02 and its candidates
+(`Runs/2026-11-11_b02-st100/analysis/report_v2.md`):
+
+- **One reference per molecule.** Of 371 PubChem molecules with pure-liquid records at 20-30 °C, only one has values
+  from two tiers, so the tiers cannot be compared molecule by molecule from PubChem alone. A second independent
+  source per molecule (Jasper, ThermoML) is what would give the per-molecule spread.
+- **Across molecules, against the Sugden parachor with the measured density** (no fit), on the b02 candidates:
+  tier 1 (67 molecules) 1.9 mN/m mean error and 1 % of values more than 30 % off; tier 2 (74) 2.3 mN/m and 3 %;
+  CHRIS (49) 2.4 mN/m and 10 %. CHRIS carries the gross errors (dipropylamine 6.1 mN/m against a Sugden 21.7).
+- **In cross-validation** the training set (tier 1; tiers 1 + 2; all three, as b02 did) changes the error on the
+  tier-1 values by at most 0.15 mN/m, within the noise of 80 molecules, once the screens below have removed the gross
+  errors.
+- **The 20 → 25 °C correction** (half of b02's values were measured at 20 °C; the molecule's own dσ/dT where its
+  records span ≥ 10 K, else −0.1 mN/m per K) lowers the cross-validated error by about 0.1 mN/m for every model with
+  a measured density: keep it.
+- **The five gases** b02 left out (methylamine, dimethylamine, ethylamine, chloromethane, bromoethene: they boil
+  below the record's temperature) are saturated-liquid values that the Sugden parachor reproduces within 0-3 mN/m;
+  adding them changes the cross-validated error by less than 0.1 mN/m. They are not wrong, only not liquids at
+  1 atm: leave them out of a 25 °C, 1 atm target set.
+
+**Recommendation.** Train on tiers 1 and 2, after the two screens (a value in water's range, ≥ 65 mN/m, for an
+organic liquid; a value more than 30 % from the Sugden estimate with the measured density) and the 20 → 25 °C
+correction. Keep CHRIS values as a separate check set, and use one in training only where a class has no other
+value. Add Jasper's coefficients next (below), so that most molecules get a second, independent value and a spread.
+
+**Other sources and how to get them.**
+- **Jasper 1972** (J. Phys. Chem. Ref. Data 1, 841-1010): the standard evaluated σ(T) compilation, about 2,200 pure
+  liquids as linear σ = a − bT with their ranges, perfluoroalkanes and other fluorocarbons included. The PDF is free
+  from NIST's JPCRD reprints; the coefficients are in the MIT-licensed `chemicals` package (`chemicals.interface`,
+  Jasper's data through Lange's Handbook), with CAS numbers to join on. Cite Jasper with every value.
+- **NIST ThermoML**: free bulk archive (data.nist.gov) of the XML data files of J. Chem. Eng. Data, J. Chem.
+  Thermodyn., Fluid Phase Equilib., Thermochim. Acta and Int. J. Thermophys. since about 2003; each data set states
+  compound, phase, T and method. Parse the XML (for example with choderalab's `thermopyl`) and keep the DOI.
+- **DIPPR 801** (AIChE): recommended σ(T) correlations; a subscription, values may not be redistributed. Through a
+  university license it can validate a model, but it cannot go into a published training table.
+
+**Note for later.** PFAS surfactants (PFCAs longer than C6, PFSAs, their salts) have no pure-liquid σ at 25 °C: their
+target is γ at the CMC of an aqueous solution, model (2) of "Two targets", with the counter-ion and electrolyte
+recorded. Neither the tiers nor the parachor models above apply to it.
+
 ## Open questions
 - Which temperature: 25 °C (TEST, CRC, most PFAS work) or 20 °C (much of Jasper and HSDB)? Recommended: 25 °C,
-  with converted values flagged.
+  with converted values flagged. DESC-2: the correction to 25 °C lowers the cross-validated error of b02's models
+  by about 0.1 mN/m.
 - For PFAS in water (air-water interfaces, foam fractionation, sorption), is γ(c)/γ_CMC the real target, and the
   pure-liquid σ model a stepping stone that validates the descriptors?
 - Is there a university license for DIPPR 801 or TRC Web Thermo Tables (validation only)?

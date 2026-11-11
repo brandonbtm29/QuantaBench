@@ -1075,3 +1075,117 @@ QuantaBench treats g-xTB as missing there, and `auto` ranks water runs with AIMN
 **Limits:** the same as RANK-1 and RANK-1b (single points at GFN2-xTB geometries, at most 10 conformers per pool,
 an electrostatics-only reference). The timings are one machine at idle priority with other work running, 18
 molecules; the review's cost model takes them as its anchor (`advisor.RANK_SP_S`).
+
+## DESC-2: density and polarizability estimates (2026-11-11, `Runs/desc2-2026-11-11`)
+
+The question: which cheap liquid density and polarizability can stand in for a measured density and for the
+minimal-basis xTB polarizability in a parachor-type surface-tension model, PFAS included (b02 found the quantum
+parachor failing on both counts)? Scripts: `scratch/desc2/` and `scratch/batches/analyze_b02_v2.py` on NOVA (not in
+the repository); NOVA's `.venv` with the branch's `chem/estimates.py`, idle priority, at most 8 threads.
+
+**Data.** The PubChem/HSDB records of `Runs/pubchem-2026-11-05` (the QSAR cohorts' pull). Per molecule: the median of
+its plain pure-liquid density records at 10-40 °C, moved to 25 °C at −0.001 g/cm³ per K (CHRIS strings that mix
+heat capacities and lb/ft³, relative and vapour densities, and salts skipped; PubChem's one-line summary density is
+not used: it mixes in CHRIS strings and, for anisole, the refractive index); n_D from refractive-index records whose
+text holds exactly one plausible value (1.2-1.8) at 15-30 °C. Neutral single-fragment structures of C H N O F Si P S
+Cl Br I B, boiling at ≥ 30 °C and melting at ≤ 25 °C where PubChem says (96 liquefied gases and solids left out: a
+liquefied gas has a near-critical density at 25 °C), one row per CID: 1,068 liquids, 37 of them fluorinated. A fixed
+test set (crc32 of the CID mod 5 = 0: 237 liquids, 8 fluorinated) is never fitted; the 831 others train. One
+MMFF94s conformer per molecule (ETKDGv3, seed 7) and its Bondi union volume (grid 0.15 Å), as the descriptors step
+computes it (there at the refined geometry: b02's packing densities from GFN2-xTB geometries have a mean signed
+error of +0.7 % against the measured ones).
+
+**The packing model.** The measured packing coefficient k = N_A V_vdW / V_m has a median of 0.584 (5-95 %: 0.52-0.64).
+Least squares on k, 5-fold CV on the training set (density error, mean absolute %):
+
+| model of k | CV MAE % | median % | fluorinated (29) |
+|---|---|---|---|
+| Girolami's density (no fit) | 5.48 | 4.59 | 10.0 |
+| constant | 5.10 | 4.24 | 10.7 |
+| 1/n_heavy | 4.48 | 3.59 | 10.7 |
+| + F fraction + H-bond donors | 3.94 | 3.15 | 7.9 |
+| + every element fraction | 3.89 | 3.29 | 8.0 |
+| + ring and aromatic atoms (chosen, 14 coefficients) | 2.59 | 1.74 | 7.4 |
+
+The fluorinated CV error is dominated by two wrong records (PFBA 1.025 g/cm³, CRC 1.651; Halon 2402 1.455, CRC
+2.149); the refit leaves out training molecules more than 5 robust SDs from the first fit (8, those two among them).
+The coefficients in `estimates.PACKING` are that training fit. The test set was scored three times while the data
+rules were settled (the first fit, after leaving out the liquefied gases, after one row per CID), each time with the
+model chosen by CV; the numbers below are the last:
+
+| on the test set (237) | MAE % | median % | RMSE g/cm³ | fluorinated (8) | P compounds (7) | esters (50) | halocarbons (24) |
+|---|---|---|---|---|---|---|---|
+| Girolami | 5.34 | 3.89 | 0.088 | 4.5 | 13.2 | 8.0 | 4.8 |
+| packing | 2.67 | 1.87 | 0.065 | 2.8 | 5.1 | 2.1 | 3.2 |
+
+Fluorinated liquids (≥ 3 F) with a plain density record in the pure-liquid or unknown condition class, one per
+structure, the two wrong records left out (validation only):
+
+| subset | n | Girolami MAE % | packing MAE % | packing mean signed % |
+|---|---|---|---|---|
+| all | 26 | 6.4 | 3.2 | +0.2 |
+| not in the packing fit | 11 | 6.8 | 3.8 | −0.8 |
+| ρ ≥ 1.6 g/cm³ | 11 | 4.9 | 3.0 | −0.5 |
+| perfluorocarbons | 4 | 5.4 | 1.6 | −0.1 |
+| fluoro-chloro/bromo-carbons | 7 | 7.0 | 4.5 | +4.2 |
+
+The largest PFAS errors: 1-iodoheptafluoropropane +9 % (iodine), perfluoro(tributylamine) −6 %. FTOHs and
+fluorinated ethers are nearly absent from PubChem's liquid densities (two fluoro alcohols, one ether): the model's
+PFAS coverage rests on 37 fluorinated training and test liquids. On b02's 100 liquids (measured densities of the
+selection, mostly in the PubChem set): Girolami 5.5 %, packing 2.3 %.
+
+**Polarizabilities against Lorentz-Lorenz.** α_LL = 3/(4π N_A)·(n_D² − 1)/(n_D² + 2)·M/ρ from the same PubChem records
+(an optical value, a few percent above the static one): Crippen 1.7 % mean absolute error (mean signed −0.4 %; it was
+fitted to measured refractivities), Bosque-Sales 2.8 % (−1.3 %), D4 5.2 % (−3.9 %), on 696-726 liquids. On the 91 b02
+liquids with n_D the ratios to α_LL are GFN2-xTB 0.65 (r 0.74), GFN1-xTB 0.56 (r 0.85), D4 0.96 (r 0.991), Bosque-Sales
+0.985 (r 0.997), Crippen 0.996 (r 0.999). Against 27 experimental values of NIST's CCCBDB (`tests/test_estimates.py`):
+Bosque-Sales 4.8 % (water 18 % off), Crippen 3.8 %.
+
+**Polarizabilities against DFT.** Psi4 1.9.1, ωB97X-D/def2-SVPD (a basis made for response properties, Rappoport &
+Furche 2010), analytic CPKS through QuantaBench's `psi4_driver.py`, at the gas-phase runs' best conformers; 8 threads,
+idle priority (`scratch/desc2/dft_alpha.py`, `alpha_reference.py`):
+
+48 molecules (34 b02 liquids, 14 neutral Essential-76 PFAS) in 48 min: 3 s for CS2, 1-8 min for 18-26 atoms.
+
+| α | subset | n | MAE % | mean ratio to DFT | ratio range | r | MAE % after one scale factor (leave-one-out) |
+|---|---|---|---|---|---|---|---|
+| GFN2-xTB (tblite) | all | 48 | 44.1 | 0.69 | 0.41-2.31 | 0.57 | 34.5 |
+| GFN1-xTB (dxtb) | all | 48 | 43.7 | 0.59 | 0.35-1.47 | 0.72 | 25.4 |
+| D4 (EEQ) | non-fluorinated | 34 | 2.7 | 1.01 | 0.90-1.10 | 0.995 | 2.7 |
+| D4 (EEQ) | PFAS (≥ 3 F) | 14 | 10.5 | 1.11 | 1.02-1.21 | 0.992 | 3.0 |
+| Bosque-Sales | all (no Si) | 47 | 4.2 | 1.04 | 0.97-1.16 | 0.996 | 2.6 |
+| Bosque-Sales | PFAS | 14 | 3.4 | 1.03 | 1.00-1.08 | 0.998 | 2.1 |
+| Crippen | all (no Si) | 47 | 5.0 | 1.05 | 1.00-1.11 | 0.998 | 1.9 |
+| Crippen | PFAS | 14 | 3.5 | 1.04 | 1.01-1.08 | 0.999 | 1.2 |
+
+ωB97X-D/def2-SVPD itself is 0.95 x Lorentz-Lorenz on the 32 b02 liquids with both (static against optical, and a
+double-zeta basis): the additive estimates sit between it and experiment. GFN2-xTB's response is half of DFT's for
+most molecules and too large for heavy halogens (1,1,2,2-tetrabromoethane 37.3 against 16.2 Å³, dichloromethane
+10.7 against 6.2); GFN1-xTB's is low throughout. Which cheap α to trust: Crippen or Bosque-Sales (r ≥ 0.996 with
+DFT, PFAS included), D4 for other elements with a PFAS rescale, the xTB responses only as relative descriptors.
+Per molecule: `Runs/desc2-2026-11-11/alpha_reference.md`.
+
+**The surface tension of b02 with the estimates** (`Runs/2026-11-11_b02-st100/analysis/report_v2.md`; 80 training
+molecules, the 20 holdout molecules predicted once at the end; mean absolute errors in mN/m):
+
+| model | measured density | 5-fold CV | leave-class-out | holdout |
+|---|---|---|---|---|
+| training mean | - | 6.13 | 6.21 | 6.37 |
+| Sugden parachor, measured ρ (no fit) | yes | 1.74 | 1.74 | 2.05 |
+| quantum parachor (a·α + b·μ² + e·V + c)/V_m, α Bosque-Sales, measured ρ | yes | 1.65 | 1.79 | 1.39 (19: no Si) |
+| volume parachor (a·V + c)/V_m, measured ρ | yes | 2.60 | 2.63 | - |
+| Sugden parachor, packing ρ (no fit) | no | 3.06 | 3.06 | 3.86 |
+| Sugden recalibrated (a·P + b·μ² + c)/V_m, packing ρ | no | 2.87 | 3.00 | 3.01 |
+| quantum parachor, α GFN1-xTB, packing ρ | no | 3.05 | 3.12 | 3.51 |
+| Sugden parachor, Girolami ρ (no fit) | no | 6.67 | 6.67 | - |
+| first report's best density-free form (ln σ on α/V, μ²/V, ...) | no | 4.65 | - | - |
+
+With a measured density the quantum parachor works once V_m replaces V and a volume term is in; the α makes little
+difference (CV: Bosque-Sales 1.65, Crippen 1.76, GFN1 1.83, GFN2 1.96, D4 2.07), and without the volume term every α
+fails (7.7 or worse). With no measured density the packing density takes the best model from 4.65 to 2.9 mN/m (3.0
+on the holdout); the rest is about four times the density error. The target tiers, the 20 → 25 °C correction and the
+gases: docs/SURFACE_TENSION.md, "Which surface tension values to train on".
+
+**Limits.** One density source (PubChem/HSDB), with its record errors; few fluorinated liquids and almost no FTOHs or
+fluorinated ethers; the DFT reference is one functional and a double-zeta basis (def2-SVPD gives polarizabilities a
+few percent below the basis-set limit); the σ models are tested on non-fluorinated liquids only (b02).

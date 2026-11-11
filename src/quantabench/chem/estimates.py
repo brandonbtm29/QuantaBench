@@ -4,7 +4,8 @@ milliseconds, and need no data about the molecule.
 
 Why: a surface tension model of the parachor family, σ = (P/V_m)⁴, needs the liquid's molar volume V_m, which a
 QuantaBench volume is not (the van der Waals volume V_vdW is 50-66 % of V_m, batch b02), and a polarizability
-that tracks size better than the minimal-basis xTB response (GFN2-xTB gives tributyl phosphate 14 Å³; DFT 30).
+that tracks size better than the minimal-basis xTB response (GFN2-xTB gives tributyl phosphate 14 Å³, Bosque-Sales
+27.8; the xTB responses are 0.6-0.7 x DFT, docs/VALIDATION.md, DESC-2).
 docs/SURFACE_TENSION.md, "Density and polarizability estimates", compares these with the other options.
 
 Columns (``descriptors.csv``):

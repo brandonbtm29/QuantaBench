@@ -1668,8 +1668,9 @@ Bosque and Sales fitted average atomic polarizabilities to the experimental pola
 - **Good for:** An absolute polarizability that scales with size, for dispersion terms of a QSPR (α/V, the
   quantum parachor); PFAS included.
 - **Watch out:** QuantaBench measured 2.8 % mean error against Lorentz-Lorenz polarizabilities of 696 PubChem
-  liquids, 3.5 % against ωB97X-D/def2-SVPD (3.7 % for PFAS) and 4.8 % against 27 experimental values (water 18
-  % off) (docs/VALIDATION.md, DESC-2). No value for other elements (Si, B, metals) or isomers' differences.
+  liquids, 4.2 % against ωB97X-D/def2-SVPD (3.4 % for PFAS; r 0.996) and 4.8 % against 27 experimental values
+  (water 18 % off) (docs/VALIDATION.md, DESC-2). No value for other elements (Si, B, metals) or isomers'
+  differences.
 - **Cost:** None.
 - **Dispersion:** Not applicable.
 - **Solvation:** None: a gas-phase molecular property.
@@ -1698,9 +1699,9 @@ is an optical (589 nm) polarizability, a few percent above the static one.
 - **Good for:** Like [Bosque-Sales](#polarizability-bosque), with atom types (hybridization, neighbours)
   instead of plain element counts.
 - **Watch out:** QuantaBench measured 1.7 % against Lorentz-Lorenz values of PubChem liquids (it was fitted to
-  that kind of data), 4.3 % against ωB97X-D/def2-SVPD (3.5 % for PFAS) and 3.8 % against 27 experimental
-  values (docs/VALIDATION.md, DESC-2). Only H, C, N, O, F, P, S, Cl, Br and I have their own types: other
-  elements get no value.
+  that kind of data), 5.0 % against ωB97X-D/def2-SVPD (3.5 % for PFAS; r 0.998) and 3.8 % against 27
+  experimental values (docs/VALIDATION.md, DESC-2). Only H, C, N, O, F, P, S, Cl, Br and I have their own
+  types: other elements get no value.
 - **Cost:** None.
 - **Dispersion:** Not applicable.
 - **Solvation:** None: a gas-phase molecular property.
@@ -1730,7 +1731,7 @@ installed; without them the column is absent.
 - **Avoid for:** Mixing PFAS and other molecules without a rescale (11 % high for PFAS, DESC-2).
 - **Good for:** A geometry- and charge-aware polarizability for every element up to Rn, silicon and metals
   included.
-- **Watch out:** QuantaBench measured 1.02 x DFT (ωB97X-D/def2-SVPD) for non-fluorinated molecules but 1.11 x
+- **Watch out:** QuantaBench measured 1.01 x DFT (ωB97X-D/def2-SVPD) for non-fluorinated molecules but 1.11 x
   DFT for PFAS, and 0.96 x Lorentz-Lorenz (r 0.991) for PubChem liquids (docs/VALIDATION.md, DESC-2): rescale
   it before mixing fluorinated and other molecules. It is not the xTB response ([xTB response polarizability
   (GFN1, GFN2)](#polarizability-xtb)).
@@ -1761,10 +1762,10 @@ the values are well below experiment.
 - **Avoid for:** Absolute polarizabilities: half of DFT's for many molecules (DESC-2).
 - **Good for:** Relative trends within one class, solvent shifts (water − gas), and recalibrated (one scale
   factor per class) when DFT is too expensive.
-- **Watch out:** QuantaBench measured GFN2-xTB at 0.66 x and GFN1-xTB at 0.60 x ωB97X-D/def2-SVPD, with ratios
-  from 0.45 to 1.4 (high for bromine and iodine), and 0.65 x / 0.56 x Lorentz-Lorenz (docs/VALIDATION.md,
-  DESC-2). As the α of a parachor model it fails without a volume term (b02). Gas-phase multiply charged
-  anions can have unphysical values (discarded with a note).
+- **Watch out:** QuantaBench measured GFN2-xTB at 0.69 x and GFN1-xTB at 0.59 x ωB97X-D/def2-SVPD, with ratios
+  from 0.35 to 2.3 (GFN2-xTB too large for bromine and iodine), and 0.65 x / 0.56 x Lorentz-Lorenz
+  (docs/VALIDATION.md, DESC-2). As the α of a parachor model it fails without a volume term (b02). Gas-phase
+  multiply charged anions can have unphysical values (discarded with a note).
 - **Cost:** Six or seven SCFs: milliseconds to a second.
 - **Dispersion:** Not applicable.
 - **Solvation:** The run's solvent (ALPB by default) in the same SCF as the field.
