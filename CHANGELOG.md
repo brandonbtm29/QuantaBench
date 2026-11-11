@@ -2,6 +2,54 @@
 
 ## 0.3.0.dev (unreleased)
 
+### The rank step: g-xTB + CPCM and AIMNet2 rank the conformers, RANK-2 (2026-11-11)
+- **A rank step between the refinement and the descriptors** (`chem/rank.py`): every refined conformer gets a single
+  point at the rank level at its refined geometry, and those energies set the lowest conformer, the window and the
+  Boltzmann weights. Every descriptor taken from the lowest conformer or the ensemble follows it: `dipole_debye_best`
+  and `_boltz`, the 3D `_best`/`_boltz` descriptors, `xtb_*`, the frequencies and the QM stage's `--qm-top`
+  conformers. Before the step the refined conformers are pruned only as RMSD duplicates; the rank window (default
+  30 kJ/mol) prunes after it.
+- **`rank_method`** (BuildConfig, settings `build.rank_method`, `build --rank`, `grid build --rank`, worker job
+  configs, the GUI's new Conformer ranking page): `auto` (the default), `refine` (the refinement's energies and
+  `--window`, as before), `gxtb+cpcm` (g-xTB gas + ΔG_solv = E(GFN1-xTB CPCM) − E(GFN1-xTB gas), tblite's ddX, in the
+  run's solvent), `gxtb`, `aimnet2`, `aimnet2+cpcm`, `qm` (the QM stage's level on every conformer). `auto` ranks by
+  phase, not by fluorine content (RANK-1b): in a solvent `gxtb+cpcm`, else `aimnet2+cpcm`, else `refine`; in the gas
+  phase `aimnet2` where its elements, charge and a closed shell allow, else `gxtb`, else `refine`. A level that cannot
+  run for a molecule falls back with a note. `rank_window_kj` (`--rank-window`, shown in the display unit).
+- **The outputs record it:** `summary.csv` `rank_method`, `rank_level`, `rank_energy_eV`, `rank_pick_changed`,
+  `rank_n_pool`; `descriptors.csv` `rank_method`; per conformer `rank_energy_ev` and `refine_rel_kcal` (summary JSON,
+  the SDF's `QB_RankEnergy_eV`/`QB_RefineRelEnergy_kcal`/`QB_RankLevel`, two new columns in the GUI's conformer
+  table); `<id>_summary.json` `rank` with every pooled conformer's refinement and rank energies, their terms, the
+  pick and the engines; the phase note `rank: g-xTB + CPCM(GFN1, water)`. `energy_ev` stays the refinement's;
+  `rel_kcal` and the weights follow the rank level.
+- **g-xTB** (`chem/eng_gxtb.py`): the official grimme-lab/g-xtb v2.0.1 build of xtb (`xtb --gxtb --chrg Q
+  --norestart`, `--uhf` only for open shells), its own program entry `gxtb` (a plain `xtb` is never taken for it),
+  found through this machine's path in the settings or `QUANTABENCH_GXTB`. Every molecule's `rank` record and the
+  run's telemetry name the build (release, platform, SHA-256 of the executable); `doctor` shows it. A binary that
+  does not start counts as missing. A rank level only, not a refinement engine. GPL-3.0: run as a separate program.
+- **Installers:** `--with-engines` / `-WithEngines` download the platform's g-xTB v2.0.1 build from
+  `scripts/fork-packages.json` ("programs" > "gxtb", pinned by URL and SHA-256) and set it as this machine's path.
+  The macOS arm64 build ships without `libgcc_s.1.1.dylib`; `install_macos.sh` copies conda-forge's from `qb-tools`.
+- **Telemetry:** a `rank` stage (wall and CPU time, the engine with the g-xTB build); `telemetry_runs` records the
+  g-xTB build and the rank settings.
+- **Cache:** g-xTB and tblite single points are cached per conformer in the per-machine cache folder
+  (`rank_singlepoints.sqlite`), so a molecule computed again after an interruption does not redo them.
+- **Resume:** `rank_method` and `rank_window_kj` are science settings (a change is refused unless forced). A run
+  folder from before RANK-2 resumes as `refine`, unchanged: a stored config without `rank_method` ran at the
+  refinement level (`jobs.LEGACY_DEFAULTS`, `jobs.stored_science`).
+- **The review** (ADV-1) judges the level that ranks each molecule. In water the rank step (`rank_method auto`)
+  replaces the DFT re-rank it recommended, and AIMNet2 single points (the rank step) the switch of the refinement
+  method in the gas phase; where no rank engine is installed it says so and keeps the DFT re-rank. The presets set
+  `--rank auto`: Recommended in water no longer runs DFT; Careful checks the rank step's lowest 8 with
+  ωB97X-D/def2-SVPD. New findings for g-xTB + CPCM, AIMNet2 + CPCM, g-xTB and a narrow rank window.
+- Checked: RANK-1b's 136 pools and RANK-1's 8 holdout ions through the rank code path give the benchmark's picks in
+  196 of 196 molecule-levels, with relative energies equal to 2e-9 kJ/mol (docs/VALIDATION.md, "RANK-2 integration
+  check"). In real builds on NOVA the step changed the pick in 6 of 8 PFAS and other ions in water and 6 of 10
+  neutrals in the gas phase.
+- `grid build --rank auto` warns that a machine without the rank engines falls back to another level.
+- The methods guide's g-xTB and conformer-ranking entries, docs/METHODS.md, docs/ENGINES.md ("The rank step",
+  "g-xTB"), docs/CHOOSING_METHODS.md.
+
 ### Run priority and free threads, PRIO-1 (2026-11-09)
 - **Runs give way to what you do on the PC.** A new run priority per machine: `normal`, `low` (the new default)
   or `background`. `low` means below-normal CPU and low I/O priority on Windows (nice 10 and ionice best-effort 7
