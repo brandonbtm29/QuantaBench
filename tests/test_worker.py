@@ -134,7 +134,8 @@ def test_auth_info_and_discovery(make_worker, capsys):
     status, info = raw(w1.url + "/v1/info")
     assert status == 200 and info["name"] == "w1" and info["api"] == worker_mod.API_VERSION
     assert info["quantabench_version"] == __version__ and info["profile"]["address"] == w1.url
-    assert info["queue"] == {"running": [], "queued": [], "paused": False, "max_jobs": 1, "hold": ""}
+    assert info["queue"] == {"running": [], "queued": [], "paused": False, "max_jobs": 1, "hold": "", "pause": None,
+                             "paused_jobs": [], "rejoin": [], "last_wake": None}
     assert TOKEN not in json.dumps(info)
     assert raw(w1.url + "/v1/nothing")[0] == 404
     assert raw(w1.url + "/v1/info", "POST", {})[0] == 405

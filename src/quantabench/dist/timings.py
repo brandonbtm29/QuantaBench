@@ -68,7 +68,7 @@ THROTTLE_CLOCK_FRACTION = 0.85
 THROTTLE_TEMP_C = 85.0
 THROTTLE_MIN_SAMPLES = 2
 CSV_FIELDS = ("run_id", "run_started", "mol_id", "attempt", "lane", *STAGE_FIELDS, *ATTEMPT_FIELDS, *RUN_FIELDS,
-              *LOAD_FIELDS, "run_dir")
+              *LOAD_FIELDS, "run_dir", "duplicate")
 
 _SQL = ("SELECT a.run_id, a.mol_id, a.attempt, a.lane, a.lane_device, a.lane_threads, a.pid, a.dispatch_k, "
         "a.queue_wait_s, a.wall_s AS attempt_wall_s, a.outcome AS attempt_outcome, a.error, a.method AS mol_method, "
@@ -218,6 +218,79 @@ def write_csv(rows: list[dict], path: str | Path) -> Path:
     return path
 
 
+# ------------------------------------------------------------------------------- per machine (DIST-7)
+def grid_duplicates(paths: Iterable[str | Path]) -> set[tuple[str, str]]:
+    """(run folder name, molecule id) of results a grid dropped at its merge (DIST-7: a molecule two machines finished,
+    after one was away and its molecules were given to another; ``grid.json`` ``duplicates``). Grid records are found
+    in the given folders and the grid folders right under them."""
+    out: set[tuple[str, str]] = set()
+    seen: set[str] = set()
+    for p in paths:
+        p = Path(p).expanduser()
+        cands = [p / "grid.json"] if (p / "grid.json").is_file() else []
+        with contextlib.suppress(OSError):
+            cands += sorted(p.glob("*grid*/grid.json"))
+        for g in cands:
+            key = os.path.normcase(os.path.abspath(g))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                data = json.loads(g.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            folders: dict[str, list[str]] = {}
+            for s in data.get("shares") or []:
+                if isinstance(s, dict) and s.get("run_folder"):
+                    folders.setdefault(str(s.get("machine")), []).append(str(s["run_folder"]))
+            for d in data.get("duplicates") or []:
+                if not isinstance(d, dict):
+                    continue
+                for machine in d.get("dropped") or []:
+                    for folder in folders.get(str(machine), []):
+                        out.add((folder, str(d.get("id"))))
+    return out
+
+
+def mark_duplicates(rows: list[dict], dropped: set[tuple[str, str]]) -> int:
+    """Set ``duplicate`` = 1 on the rows of a molecule's dropped result (``grid_duplicates``); returns how many."""
+    n = 0
+    for r in rows:
+        dup = (Path(str(r.get("run_dir") or "")).name, str(r.get("mol_id"))) in dropped
+        r["duplicate"] = 1 if dup else 0
+        n += dup
+    return n
+
+
+def molecules_by_machine(rows: list[dict]) -> dict[str, dict]:
+    """Molecules each machine finished: {machine: {"ok", "failed", "duplicates"}}, a molecule counted once per run on the
+    machine whose result was kept; results a grid dropped as duplicates (``duplicate`` = 1) are counted apart."""
+    final: dict[tuple, tuple[str, str, bool]] = {}
+    for r in rows:
+        out = r.get("attempt_outcome")
+        if out not in ("ok", "failed", "timeout"):
+            continue
+        final[(r.get("run_id"), r.get("mol_id"))] = (r.get("machine") or "?", "ok" if out == "ok" else "failed",
+                                                     bool(r.get("duplicate")))
+    counts: dict[str, dict] = {}
+    for machine, outcome, dup in final.values():
+        c = counts.setdefault(machine, {"ok": 0, "failed": 0, "duplicates": 0})
+        c["duplicates" if dup else outcome] += 1
+    return counts
+
+
+def machine_lines(counts: dict[str, dict]) -> list[str]:
+    if not counts:
+        return []
+    parts = []
+    for m, c in sorted(counts.items(), key=lambda kv: -(kv[1]["ok"] + kv[1]["failed"])):
+        text = f"{m} {c['ok']} ok" + (f", {c['failed']} failed" if c["failed"] else "")
+        if c["duplicates"]:
+            text += f" ({c['duplicates']} also finished first elsewhere: not counted)"
+        parts.append(text)
+    return ["Molecules per machine: " + "; ".join(parts)]
+
+
 # ---------------------------------------------------------------------------------------- summary
 def _is_crest(row: dict) -> bool:
     return row.get("stage") == "conformers" and str(row.get("engine") or "").startswith("crest")
@@ -233,7 +306,7 @@ def summarize(rows: list[dict], crest_power: float | None = None) -> list[dict]:
     p_crest = threads_mod.COST_POWER if crest_power is None else float(crest_power)
     groups: dict[tuple, list[dict]] = {}
     for r in rows:
-        if r.get("outcome") != "ok" or not r.get("stage") or r.get("wall_s") is None:
+        if r.get("outcome") != "ok" or not r.get("stage") or r.get("wall_s") is None or r.get("duplicate"):
             continue
         groups.setdefault((r.get("machine") or "?", r["stage"], r.get("engine") or ""), []).append(r)
     order = {s: i for i, s in enumerate(("prepare", "conformers", "refine", "rank", "descriptors", "properties",
@@ -538,6 +611,7 @@ def _cli(args) -> int:
 
     folders = find_job_tables(paths, log)
     got = read_rows(folders, log)
+    dups = mark_duplicates(got.rows, grid_duplicates(paths))
     print(f"{len(folders)} run folder(s) with a job table, {len(got.runs)} run(s) with timings, "
           f"{len({(r['run_id'], r['mol_id'], r['attempt']) for r in got.rows})} molecule attempt(s), "
           f"{sum(1 for r in got.rows if r.get('stage'))} stage row(s)")
@@ -547,6 +621,9 @@ def _cli(args) -> int:
         print(f"  {d}: could not be read ({why})", file=sys.stderr)
     if got.duplicates:
         print(f"  {got.duplicates} copy(ies) of a run found twice (synced and downloaded): read once")
+    if dups:
+        print(f"  {dups} row(s) of molecules a grid finished on two machines: the result it dropped is marked "
+              "duplicate=1 and left out of the summary")
     if not got.rows:
         return 1
     out = Path(args.out) if args.out else Path(paths[0]).expanduser() / "timings.csv"
@@ -556,6 +633,8 @@ def _cli(args) -> int:
         print(f"Wrote {write_csv(got.rows, out)}")
     except OSError as exc:
         print(f"Could not write {out} ({exc})", file=sys.stderr)
+    for line in machine_lines(molecules_by_machine(got.rows)):
+        print(line)
     for line in summary_lines(summarize(got.rows, args.power)):
         print(line)
     for line in sensor_lines(sensor_summary(got)):
