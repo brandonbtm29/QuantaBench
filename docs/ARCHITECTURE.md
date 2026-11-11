@@ -55,7 +55,8 @@
 | `chem.optimize` | ASE LBFGS/FIRE with cancellation. |
 | `chem.batch_opt` | Batched L-BFGS and FIRE over `[B, N, 3]` torch tensors, batched dxtb and AIMNet2 models, `refine_batched` (drop-in for `pipeline._refine`), VRAM-based batch sizing with halving on out-of-memory. |
 | `chem.vibrations` | Hessian (dxtb autograd or finite differences), Eckart normal modes, IR intensities (km/mol), RRHO/qRRHO thermochemistry (Grimme, *Chem. Eur. J.* 2012, 18, 9955), IR spectra, mode trajectories. |
-| `chem.properties` | GFN1-xTB charges, dipole and polarizability at a fixed geometry. |
+| `chem.properties` | GFN1-xTB charges, dipole and polarizability at a fixed geometry; GFN2-xTB's polarizability (tblite) for runs whose refinement engine gave none. |
+| `chem.estimates` | Cheap estimates in every phase's descriptors step (DESC-2): liquid density and molar volume (Girolami; a packing coefficient on the Bondi volume, fitted to PubChem densities), additive polarizabilities (Bosque-Sales, Wildman-Crippen refractivity), the D4 model's polarizability (optional: PyTorch + tad-dftd4) and Sugden's parachor; no value and a note where a method has no parameters. |
 | `chem.descriptors` | Graph descriptors and 3D ensemble descriptors (best and Boltzmann-weighted). |
 | `chem.conformer_compare` | Two programs' conformer sets (Spartan documents or imports, QuantaBench run folders) joined by constitution and matched by a symmetric heavy-atom RMSD that factors out PFAS sibling-group symmetry, plus torsions and stereo; coverage, same-lowest, search vs ranking at a GFN2-xTB common level (tblite), dipole split (`conformers compare`, `cli_conformers`). |
 | `chem.export` | Per-molecule writers and batch CSV tables; `read_molecule` reads a molecule's folder back into a `MoleculeResult` (every conformer from the SDF). |
@@ -168,7 +169,8 @@ aborts the process).
 <output_dir>/<YYYY-MM-DD_HHMMSS>_<label>/
     summary.csv            one row per molecule: status, error, charge as drawn and computed, multiplicity,
                            removed fragments, method, force field, device, best energy, notes
-    descriptors.csv        one row per molecule: graph + 3D (best/Boltzmann) + xTB + vib_* (frequencies)
+    descriptors.csv        one row per molecule: graph + 3D (best/Boltzmann) + xTB + estimates (density_*, polarizability_*,
+                           parachor_sugden) + vib_* (frequencies)
     jobs.sqlite            batch runs: job table (config, inputs, status, per-molecule summaries), and the
                            timings of each run (telemetry_* tables, chem/telemetry.py; quantabench-cli timings)
     jobs.lock              batch runs: host + pid of the process working on the folder (removed on exit)

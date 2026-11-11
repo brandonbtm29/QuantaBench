@@ -36,6 +36,10 @@ Edit the data there, not this file (a test checks that the two agree).
 - **Optimizers:** [L-BFGS (ASE)](#lbfgs), [FIRE (ASE)](#fire), [Engine's own optimizer](#native-optimizer)
 - **Spartan's levels:** [Spartan B3LYP/6-311+G\*\* (C-PCM water)](#spartan-b3lyp), [Spartan
   ωB97X-D/6-31G\*](#spartan-wb97x-d), [Spartan PM6](#spartan-pm6)
+- **Property estimates:** [Girolami liquid density](#density-girolami), [Packing-coefficient liquid
+  density](#density-packing), [Bosque-Sales additive polarizability](#polarizability-bosque), [Crippen
+  molar-refractivity polarizability](#polarizability-crippen), [D4-model polarizability](#polarizability-d4),
+  [xTB response polarizability (GFN1, GFN2)](#polarizability-xtb), [Sugden parachor](#parachor-sugden)
 - **Concepts:** [Dispersion corrections (D3, D3(BJ), D4, -D)](#dispersion), [Single point vs
   optimization](#single-point), [Boltzmann weighting](#boltzmann), [HOMO and LUMO energies](#homo-lumo),
   [Basis-set superposition error and gCP](#gcp), [Ranking conformers (which level picks the
@@ -1579,6 +1583,235 @@ areas, volumes). Spartan's keyword is plain PM6.
     application to 70 elements. J. Mol. Model. 13, 1173-1213 (2007).
     [doi:10.1007/s00894-007-0233-4](https://doi.org/10.1007/s00894-007-0233-4)
 - **Also found as:** `spartan pm6`, `pm6 (spartan)`
+
+## Property estimates
+
+<a id="density-girolami"></a>
+
+### Girolami liquid density
+
+> A graph-only liquid density from relative atom volumes, for every molecule: `density_girolami_g_cm3`.
+
+Girolami's rule sums relative atomic volumes (H 1, Li-F 2, Na-Cl 4, K-Br 5, Rb-I 7.5, Cs-Bi 9) and divides the
+molar mass by five times the sum, giving g/cm³. The density is raised 10 % for each OH, COOH, primary or
+secondary amine, amide, sulfoxide and ring, 20 % for a sulfone and 7.5 % per ring of a fused system, at most
+30 % in all. QuantaBench writes the density and the molar volume M/ρ (`molar_volume_girolami_cm3`, cm³/mol) of
+every neutral molecule in the descriptors step.
+
+- **Corrects:** The missing liquid density, from the graph alone.
+- **Use for:** A quick density and molar volume where none is measured; a cross-check of the packing density.
+- **Avoid for:** Final densities of fluorinated or phosphorus compounds (6-13 % off, DESC-2).
+- **Good for:** A density where none is measured, as a cross-check of [the packing density](#density-packing),
+  and the molar volume V\_m that a parachor model σ = (P/V\_m)⁴ needs.
+- **Watch out:** QuantaBench measured 5.3 % mean error on 237 PubChem test liquids, 6.4 % on fluorinated
+  liquids (≥ 3 F) and 13 % on phosphorus compounds (docs/VALIDATION.md, DESC-2). Fluorine counts as any
+  second-row atom. Not defined for ions (no value, with a note).
+- **Cost:** None: it reads the molecular graph.
+- **Dispersion:** Not applicable.
+- **Solvation:** None: a pure-liquid property at room temperature.
+- **See also:** [Packing-coefficient liquid density](#density-packing), [Sugden parachor](#parachor-sugden)
+- **References:**
+  - Girolami. A simple "back of the envelope" method for estimating the densities and molecular volumes of
+    liquids and solids. J. Chem. Educ. 71, 962 (1994).
+    [doi:10.1021/ed071p962](https://doi.org/10.1021/ed071p962)
+- **Also found as:** `girolami`, `density_girolami_g_cm3`, `molar_volume_girolami_cm3`, `girolami density`
+
+<a id="density-packing"></a>
+
+### Packing-coefficient liquid density
+
+> Liquid density from the computed van der Waals volume and a fitted packing coefficient:
+> `density_packing_g_cm3`.
+
+The liquid's molar volume is the molecules' van der Waals volume divided by how densely they pack: V\_m = N\_A
+V\_vdW / k. QuantaBench computes V\_vdW with Bondi's radii at the best conformer and takes k (about 0.52-0.64)
+from a linear model in the inverse number of heavy atoms, the fractions of F, Cl, Br, I, Si, S, P, N and O,
+the H-bond donors and the ring and aromatic atoms, fitted on 831 PubChem/HSDB liquid densities near 25 °C
+(DESC-2). It writes the density and `molar_volume_packing_cm3` (cm³/mol) for every neutral molecule.
+
+- **Corrects:** The gap between the van der Waals volume and the liquid's molar volume (V\_vdW is 50-66 % of
+  V\_m), with a packing coefficient fitted to measured densities.
+- **Use for:** V\_m of a parachor model with no measured density, PFAS included (2.7 % mean error, DESC-2).
+- **Avoid for:** Ions, elements it was not fitted for, liquids far from 25 °C and 1 atm.
+- **Good for:** The molar volume of a parachor model when no density is measured, PFAS included; the best of
+  the cheap estimates.
+- **Watch out:** QuantaBench measured 2.7 % mean error on 237 test liquids it was not fitted to, 3.2 % on 26
+  fluorinated liquids (3.8 % on the 11 it was not fitted to) and 3.0 % above 1.6 g/cm³ (docs/VALIDATION.md,
+  DESC-2). Fitted for H, C, N, O, F, Si, P, S, Cl, Br, I only (other elements get no value), on neutral
+  liquids at 1 atm; with non-default radii it computes its own Bondi volume.
+- **Cost:** One grid volume of the best conformer: milliseconds.
+- **Dispersion:** Not applicable.
+- **Solvation:** None: a pure-liquid property at room temperature.
+- **See also:** [Girolami liquid density](#density-girolami), [Sugden parachor](#parachor-sugden)
+- **References:**
+  - Bondi. van der Waals volumes and radii. J. Phys. Chem. 68, 441-451 (1964).
+    [doi:10.1021/j100785a001](https://doi.org/10.1021/j100785a001)
+  - Elbro, Fredenslund, Rasmussen. Group contribution method for the prediction of liquid densities as a
+    function of temperature for solvents, oligomers, and polymers. Ind. Eng. Chem. Res. 30, 2576-2582 (1991).
+    [doi:10.1021/ie00060a011](https://doi.org/10.1021/ie00060a011)
+- **Also found as:** `packing density`, `density_packing_g_cm3`, `molar_volume_packing_cm3`, `packing
+  coefficient`
+
+<a id="polarizability-bosque"></a>
+
+### Bosque-Sales additive polarizability
+
+> Static polarizability from the composition alone: `polarizability_bosque_A3`.
+
+Bosque and Sales fitted average atomic polarizabilities to the experimental polarizabilities of 340 solvents:
+α (Å³) = 0.32 + 1.51 n\_C + 0.17 n\_H + 0.57 n\_O + 1.05 n\_N + 2.99 n\_S + 2.48 n\_P + 0.22 n\_F + 2.16 n\_Cl
++ 3.29 n\_Br + 5.45 n\_I. It ignores structure and charge.
+
+- **Corrects:** The low absolute polarizability of the minimal-basis xTB response.
+- **Use for:** Absolute α for dispersion descriptors (α/V, the quantum parachor).
+- **Avoid for:** Si, B, metals (no parameters); isomers (it sees only the composition).
+- **Good for:** An absolute polarizability that scales with size, for dispersion terms of a QSPR (α/V, the
+  quantum parachor); PFAS included.
+- **Watch out:** QuantaBench measured 2.8 % mean error against Lorentz-Lorenz polarizabilities of 696 PubChem
+  liquids, 4.2 % against ωB97X-D/def2-SVPD (3.4 % for PFAS; r 0.996) and 4.8 % against 27 experimental values
+  (water 18 % off) (docs/VALIDATION.md, DESC-2). No value for other elements (Si, B, metals) or isomers'
+  differences.
+- **Cost:** None.
+- **Dispersion:** Not applicable.
+- **Solvation:** None: a gas-phase molecular property.
+- **See also:** [Crippen molar-refractivity polarizability](#polarizability-crippen), [D4-model
+  polarizability](#polarizability-d4), [xTB response polarizability (GFN1, GFN2)](#polarizability-xtb)
+- **References:**
+  - Bosque, Sales. Polarizabilities of solvents from the chemical composition. J. Chem. Inf. Comput. Sci. 42,
+    1154-1163 (2002). [doi:10.1021/ci025528x](https://doi.org/10.1021/ci025528x)
+  - Miller. Additivity methods in molecular polarizability. J. Am. Chem. Soc. 112, 8533-8542 (1990).
+    [doi:10.1021/ja00179a044](https://doi.org/10.1021/ja00179a044)
+- **Also found as:** `bosque`, `bosque-sales`, `polarizability_bosque_A3`, `additive polarizability`
+
+<a id="polarizability-crippen"></a>
+
+### Crippen molar-refractivity polarizability
+
+> Polarizability from Wildman-Crippen atom-type refractivities: `polarizability_crippen_A3`.
+
+RDKit's Wildman-Crippen molar refractivity MR is a sum of atom-type contributions fitted to measured molar
+refractivities. Lorentz-Lorenz turns it into a polarizability: α = 3 MR / (4π N\_A), 0.3964 Å³ per cm³/mol. It
+is an optical (589 nm) polarizability, a few percent above the static one.
+
+- **Corrects:** The low xTB response, with atom types fitted to measured refractivities.
+- **Use for:** Absolute α where the atom types matter.
+- **Avoid for:** Elements outside H C N O F P S Cl Br I.
+- **Good for:** Like [Bosque-Sales](#polarizability-bosque), with atom types (hybridization, neighbours)
+  instead of plain element counts.
+- **Watch out:** QuantaBench measured 1.7 % against Lorentz-Lorenz values of PubChem liquids (it was fitted to
+  that kind of data), 5.0 % against ωB97X-D/def2-SVPD (3.5 % for PFAS; r 0.998) and 3.8 % against 27
+  experimental values (docs/VALIDATION.md, DESC-2). Only H, C, N, O, F, P, S, Cl, Br and I have their own
+  types: other elements get no value.
+- **Cost:** None.
+- **Dispersion:** Not applicable.
+- **Solvation:** None: a gas-phase molecular property.
+- **See also:** [Bosque-Sales additive polarizability](#polarizability-bosque), [D4-model
+  polarizability](#polarizability-d4)
+- **References:**
+  - Wildman, Crippen. Prediction of physicochemical parameters by atomic contributions. J. Chem. Inf. Comput.
+    Sci. 39, 868-873 (1999). [doi:10.1021/ci990307l](https://doi.org/10.1021/ci990307l)
+- **Also found as:** `crippen`, `wildman-crippen`, `molar refractivity`, `polarizability_crippen_A3`, `crippen
+  mr`
+
+<a id="polarizability-d4"></a>
+
+### D4-model polarizability
+
+> The D4 dispersion model's static polarizability with EEQ charges at the best conformer:
+> `polarizability_d4_A3`.
+
+D4 (the [Dispersion corrections (D3, D3(BJ), D4, -D)](#dispersion) correction) weights TD-DFT reference
+polarizabilities of each element by the atom's coordination number and its electronegativity-equalization
+(EEQ) charge. The sum over atoms is a molecular static polarizability that responds to the environment and the
+charge, with no SCF. QuantaBench computes it with tad-dftd4 (or the copy inside the dxtb fork) when PyTorch is
+installed; without them the column is absent.
+
+- **Corrects:** The low xTB response, with no SCF; responds to geometry and charge.
+- **Use for:** Molecules with elements the additive tables lack (Si, metals).
+- **Avoid for:** Mixing PFAS and other molecules without a rescale (11 % high for PFAS, DESC-2).
+- **Good for:** A geometry- and charge-aware polarizability for every element up to Rn, silicon and metals
+  included.
+- **Watch out:** QuantaBench measured 1.01 x DFT (ωB97X-D/def2-SVPD) for non-fluorinated molecules but 1.11 x
+  DFT for PFAS, and 0.96 x Lorentz-Lorenz (r 0.991) for PubChem liquids (docs/VALIDATION.md, DESC-2): rescale
+  it before mixing fluorinated and other molecules. It is not the xTB response ([xTB response polarizability
+  (GFN1, GFN2)](#polarizability-xtb)).
+- **Cost:** Milliseconds after PyTorch is loaded.
+- **Dispersion:** Not applicable.
+- **Solvation:** None: the gas-phase EEQ charges.
+- **See also:** [Dispersion corrections (D3, D3(BJ), D4, -D)](#dispersion), [Bosque-Sales additive
+  polarizability](#polarizability-bosque), [xTB response polarizability (GFN1, GFN2)](#polarizability-xtb)
+- **References:**
+  - Caldeweyher, Ehlert, Hansen, Neugebauer, Spicher, Bannwarth, Grimme. A generally applicable atomic-charge
+    dependent London dispersion correction. J. Chem. Phys. 150, 154122 (2019).
+    [doi:10.1063/1.5090222](https://doi.org/10.1063/1.5090222)
+- **Also found as:** `polarizability_d4_A3`, `d4 polarizability`, `d4 alpha`, `dftd4 polarizability`
+
+<a id="polarizability-xtb"></a>
+
+### xTB response polarizability (GFN1, GFN2)
+
+> The SCF response of GFN1-/GFN2-xTB to a field: `xtb_polarizability_iso_A3`,
+> `tblite_gfn2_polarizability_iso_A3`.
+
+The static polarizability of the [GFN1-xTB](#gfn1-xtb) and [GFN2-xTB](#gfn2-xtb) Hamiltonians: dxtb's autograd
+or tblite's finite field (six SCFs in ±field), with the run's solvent when it has one. Every run with tblite
+now writes both, whatever engine refined the conformers. The minimal valence basis cannot polarize much, so
+the values are well below experiment.
+
+- **Use for:** Trends within a class and solvent shifts of α.
+- **Avoid for:** Absolute polarizabilities: half of DFT's for many molecules (DESC-2).
+- **Good for:** Relative trends within one class, solvent shifts (water − gas), and recalibrated (one scale
+  factor per class) when DFT is too expensive.
+- **Watch out:** QuantaBench measured GFN2-xTB at 0.69 x and GFN1-xTB at 0.59 x ωB97X-D/def2-SVPD, with ratios
+  from 0.35 to 2.3 (GFN2-xTB too large for bromine and iodine), and 0.65 x / 0.56 x Lorentz-Lorenz
+  (docs/VALIDATION.md, DESC-2). As the α of a parachor model it fails without a volume term (b02). Gas-phase
+  multiply charged anions can have unphysical values (discarded with a note).
+- **Cost:** Six or seven SCFs: milliseconds to a second.
+- **Dispersion:** Not applicable.
+- **Solvation:** The run's solvent (ALPB by default) in the same SCF as the field.
+- **See also:** [GFN1-xTB](#gfn1-xtb), [GFN2-xTB](#gfn2-xtb), [D4-model polarizability](#polarizability-d4),
+  [Bosque-Sales additive polarizability](#polarizability-bosque)
+- **References:**
+  - Bannwarth, Ehlert, Grimme. GFN2-xTB, an accurate and broadly parametrized self-consistent tight-binding
+    quantum chemical method with multipole electrostatics and density-dependent dispersion contributions. J.
+    Chem. Theory Comput. 15, 1652-1671 (2019).
+    [doi:10.1021/acs.jctc.8b01176](https://doi.org/10.1021/acs.jctc.8b01176)
+  - Grimme, Bannwarth, Shushkov. A robust and accurate tight-binding quantum chemical method for structures,
+    vibrational frequencies, and noncovalent interactions of large molecular systems parametrized for all
+    spd-block elements (Z = 1-86). J. Chem. Theory Comput. 13, 1989-2009 (2017).
+    [doi:10.1021/acs.jctc.7b00118](https://doi.org/10.1021/acs.jctc.7b00118)
+- **Also found as:** `xtb polarizability`, `xtb_polarizability_iso_A3`, `tblite_gfn2_polarizability_iso_A3`,
+  `gfn2 polarizability`, `gfn1 polarizability`
+
+<a id="parachor-sugden"></a>
+
+### Sugden parachor
+
+> Sugden's group parachor P, with σ ≈ (P ρ / M)⁴ for a pure liquid: `parachor_sugden`.
+
+The parachor P = M σ^¼ / (ρ\_l − ρ\_v) is nearly additive over atoms and bonds. QuantaBench sums Sugden's
+values as Quayle tabulated them (C 4.8, H 17.1, O 20.0, F 25.7, Cl 54.3, Br 68.0, ...; a double bond 23.2, a
+six-ring 6.1, an ester group 60.0), in cm³ mol⁻¹ (mN/m)^¼. With a liquid density, measured or
+[estimated](#density-packing), it predicts the surface tension with no fit.
+
+- **Use for:** A no-fit surface-tension baseline, with a measured or estimated density.
+- **Avoid for:** Surfactant solutions (γ at the CMC) and ions.
+- **Good for:** A surface-tension baseline for any liquid with C, H, N, O, F, Si, P, S, Cl, Br, I or B.
+- **Watch out:** QuantaBench measured on b02 (80 non-fluorinated liquids): 1.7 mN/m mean error with the
+  measured density, 3.1 with the packing density, 6.7 with Girolami's (docs/SURFACE\_TENSION.md,
+  docs/VALIDATION.md, DESC-2). Errors in P or ρ count four times in σ. Pure liquids only: not the surface
+  tension of a surfactant solution.
+- **Cost:** None: it reads the molecular graph.
+- **Dispersion:** Not applicable.
+- **Solvation:** None: a pure-liquid property.
+- **See also:** [Packing-coefficient liquid density](#density-packing), [Girolami liquid
+  density](#density-girolami)
+- **References:**
+  - Sugden. A relation between surface tension, density, and chemical composition. J. Chem. Soc., Trans. 125,
+    1177-1189 (1924). [doi:10.1039/CT9242501177](https://doi.org/10.1039/CT9242501177)
+  - Quayle. The parachors of organic compounds. An interpretation and catalogue. Chem. Rev. 53, 439-589
+    (1953). [doi:10.1021/cr60166a003](https://doi.org/10.1021/cr60166a003)
+- **Also found as:** `sugden`, `parachor`, `parachor_sugden`
 
 ## Concepts
 

@@ -928,7 +928,8 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   - Rough total: 14,223 molecules x 7.1 min / 300, scaled by size, is about 3-4 h per phase at full speed on
     both machines (+5-10 % for the rank step's single points); b03 measures it.
 - Open (needs-Brandon): TFA and PFPrA (recompute Spartan's conformers or leave them out, VAL-2); whether b02's σ
-  should include values of gases above their boiling point (left out now); ids of the baseline cohorts (Spartan
+  should include values of gases above their boiling point (left out now; DESC-2: Sugden reproduces them within
+  0-3 mN/m and adding them moves the CV error by < 0.1 mN/m, so leaving them out costs nothing); ids of the baseline cohorts (Spartan
   labels now, PubChem titles and CAS in selection.csv; QSAR-2); the b03 and tranche sizes above.
 - Acceptance (unchanged): one merged table for all 14,223 molecules, no manual recombination, and the overlap with
   the Spartan results compared.
@@ -1020,6 +1021,32 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   split).
 - Needs Brandon: the target choice (pure-liquid σ vs γ_CMC first), 20 or 25 °C, and access to DIPPR/TRC for
   validation.
+- Done 2026-11-11 (DESC-2, below): b02's analysis redone with estimated densities and better polarizabilities
+  (`Runs/2026-11-11_b02-st100/analysis/report_v2.md`), and the target tiers compared: train on tiers 1 + 2 after
+  the screens, keep CHRIS as a check set, keep the 20 → 25 °C correction (docs/SURFACE_TENSION.md, "Which surface
+  tension values to train on"). Next: Jasper's coefficients (the `chemicals` package) as a second, independent
+  value per molecule; ThermoML.
+
+### DESC-2: Density and polarizability estimates · done 2026-11-11 (branch `feat/density-polarizability`)
+Why: b02's quantum parachor failed because V_vdW is not the molar volume and the minimal-basis xTB polarizability
+is half of DFT's. `chem/estimates.py` adds, for every molecule and phase: Girolami and packing-coefficient densities
+and molar volumes, Bosque-Sales, Crippen and D4 polarizabilities, Sugden's parachor; the properties step adds
+GFN2-xTB's polarizability where the refinement engine gave none. Validation in docs/VALIDATION.md (DESC-2); the
+options in docs/SURFACE_TENSION.md. Scripts in `scratch/desc2/` and `scratch/batches/analyze_b02_v2.py` on NOVA.
+Follow-ups (ready):
+- **GCVOL** (Elbro 1991, Ihmels & Gmehling 2003): type in and check the group tables, test the CF2/CF3 groups on the
+  fluorinated liquids of `Runs/desc2-2026-11-11/liquids.csv`, and compare with the packing model.
+- **Miller's ahp table** (J. Am. Chem. Soc. 1990, 112, 8533): not checked in this session; add it only if it beats
+  Bosque-Sales and Crippen on the DFT set.
+- **D4 for PFAS:** 11 % above DFT for perfluorinated molecules (1.01 for the others); a per-element rescale fitted on
+  the DFT set, or leave D4 for elements the additive tables lack.
+- **More fluorinated densities:** the packing model saw 37 fluorinated liquids (29 in training). The ITRC table's
+  densities (66 PFAS, with temperatures), CRC values for perfluoroalkanes and FTOHs, and Jasper's density column
+  would test it on PFAS properly; refit with them if they move the F coefficient.
+- **COSMO volume:** parse MOPAC's COSMO cavity volume and area into descriptors (a second volume for the packing fit).
+- **MD densities** (OpenMM + OpenFF Sage/GAFF2): for a check set of PFAS liquids, with the Simulate track.
+- **A DFT polarizability subset of each batch:** `--qm wb97x-d/def2-svpd` on about 50 molecules per batch gives the
+  reference α at about 1-5 min per molecule (8 threads), anions included (diffuse basis; finite field in PCM).
 
 ### PUBCHEM-1: PubChem follow-ups · ready
 - **`build --pubchem-validate`** (not done: it would touch the pipeline's summary row, which other branches are

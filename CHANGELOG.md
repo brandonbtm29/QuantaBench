@@ -38,6 +38,31 @@
 - **The Mac's worker** was found gone on 2026-11-09 because a restart ended its `nohup` process (sleep does not):
   docs/WORKERS.md now says to run it from the LaunchAgent and why.
 
+### Density and polarizability estimates for every molecule, DESC-2 (2026-11-11)
+- **`chem/estimates.py`**, in the descriptors step of every phase (graph or best conformer, milliseconds):
+  `density_girolami_g_cm3` and `molar_volume_girolami_cm3` (Girolami's atom-volume rule), `density_packing_g_cm3`
+  and `molar_volume_packing_cm3` (V_m = N_A V_vdW / k: the Bondi van der Waals volume of the best conformer and a
+  packing coefficient from composition, H-bond donors and rings, fitted to 831 PubChem/HSDB liquid densities near
+  25 °C), `polarizability_bosque_A3` (Bosque & Sales' composition model), `polarizability_crippen_A3`
+  (Wildman-Crippen molar refractivity through Lorentz-Lorenz), `polarizability_d4_A3` (the D4 model with EEQ
+  charges; only where PyTorch and tad-dftd4 or the dxtb fork are installed) and `parachor_sugden` (Sugden's group
+  parachor, Quayle's table). A method with no parameters for an element of the molecule writes no value (an empty
+  cell) and a note; the densities are not defined for ions.
+- **Measured** (docs/VALIDATION.md, DESC-2): densities on 237 PubChem test liquids, 2.7 % mean error for the packing
+  model and 5.3 % for Girolami; on 26 fluorinated liquids (≥ 3 F) 3.2 % and 6.4 %, on the 11 of them the fit
+  never saw 3.8 % and 6.8 %. Polarizabilities against
+  Lorentz-Lorenz values from PubChem's n_D and ρ: Crippen 1.7 %, Bosque-Sales 2.8 %, D4 5.2 % (696-726 liquids);
+  against ωB97X-D/def2-SVPD (Psi4, 48 molecules, 14 of them PFAS): Bosque-Sales 4.2 % and Crippen 5.0 % (r 0.996 and
+  0.998, PFAS included), D4 1.01 x DFT for organics but 1.11 x for PFAS, GFN1-/GFN2-xTB at 0.59 and 0.69 of DFT.
+- **Both xTB polarizabilities in every run:** the properties step adds GFN2-xTB's (`tblite_gfn2_polarizability_*`,
+  tblite, the run's solvent) when the refinement engine gave none, and computes the gas-phase GFN1-xTB properties
+  with tblite where dxtb is not installed.
+- **Methods guide:** a "Property estimates" family (Girolami and packing densities, Bosque-Sales, Crippen, D4 and
+  xTB polarizabilities, Sugden parachor) with what each corrects and when to use it; docs/METHODS.md regenerated.
+- **docs/SURFACE_TENSION.md:** the options for densities and polarizabilities (accuracy, cost, coverage,
+  dependencies, license), which surface tension values to train on (reference tiers, the 20 → 25 °C correction,
+  the gases), and where to get Jasper, ThermoML and DIPPR.
+
 ### The rank step: g-xTB + CPCM and AIMNet2 rank the conformers, RANK-2 (2026-11-11)
 - **A rank step between the refinement and the descriptors** (`chem/rank.py`): every refined conformer gets a single
   point at the rank level at its refined geometry, and those energies set the lowest conformer, the window and the
