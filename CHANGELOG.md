@@ -2,6 +2,19 @@
 
 ## 0.3.0.dev (unreleased)
 
+### PubChem target tables, for the staged QSAR batches (QSAR-1, 2026-11-11)
+- **`quantabench-cli pubchem targets RECORDS --out TABLE`** (`chem/pubchem_targets.py`): one value per molecule
+  from the long-form records of `pubchem enrich --records`, e.g. the pure-liquid surface tension at 25 °C. Records
+  of the wanted condition class with a stated temperature in a window (`--window`, default 20-30 °C), moved to the
+  target with the molecule's own dσ/dT when its records give a plausible one, else -0.1 mN/m per K; one value per
+  reference, references tiered (compilations such as the CRC Handbook and Riddick first, the U.S. Coast Guard's
+  CHRIS manual last) and the median of the best tier. Records to review, estimated values and records without a
+  temperature are left out and counted; surface tensions printed in N/m for mN/m are repaired and flagged. The raw
+  value, its temperature, the correction and the spread over all references stay in the row. `--heading Density`
+  makes a density table the same way.
+- docs/ENGINES.md (PubChem) and docs/SURFACE_TENSION.md (Data assembly); BACKLOG QSAR-1 is now the staged-batch
+  plan.
+
 ### Run priority and free threads, PRIO-1 (2026-11-09)
 - **Runs give way to what you do on the PC.** A new run priority per machine: `normal`, `low` (the new default)
   or `background`. `low` means below-normal CPU and low I/O priority on Windows (nice 10 and ionice best-effort 7

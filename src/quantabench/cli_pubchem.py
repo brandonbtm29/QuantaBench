@@ -1,9 +1,11 @@
-"""Command line for PubChem (``chem.pubchem``, ``chem.pubchem_enrich``): ``pubchem enrich`` and ``pubchem lookup``.
+"""Command line for PubChem (``chem.pubchem``, ``chem.pubchem_enrich``, ``chem.pubchem_targets``): ``pubchem enrich``,
+``pubchem targets`` and ``pubchem lookup``.
 
     quantabench-cli pubchem enrich list.csv --out enriched.csv                     # CAS and/or SMILES columns
     quantabench-cli pubchem enrich RUN_DIR --validate --experimental --out enriched.csv --records experimental.csv
     quantabench-cli pubchem enrich list.csv --offline --out enriched.csv          # cache only, no network
     quantabench-cli pubchem lookup 335-67-1 --experimental                        # one identifier, printed
+    quantabench-cli pubchem targets experimental.csv --out st25.csv --window 20,25  # one sigma(25 °C) per molecule
 
 ``register`` adds the ``pubchem`` command to the parser of ``quantabench.cli``.
 """
@@ -26,6 +28,18 @@ ENRICH_DESCRIPTION = (
     "columns), an SD file, or a QuantaBench run folder / merged tables (summary.csv). Requests stay within "
     "PubChem's policy (<= 5/s, <= 400/min, slower when its throttling header says Yellow/Red) and every answer is "
     "cached on disk, so an interrupted run resumes and a rerun makes no new requests. See docs/SURFACE_TENSION.md.")
+
+
+TARGETS_DESCRIPTION = (
+    "Reads the long-form records of `pubchem enrich --experimental --records` and writes one row per molecule: the "
+    "value at --t (default 25 °C) of one heading (default Surface Tension) in the wanted condition class (default "
+    "pure_liquid), from records with a stated temperature within --window. Each record is moved to --t with the "
+    "molecule's own temperature slope when its records span >= 10 K and the slope is plausible, else the default "
+    "(-0.1 mN/m per K). One value per reference; references are tiered (compilation: CRC Handbook, Riddick, Jasper, "
+    "Daubert & Danner/DIPPR, Lange, Yaws; other; chris: the U.S. Coast Guard manual) and the target is the median "
+    "of the best tier present. The raw value, its temperature, the correction, the spread over all references and "
+    "what was left out (review, estimated, no temperature, outside the window) stay in the row. "
+    "See docs/SURFACE_TENSION.md, Data assembly.")
 
 
 def register(sub) -> None:
@@ -51,6 +65,28 @@ def register(sub) -> None:
     e.add_argument("--limit", type=int, help="only the first N molecules (a trial run)")
     e.add_argument("-q", "--quiet", action="store_true", help="no progress lines")
     e.set_defaults(func=enrich_command)
+
+    tg = ps.add_parser("targets", help="one target value per molecule (e.g. pure-liquid surface tension at 25 °C) "
+                                       "from the --records table",
+                       description=TARGETS_DESCRIPTION)
+    tg.add_argument("records", help="the long-form records CSV of `pubchem enrich --experimental --records`")
+    tg.add_argument("--out", required=True, help="target table to write (CSV, one row per molecule)")
+    tg.add_argument("--heading", default="Surface Tension", help="the property (default: Surface Tension)")
+    tg.add_argument("--class", dest="classes", default="pure_liquid",
+                    help="condition classes to use, comma-separated (default pure_liquid; 'any' for all)")
+    tg.add_argument("--t", dest="target_t", type=float, default=25.0, help="target temperature, °C (default 25)")
+    tg.add_argument("--window", default="20,30", help="temperatures of the records to use, °C (default 20,30)")
+    tg.add_argument("--slope", type=float, help="the temperature slope per K when a molecule's own records do not "
+                                                "give one (default: surface tension -0.1, density -0.001)")
+    tg.add_argument("--slope-range", help="plausible own slopes, per K, as MIN,MAX (default: surface tension "
+                                          "-0.3,-0.02; density -0.003,-0.0002)")
+    tg.add_argument("--include-review", action="store_true", help="also use records marked needs_review")
+    tg.add_argument("--include-estimated", action="store_true", help="also use estimated/calculated values")
+    tg.add_argument("--allow-no-temperature", action="store_true",
+                    help="use records without a stated temperature as if at the target (flagged)")
+    tg.add_argument("--spread-flag", type=float, default=2.0,
+                    help="flag molecules whose references differ by more than this (default 2)")
+    tg.set_defaults(func=targets_command)
 
     lk = ps.add_parser("lookup", help="look one identifier up and print what PubChem has")
     lk.add_argument("identifier", help="CAS RN, name, InChIKey, SMILES or CID:<n>")
@@ -118,6 +154,38 @@ def enrich_command(args) -> int:
         print(f"wrote {rec} ({len(res.records)} record(s))")
     print(res.summary())
     return 1 if res.stopped else 0
+
+
+def _pair(text: str, what: str) -> tuple[float, float]:
+    parts = [p for p in (text or "").replace(";", ",").split(",") if p.strip()]
+    if len(parts) != 2:
+        raise ValueError(f"{what} needs two numbers, e.g. 20,30 (got {text!r})")
+    a, b = (float(p) for p in parts)
+    return (min(a, b), max(a, b))
+
+
+def targets_command(args) -> int:
+    from .chem import pubchem_targets as pt
+
+    try:
+        classes = tuple(c.strip() for c in args.classes.split(",") if c.strip())
+        s = pt.Settings(heading=args.heading, classes=() if classes == ("any",) else classes,
+                        target_t=args.target_t, window=_pair(args.window, "--window"), slope=args.slope,
+                        slope_range=_pair(args.slope_range, "--slope-range") if args.slope_range else None,
+                        include_review=args.include_review, include_estimated=args.include_estimated,
+                        allow_no_temperature=args.allow_no_temperature, spread_flag=args.spread_flag)
+        records = pt.read_records(args.records)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    rows = pt.targets(records, s)
+    if not rows:
+        print(f"error: no {args.heading!r} records in {args.records}", file=sys.stderr)
+        return 1
+    out = pt.write_csv(args.out, rows)
+    print(f"wrote {out}")
+    print(pt.summary(rows))
+    return 0
 
 
 def lookup_command(args) -> int:
