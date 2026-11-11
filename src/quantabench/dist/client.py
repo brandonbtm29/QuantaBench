@@ -986,6 +986,7 @@ class MachineWatch:
         self._t0: dict[str, float] = {}
         self._t1: dict[str, float] = {}
         self._noted: set[str] = set()
+        self.disturbed: set[str] = set()          # paused or away at some point: its rate here is not its speed
 
     # ---------------------------------------------------------------- what follow tells it
     def ok(self, share: Share, st: dict) -> None:
@@ -997,6 +998,7 @@ class MachineWatch:
         share.paused = bool(st.get("machine_paused")) or share.state == "paused"
         if share.paused:
             self.paused.add(m)
+            self.disturbed.add(m)
         elif all(not s.paused for s in self.grid.shares if s.machine == m and s.job_id):
             self.paused.discard(m)
         key = json.dumps(share.counts, sort_keys=True)
@@ -1054,8 +1056,10 @@ class MachineWatch:
         return done / busy if done >= 2 and busy > 0 else None
 
     def rates_per_hour(self) -> dict[str, float]:
+        """Molecules/hour of each machine that ran undisturbed (never paused or away): ``grid.rates``, the
+        ``measured`` weights of the next grid with this protocol."""
         out = {}
-        for m in {s.machine for s in self.grid.shares if s.job_id}:
+        for m in {s.machine for s in self.grid.shares if s.job_id} - self.disturbed:
             r = self.rate(m)
             if r:
                 out[m] = round(r * 3600.0, 1)
@@ -1104,6 +1108,7 @@ class MachineWatch:
             last = self.contact.get(m, self.t_start)
             if now - last > self.away_after_s:
                 self.away[m] = now - (now - last - self.away_after_s)
+                self.disturbed.add(m)
                 for s in open_shares:
                     s.away_since = _now()
                 self.log(f"{m} has not answered for {(now - last) / 60:.1f} min: it is away (a closed laptop?); its "
@@ -1125,7 +1130,7 @@ class MachineWatch:
                 self.log(f"{share.machine} is paused with {pending} molecule(s) not started, and no other machine can "
                          "take them now: they wait for it to resume")
             return
-        ids = self._release(share, pending, "paused")
+        ids = self._release(share, pending, "the other machines (paused here)")
         if not ids:
             return
         gone = set(ids)

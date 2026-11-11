@@ -1067,6 +1067,44 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   surface tension and the experimental physchem values. Check the property names on the workstation first
   (api-ccte.epa.gov is blocked in the cloud environment).
 
+### DIST-7: Machine control: split, budget, pause, a closing laptop · done 2026-11-11 (branch `feat/machine-control`; LaunchAgent on the Mac needs-Brandon)
+Brandon (2026-11-11): "Can we make it a feature about how we balance the machine split and also how many processors /
+much processing is used? ... I'm often opening and closing my laptop throughout the day. Is there a way we include a
+pause button on a machine and the work is redistributed?"
+- Done (docs/WORKERS.md, "Pausing a machine, a closing laptop"; `dist/control.py`, `jobs.BatchControl`,
+  `worker.JobManager`, `client.MachineWatch`):
+  - **Split:** per machine Auto (measured) / Manual / Off in the dock and `machines set --split`; `grid build
+    --weights auto|measured|equal|benchmark|NAME=W`, `--exclude`; learned molecules/hour per protocol in
+    `grid.json` `rates` (the DIST-6 "learned weights"); per-machine counts at the end of a grid and in `timings`.
+  - **Budget:** priority, free threads, max CPU %, lanes, pause on battery per machine from the dock or
+    `machines set`; the priority applied live to running lanes.
+  - **Pause:** drain / now, persisted, CLI, HTTP, dock, this machine's GUI batch and local share; a grid moves the
+    paused machine's unstarted molecules.
+  - **Away and back:** 2 min away, 10 min for the running ones, `--wait` never hangs; sync on return, wake
+    detection (clock jump, missed polls), the synced `grid.json` fallback; first-done merge and deduplicated timings.
+  - **Settings:** three-way merge on save, no-op saves skipped, stamps and SyncThing conflict recovery; workers write
+    their state only to `pause.json` and `machines/status/<name>.json`.
+- Tested: tests/test_machine_control.py (batch hold/drain/now, sequential and lanes; worker pause, restart, sync,
+  wake and lost-contact holds, battery; MachineWatch; end to end: a paused worker and a worker that goes dark mid-run,
+  with duplicates merged once and counted once in the timings; weights; settings merge, conflict recovery; the CLI;
+  live priority), tests/test_gui_machines.py (the dock). On NOVA (2026-11-11, scratch settings, two throwaway
+  workers on localhost, 40 MMFF molecules): pausing nova-t1 after 4 molecules moved its 17 unstarted molecules to
+  nova-t2 (40/40 merged in 57 s); freezing nova-t1's process for 55 s (what a sleep looks like from outside) made it
+  away after 20 s (the test's setting), its 20 unfinished molecules went to nova-t2, it noticed the gap when thawed,
+  the client told it 20 had moved (17 dropped there, 3 it had finished), and the merge kept each of the 3 duplicates
+  once (40/40, 76 s).
+- Left:
+  - needs-Brandon: install the Mac's LaunchAgent (docs/WORKERS.md, Setup on the MacBook, step 3) instead of the
+    `nohup` start, so a restart or logout does not end the worker (found gone on 2026-11-09: a clean stop at 20:10,
+    the Mac rebooted at 20:14, nothing started it again); then close the lid during a grid and check the away/back
+    log lines on both sides.
+  - A real lid close: the freeze test stands in for it; check that macOS's monotonic clock stops during sleep on the
+    M3 (the watcher works either way) and that Tailscale is back before the first poll.
+  - A running lane pool is not resized when its lanes or free threads change; they apply with the next job. A
+    "restart lanes now" (drain, then requeue the job) is a small step on top of the pause.
+  - Raising a run priority live works on Windows only (POSIX cannot lower a nice value without privileges).
+  - With UI-5: "Run on" picks machines from the dock's rows; a tray icon with Pause / Resume on the laptop.
+
 ### DIST-6: Grid weights from measured throughput · done 2026-11-06 (work sharing; learned weights optional)
 - 2026-11-06: **work sharing** instead of learned weights: while `grid build` follows a grid, a machine that
   has finished takes molecules another has not started (`client.WorkSharing`, `POST /v1/jobs/<id>/release`,

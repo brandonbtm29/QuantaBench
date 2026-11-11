@@ -759,6 +759,7 @@ class Job:
     # DIST-7: a hold after this machine slept, or lost its grid client, until the client says what is still ours
     rejoin: dict | None = field(default=None, repr=False)
     last_poll: float = field(default=0.0, repr=False)     # wall time of the grid client's last status request
+    last_sync: float = field(default=0.0, repr=False)     # wall time of the grid client's last sync
     polls: int = field(default=0, repr=False)
     following: bool = field(default=False, repr=False)    # a grid client follows this job (it polls with follow=1)
     live_priority: str = field(default="", repr=False)    # the run priority applied to its lanes while it runs
@@ -1250,6 +1251,7 @@ class JobManager:
                 job.following = bool(following)
             held = job.rejoin is not None
             job.rejoin = None
+            job.last_sync = time.time()
             self._apply_mode(job)
             self._cond.notify_all()
         done = [i for i in revoke if states.get(i) in ("ok", "failed")]
@@ -1273,6 +1275,8 @@ class JobManager:
                 if job.state not in ("running", "queued") or not job.following:
                     continue
                 if job.last_poll and before - job.last_poll > 120.0:
+                    continue
+                if job.last_sync > before:      # the client was quicker than this watcher: it has said already
                     continue
                 job.rejoin = {"since": time.monotonic(), "at": _now(), "why": f"asleep {away_s:.0f} s"}
                 self._apply_mode(job)
@@ -1497,7 +1501,8 @@ class JobManager:
                 tables = self._final_tables(run_dir)
                 self._checkpoint(run_dir)
                 job.state = ("cancelled" if job.cancel_requested else "interrupted" if job.stop.is_set()
-                             else "paused" if left and job.control.mode == "drain" else "done")
+                             else "paused" if left and (job.control.drained or job.control.mode == "drain")
+                             else "done")
             except Exception as exc:
                 job.counts = self._counts(job)
                 job.state, job.error = "failed", f"{type(exc).__name__}: {exc}"

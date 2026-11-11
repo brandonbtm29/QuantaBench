@@ -1347,6 +1347,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                     log("Resumed")
                 if mode == "drain" and not busy_now:
                     log(f"Paused: {len(queue)} molecule(s) not started stay in the job table")
+                    control.drained = True
                     break
             if not stopping and mode == "run" and not interrupting:
                 states, held = None, []

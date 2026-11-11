@@ -411,6 +411,7 @@ class BatchControl:
         self._polled = 0.0
         self.applied_priority: str | None = None    # set by the batch once it applied ``priority``
         self.idle_since: float | None = None        # monotonic time the batch last had nothing running while held
+        self.drained = False                        # the batch returned because of a drain (molecules are left)
 
     def set(self, mode: str | None = None, interrupt: bool | None = None, priority: str | None = None) -> None:
         if mode is not None:
@@ -1044,6 +1045,7 @@ def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, don
                 control.interrupt = False      # nothing runs between molecules: done
             if mode == "drain":
                 log(f"Paused: {len(queue)} molecule(s) not started stay in the job table")
+                control.drained = True
                 break
             if not held_logged:
                 held_logged = True

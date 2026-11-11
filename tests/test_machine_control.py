@@ -247,6 +247,33 @@ def test_worker_pause_now_stops_running_molecules(make_worker, monkeypatch):
     assert (Path(st["run_dir"]) / worker_mod.JOB_FILE).is_file()
 
 
+def test_resume_just_after_a_drain_runs_the_rest(tmp_path, monkeypatch):
+    """A resume that arrives while a drained batch is returning: the job is queued again, never 'done' with molecules
+    left."""
+    started = stoppable(monkeypatch, 0.2)
+    m = worker_mod.JobManager(tmp_path / "runs", "w1", state_dir=tmp_path / "state", awake=False, watch=False)
+    m.start()
+    real = jobs.run_resumable
+    drained: list = []
+
+    def wrapped(*a, **k):
+        out = real(*a, **k)
+        drained.append(k["control"].drained)
+        if len(drained) == 1:
+            m.set_paused(False)
+        return out
+
+    monkeypatch.setattr(jobs, "run_resumable", wrapped)
+    try:
+        job = m.submit(worker_mod.validate_job(client_mod.job_body(inputs(6), dict(CONFIG), "rc"), VERSION))
+        wait_for(lambda: started, what="a start")
+        m.set_paused(True)
+        wait_for(lambda: job.state == "done", timeout=120, what="done")
+        assert drained == [True, False] and job.counts["ok"] == 6 and job.counts["pending"] == 0
+    finally:
+        m.stop(5)
+
+
 def test_paused_worker_stays_paused_across_a_restart(tmp_path, qb_settings, monkeypatch):
     stoppable(monkeypatch, 0.2)
     state, out = tmp_path / "state", tmp_path / "runs"
@@ -341,6 +368,10 @@ def test_lost_contact_and_expiry(tmp_path, monkeypatch):
         m.note_poll(job, True)
         m.on_wake(100.0)
         assert job.rejoin is not None
+        m.sync(job.id, [], following=True)
+        assert job.rejoin is None
+        # the client synced before this machine's watcher noticed the wake: no second hold
+        assert m.on_wake(100.0, asleep_from=time.time() - 100.0) == [] and job.rejoin is None
         m.sync(job.id, [], following=False)
         assert job.rejoin is None and not job.following
     finally:
@@ -455,6 +486,7 @@ def test_machine_watch_paused_away_back(tmp_path):
     w.ok(a, {"state": "running"})
     assert ("sync", "mac", ("m2", "m3", "m4", "m5", "m1")) in calls and "mac" not in w.away and not a.away_since
     assert "m3" not in a.ids and a.n == 6 - 4
+    assert "mac" not in w.rates_per_hour()                 # paused and away here: its rate is not its speed
 
 
 def test_machine_watch_gives_up_without_receivers(tmp_path):

@@ -308,7 +308,7 @@ def machine_lines(s, machine: str, logical: int | None = None) -> list[str]:
     c = s.machine_control_for(machine)
     split = {"auto": "auto (measured speed)", "manual": f"manual weight {c['weight']:g}", "off": "off"}[c["split"]]
     lines = [f"split {split}; run priority {level} ({wp}); free threads {free} ({wf}); lanes {s.lanes_for(machine)}"
-             + ("; pauses on battery" if c["pause_on_battery"] else "; runs on battery too")]
+             + ("" if c["pause_on_battery"] else "; works on battery too (pause_on_battery off)")]
     if logical:
         from .. import priority
 

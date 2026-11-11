@@ -677,6 +677,16 @@ Limits:
   policy keeps a process on the efficiency cores, which would make a CREST run several times slower even on an
   idle Mac. The macOS path is written to Apple's documentation but not yet run on the MacBook.
 
+**Per machine, from anywhere (DIST-7).** The Machines dock's *Processing budget* box and `quantabench-cli machines set
+NAME --priority background --free-threads 6 --lanes auto` (or `--max-cpu 50`, which sets the free threads from the
+machine's thread count: 12 of 24 on NOVA) store another machine's values the same way, with a fresh read and write
+of the settings file. A worker reads its machine's values at job start and re-reads them every 15 s while a job
+runs. A changed **run priority** is applied to the job's running lanes and the programs they started at once
+(`priority.apply_to_pids`): lowering works everywhere, raising only on Windows (on macOS and Linux it applies from the
+next worker start). **Lanes and free threads** apply with the machine's next job (a pause and resume restarts the
+job's lanes too). A job that `grid build --priority` gave its own priority keeps it. docs/WORKERS.md, "Pausing a
+machine, a closing laptop", has the rest.
+
 **Free threads.** With CPU threads = Auto (0, the default), the run's thread budget is the logical threads minus the
 free threads. The `auto` lane plan stays inside that budget, as do `1` (one process) and `N` lanes. Dynamic CREST
 threads never borrow beyond it: whatever a lane borrows comes out of the budget, so the free threads stay free.

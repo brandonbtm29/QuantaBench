@@ -133,6 +133,32 @@ thread speed is and the temperature of the PC."
   (when a stage or molecule started), the run's own CPU share (the run timings' `own_cpu_percent`) against the
   machine's, and a throttling banner from `timings`' rule while a run is going.
 
+## Machines dock: split, budget and pause per machine (DIST-7, 2026-11-11)
+
+Brandon (2026-11-11): "how we balance the machine split and also how many processors / much processing is used ...
+include a pause button on a machine and the work is redistributed?"
+
+- **Today** (`gui.machines_panel`): one row per machine (this computer first, then the registry and the workers
+  that answer).
+  - **Status:** idle, busy, `paused (drain)` or `paused (now)`, "waiting for its grid client after a wake". A worker
+    that does not answer shows what its status file last said: `unreachable, paused (last said)`.
+  - **Split:** *Auto (measured speed)*, *Manual weight* with a weight box (1 = an average Auto machine) or *Off*.
+    This is what `grid build --weights auto` uses, saved per machine at once.
+  - **Share:** the molecules of the current molecule list it would get, e.g. "28 of 40 (70 %)". It needs an
+    explicit method; Auto uses the last grid of the same protocol, else the benchmark.
+  - **Run:** a Pause / Resume button. Its arrow has *Pause now*, which stops the molecules in progress at their
+    next checkpoint. This computer is paused through its pause file, which its worker, a grid build's local share
+    and this window's own batch follow; a worker through its `POST /v1/pause`.
+  - Hardware, throughput (benchmark) and profile age, as before.
+- **Processing budget** box under the table, for the selected machine: run priority (default, normal, low,
+  background), free threads, a *Max CPU* percent that sets the free threads from its thread count, its lane spec,
+  and *Pause its worker while it runs on battery* (on by default). "Save for this machine" writes only that
+  machine's entries (a fresh read and write), and says when they apply: the priority at once to running lanes, lanes
+  and free threads with the next job.
+- **Later:** with UI-5's job dialog, "Run on" picks machines from these rows, and the job monitor shows each share's
+  moves (paused, away, work sharing) next to the sparklines. A tray icon on the laptop with Pause / Resume would save
+  opening the app.
+
 ## Priorities
 
 - **Tier 1:** app shell (UI-1), project document (UI-2), spreadsheet/plots/formulas (UI-3), structure
