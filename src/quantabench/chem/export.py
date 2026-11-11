@@ -72,6 +72,8 @@ def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMAT
             for c in result.conformers:
                 at = mol_to_atoms(mol, c.conf_id)
                 at.info.update(rank=c.rank, energy_eV=c.energy_ev, rel_kcal=c.rel_kcal, weight=c.weight)
+                if c.rank_energy_ev is not None:     # the rank step's energy (chem.rank); rel_kcal follows it
+                    at.info.update(rank_energy_eV=c.rank_energy_ev, refine_rel_kcal=c.refine_rel_kcal)
                 frames.append(at)
             _write_text_format(p, frames, format="extxyz")
         elif fmt == "extxyz":
@@ -87,10 +89,18 @@ def write_molecule(result: MoleculeResult, out_dir: Path, formats=DEFAULT_FORMAT
             w = Chem.SDWriter(str(p))
             for c in result.conformers:
                 mol.SetProp("_Name", f"{stem} conf {c.rank}")
+                ranked = c.rank_energy_ev is not None     # QB_RelEnergy_kcal and the weight follow the rank level
                 for key, val in (("QB_Rank", c.rank), ("QB_Method", result.method), ("QB_Energy_eV", c.energy_ev),
                                  ("QB_RelEnergy_kcal", c.rel_kcal), ("QB_BoltzmannWeight", c.weight),
-                                 ("QB_Converged", int(c.converged))):
+                                 ("QB_Converged", int(c.converged)),
+                                 *((("QB_RankLevel", (result.rank or {}).get("level", "")),
+                                    ("QB_RankEnergy_eV", c.rank_energy_ev),
+                                    ("QB_RefineRelEnergy_kcal", c.refine_rel_kcal)) if ranked else ())):
                     mol.SetProp(key, f"{val:.6f}" if isinstance(val, float) else str(val))
+                if not ranked:
+                    for key in ("QB_RankLevel", "QB_RankEnergy_eV", "QB_RefineRelEnergy_kcal"):
+                        if mol.HasProp(key):
+                            mol.ClearProp(key)
                 w.write(mol, confId=c.conf_id)
             w.close()
         elif fmt == "pdb":

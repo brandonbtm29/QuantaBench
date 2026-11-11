@@ -17,9 +17,10 @@ first time a run opens them, and columns added later are added the same way):
                         temperature and power (``SENSOR_COLUMNS``, ``quantabench.sensors``; NULL where unknown)
     telemetry_attempts  one row per molecule attempt: lane and its threads, CREST threads given and borrowed,
                         queue wait, wall, outcome, the molecule's features, the cost model's prediction
-    telemetry_stages    one row per attempt and stage (prepare, conformers, refine, descriptors, properties,
-                        frequencies, qm, export): engine, threads planned/borrowed/given, wall start and end, CPU
-                        seconds of this process and of the programs it ran, peak memory, conformers in and out
+    telemetry_stages    one row per attempt and stage (prepare, conformers, refine, rank, descriptors, properties,
+                        frequencies, qm, export; rank's engine names the g-xTB build by its SHA-256): engine,
+                        threads planned/borrowed/given, wall start and end, CPU seconds of this process and of the
+                        programs it ran, peak memory, conformers in and out
 
 ``properties`` (the xTB properties) is the part of ``MoleculeResult.timings["descriptors"]`` after the descriptors;
 ``export`` (writing the molecule's files) is not in ``timings``. Times are Unix seconds (``time.time``) and
@@ -360,6 +361,12 @@ def engines_info(cfg) -> dict:
             programs[name] = None if p is None else {"path": p.path, "version": p.version, "source": p.source,
                                                      "via_wsl": p.via_wsl}
     out["programs"] = programs
+    if getattr(cfg, "rank_method", "refine") in ("auto", "gxtb", "gxtb+cpcm"):    # the rank step's g-xTB build
+        with contextlib.suppress(Exception):
+            from . import eng_gxtb
+
+            b = eng_gxtb.build_info()
+            programs["gxtb"] = None if b is None else {**b.to_dict(), "label": b.label()}
     if getattr(cfg, "qm_method", ""):
         with contextlib.suppress(Exception):
             out["psi4_python"] = external.find_python_with("psi4", "psi4_python")
@@ -368,7 +375,8 @@ def engines_info(cfg) -> dict:
 
 #: BuildConfig fields that change what a molecule costs (config_json of telemetry_runs)
 COST_FIELDS = ("method", "conformer_search", "crest_method", "crest_quick", "solvent", "max_conformers",
-               "refine_top", "energy_window_kcal", "rmsd_threshold", "fmax", "max_steps", "optimizer", "batched",
+               "refine_top", "energy_window_kcal", "rank_method", "rank_window_kj", "rmsd_threshold", "fmax",
+               "max_steps", "optimizer", "batched",
                "xtb_properties", "frequencies", "freq_hessian", "qm_method", "qm_task", "qm_top", "qm_properties",
                "qm_frequencies", "qm_cubes", "threads", "gpu", "dxtb_gpu", "memory_budget_gb", "molecule_timeout_s",
                "protonate", "protonation_method", "priority", "free_threads")

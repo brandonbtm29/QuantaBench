@@ -247,8 +247,11 @@ models or what they were intended to correct."
     `MainWindow.request_run` is the Run buttons' entry; `run_build` never asks.
   - User guide: docs/CHOOSING_METHODS.md.
 - Open:
-  - When RANK-2 lands, add `rank_method` to the rules and the presets: g-xTB + GFN1-xTB CPCM replaces the DFT
-    re-rank as the water recommendation, and AIMNet2 the gas one.
+  - Done 2026-11-11 (RANK-2): `rank_method` in the rules and the presets. The ranking rules judge the level that ranks
+    each molecule (`advisor.rank_level`); in water the rank step (g-xTB + GFN1-xTB CPCM) replaces the DFT re-rank as
+    the recommendation, in the gas phase AIMNet2 single points replace switching the refinement method; every preset
+    sets `--rank auto`, and Careful checks the rank step's lowest 8 with DFT. Where no rank engine is installed the
+    old DFT re-rank stays the recommendation.
   - r2SCAN-3c in the QM stage. Psi4 runs -3c methods with an empty basis (`energy('r2scan3c/')`); the stage takes
     'functional/basis'. Then the Careful preset uses it, the level RANK-1b recommends for DFT checks.
   - UI-5's job dialog: the review as its last page before Submit.
@@ -522,17 +525,32 @@ Open (needs-Brandon):
         ions (PCM), +3.7 ± 1.9 for neutrals in the gas phase (against def2-TZVP).
     - Follow-up of RANK-1b: a reference with non-electrostatic solvation (SMD, or IEF-PCM + cavitation/dispersion) for
       surfactant-like hydrocarbon ions, whose pools are flat; until then no cheap ranker is judged on them.
-    - RANK-2 (· ready, next): a rank step in the pipeline (from RANK-1; levels per phase from RANK-1b).
-      - `rank_method` (BuildConfig, settings, `build --rank`): after refinement, single points of every refined
-        conformer at the rank level; the energy window, order, Boltzmann weights and `kept[0]` use those energies,
-        so every descriptor (`dipole_debye_best`, the ensemble, `xtb_*`, the QM stage's `qm_top`) follows the rank
-        level. No energy-window pruning at the refinement level before it (RMSD pruning only).
-      - Levels: `refine` (today), `gxtb+cpcm` (g-xTB gas + tblite GFN1-xTB CPCM ΔG_solv), `aimnet2`, `qm` (the QM
-        stage's level on every kept conformer, then all descriptors from the QM-lowest).
-      - Defaults by phase, not by fluorine content (RANK-1b): `gxtb+cpcm` for every molecule in water, neutrals
-        included; `aimnet2` (or g-xTB) in the gas phase. GFN2 (`refine`) only for pure hydrocarbons.
-      - A g-xTB engine: the official grimme-lab/g-xtb build of xtb (`--gxtb`; its own program entry, since it is a
-        different binary from xtb 6.7.1; record the version and SHA-256, the release is preliminary).
+    - RANK-2 (done 2026-11-11, branch `feat/rank2`; docs/ENGINES.md "The rank step" and "g-xTB"; docs/VALIDATION.md,
+      "RANK-2 integration check"): the rank step in the pipeline (`chem/rank.py`, `pipeline._rank_step`).
+      - `rank_method` (BuildConfig, settings `build.rank_method`, `build --rank`, `grid build`, worker configs, the
+        GUI's Conformer ranking page): `auto` (default), `refine`, `gxtb+cpcm`, `gxtb`, `aimnet2`, `aimnet2+cpcm`,
+        `qm`. After refinement (RMSD pruning only), single points of every refined conformer at the rank level; the
+        rank window (`rank_window_kj`, 30), order, Boltzmann weights and `kept[0]` use them, so every descriptor
+        follows the rank level. `auto`: in water `gxtb+cpcm` > `aimnet2+cpcm` > `refine`; in the gas phase `aimnet2`
+        (its elements, charge, closed shell) > `gxtb` > `refine`; explicit levels fall back to `refine`; all noted.
+      - The default is `auto`; old run folders resume unchanged as `refine` (`jobs.LEGACY_DEFAULTS`), and a change of
+        either rank field is a config mismatch.
+      - g-xTB (`chem/eng_gxtb.py`): program entry `gxtb`, v2.0.1 builds pinned by SHA-256 (Windows, Linux, macOS
+        arm64 and x86-64), the build recorded per molecule and in telemetry; the installers fetch it.
+      - Checked: the rank code path reproduces RANK-1b's g-xTB + CPCM(GFN1), g-xTB and AIMNet2 picks in 196 of 196
+        molecule-levels (relative energies to 2e-9 kJ/mol).
+      - Open:
+        - The macOS arm64 build of g-xTB v2.0.1 lacks `libgcc_s.1.1.dylib`: `install_macos.sh` now copies
+          conda-forge's; report it upstream (Brandon) or wait for a fixed release. Until a machine has it, `auto`
+          there ranks water runs with AIMNet2 + CPCM.
+        - The CPCM term is most of the rank step's cost (about 0.5-0.9 s per conformer on one thread for 20-40
+          atoms, about the GFN2-xTB/ALPB refinement's own time for PFAS ions). Options: fewer conformers into the
+          rank step (the refinement window as a loose pre-filter, e.g. 60 kJ/mol), the gas-phase wavefunction as
+          the CPCM SCF's guess, or more threads per lane for tblite.
+        - A two-level rank: DFT (r2SCAN-3c in PCM, once the QM stage runs -3c methods) on the conformers within the
+          cheap ranker's window only; `qm` today ranks every pooled conformer.
+        - g-xTB as a refinement engine (v2.0.1 has analytic gradients); not needed for ranking.
+        - Settle the cost estimate of the rank step in the review (`advisor.RANK_SP_S`) from run telemetry.
       - For the QSAR ions: g-xTB + CPCM ranks all. Where DFT quality is needed, DFT re-ranks the conformers within
         20-30 kJ/mol of its lowest, in PCM at r2SCAN-3c or with a diffuse basis, not at def2-SVP. First, a random
         ~10 % check subset (~80 lane-hours at r2SCAN-3c) measures the agreement on the real list.

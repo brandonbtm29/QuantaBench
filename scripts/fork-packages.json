@@ -7,7 +7,9 @@
     "package, and --upgrade-packages keeps all of them. packages: requirement strings. only_binary: names passed as",
     "--only-binary (never build from source). find_links: package name -> URL passed as --find-links; point it at",
     "a new release and Update reinstalls that package, even when the version number stays the same.",
-    "Keep this file ASCII: Windows PowerShell 5.1 reads it as ANSI."
+    "Keep this file ASCII: Windows PowerShell 5.1 reads it as ANSI.",
+    "programs: external programs the platform's installer downloads with --with-engines (-WithEngines): url, the",
+    "archive's sha256, the exe inside it and the release; the exe becomes this machine's engine path."
   ],
   "windows": {
     "_why": "FORK-1: dxtb ported to tad-libcint 0.4 (GFN2, polarizability, IR intensities). FORK-2: tblite wheels (PyPI has none for Windows).",
@@ -19,6 +21,16 @@
     "only_binary": ["tblite"],
     "find_links": {
       "tblite": "https://github.com/brandonbtm29/tblite/releases/expanded_assets/qb-v0.8.0-win1"
+    },
+    "programs": {
+      "gxtb": {
+        "_why": "RANK-2: the rank step's g-xTB (rank_method gxtb, gxtb+cpcm, auto), the official grimme-lab/g-xtb v2.0.1 build of xtb, a preliminary release (docs/ENGINES.md). License GPL-3.0 (xtb itself LGPL-3.0): the installer downloads it for you and QuantaBench runs it as a separate program, never bundled. --with-engines (-WithEngines) downloads url, checks sha256 (the archive's; exe_sha256 is the executable's, as chem/eng_gxtb.py KNOWN_BUILDS lists it), unpacks it under the programs folder and sets exe as this machine's gxtb path. Its DLLs sit next to xtb.exe; QuantaBench puts that folder first on PATH when it runs it.",
+        "url": "https://github.com/grimme-lab/g-xtb/releases/download/v2.0.1/xtb-6.7.1-gxtb-140526-windows-x86_64.zip",
+        "release": "v2.0.1",
+        "sha256": "fa6d6491b38d895196e2312c6ce34b74e60cd974f9c01da6c3ee567b3ca41830",
+        "exe": "xtb-bleed-windows/bin/xtb.exe",
+        "exe_sha256": "c2af5f3db91794cc40b5e38712f28f0d24acb9af040abb0bfb627313e926cff6"
+      }
     }
   },
   "macos": {
@@ -37,6 +49,17 @@
         "built_by": "brandonbtm29/crest Actions run 42295799792 (qb-macos, fork commit 12eb61d), artifact crest-macos-arm64, released unchanged as qb-v3.0.2-macos1 on 2026-11-07",
         "sha256": "47ba788333b7d89f63c54565330683fd7f558500ec482e7033ad34d064047a33",
         "exe": "crest-macos-arm64/bin/crest"
+      },
+      "gxtb": {
+        "_why": "RANK-2: the rank step's g-xTB (rank_method gxtb, gxtb+cpcm, auto), the official grimme-lab/g-xtb v2.0.1 build of xtb, a preliminary release (docs/ENGINES.md). License GPL-3.0 (xtb itself LGPL-3.0): the installer downloads it for you and QuantaBench runs it as a separate program, never bundled. --with-engines (-WithEngines) downloads url, checks sha256 (the archive's; exe_sha256 is the executable's, as chem/eng_gxtb.py KNOWN_BUILDS lists it), unpacks it under the programs folder and sets exe as this machine's gxtb path. The arm64 archive has no libgcc_s.1.1.dylib, which its libgfortran needs (dyld stops at once on a Mac without Homebrew's gcc): install_macos.sh copies conda-forge's from the qb-tools environment into its lib folder (checked on the MacBook 2026-11-11: the same energies as the Linux build to 1e-12 Eh).",
+        "url": "https://github.com/grimme-lab/g-xtb/releases/download/v2.0.1/xtb-6.7.1-gxtb-140526-macos-arm64.tar.gz",
+        "release": "v2.0.1",
+        "sha256": "035a37f241a24067eb854177ea0dd3e1d1b48aca2155cf934aae315351e098af",
+        "exe": "xtb-bleed-macos-arm64/bin/xtb",
+        "exe_sha256": "874673d108e5d30c0989e972b3e3596ba2624395a159c8c6ee4d6248aa7979bf",
+        "missing_libs": [
+          "xtb-bleed-macos-arm64/lib/libgcc_s.1.1.dylib"
+        ]
       }
     }
   },
@@ -44,6 +67,16 @@
     "_why": "GFN2-xTB in PyPI's dxtb needs tad-libcint below 0.4 (0.4 needs the dxtb fork; docs/INSTALL.md).",
     "packages": ["tad-libcint<0.4"],
     "only_binary": [],
-    "find_links": {}
+    "find_links": {},
+    "programs": {
+      "gxtb": {
+        "_why": "RANK-2: the rank step's g-xTB (rank_method gxtb, gxtb+cpcm, auto), the official grimme-lab/g-xtb v2.0.1 build of xtb, a preliminary release (docs/ENGINES.md). License GPL-3.0 (xtb itself LGPL-3.0): the installer downloads it for you and QuantaBench runs it as a separate program, never bundled. --with-engines (-WithEngines) downloads url, checks sha256 (the archive's; exe_sha256 is the executable's, as chem/eng_gxtb.py KNOWN_BUILDS lists it), unpacks it under the programs folder and sets exe as this machine's gxtb path. The Linux build is statically linked.",
+        "url": "https://github.com/grimme-lab/g-xtb/releases/download/v2.0.1/xtb-6.7.1-gxtb-140526-linux-x86_64.tar.xz",
+        "release": "v2.0.1",
+        "sha256": "cdfb81164f8d3300fc451dbbf2414528b533e71f7a30ec824b564cd30d6d9e5c",
+        "exe": "xtb-6.7.1/bin/xtb",
+        "exe_sha256": "1b4e30b68ed4e88b4075f60d97f4756ee440fe92d3294cc20826d53f8121cd26"
+      }
+    }
   }
 }

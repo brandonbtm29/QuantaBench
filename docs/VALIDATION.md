@@ -1016,3 +1016,62 @@ Regret / random's, same columns:
   for their large dipole errors). Its candidates' single points are RANK-1's.
 - IEF-PCM is electrostatics only; the baseline-ion verdict depends on it more than the PFAS-ion one.
 - g-xTB v2.0.1 is a preliminary release (RANK-1).
+
+## RANK-2 integration check: the rank step reproduces the benchmark (2026-11-11)
+
+The question: does the pipeline's rank step (`chem/rank.py`, `pipeline._rank_step`) pick the conformers the RANK-1b
+benchmark scripts picked, and what does it cost inside a real `build`? Scripts: `scratch/rank2/` on NOVA (not in the
+repository); NOVA's `.venv` with the branch's `src` on `PYTHONPATH`, g-xTB v2.0.1 (the Windows build RANK-1 used,
+SHA-256 `c2af5f3d…e926cff6`), idle priority, 1-thread workers, at most 4 at a time.
+
+**The picks.** RANK-1b's pools (`Runs/rank1b-2026-11-08/pools/pools.json`: 68 water pools, 60 gas pools, 873
+conformers) and RANK-1's 8 holdout PFAS ions (`rank1_holdout_pool.json`, 52 conformers) went through `rank.compute`
+and `rank.window_keep`, the functions the pipeline's step calls, at the pools' GFN2-xTB geometries:
+
+| level | pools | the same pick as the benchmark's | largest difference of a relative energy | DFT's lowest within the 30 kJ/mol window |
+|---|---|---|---|---|
+| `gxtb+cpcm` (water) | 76 (12 hydrocarbons, 28 polar, 20 neutral PFAS, 6 derived ions, 2 C6A ions, 8 PFAS ions) | 76 | 2e-9 kJ/mol | 76 of 76 |
+| `gxtb` (gas) | 60 | 60 | 1e-9 kJ/mol | 60 of 60 |
+| `aimnet2` (gas) | 60 | 60 | 9e-10 kJ/mol | 60 of 60 |
+
+- The benchmark's picks are its candidates' lowest conformers (`tables/*_per_molecule.csv`, `cand_lowest` of
+  `gxtb+cpcm1`, `gxtb_gas`, `aimnet2_gas`), and its energies `cheap_results.jsonl`; the composite is
+  E(g-xTB gas) + E(GFN1-xTB CPCM) − E(GFN1-xTB gas). The energies agree to the printed digits, so the counts against
+  r2SCAN-3c in "RANK-1b" hold for the rank step as they are on these pools (in water 26 of 28 polar organics and 19
+  of 20 neutral PFAS within 4 kJ/mol; in the gas phase g-xTB 40 of 40 and AIMNet2 39 of 40 baseline neutrals, both 18
+  of 20 PFAS). Of RANK-1b's 13 PFAS ions only the 8 holdout ions have a pool file; the 5 test ions' geometries come
+  from the DFT test's cache and were not rerun.
+- The pools were de-duplicated already, so the pipeline's RMSD pruning before the step was not exercised here; the
+  builds below exercise it.
+- A second pass read every g-xTB and tblite energy back from the single-point cache (14 s instead of 137 s, the same
+  picks).
+
+**The cost and the picks in real builds.** 10 ions (charged as drawn, up to 32 heavy atoms; 2 failed RDKit's
+embedding, unrelated) in water and 10 neutrals (up to 30 heavy atoms) in the gas phase, drawn with a seed from the
+300-molecule validation sample (`Runs/validation-2026-11-06/validation300.csv`): `build --method tblite-gfn2 --rank
+auto --lanes cpu:4x1 --priority background`, 50 RDKit conformers, the lowest 20 refined. Times from the job tables'
+telemetry (`telemetry_stages`, the `rank` and `refine` stages):
+
+| phase | molecules | level | rank step per molecule, median (mean) | per conformer | refinement per molecule, median | rank / refine, median | pick changed |
+|---|---|---|---|---|---|---|---|
+| water | 8 ions | `gxtb+cpcm` | 14.1 s (13.7 s) | 0.76 s | 11.9 s | 0.71 | 6 of 8 |
+| gas | 10 neutrals | `aimnet2` | 0.07 s (3.4 s) | 0.013 s | 0.84 s | 0.04 | 6 of 10 (6 of the 6 with more than one conformer) |
+
+- In water the GFN1-xTB CPCM SCF (ddX) is most of the cost; g-xTB itself takes about 0.1 s per conformer, the program
+  start included. Reusing one tblite calculator per molecule, each SCF restarted from the previous conformer's
+  wavefunction, cut the rank step from 20.1 s to 14.1 s (median) and changes ΔG_solv by about 3e-6 kJ/mol.
+- The gas-phase mean is AIMNet2's model load, 5-8 s once per lane process; the single points themselves are
+  milliseconds.
+- Where the pick changed, the rank step's pick sat at the refinement's rank 2-8 in water, 0.6-12.8 kJ/mol above
+  GFN2-xTB/ALPB's lowest, and at rank 2-12 in the gas phase, 0-13 kJ/mol above GFN2-xTB's lowest. The rank window
+  kept 18-20 of 20 conformers.
+
+**On the MacBook** (macOS 27.2, arm64) the official arm64 build of g-xTB v2.0.1 does not start: its
+`libgfortran.5.dylib` needs `@rpath/libgcc_s.1.1.dylib`, which the archive does not ship (dyld aborts). With
+conda-forge's `libgcc_s.1.1.dylib` from the `qb-tools` environment copied into the build's `lib` folder it runs and
+gives the Linux build's energies to 1e-12 Eh (water, acetate); `install_macos.sh` now does that. Without it
+QuantaBench treats g-xTB as missing there, and `auto` ranks water runs with AIMNet2 + CPCM.
+
+**Limits:** the same as RANK-1 and RANK-1b (single points at GFN2-xTB geometries, at most 10 conformers per pool,
+an electrostatics-only reference). The timings are one machine at idle priority with other work running, 18
+molecules; the review's cost model takes them as its anchor (`advisor.RANK_SP_S`).

@@ -16,7 +16,9 @@ What a review holds:
 - **Findings**: ``Finding(level, topic, ids, message, recommendation, changes, why, guide)``. ``changes`` are
   ``BuildConfig`` fields to set; ``guide`` are methods-guide entries to read. Every rule rests on a measured
   result (docs/VALIDATION.md: the DFT conformer test, RANK-1, RANK-1b) or on a method's own documentation, named in
-  ``evidence``; ``rank_verdict`` holds the measured conformer-ranking table.
+  ``evidence``; ``rank_verdict`` holds the measured conformer-ranking table. The ranking rules judge the level that
+  ranks each molecule's conformers: the rank step's (``BuildConfig.rank_method``, ``rank_level``: g-xTB + CPCM in
+  water, AIMNet2 or g-xTB in the gas phase, as installed here) or, without one, the refinement method's.
 - **Presets**: "Fast screen", "Recommended" and "Careful", each a ``BuildConfig`` with a plain-language rationale
   and an estimated cost on this machine (``estimate_cost``). A preset never uses a method outside a molecule's
   coverage.
@@ -615,10 +617,18 @@ def profile_batch(inputs, cfg, max_ids: int = MAX_IDS) -> tuple[Profile, list[tu
 
 # ======================================================================================= availability
 def probe_available() -> set[str]:
-    """Engine keys installed here (quick checks: no torch import), plus "psi4" and "crest" when found."""
+    """Engine keys installed here (quick checks: no torch import), plus "psi4", "crest" and "gxtb" (the rank
+    step's g-xTB program) when found."""
     from . import engines
 
     out = {k for k in engines.all_engines() if engines.available(k, quick=True)[0]}
+    try:
+        from . import eng_gxtb
+
+        if eng_gxtb.available()[0]:
+            out.add("gxtb")           # the rank step's g-xTB (not a refinement engine)
+    except Exception:  # noqa: BLE001, S110 - a broken g-xTB setup: not available
+        pass
     try:
         from . import qm
 
@@ -674,6 +684,38 @@ class _Resolver:
         return out
 
 
+def _tblite_here(available: set[str]) -> bool:
+    return bool({"tblite-gfn1", "tblite-gfn2"} & set(available))
+
+
+def rank_level(cfg, m, solvent: str, available: set[str]) -> str:
+    """The level that ranks molecule ``m``'s conformers in a run of ``cfg`` here: ``chem.rank.resolve`` with the
+    installed set ``available`` (engine keys, "gxtb", "psi4") instead of the checks on this machine."""
+    from . import rank
+
+    requested = getattr(cfg, "rank_method", "refine") or "refine"
+    if requested == "refine":
+        return "refine"
+
+    def ok(level: str) -> bool:
+        if level == "refine":
+            return True
+        if level == "qm":
+            return bool(cfg.qm_method) and "psi4" in available
+        if rank.with_cpcm(level) and not (solvent and _tblite_here(available)
+                                          and not guide.COVERAGE["gfn1-xtb"].missing(m.z)):
+            return False
+        if rank.gas_level(level) == "gxtb":
+            return "gxtb" in available and guide.COVERAGE["g-xtb"].handles(m.z, m.charge, m.mult)[0]
+        return "aimnet2" in available and _aimnet_ok(m)
+
+    if requested == "auto":
+        chain = rank.AUTO_SOLVENT if solvent else rank.AUTO_GAS
+    else:
+        chain = (requested if solvent or not rank.with_cpcm(requested) else rank.gas_level(requested), "refine")
+    return next(level for level in chain if ok(level))
+
+
 # ======================================================================================= the measured ranking table
 @dataclass(frozen=True)
 class Verdict:
@@ -686,10 +728,13 @@ class Verdict:
 def rank_verdict(family: str, cls: str, phase: str) -> Verdict | None:
     """How well a refinement method family ranks conformers of a molecule class in a phase, as measured.
 
-    ``family``: gfn2, gfn1, aimnet2, mmff, gfnff, pm7, pm6. ``cls``: "pfas_ion", "ion" (other ions and
-    zwitterions), "polar" (neutral, not a pure hydrocarbon), "hydrocarbon". ``phase``: "gas" or "water"
-    (any solvent). None when there is nothing measured to say."""
+    ``family``: a refinement method family (gfn2, gfn1, aimnet2, mmff, gfnff, pm7, pm6) or a rank step's level
+    (gxtb+cpcm, gxtb, aimnet2+cpcm, aimnet2-rank, qm). ``cls``: "pfas_ion", "ion" (other ions and zwitterions),
+    "polar" (neutral, not a pure hydrocarbon), "hydrocarbon". ``phase``: "gas" or "water" (any solvent). None when
+    there is nothing measured to say."""
     water = phase != "gas"
+    if family in RANK_FAMILIES:
+        return _rank_step_verdict(family, cls, water)
     if cls == "pfas_ion":
         if family == "gfn2":
             return Verdict("problem", "GFN2-xTB ranks the conformers of PFAS ions no better than a random pick",
@@ -768,6 +813,71 @@ def rank_verdict(family: str, cls: str, phase: str) -> Verdict | None:
     return None
 
 
+#: the rank step's levels as ranking families (``aimnet2-rank``: AIMNet2 single points of a rank step, whose
+#: geometries are the refinement's, unlike AIMNet2 as the refinement)
+RANK_FAMILIES = ("gxtb+cpcm", "gxtb", "aimnet2+cpcm", "aimnet2-rank", "qm")
+_RANK_NAMES = {"gxtb+cpcm": "g-xTB + GFN1-xTB CPCM", "gxtb": "g-xTB (gas phase)",
+               "aimnet2+cpcm": "AIMNet2 + GFN1-xTB CPCM", "aimnet2-rank": "AIMNet2 (gas phase)",
+               "qm": "The QM stage's level"}
+
+
+def _rank_step_verdict(family: str, cls: str, water: bool) -> Verdict | None:
+    """The rank step's levels, as measured (RANK-1, RANK-1b; single points at the same geometries)."""
+    name = _RANK_NAMES[family]
+    both = f"{EVIDENCE_RANK1}; {EVIDENCE_RANK1B}"
+    if family == "qm":
+        return Verdict("info", "The QM stage's level ranks every conformer",
+                       "DFT in PCM is the reference level of RANK-1 and RANK-1b; one DFT single point per conformer "
+                       "costs minutes (r2SCAN-3c or a diffuse basis for anions, not def2-SVP: RANK-1b).", both)
+    if family in ("gxtb+cpcm", "aimnet2+cpcm") and water:
+        nums = {"gxtb+cpcm": ("12 of 13 PFAS ions against r2SCAN-3c/PCM (regret 0.6 kJ/mol; 13 of 17 against "
+                              "ωB97X-D/def2-SVP)", "26 of 28 polar organics and 19 of 20 neutral PFAS", "5 of 8"),
+                "aimnet2+cpcm": ("11 of 13 PFAS ions against r2SCAN-3c/PCM (regret 0.8 kJ/mol)",
+                                 "26 of 28 polar organics and 18 of 20 neutral PFAS", "5 of 8")}[family]
+        if cls == "pfas_ion":
+            return Verdict("info", f"{name} ranks PFAS ions as close to DFT as anything cheap measured",
+                           f"Its pick was within 4 kJ/mol of the DFT lowest in {nums[0]}, at about 0.1 % of a DFT "
+                           "single point; GFN2-xTB in any solvent model managed 0 of 13. Where descriptors must be at "
+                           "DFT quality, a QM stage on the conformers within the rank window checks it.", both)
+        if cls == "ion":
+            return Verdict("warning", f"{name} ranks non-fluorinated ions only moderately",
+                           f"On 8 non-fluorinated ions in water (carboxylates, ammoniums) it picked within 4 kJ/mol of "
+                           f"r2SCAN-3c/PCM in {nums[2]} (0.5-0.6 of a random pick's regret). Their pools are flat and "
+                           "the electrostatics-only reference favours extended chains, so the misses are a few kJ/mol "
+                           "and partly the reference's.", EVIDENCE_RANK1B)
+        if cls == "polar":
+            return Verdict("info", f"{name} ranks polar molecules in water well",
+                           f"Its pick was within 4 kJ/mol of r2SCAN-3c/PCM in {nums[1]} (GFN2-xTB/ALPB 16 and 14).",
+                           EVIDENCE_RANK1B)
+        return Verdict("info", f"{name} ranks pure hydrocarbons well",
+                       "Every cheap method tested picked within 4 kJ/mol of r2SCAN-3c in 10-12 of 12 hydrocarbons.",
+                       EVIDENCE_RANK1B)
+    gas_name = "g-xTB" if family == "gxtb" else "AIMNet2"
+    if not water:
+        if cls in ("polar", "hydrocarbon"):
+            nums = "40 of 40 non-fluorinated neutrals and 18 of 20 PFAS" if family == "gxtb" else \
+                "39 of 40 non-fluorinated neutrals and 18 of 20 PFAS (Essential 76 against ωB97X-D/6-31G*: 45 of 53)"
+            return Verdict("info", f"{gas_name} is the best cheap gas-phase ranker measured for neutral molecules",
+                           f"Its pick was within 4 kJ/mol of r2SCAN-3c in {nums}; neutral dipoles hardly depend on "
+                           "the conformer picked.", both)
+        return None                     # gas-phase ions: not measured (the solvent finding asks for water)
+    if cls == "pfas_ion":
+        return Verdict("warning", f"{gas_name} without a solvation term ranks PFAS ions only moderately",
+                       "In the gas phase it picked within 4 kJ/mol of r2SCAN-3c/PCM in 10 of 13 PFAS ions; with a "
+                       "GFN1-xTB CPCM ΔG_solv (rank gxtb+cpcm or aimnet2+cpcm) 11-12 of 13.", both)
+    if cls == "ion":
+        return Verdict("warning", f"{gas_name} ranks these ions about as well as a random pick",
+                       "On 8 non-fluorinated ions in water it picked within 4 kJ/mol of r2SCAN-3c/PCM in 5 (0.66-0.70 "
+                       "of a random pick's regret).", EVIDENCE_RANK1B)
+    if cls == "polar":
+        return Verdict("info", f"{gas_name}'s gas-phase energies rank polar molecules in water well",
+                       ("24 of 28 polar organics and 19 of 20 neutral PFAS" if family == "gxtb" else
+                        "25 of 28 polar organics and 19 of 20 neutral PFAS")
+                       + " within 4 kJ/mol of r2SCAN-3c/PCM; with a GFN1-xTB CPCM term 26 of 28.", EVIDENCE_RANK1B)
+    return Verdict("info", f"{gas_name} ranks pure hydrocarbons well", "12 of 12 within 4 kJ/mol of r2SCAN-3c.",
+                   EVIDENCE_RANK1B)
+
+
 # ======================================================================================= cost model
 #: Measured anchors (QuantaBench, docs/VALIDATION.md, ENGINES.md, PLATFORMS.md, BACKLOG PERF-1); everything else is
 #: scaled from them by size, so an estimate is good to a factor of about 2.
@@ -813,8 +923,25 @@ def _crest_seconds(m: _Mol, cfg, model) -> float:
     return base * CREST_LEVEL_FACTOR.get(level, 1.0) * (1.0 if cfg.crest_quick else CREST_FULL_FACTOR)
 
 
-def molecule_seconds(m: _Mol, cfg, engine: str, crest_model=None) -> dict[str, float]:
-    """Estimated seconds of each stage of one molecule on a 4-thread lane."""
+#: one rank-step single point of a 25-atom molecule on one thread, seconds (NOVA, RANK-2 integration check, 20-50
+#: atoms): a g-xTB run (the program's start is most of it), the GFN1-xTB gas + CPCM pair (tblite, ddX), an AIMNet2
+#: energy on the CPU (its model load, seconds once per process, is not counted)
+RANK_SP_S = {"gxtb": 0.1, "cpcm": 0.4, "aimnet2": 0.01}
+
+
+def rank_seconds(m: _Mol, level: str, n_conf: int) -> float:
+    """Estimated seconds of the rank step of one molecule (``n_conf`` pooled conformers) at ``level``."""
+    if level in ("refine", "qm"):
+        return 0.0
+    size = max(m.atoms, 4) / 25.0
+    per = RANK_SP_S["gxtb"] * size if level.startswith("gxtb") else RANK_SP_S["aimnet2"] * size ** 1.5
+    if level.endswith("+cpcm"):
+        per += RANK_SP_S["cpcm"] * size ** 2.0
+    return n_conf * per
+
+
+def molecule_seconds(m: _Mol, cfg, engine: str, crest_model=None, rank: str = "refine") -> dict[str, float]:
+    """Estimated seconds of each stage of one molecule on a 4-thread lane (``rank``: its rank step's level)."""
     size = max(m.atoms, 4) / 25.0
     out = {}
     if cfg.conformer_search == "crest":
@@ -826,13 +953,15 @@ def molecule_seconds(m: _Mol, cfg, engine: str, crest_model=None) -> dict[str, f
     fam = _family(engine)
     step = STEP_S.get(fam, 0.015) * size ** (1.5 if fam == "aimnet2" else 2.5)
     out["refine"] = n_conf * OPT_STEPS * step
+    if rank not in ("refine", "qm"):
+        out["rank"] = rank_seconds(m, rank, n_conf)
     if cfg.xtb_properties:
         out["properties"] = 40 * STEP_S["gfn1"] * size ** 2.5
     if cfg.frequencies:
         out["frequencies"] = 6 * max(m.atoms, 2) * STEP_S.get(fam, 0.015) * size ** 2.5
     if cfg.qm_method:
         sp = _qm_seconds(m, cfg.qm_method)
-        n_qm = max(1, min(cfg.qm_top, n_conf))
+        n_qm = n_conf if rank == "qm" else max(1, min(cfg.qm_top, n_conf))   # rank "qm": every conformer
         out["qm"] = sp * (n_qm + (QM_PROPERTIES_FACTOR if cfg.qm_properties else 0.0)) \
             * (3.0 if cfg.qm_task == "optimize" else 1.0)
         if cfg.qm_frequencies:
@@ -865,7 +994,7 @@ def estimate_cost(mols: list[tuple[str, _Mol]], cfg, resolve: _Resolver) -> Cost
         if not m.ok:
             continue
         engine, _why = resolve(m.z)
-        stages = molecule_seconds(m, cfg, engine, model)
+        stages = molecule_seconds(m, cfg, engine, model, rank_level(cfg, m, resolve.solvent, resolve.available))
         total = sum(stages.values())
         per.append(total)
         by_stage.update(stages)
@@ -912,6 +1041,18 @@ class _Ctx:
         self.max_ids = max_ids
         self.resolve = _Resolver(cfg, self.solvent, available)
         self.engine = {i: self.resolve(m.z)[0] for i, m in self.mols}
+        # the level that ranks each molecule's conformers here: the rank step's, or "refine"
+        self.rank = {i: rank_level(cfg, m, self.solvent, available) for i, m in self.mols}
+
+    def ranker(self, ident: str) -> str:
+        """The ranking family of a molecule (``rank_verdict``): the rank step's level, else the refinement's family.
+        AIMNet2 single points of a rank step on another method's geometries are ``aimnet2-rank``."""
+        level = self.rank.get(ident, "refine")
+        if level == "refine":
+            return _family(self.engine[ident])
+        if level == "aimnet2":
+            return "aimnet2" if _family(self.engine[ident]) == "aimnet2" else "aimnet2-rank"
+        return level
 
     def cls(self, m: _Mol) -> str:
         if m.ion:
@@ -991,13 +1132,17 @@ def rerank_configured(cfg, anions: bool, solvent: str) -> bool:
 
 
 def _rank_findings(ctx: _Ctx) -> list[Finding]:
-    """Conformer ranking: the measured verdict for each (refinement family, molecule class) in the run's phase."""
+    """Conformer ranking: the measured verdict for each (ranking level, molecule class) in the run's phase. The level
+    is the rank step's (``rank_level``) or, without one, the refinement method's family. Where the refinement ranks
+    polar or charged molecules, the fix is the rank step: g-xTB + GFN1-xTB CPCM in water, AIMNet2 (or g-xTB) in the
+    gas phase (RANK-1, RANK-1b); it replaces the DFT re-rank this advisor recommended before RANK-2."""
     by: dict[tuple[str, str], list[str]] = {}
     for ident, m in ctx.mols:
-        by.setdefault((_family(ctx.engine[ident]), ctx.cls(m)), []).append(ident)
+        by.setdefault((ctx.ranker(ident), ctx.cls(m)), []).append(ident)
     out = []
     cfg = ctx.cfg
-    psi4 = "psi4" in ctx.available
+    have_gxtb, have_aimnet, have_tblite = ("gxtb" in ctx.available, "aimnet2" in ctx.available,
+                                           _tblite_here(ctx.available))
     for (fam, cls), ids in sorted(by.items(), key=lambda kv: -len(kv[1])):
         v = rank_verdict(fam, cls, ctx.phase)
         if v is None:
@@ -1005,50 +1150,67 @@ def _rank_findings(ctx: _Ctx) -> list[Finding]:
         changes, rec = {}, ""
         level_of = v.level
         message = v.message
-        guide_keys: tuple[str, ...] = ("conformer-ranking", guide.ENGINE_ENTRIES.get(ctx.engine[ids[0]], ""))
+        stepped = fam in RANK_FAMILIES
+        engine_entry = guide.ENGINE_ENTRIES.get(ctx.engine[ids[0]], "")
+        guide_keys: tuple[str, ...] = ("conformer-ranking", "g-xtb" if fam.startswith("gxtb") else
+                                       "aimnet2" if "aimnet2" in fam else engine_entry)
         anions = any(_anionic(m) for _i, m in ctx.mols)
-        if (v.level != "info" and cls in ("pfas_ion", "ion", "polar") and ctx.phase != "gas"
+        if (not stepped and v.level != "info" and cls in ("pfas_ion", "ion", "polar") and ctx.phase != "gas"
                 and rerank_configured(cfg, anions, ctx.solvent)):
             level_of = "info"
             message = (f"{v.message}; the QM stage re-ranks the lowest {cfg.qm_top} at {cfg.qm_method} in PCM, as "
                        "measured best, and its qm_* descriptors follow the DFT-lowest conformer")
-            rec = ("The other descriptors (xtb_*, 3D shape, Boltzmann averages) stay at the refinement's ranking until "
-                   "the rank step (BACKLOG RANK-2) lands.")
-            guide_keys = ("conformer-ranking", "pcm")
-        elif v.level != "info" and cls in ("pfas_ion", "ion", "polar") and (cls != "polar" or ctx.phase != "gas"):
-            level = corrected_level(cfg, anions)
-            changes = {"qm_method": level, "qm_top": max(int(cfg.qm_top or 1), 8),
-                       "energy_window_kcal": max(float(cfg.energy_window_kcal), 15.0),
-                       "refine_top": max(int(cfg.refine_top), 20)}
+            rec = ("The other descriptors (xtb_*, 3D shape, Boltzmann averages) stay at the refinement's ranking: the "
+                   "rank step (g-xTB + GFN1-xTB CPCM, rank_method auto) makes every descriptor follow a measured "
+                   "ranking at about 0.1 % of the DFT cost.")
+            if cfg.rank_method == "refine":
+                changes = {"rank_method": "auto"}
+            guide_keys = ("conformer-ranking", "pcm", "g-xtb")
+        elif not stepped and v.level != "info" and cls in ("pfas_ion", "ion", "polar") and ctx.phase != "gas":
+            if have_gxtb and have_tblite:
+                fix, what = "gxtb+cpcm", "g-xTB + GFN1-xTB CPCM"
+            elif have_aimnet and have_tblite:
+                fix, what = "aimnet2+cpcm", "AIMNet2 + GFN1-xTB CPCM (g-xTB is not installed here)"
+            else:
+                fix, what = "", ""
+            if fix and cfg.rank_method != "auto":
+                changes = {"rank_method": "auto"}
+            if fix and changes:
+                rec = (f"Rank the refined conformers with the rank step: {what} single points at the refined "
+                       "geometries (rank_method auto), about 0.1 % of a DFT single point each. The lowest conformer, "
+                       "the window and the Boltzmann weights, and with them every descriptor, then follow it "
+                       "(12 of 13 PFAS ions, 26 of 28 polar organics within 4 kJ/mol of r2SCAN-3c/PCM).")
+            elif fix:
+                rec = ("The rank step cannot take these molecules (their elements, charge or spin are outside g-xTB's, "
+                       "GFN1-xTB's or AIMNet2's coverage), so the refinement ranks them.")
+            else:
+                rec = ("Install g-xTB (scripts/install_* --with-engines, or the official build and `quantabench-cli "
+                       "settings --engine-path gxtb=...`) and tblite: the rank step (rank_method auto) then ranks "
+                       "with g-xTB + GFN1-xTB CPCM. Until then, a QM stage in PCM on the lowest conformers ("
+                       f"{corrected_level(cfg, anions)}, --qm-top 8, a 15 kcal/mol window) re-ranks them for the "
+                       "qm_* descriptors only.")
+                if "psi4" in ctx.available:
+                    changes = {"qm_method": corrected_level(cfg, anions), "qm_top": max(int(cfg.qm_top or 1), 8),
+                               "energy_window_kcal": max(float(cfg.energy_window_kcal), 15.0),
+                               "refine_top": max(int(cfg.refine_top), 20)}
             if not ctx.solvent and cls != "polar":
                 changes["solvent"] = "water"
-            basis = level.split("/", 1)[1]
-            rec = ("Today: re-rank a wider pool with DFT in PCM water: the QM stage on the lowest 8 conformers at "
-                   f"{level}" + (f" ({_basis_name(basis)}'s diffuse functions for the anions)" if anions else "")
-                   + ", keeping conformers up to 15 kcal/mol (63 kJ/mol) above the refinement's lowest, since DFT's "
-                   "lowest sat 5-62 kJ/mol above GFN2's lowest in the DFT test. Only the qm_* descriptors follow the "
-                   "DFT-lowest conformer; the coming rank step (BACKLOG RANK-2: g-xTB + GFN1-xTB CPCM, about 0.1 % "
-                   "of the DFT cost) makes every descriptor follow it."
-                   + ("" if psi4 else " Psi4 is not found on this machine."))
-            guide_keys = ("conformer-ranking", guide.ENGINE_ENTRIES.get(ctx.engine[ids[0]], ""), "g-xtb",
-                          "def2-svpd" if anions else "pcm")
-        elif fam == "gfn2" and cls == "polar" and ctx.phase == "gas" and "aimnet2" in ctx.available:
-            covered = [i for i in ids if _aimnet_ok(ctx.by_id[i])]
-            every = all(_aimnet_ok(m) for _i, m in ctx.mols)
-            open_shell = any(m.mult > 1 for _i, m in ctx.mols)
-            if covered and (every or not open_shell):
-                changes = {"method": "aimnet2" if every else "auto"}
-                rec = ("Refine with AIMNet2" + ("." if every else ": method auto takes it for every molecule within "
-                                                "its 14 elements and the next engine for the others."))
-            elif covered:
-                rec = ("Refine the closed-shell molecules within AIMNet2's 14 elements with AIMNet2, in a batch of "
-                       "their own (auto would also send the open-shell ones to it).")
-            guide_keys = ("conformer-ranking", "aimnet2")
+            guide_keys = ("conformer-ranking", engine_entry, "g-xtb", "def2-svpd" if anions else "pcm")
+        elif not stepped and fam == "gfn2" and cls == "polar" and ctx.phase == "gas":
+            if have_aimnet or have_gxtb:
+                changes = {"rank_method": "auto"} if cfg.rank_method != "auto" else {}
+                rec = ("Rank with the rank step (rank_method auto): " + ("AIMNet2" if have_aimnet else "g-xTB")
+                       + " single points at the refined geometries, the best cheap gas-phase rankers measured; the "
+                       "refinement stays as it is." + ("" if have_aimnet else " AIMNet2 is not installed here."))
+                if not changes and not have_aimnet:
+                    rec = "AIMNet2 and g-xTB molecules outside their coverage are ranked by the refinement."
+            guide_keys = ("conformer-ranking", "aimnet2", "g-xtb")
         out.append(ctx.finding(level_of, "conformer ranking", f"rank.{fam}.{cls}", f"{message} ({len(ids)} "
                                f"molecule{'s' if len(ids) != 1 else ''}).", ids, why=v.why, changes=changes,
-                               recommendation=rec, guide=tuple(k for k in guide_keys if k), evidence=v.evidence))
+                               recommendation=rec, guide=tuple(dict.fromkeys(k for k in guide_keys if k)),
+                               evidence=v.evidence))
     # the window: GFN2's 6 kcal/mol window drops DFT's lowest before the QM stage sees it
-    ions_gfn2 = [i for i, m in ctx.mols if m.pfas and m.ion and _family(ctx.engine[i]) == "gfn2"]
+    ions_gfn2 = [i for i, m in ctx.mols if m.pfas and m.ion and ctx.ranker(i) == "gfn2"]
     if ions_gfn2 and cfg.qm_method and cfg.energy_window_kcal < 15:
         out.append(ctx.finding(
             "warning", "conformer ranking", "rank.window",
@@ -1056,6 +1218,15 @@ def _rank_findings(ctx: _Ctx) -> list[Finding]:
             "the pool.", ions_gfn2,
             why="GFN2-xTB's 6 kcal/mol (25 kJ/mol) window kept DFT's lowest conformer in only 11 of 17 PFAS ions.",
             changes={"energy_window_kcal": 15.0}, recommendation="Widen the window to 15 kcal/mol.",
+            guide=("conformer-ranking", "boltzmann"), evidence=EVIDENCE_RANK1))
+    stepped_ids = [i for i, _m in ctx.mols if ctx.rank[i] not in ("refine",)]
+    if stepped_ids and float(getattr(cfg, "rank_window_kj", 30.0)) < 20.0:
+        out.append(ctx.finding(
+            "warning", "conformer ranking", "rank.rank-window",
+            f"The {cfg.rank_window_kj:g} kJ/mol rank window is narrower than measured safe.", stepped_ids,
+            why="Around g-xTB + CPCM's lowest, 20 kJ/mol kept DFT's lowest in 16-17 of 17 PFAS ions and 30 kJ/mol in "
+                "17 of 17 (RANK-1); a QM stage sees only the conformers the window keeps.",
+            changes={"rank_window_kj": 30.0}, recommendation="Use the 30 kJ/mol default.",
             guide=("conformer-ranking", "boltzmann"), evidence=EVIDENCE_RANK1))
     return out
 
@@ -1528,6 +1699,8 @@ def coverage_rows(ctx: _Ctx) -> list[CoverageRow]:
             kind, installed = "QM basis", "psi4" in ctx.available
         elif key in inverse:
             kind, installed = "refinement", any(k in ctx.available or k == "mmff" for k in inverse[key])
+        elif key == "g-xtb":
+            kind, installed = "rank step", "gxtb" in ctx.available
         else:
             kind, installed = "not in QuantaBench yet", None
         row = CoverageRow(key, cov.label, kind, installed=installed, note=cov.available)
@@ -1561,6 +1734,7 @@ def phase_steps(ctx: _Ctx) -> list[tuple[str, str]]:
     steps = [("conformer search", f"ALPB({ctx.solvent}) (CREST)" if cfg.conformer_search == "crest" else
               "gas (RDKit's MMFF94s has no solvent: the same pool in every phase)"),
              ("refinement", f"{label} ({engine})"),
+             ("conformer ranking", _rank_step_text(ctx)),
              ("xTB properties", f"{pipeline.solvation_label('tblite-gfn1', ctx.solvent)}, tblite GFN1-xTB" if solvated
               and "tblite-gfn1" in ctx.available else "gas (no solvated refinement or no tblite)")]
     if cfg.frequencies:
@@ -1571,6 +1745,15 @@ def phase_steps(ctx: _Ctx) -> list[tuple[str, str]]:
     return steps
 
 
+def _rank_step_text(ctx: _Ctx) -> str:
+    """'g-xTB + CPCM(GFN1, water) (12), the refinement (3)': the levels that rank this batch here."""
+    from . import rank
+
+    counts = Counter(ctx.rank.values())
+    return ", ".join(rank.label(level, ctx.solvent, "the refinement", ctx.cfg.qm_method).replace(" (refinement)", "")
+                     + f" ({n})" for level, n in counts.most_common()) or "the refinement"
+
+
 # ======================================================================================= presets
 PRESET_NAMES = {"fast": "Fast screen", "recommended": "Recommended", "careful": "Careful"}
 
@@ -1578,7 +1761,9 @@ PRESET_NAMES = {"fast": "Fast screen", "recommended": "Recommended", "careful": 
 def _presets(ctx: _Ctx) -> list[Preset]:
     """Fast screen, Recommended and Careful for this batch in its phase. Every method in them takes every molecule
     (elements, charge, spin): AIMNet2 only when no molecule is open-shell, the QM stage only when the def2 basis sets
-    cover every element."""
+    cover every element. All three rank with the rank step (rank_method auto: g-xTB + GFN1-xTB CPCM in water, AIMNet2
+    or g-xTB in the gas phase, RANK-1b); where it cannot run here, Recommended keeps the DFT re-rank of the lowest
+    conformers it used before RANK-2."""
     cfg = ctx.cfg
     mols = [m for _i, m in ctx.mols]
     n_ion = sum(m.ion for m in mols)
@@ -1603,13 +1788,27 @@ def _presets(ctx: _Ctx) -> list[Preset]:
     basis = "def2-svpd" if n_anion else "def2-svp"
     crest_here = "crest" in ctx.available
     needs_qm = [] if "psi4" in ctx.available else ["Psi4"]
+    # the rank step with rank_method auto here: which molecules it takes, and with which level
+    auto_cfg = replace(cfg, rank_method="auto")
+    auto_rank = [rank_level(auto_cfg, m, ctx.solvent, ctx.available) for m in mols]
+    polar_ion = [lv for m, lv in zip(mols, auto_rank) if m.ion or not m.hydrocarbon]
+    stepped = bool(polar_ion) and all(lv != "refine" for lv in polar_ion)
+    levels = Counter(lv for lv in auto_rank if lv != "refine")
+    rank_name = {"gxtb+cpcm": "g-xTB + GFN1-xTB CPCM", "aimnet2+cpcm": "AIMNet2 + GFN1-xTB CPCM", "gxtb": "g-xTB",
+                 "aimnet2": "AIMNet2"}.get(levels.most_common(1)[0][0] if levels else "", "")
+    rank_part = (f" The rank step ranks the refined conformers with {rank_name} single points, so the lowest conformer, "
+                 "the window, the Boltzmann weights and every descriptor follow a measured ranker (RANK-1b)."
+                 if rank_name else "")
 
     # ---- Fast screen
     fast = {"method": method, "conformer_search": "rdkit", "max_conformers": 30, "refine_top": 10,
-            "energy_window_kcal": 6.0, "qm_method": "", "frequencies": False}
+            "energy_window_kcal": 6.0, "rank_method": "auto", "rank_window_kj": 30.0, "qm_method": "",
+            "frequencies": False}
     fast_why = (f"RDKit conformers, the lowest 10 refined with {m_name} {phase}, no DFT: geometries and trend "
-                "descriptors for the whole batch, quickly.")
-    if water and polar_or_ion:
+                "descriptors for the whole batch, quickly." + rank_part)
+    if water and polar_or_ion and stepped:
+        fast_why += " With only 10 refined, the pool may miss the lowest conformer of flexible molecules."
+    elif water and polar_or_ion:
         fast_why += (f" The conformer each of the {polar_or_ion} polar or charged molecules ends up with is rough: "
                      "GFN2-xTB/ALPB ranks polar molecules in water at 0.6-0.7 of a random pick's regret and PFAS ions "
                      "no better than a random pick (RANK-1b), so treat their conformer-dependent descriptors (dipole, "
@@ -1619,9 +1818,16 @@ def _presets(ctx: _Ctx) -> list[Preset]:
 
     # ---- Recommended
     rec = {"method": method, "conformer_search": "rdkit", "max_conformers": 50, "refine_top": 20,
-           "energy_window_kcal": 6.0, "qm_method": "", "qm_top": 1}
+           "energy_window_kcal": 6.0, "rank_method": "auto", "rank_window_kj": 30.0, "qm_method": "", "qm_top": 1}
     rec_needs: list[str] = []
-    if water and polar_or_ion and def2_ok:
+    if water and polar_or_ion and stepped:
+        rec.update(energy_window_kcal=15.0)
+        rec_why = (f"{m_name} gives solvated geometries and xTB properties for the lowest 20 of 50 RDKit conformers, "
+                   "from a force-field pool kept up to 19 kcal/mol above its lowest (MMFF94s ranks ions poorly)."
+                   + rank_part + " In water g-xTB + GFN1-xTB CPCM picked within 4 kJ/mol of r2SCAN-3c/PCM in 12 of 13 "
+                   "PFAS ions and 26 of 28 polar organics, at about 0.1 % of a DFT single point; it replaces the DFT "
+                   "re-rank this preset ran before (Careful adds a DFT check).")
+    elif water and polar_or_ion and def2_ok:
         rec.update(energy_window_kcal=15.0, qm_method=f"wb97x-d/{basis}", qm_top=8, qm_task="energy")
         rec_needs = needs_qm
         rec_why = (f"{m_name} gives solvated geometries and xTB properties. Then the QM stage re-ranks the lowest 8 "
@@ -1631,8 +1837,8 @@ def _presets(ctx: _Ctx) -> list[Preset]:
                    "conformers need"
                    + ("; def2-SVPD's diffuse functions hold the anions' loosely bound electrons, which def2-SVP "
                       "squeezes toward compact conformers (RANK-1b)." if n_anion else ".")
-                   + " Until the rank step (BACKLOG RANK-2: g-xTB + CPCM at about 0.1 % of the DFT cost) lands, only "
-                   "the qm_* descriptors follow the DFT-lowest conformer.")
+                   + " The rank step cannot run here (install g-xTB and tblite: g-xTB + CPCM at about 0.1 % of the DFT "
+                   "cost), so only the qm_* descriptors follow the DFT-lowest conformer.")
     elif water and polar_or_ion:
         rec_why = (f"{m_name} {phase}, the lowest 20 refined. The DFT re-ranking the validation recommends for polar "
                    "and charged molecules in water is left out: the def2 basis sets do not cover every element here.")
@@ -1640,7 +1846,7 @@ def _presets(ctx: _Ctx) -> list[Preset]:
         rec_why = (f"{m_name} {phase}, the lowest 20 refined: for pure hydrocarbons GFN2-xTB ranks conformers as well "
                    "as any cheap method measured (12 of 12, RANK-1b), so no DFT re-ranking is needed.")
     else:
-        rec_why = f"{m_name} {phase}, the lowest 20 of 50 RDKit conformers refined."
+        rec_why = f"{m_name} {phase}, the lowest 20 of 50 RDKit conformers refined." + rank_part
         if mols and all(m.hydrocarbon for m in mols):
             rec_why += (" For pure hydrocarbons every cheap method ranks conformers within 4 kJ/mol of r2SCAN-3c "
                         "(GFN2-xTB 12 of 12, RANK-1b), so no DFT re-ranking is needed.")
@@ -1663,13 +1869,22 @@ def _presets(ctx: _Ctx) -> list[Preset]:
     else:
         careful.update(conformer_search="rdkit", max_conformers=200)
         search = "200 RDKit conformers (CREST, which would search wider, is not found here)"
-    if water and polar_or_ion and def2_ok:
+    if water and polar_or_ion and def2_ok and stepped:
+        careful.update(qm_method="wb97x-d/def2-svpd", qm_top=8, energy_window_kcal=15.0)
+        careful_needs = needs_qm
+        careful_why = (f"{search} widens the pool with folded and extended conformers; the lowest 30 are refined with "
+                       f"{m_name} and ranked with {rank_name}, then ωB97X-D/def2-SVPD in PCM checks the rank step's "
+                       "lowest 8 (dispersion, and diffuse functions for anions and polarizabilities): the qm_* "
+                       "descriptors come from the DFT-lowest of them. RANK-1b recommends r2SCAN-3c for this check, which "
+                       "the QM stage cannot run yet (BACKLOG ADV-1). The most expensive preset.")
+    elif water and polar_or_ion and def2_ok:
         careful.update(qm_method="wb97x-d/def2-svpd", qm_top=12, energy_window_kcal=15.0)
         careful_needs = needs_qm
         careful_why = (f"{search} widens the pool with folded and extended conformers; the lowest 30 are refined with "
                        f"{m_name}, then ωB97X-D/def2-SVPD in PCM re-ranks the lowest 12 (dispersion, and diffuse "
-                       "functions for anions and polarizabilities). The most defensible ranking QuantaBench runs "
-                       "today, and the most expensive.")
+                       "functions for anions and polarizabilities). The rank step cannot run here (install g-xTB and "
+                       "tblite), so this is the most defensible ranking QuantaBench runs here, and the most "
+                       "expensive.")
     elif not water and def2_ok:
         level = "def2-svpd" if n_anion else "def2-tzvp"
         careful.update(qm_method=f"wb97x-d/{level}", qm_top=3)
@@ -1678,8 +1893,9 @@ def _presets(ctx: _Ctx) -> list[Preset]:
                        "single points on the lowest 3 give DFT-quality properties ("
                        + ("diffuse functions for the anions)." if n_anion else
                           "a triple-zeta basis removes most of def2-SVP's superposition error).")
-                       + " The ranking stays the refinement's: for neutrals in the gas phase the measured cheap "
-                       "rankers are close to DFT.")
+                       + (f" {rank_name} ranks the conformers: for neutrals in the gas phase it is close to DFT."
+                          if rank_name else " The ranking stays the refinement's: for neutrals in the gas phase the "
+                          "measured cheap rankers are close to DFT."))
     else:
         careful_why = (f"{search} widens the pool and {m_name} refines the lowest 30; no DFT stage (the def2 basis sets "
                        "do not cover every element here).")
@@ -1717,7 +1933,8 @@ def review(inputs, cfg, *, available: Iterable[str] | None = None, max_ids: int 
                 "protonate": cfg.protonate, "keep_largest_fragment": cfg.keep_largest_fragment,
                 "conformer_search": cfg.conformer_search, "crest_method": cfg.crest_method,
                 "max_conformers": cfg.max_conformers, "refine_top": cfg.refine_top,
-                "energy_window_kcal": cfg.energy_window_kcal,
+                "energy_window_kcal": cfg.energy_window_kcal, "rank_method": cfg.rank_method,
+                "rank_window_kj": cfg.rank_window_kj, "rank_levels": dict(Counter(ctx.rank.values()).most_common()),
                 "qm_method": _qm.level_string(cfg.qm_method) if cfg.qm_method and _qm_parts(cfg.qm_method)[0] else
                 cfg.qm_method, "qm_top": cfg.qm_top}
     return Review(n=len(inputs), settings=settings, profile=prof, coverage=coverage_rows(ctx), findings=findings,
@@ -1729,7 +1946,8 @@ def review(inputs, cfg, *, available: Iterable[str] | None = None, max_ids: int 
 #: BuildConfig field -> the build option that sets it (None: Settings only)
 CLI_FLAGS = {"method": "--method", "solvent": "--solvent", "conformer_search": "--conformers",
              "crest_method": "--crest-method", "max_conformers": "--max-confs", "refine_top": "--refine-top",
-             "energy_window_kcal": "--window", "qm_method": "--qm", "qm_top": "--qm-top", "qm_task": "--qm-task",
+             "energy_window_kcal": "--window", "rank_method": "--rank", "rank_window_kj": "--rank-window",
+             "qm_method": "--qm", "qm_top": "--qm-top", "qm_task": "--qm-task",
              "ph": "--ph", "frequencies": "--freq"}
 
 

@@ -236,7 +236,7 @@ def summarize(rows: list[dict], crest_power: float | None = None) -> list[dict]:
         if r.get("outcome") != "ok" or not r.get("stage") or r.get("wall_s") is None:
             continue
         groups.setdefault((r.get("machine") or "?", r["stage"], r.get("engine") or ""), []).append(r)
-    order = {s: i for i, s in enumerate(("prepare", "conformers", "refine", "descriptors", "properties",
+    order = {s: i for i, s in enumerate(("prepare", "conformers", "refine", "rank", "descriptors", "properties",
                                          "frequencies", "qm", "export"))}
     out = []
     for (machine, stage, engine), rs in sorted(groups.items(), key=lambda kv: (kv[0][0], order.get(kv[0][1], 99),

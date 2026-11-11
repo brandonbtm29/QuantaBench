@@ -90,7 +90,7 @@ def test_machine_name(monkeypatch):
 def test_local_profile_keeps_measurements_and_takes_the_worker_address():
     p = profile.local_profile()
     assert p.name == profile.machine_name() and p.quantabench_version == __version__
-    assert p.engines["mmff"] is True and set(p.programs) == {"xtb", "crest", "mopac", "psi4"}
+    assert p.engines["mmff"] is True and set(p.programs) == {"xtb", "crest", "gxtb", "mopac", "psi4"}
     assert p.logical_cores >= 1 and p.ram_gb > 0 and profile.profile_age_s(p) < 60
     assert MachineProfile.from_dict(json.loads(json.dumps(p.to_dict()))) == p
     old = MachineProfile(name=p.name, throughput={"mmff@cpu": 123.0}, benchmarks={"mmff@cpu": {"seconds": 1.0}},

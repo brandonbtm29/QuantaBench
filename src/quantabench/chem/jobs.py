@@ -71,7 +71,14 @@ SCIENCE_FIELDS = (
     "temperature_k", "xtb_properties", "seed", "frequencies", "freq_hessian", "symmetry_number", "freq_qrrho",
     "solvent", "conformer_search", "crest_method", "crest_quick", "qm_method", "qm_task", "qm_top",
     "qm_properties", "qm_frequencies", "qm_cubes", "qm_program", "radii_set", "radii_overrides", "sasa_probe_A",
+    "rank_method", "rank_window_kj",
 )
+#: Science fields added after run folders existed whose behaviour before them differs from today's default: a stored
+#: config without the field ran with this value (RANK-2: every run before the rank step ranked at the refinement
+#: level). ``stored_science`` and ``config_differences`` use it, so an old run folder resumes as it was started.
+LEGACY_DEFAULTS = {"rank_method": "refine"}
+#: fields that only matter with another field's value: rank_window_kj only when a rank step runs
+_ONLY_WITH = {"rank_window_kj": ("rank_method", "refine")}
 
 #: Versions before this one ran the stock AIMNet2 calculator with aimnet 0.2's adaptive neighbor lists
 #: unguarded: after a smaller molecule they silently dropped neighbors of larger ones (0.1-0.2 eV). Results of
@@ -660,15 +667,30 @@ class _RunLock:
 
 
 # -------------------------------------------------------------------------------------- running
+def stored_science(stored: dict) -> dict:
+    """The science settings a run folder's stored config ran with: its ``SCIENCE_FIELDS``, plus ``LEGACY_DEFAULTS``
+    for those it predates (a run from before RANK-2 has no ``rank_method``: it ranked at the refinement level)."""
+    out = {k: stored[k] for k in SCIENCE_FIELDS if k in stored}
+    for k, v in LEGACY_DEFAULTS.items():
+        out.setdefault(k, v)
+    return out
+
+
 def config_differences(stored: dict, cfg: BuildConfig) -> dict[str, tuple]:
-    """Science fields whose stored value differs from ``cfg`` (missing fields compare to the default)."""
+    """Science fields whose stored value differs from ``cfg`` (missing fields compare to ``LEGACY_DEFAULTS``, else
+    the default). A field that only matters with another one's value (``_ONLY_WITH``: the rank window without a
+    rank step) is not a difference while both sides have that value."""
     defaults = BuildConfig()
+    known = stored_science(stored)
     diffs = {}
     for name in SCIENCE_FIELDS:
-        old = stored.get(name, getattr(defaults, name))
+        old = known.get(name, getattr(defaults, name))
         new = getattr(cfg, name)
         if old != new:
             diffs[name] = (old, new)
+    for name, (other, idle) in _ONLY_WITH.items():
+        if name in diffs and known.get(other, getattr(defaults, other)) == idle and getattr(cfg, other) == idle:
+            del diffs[name]
     return diffs
 
 
@@ -703,11 +725,13 @@ def _prepare_run(store: JobStore, cfg: BuildConfig, chunk: Chunk | None, force: 
 
 def light_result(res: MoleculeResult) -> MoleculeResult:
     """``res`` without what is big and already on disk: the RDKit molecule with every conformer, the other
-    conformers' records, the normal modes, the QM stage's arrays. Status, error, SMILES, the best conformer,
-    descriptors and files stay (about 20 KB per molecule instead of 100 KB and more)."""
+    conformers' records, the normal modes, the QM stage's arrays, the rank step's pool. Status, error, SMILES, the
+    best conformer, descriptors, files and the rank step's summary stay (about 20 KB per molecule instead of 100 KB
+    and more)."""
     from dataclasses import replace
 
-    return replace(res, mol=None, vibrations=None, qm=None, conformers=list(res.conformers[:1]),
+    rank = {k: v for k, v in res.rank.items() if k != "conformers"} if isinstance(res.rank, dict) else res.rank
+    return replace(res, mol=None, vibrations=None, qm=None, conformers=list(res.conformers[:1]), rank=rank,
                    input=replace(res.input, mol=None))
 
 
@@ -1159,7 +1183,7 @@ def stored_config(config: dict, base: BuildConfig | None = None) -> BuildConfig:
     from dataclasses import replace
 
     base = base or BuildConfig()
-    cfg = replace(base, **{k: config[k] for k in SCIENCE_FIELDS if k in config})
+    cfg = replace(base, **stored_science(config))
     if config.get("formats"):
         cfg = replace(cfg, formats=tuple(config["formats"]))
     return cfg

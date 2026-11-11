@@ -44,6 +44,8 @@
 | `chem.engines` | Engine registry and ASE calculator factory: `DxtbCalculator`, AIMNet2, and `register()` for plugin engines (`PLUGINS`), each with an availability check, a calculator factory, optional properties and native optimizer. `method_keys`, `auto_candidates` (solvent-aware). |
 | `chem.external` | External programs: discovery (settings, `QUANTABENCH_<NAME>`, PATH, conda envs, `wsl:`), `program_env` (threads, `OMP_STACKSIZE`, `PSI_SCRATCH`, `WSLENV`), `work_dir`, `run_program` (log file, timeout, process-tree cancellation, the run priority through `popen_args`). |
 | `chem.eng_xtb`, `chem.eng_tblite`, `chem.eng_mopac` | Plugin engines: the xtb program (GFN2/GFN1/GFN-FF), tblite in process, MOPAC PM7/PM6-D3H4X. |
+| `chem.eng_gxtb` | g-xTB single points with the official g-xtb build of xtb (`xtb --gxtb`): its own program entry `gxtb`, the build's SHA-256 against the pinned releases (`KNOWN_BUILDS`), a start check, the command and the energy. Not a refinement engine. |
+| `chem.rank` | The rank step (RANK-2): `rank_method` levels and the `auto` rules by phase with their fallbacks (`resolve`), single points of the refined conformers at the rank level (`compute`: g-xTB, AIMNet2, the GFN1-xTB CPCM ΔG_solv of tblite), the per-machine single-point cache, the rank window and the molecule's `rank` record. |
 | `chem.solvents` | One canonical solvent name mapped to ALPB/GBSA, COSMO (ε) and PCM keywords. |
 | `chem.crest` | CREST conformer search into a `ConformerSet` (atom order and topology checked). |
 | `chem.qm`, `chem.psi4_driver` | QM stage: the driver runs inside Psi4's own Python (stdlib + numpy + psi4) on a JSON task; the parent builds `result.qm`, descriptors and the vibrational analysis. |
@@ -56,7 +58,7 @@
 | `chem.descriptors` | Graph descriptors and 3D ensemble descriptors (best and Boltzmann-weighted). |
 | `chem.conformer_compare` | Two programs' conformer sets (Spartan documents or imports, QuantaBench run folders) joined by constitution and matched by a symmetric heavy-atom RMSD that factors out PFAS sibling-group symmetry, plus torsions and stereo; coverage, same-lowest, search vs ranking at a GFN2-xTB common level (tblite), dipole split (`conformers compare`, `cli_conformers`). |
 | `chem.export` | Per-molecule writers and batch CSV tables; `read_molecule` reads a molecule's folder back into a `MoleculeResult` (every conformer from the SDF). |
-| `chem.pipeline` | `BuildConfig`, `MoleculeResult`, `run_molecule`, `run`, `use_batched` (when to batch). |
+| `chem.pipeline` | `BuildConfig`, `MoleculeResult`, `run_molecule` (the rank step `_rank_step` between the refinement and the descriptors), `run`, `use_batched` (when to batch). |
 | `chem.method_guide`, `chem.advisor` | The methods guide as data (entries, what each corrects, the element, charge and spin `COVERAGE` of every method, basis set and CREST level) and the model advisor: `review(inputs, cfg)` profiles a batch (fast path for neutral single-fragment records, a per-process cache), checks coverage, and returns findings tied to docs/VALIDATION.md and three presets with cost estimates (docs/CHOOSING_METHODS.md). |
 | `chem.jobs` | Resumable batch runs: `JobStore` (SQLite, WAL), run lock, config guard, hash-based chunks, `run_resumable`, `open_run`, `rebuild_tables`, `merge_tables`; read helpers for the GUI: `molecule_rows` (light rows via SQLite `json_extract`), `load_result`, `load_inputs`, `stored_config`. |
 | `build.surfaces` | Graphite and metal slabs, orientation, placement, overlap report. |

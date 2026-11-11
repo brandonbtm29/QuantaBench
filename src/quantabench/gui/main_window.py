@@ -84,6 +84,9 @@ STAGES = [
     ("conformers", "Conformer search", "ETKDGv3 embedding + MMFF94s, or CREST metadynamics (xtb); pruning"),
     ("refine", "Refinement", "Re-optimize the lowest conformers with an ML potential, xTB, tblite or MOPAC, "
                              "optionally in an implicit solvent"),
+    ("rank", "Conformer ranking", "Which level orders the refined conformers: the lowest, the window and the "
+                                  "Boltzmann weights every descriptor follows (single points at the refined "
+                                  "geometries)"),
     ("properties", "Properties", "Boltzmann weights, descriptors, the engine's charges/dipole/polarizability, "
                                  "frequencies"),
     ("qm", "QM (DFT)", "Psi4 single points or optimizations of the lowest conformers: properties, polarizability, "
@@ -313,8 +316,8 @@ class MainWindow(QMainWindow):
             it.setData(0, Qt.ItemDataRole.UserRole, key)
             self.stage_tree.addTopLevelItem(it)
             self.stage_items[key] = it
-        self.stage_tree.setMaximumHeight(195)
-        self.stage_tree.setMinimumHeight(170)
+        self.stage_tree.setMaximumHeight(215)
+        self.stage_tree.setMinimumHeight(190)
         lay.addWidget(self.stage_tree)
         self.stage_stack = QStackedWidget()
         self.stage_pages = {}
@@ -486,6 +489,27 @@ class MainWindow(QMainWindow):
             form.addRow("Optimizer", self.w_optimizer)
             form.addRow(self.optimizer_info)
             form.addRow("Conformer batching", self.w_batched)
+        elif key == "rank":
+            from ..chem import rank
+
+            self.w_rank_method = QComboBox()
+            for k, label in rank.CHOICES:
+                self.w_rank_method.addItem(label, k)
+            self.w_rank_method.setToolTip("The level whose energies order the refined conformers. The lowest "
+                                          "conformer, the window and the Boltzmann weights follow it, and so does "
+                                          "every descriptor taken from them (dipole, xTB properties, frequencies, "
+                                          "the QM stage's conformers)")
+            # stored in kJ/mol (BuildDefaults.rank_window_kj, a science setting), shown in the display unit
+            self.w_rank_window = EnergySpinBox(1.0, 500.0, units.KJ, self.energy_display().relative)
+            self.w_rank_window.setToolTip("Keep the conformers within this of the rank level's lowest (RANK-1: "
+                                          "20-30 kJ/mol kept DFT's lowest in 16-17 of 17 PFAS ions)")
+            self.rank_info = self._guide_label()
+            self.w_rank_method.currentIndexChanged.connect(self._update_rank_info)
+            if hasattr(self, "w_solvent"):          # 'auto' picks by phase
+                self.w_solvent.currentIndexChanged.connect(self._update_rank_info)
+            form.addRow("Rank level", self.w_rank_method)
+            form.addRow(self.rank_info)
+            form.addRow("Rank window", self.w_rank_window)
         elif key == "properties":
             self.w_xtbprops = QCheckBox("GFN1-xTB charges, dipole, polarizability (best conformer)")
             self.w_xtbprops.setEnabled(resources.has_package("dxtb"))
@@ -547,6 +571,8 @@ class MainWindow(QMainWindow):
             self.w_qm_cubes.setToolTip("0.002 au density surface: area, enclosed volume, ESP extrema and "
                                        "Murray-Politzer statistics. Shown in the Surfaces panel.")
             self.w_qm_on.toggled.connect(self._update_qm_widgets)
+            if hasattr(self, "w_rank_method"):      # rank level 'qm' needs the QM stage
+                self.w_qm_on.toggled.connect(self._update_rank_info)
             form.addRow(self.w_qm_on)
             form.addRow("Functional", self.w_qm_func)
             form.addRow(self.qm_func_info)
@@ -576,7 +602,7 @@ class MainWindow(QMainWindow):
 
     def _build_bottom_dock(self) -> None:
         tabs = QTabWidget()
-        self.conf_table = QTableWidget(0, 7)
+        self.conf_table = QTableWidget(0, 9)
         self.conf_table.setHorizontalHeaderLabels(self._conformer_headers(self.energy_display()))
         self.conf_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.conf_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -600,8 +626,9 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _conformer_headers(d: units.EnergyDisplay) -> list[str]:
+        # ΔE and the weight follow the rank level; E is the refinement's energy; the last two: the rank step's
         return ["#", d.header("ΔE", "relative"), "Weight (%)", d.header("E", "absolute"), "Converged", "Steps",
-                "Dipole (D)"]
+                "Dipole (D)", d.header("E rank", "absolute"), d.header("ΔE refine", "relative")]
 
     def energy_display(self) -> units.EnergyDisplay:
         """Units and number format of Settings > Display, for everything in the window that shows an energy."""
@@ -614,6 +641,7 @@ class MainWindow(QMainWindow):
         self.conf_table.setHorizontalHeaderLabels(self._conformer_headers(d))
         self.model.set_display(d)
         self.w_window.set_unit(d.relative)
+        self.w_rank_window.set_unit(d.relative)
         res = self._shown_res
         if res is not None:
             row = self.conf_table.currentRow()
@@ -765,6 +793,8 @@ class MainWindow(QMainWindow):
         self.w_ph.setValue(b.ph)
         self.w_maxconf.setValue(b.max_conformers)
         self.w_window.set_stored(b.energy_window_kcal)
+        self._set_combo(self.w_rank_method, b.rank_method)
+        self.w_rank_window.set_stored(b.rank_window_kj)
         self.w_rmsd.setValue(b.rmsd_threshold)
         self.w_seed.setValue(b.random_seed)
         methods = method_keys()
@@ -791,6 +821,7 @@ class MainWindow(QMainWindow):
             cb.setChecked(fmt in export.DEFAULT_FORMATS)
         self.out_label.setText(f"Output folder: {self.s.output_path()}")
         self._update_engine_info()
+        self._update_rank_info()
         self._stage_loaded = True
 
     def _store_stage_values(self) -> None:
@@ -802,6 +833,8 @@ class MainWindow(QMainWindow):
         b.ph = self.w_ph.value()
         b.max_conformers = self.w_maxconf.value()
         b.energy_window_kcal = self.w_window.stored()
+        b.rank_method = self.w_rank_method.currentData()
+        b.rank_window_kj = self.w_rank_window.stored()
         b.rmsd_threshold = self.w_rmsd.value()
         b.random_seed = self.w_seed.value()
         b.refine_method = self.w_method.currentData()
@@ -890,6 +923,33 @@ class MainWindow(QMainWindow):
                               '<a href="guide:dft">Functionals</a>, <a href="guide:basis-sets">basis sets</a>.')
             else:
                 label.setText("")
+
+    def _update_rank_info(self, _index=0) -> None:
+        """The Conformer ranking page's info: the guide's summary, what each level needs and whether it is installed
+        here (quick checks: no torch import), and what 'auto' picks in the chosen phase."""
+        from ..chem import eng_gxtb, eng_tblite
+
+        key = self.w_rank_method.currentData()
+        solvent = self.w_solvent.currentData() if hasattr(self, "w_solvent") else ""
+        have = {"g-xTB": eng_gxtb.available()[0], "tblite": eng_tblite.available()[0],
+                "AIMNet2": engines.available("aimnet2", quick=True)[0]}
+        lines = [guide.summary_html(guide.get("conformer-ranking"))]
+        if key == "auto":
+            pick = ("g-xTB + GFN1-xTB CPCM" if have["g-xTB"] and have["tblite"] else
+                    "AIMNet2 + GFN1-xTB CPCM" if have["AIMNet2"] and have["tblite"] else "the refinement") \
+                if solvent else ("AIMNet2" if have["AIMNet2"] else "g-xTB" if have["g-xTB"] else "the refinement")
+            lines.append(html.escape(f"Here, {'in ' + solvent if solvent else 'in the gas phase'}: {pick} (for "
+                                     "molecules its elements, charge and spin allow; the others fall back, noted).",
+                                     quote=False))
+        needs = {"gxtb+cpcm": ("g-xTB", "tblite"), "gxtb": ("g-xTB",), "aimnet2": ("AIMNet2",),
+                 "aimnet2+cpcm": ("AIMNet2", "tblite"), "auto": ()}.get(key, ())
+        missing = [n for n in needs if not have[n]]
+        if missing:
+            lines.append(html.escape("Not installed here: " + ", ".join(missing) + " (molecules fall back to the "
+                                     "refinement's ranking, noted).", quote=False))
+        if key == "qm" and not (self.w_qm_on.isChecked() if hasattr(self, "w_qm_on") else False):
+            lines.append(html.escape("Needs a QM stage (the QM (DFT) page).", quote=False))
+        self.rank_info.setText("<br>".join(lines))
 
     def _update_qm_widgets(self, _checked=False) -> None:
         on = self.w_qm_on.isChecked()
@@ -1363,7 +1423,10 @@ class MainWindow(QMainWindow):
                 vals = [str(c.rank + 1), u.text(c.rel_kcal, units.KCAL, "relative", 2), f"{100 * c.weight:.1f}",
                         u.text(c.energy_ev, units.EV, "absolute", 5),
                         "yes" if c.converged else "no", str(c.steps),
-                        f"{c.dipole_debye:.2f}" if c.dipole_debye is not None else ""]
+                        f"{c.dipole_debye:.2f}" if c.dipole_debye is not None else "",
+                        u.text(c.rank_energy_ev, units.EV, "absolute", 5) if c.rank_energy_ev is not None else "",
+                        u.text(c.refine_rel_kcal, units.KCAL, "relative", 2) if c.refine_rel_kcal is not None
+                        else ""]
                 for col, v in enumerate(vals):
                     item = QTableWidgetItem(v)
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)

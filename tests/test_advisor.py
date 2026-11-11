@@ -25,10 +25,13 @@ MOLS = {
     "ferrocene_ions": "[Fe+2].c1cc[cH-]c1.c1cc[cH-]c1",
     "tributyltin": "CCCC[Sn](CCCC)(CCCC)Cl",
 }
-#: what the tests pretend is installed (the cloud test machine has only tblite of the engines)
+#: what the tests pretend is installed (the cloud test machine has only tblite of the engines); "gxtb" is the rank
+#: step's g-xTB program (GXTB, ALL_GXTB)
 ALL = {"mmff", "aimnet2", "gfn2-xtb", "gfn1-xtb", "tblite-gfn2", "tblite-gfn1", "xtb-gfn2", "xtb-gfn1", "gfnff",
        "mopac-pm7", "mopac-pm6", "psi4", "crest"}
 TBLITE = {"mmff", "tblite-gfn2", "tblite-gfn1", "psi4"}
+GXTB = TBLITE | {"gxtb"}
+ALL_GXTB = ALL | {"gxtb"}
 
 
 def inputs(*names, extra: dict | None = None):
@@ -188,7 +191,7 @@ def test_coverage_excludes_the_right_methods():
     rows = {c.key: c for c in review(["ethyl_radical", "tributyltin", "octane"]).coverage}
     assert rows["aimnet2"].n_ok == 1 and rows["aimnet2"].n_spin == 1 and rows["aimnet2"].n_elements == 1
     assert rows["gfn2-xtb"].n_ok == 3 and rows["gfn-ff"].n_spin_ignored == 1
-    assert rows["mmff94s"].n_elements == 1 and rows["g-xtb"].installed is None
+    assert rows["mmff94s"].n_elements == 1 and rows["g-xtb"].installed is False and rows["g-xtb"].kind == "rank step"
     assert rows["6-31g*"].ids_excluded == ["tributyltin"]
 
 
@@ -203,13 +206,14 @@ def test_coverage_table_in_the_methods_doc():
 
 # ------------------------------------------------------------------ the conformer-ranking rules
 def test_pfas_ions_ranked_by_gfn2_are_a_problem_and_the_fix_is_measured():
+    # no rank step here (no g-xTB, no AIMNet2): rank auto falls back to the refinement, and the fix is the DFT re-rank
     r = review(["PFOA", "K_PFOS", "FBSA"], "water", available=TBLITE)
     f = keys(r)["rank.gfn2.pfas_ion"]
     assert f.level == "problem" and f.n == 3 and "random pick" in f.message
     assert "0 of 13" in f.why and "RANK-1b" in f.evidence
     assert f.changes == {"qm_method": "wb97x-d/def2-svpd", "qm_top": 8, "energy_window_kcal": 15.0,
                          "refine_top": 20}
-    assert "conformer-ranking" in f.guide and "RANK-2" in f.recommendation
+    assert "conformer-ranking" in f.guide and "Install g-xTB" in f.recommendation
     # with the recommended DFT re-rank configured, it is a note
     done = advisor.review(inputs("PFOA", "K_PFOS"), replace(cfg_for("water"), **f.changes), available=TBLITE)
     g = keys(done)["rank.gfn2.pfas_ion"]
@@ -220,6 +224,51 @@ def test_pfas_ions_ranked_by_gfn2_are_a_problem_and_the_fix_is_measured():
     assert keys(r2)["rank.gfn2.pfas_ion"].changes["qm_method"] == "b3lyp-d3bj/def2-svpd"
 
 
+def test_the_rank_step_replaces_the_dft_rerank_in_water():
+    # g-xTB installed, rank_method refine: the fix is the rank step, not DFT
+    f = keys(review(["PFOA", "K_PFOS"], "water", available=GXTB, rank_method="refine"))["rank.gfn2.pfas_ion"]
+    assert f.level == "problem" and f.changes == {"rank_method": "auto"}
+    assert "g-xTB + GFN1-xTB CPCM" in f.recommendation and "g-xtb" in f.guide
+    # rank auto with g-xTB: the PFAS ions are ranked by g-xTB + CPCM, a note with the measured numbers
+    r = review(["PFOA", "K_PFOS", "ethanol", "octane"], "water", available=GXTB)
+    k = keys(r)
+    g = k["rank.gxtb+cpcm.pfas_ion"]
+    assert g.level == "info" and "12 of 13" in g.why and not g.changes and g.n == 2
+    assert k["rank.gxtb+cpcm.polar"].level == "info" and "26 of 28" in k["rank.gxtb+cpcm.polar"].why
+    assert "rank.gfn2.pfas_ion" not in k and r.counts()["problem"] == 0
+    assert r.settings["rank_levels"] == {"gxtb+cpcm": 4}
+    assert ("conformer ranking", "g-xTB + CPCM(GFN1, water) (4)") in r.steps
+    # without g-xTB but with AIMNet2 and tblite: AIMNet2 + CPCM
+    a = keys(review(["PFOA", "ethanol"], "water", available=ALL))
+    assert a["rank.aimnet2+cpcm.pfas_ion"].level == "info" and "11 of 13" in a["rank.aimnet2+cpcm.pfas_ion"].why
+    # non-fluorinated ions: only moderately, measured on flat pools
+    assert advisor.rank_verdict("gxtb+cpcm", "ion", "water").level == "warning"
+    # an explicit gas-phase rank level in water: a note that the CPCM term ranks PFAS ions better
+    gas_rank = keys(review(["PFOA"], "water", available=GXTB, rank_method="gxtb"))
+    assert gas_rank["rank.gxtb.pfas_ion"].level == "warning" and "CPCM" in gas_rank["rank.gxtb.pfas_ion"].why
+    # a narrow rank window
+    w = keys(review(["PFOA"], "water", available=GXTB, rank_window_kj=10.0))["rank.rank-window"]
+    assert w.changes == {"rank_window_kj": 30.0} and "16-17 of 17" in w.why
+    # rank qm needs a QM level and Psi4; then the QM stage ranks every conformer
+    q = review(["PFOA"], "water", available=GXTB, rank_method="qm", qm_method="wb97x-d/def2-svpd", qm_top=1)
+    assert q.settings["rank_levels"] == {"qm": 1} and keys(q)["rank.qm.pfas_ion"].level == "info"
+    assert review(["PFOA"], "water", available=GXTB, rank_method="qm").settings["rank_levels"] == {"refine": 1}
+
+
+def test_rank_level_follows_coverage_and_phase():
+    m = {i: x for i, x in advisor.molecule_features(inputs("PFOA", "ethanol", "ethyl_radical", "tributyltin"),
+                                                       cfg_for())}
+    cfg = cfg_for()
+    assert advisor.rank_level(cfg, m["ethanol"], "", ALL_GXTB) == "aimnet2"
+    assert advisor.rank_level(cfg, m["ethyl_radical"], "", ALL_GXTB) == "gxtb"        # AIMNet2: closed shells only
+    assert advisor.rank_level(cfg, m["tributyltin"], "", ALL_GXTB) == "gxtb"          # Sn: not AIMNet2's
+    assert advisor.rank_level(cfg, m["tributyltin"], "", ALL) == "refine"
+    assert advisor.rank_level(cfg, m["PFOA"], "water", ALL_GXTB) == "gxtb+cpcm"
+    assert advisor.rank_level(cfg, m["PFOA"], "water", ALL_GXTB - {"tblite-gfn1", "tblite-gfn2"}) == "refine"
+    assert advisor.rank_level(replace(cfg, rank_method="gxtb+cpcm"), m["ethanol"], "", ALL_GXTB) == "gxtb"
+    assert advisor.rank_level(replace(cfg, rank_method="refine"), m["ethanol"], "", ALL_GXTB) == "refine"
+
+
 def test_ranking_rules_by_class_and_phase():
     water = keys(review(["ethanol", "perfluorohexane", "octane"], "water", available=TBLITE))
     assert water["rank.gfn2.polar"].level == "warning" and water["rank.gfn2.polar"].n == 2
@@ -228,8 +277,11 @@ def test_ranking_rules_by_class_and_phase():
     assert "rank.gfn2.pfas_ion" not in water
     gas = keys(review(["ethanol", "octane"], "", available=TBLITE))
     assert gas["rank.gfn2.polar"].level == "info" and not gas["rank.gfn2.polar"].changes   # AIMNet2 not installed
-    gas2 = keys(review(["ethanol", "octane"], "", available=ALL, method="tblite-gfn2"))
-    assert gas2["rank.gfn2.polar"].changes == {"method": "aimnet2"}
+    # GFN2 refinement in the gas phase: the rank step (AIMNet2 single points) ranks, the refinement stays
+    gas2 = keys(review(["ethanol", "octane"], "", available=ALL, method="tblite-gfn2", rank_method="refine"))
+    assert gas2["rank.gfn2.polar"].changes == {"rank_method": "auto"} and "AIMNet2" in gas2["rank.gfn2.polar"].recommendation
+    gas3 = keys(review(["ethanol", "octane"], "", available=ALL, method="tblite-gfn2"))
+    assert gas3["rank.aimnet2-rank.polar"].level == "info" and "39 of 40" in gas3["rank.aimnet2-rank.polar"].why
     aim = keys(review(["ethanol", "octane"], "", available=ALL))                    # auto -> AIMNet2
     assert aim["rank.aimnet2.polar"].level == "info" and "39 of 40" in aim["rank.aimnet2.polar"].why
     hydro = review(["octane"], "water", available=TBLITE)
@@ -385,7 +437,16 @@ def test_presets_are_valid_build_configs(names, solvent):
 
 
 def test_recommended_preset_by_phase():
-    water = review(["PFOA", "ethanol"], "water", available=ALL).preset("recommended")
+    # the rank step here (g-xTB + CPCM): it replaces the DFT re-rank; Careful adds a DFT check of its lowest 8
+    water = review(["PFOA", "ethanol"], "water", available=ALL_GXTB).preset("recommended")
+    assert water.config.rank_method == "auto" and not water.config.qm_method
+    assert water.config.method in ("tblite-gfn2", "xtb-gfn2") and water.config.energy_window_kcal == 15
+    assert "g-xTB + GFN1-xTB CPCM" in water.rationale and water.needs == []
+    careful = review(["PFOA", "ethanol"], "water", available=ALL_GXTB).preset("careful")
+    assert careful.config.qm_method == "wb97x-d/def2-svpd" and careful.config.qm_top == 8
+    assert careful.config.rank_method == "auto"
+    # no rank step here: the DFT re-rank of before RANK-2
+    water = review(["PFOA", "ethanol"], "water", available=TBLITE).preset("recommended")
     assert water.config.qm_method == "wb97x-d/def2-svpd" and water.config.qm_top == 8
     assert water.config.method in ("tblite-gfn2", "xtb-gfn2") and water.config.energy_window_kcal == 15
     gas = review(["ethanol", "octane"], "", available=ALL).preset("recommended")

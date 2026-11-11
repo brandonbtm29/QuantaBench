@@ -65,7 +65,8 @@ molecule falls outside of. The ones that matter most:
 - **AIMNet2** takes 14 elements (H, B, C, N, O, F, Si, P, S, Cl, As, Se, Br, I) and **closed shells only**. Method
   `auto` picks it by elements and does not check the spin, so the review flags open-shell molecules that would go
   to it.
-- **GFN1/GFN2-xTB and GFN-FF** cover H to Rn. **g-xTB** covers H to Lr but is not an engine yet.
+- **GFN1/GFN2-xTB and GFN-FF** cover H to Rn. **g-xTB** covers H to Lr; QuantaBench uses it for the rank step
+  only, and its CPCM term (GFN1-xTB) H to Rn.
 - **MMFF94s** covers C, H, N, O, F, Si, P, S, Cl, Br and I (and a few free metal ions); anything else is
   pre-optimized with UFF. Force fields have no electrons, so they do not model a radical's spin.
 - **PM7 and PM6-D3H4X** (MOPAC) cover H to La and Lu to Bi.
@@ -79,22 +80,27 @@ conformer" (the dipole, shape, Boltzmann averages) follows that choice. Picks ar
 DFT reference's lowest conformer. A random pick is the baseline: a method no better than random gives you an
 arbitrary conformer.
 
-| Molecules | Phase | Rank with (today) | Avoid as the ranker | Evidence |
-|---|---|---|---|---|
-| Pure hydrocarbons | gas or water | GFN2-xTB, or any cheap method | – | RANK-1b: GFN2-xTB 12 of 12 in both phases; every cheap method 10-12 of 12 (their pools span little) |
-| Neutral molecules, polar (O, N, S, P, Si, halogens, neutral PFAS) | gas | AIMNet2 (`auto` takes it where its elements allow) | GFN-FF, MMFF94s, PM6-D3H4X | RANK-1b against r2SCAN-3c: AIMNet2 39 of 40 non-fluorinated and 18 of 20 PFAS; GFN2-xTB 34 of 40 and 15 of 20. RANK-1 (Essential 76 against ωB97X-D/6-31G*): AIMNet2 45 of 53, GFN2-xTB 36, a random pick 25 |
-| Neutral molecules, polar | water | GFN2-xTB/ALPB for geometries; where conformer-dependent descriptors matter, a QM re-rank in PCM (below) | GFN2-xTB/ALPB's own ranking | RANK-1b: GFN2-xTB/ALPB 16 of 28 polar organics and 14 of 20 neutral PFAS (0.6-0.7 of a random pick's regret); g-xTB + GFN1-xTB CPCM 26 of 28 and 19 of 20 |
-| PFAS ions | water | the QM stage on a wide pool: ωB97X-D/def2-SVPD in PCM on the lowest 8, window 15 kcal/mol | GFN2-xTB (any solvent model), PM7, MMFF94s, GFN-FF | RANK-1: GFN2-xTB/ALPB 4 of 17 against ωB97X-D/def2-SVP, a random pick about 5; RANK-1b: 0 of 13 against r2SCAN-3c, regret 36 kJ/mol (1.6 times a random pick's). GFN2-xTB puts short anionic O···F contacts 15-20 kJ/mol each too low. DFT test: DFT's lowest sat at GFN2 rank 2-6, 5-62 kJ/mol above GFN2's lowest |
-| Other ions (carboxylates, ammoniums) | water | as PFAS ions; their pools are flat, so misses are a few kJ/mol | trusting any cheap ranker on surfactant-like ions | RANK-1b: GFN2-xTB/ALPB 4 of 8 (0.73 of a random pick's regret); no xTB or AIMNet2 variant ranked the carboxylates well. The electrostatics-only PCM reference itself favours extended alkyl chains |
-| Any ion | gas | run it in water instead | – | gas-phase ions are unscreened; a multiply charged anion can be unbound |
-| Open-shell molecules | any | GFN2-xTB (tblite or xtb, unrestricted) | AIMNet2 (closed-shell model), force fields (spin ignored) | the AIMNet2 model card |
+**The rank step** (`--rank`, the Conformer ranking page; docs/ENGINES.md, "The rank step") separates the two jobs:
+the refinement method gives the geometries, and a single point of every refined conformer at the rank level picks
+the lowest one, sets the 30 kJ/mol rank window and the Boltzmann weights. Every descriptor then follows the rank
+level, the `xtb_*` properties, the 3D descriptors, the frequencies and the QM stage's conformers included. The
+default, `auto`, ranks by phase: g-xTB + GFN1-xTB CPCM in water, AIMNet2 (else g-xTB) in the gas phase. RANK-2
+checked that the step reproduces the benchmark's picks exactly (docs/VALIDATION.md).
 
-**Coming: the rank step (BACKLOG RANK-2).** g-xTB in the gas phase plus a GFN1-xTB CPCM solvation term ranked best
-of every cheap method: 13 of 17 PFAS ions against ωB97X-D/def2-SVP, 5 of 5 against r2SCAN-3c, 12 of 13 PFAS ions
-and 38 of 40 neutrals in water in RANK-1b. It costs about 0.1 % of a DFT single point. When it lands, it replaces
-the DFT re-rank as the recommendation for water runs, and every descriptor will follow its ranking. Today only the
-QM stage's `qm_*` descriptors follow the DFT-lowest conformer; the `xtb_*` and 3D descriptors stay at the
-refinement's lowest.
+| Molecules | Phase | Rank with (`--rank`) | Avoid as the ranker | Evidence |
+|---|---|---|---|---|
+| Pure hydrocarbons | gas or water | `auto`, or `refine` with GFN2-xTB: any cheap method | – | RANK-1b: GFN2-xTB 12 of 12 in both phases; every cheap method 10-12 of 12 (their pools span little) |
+| Neutral molecules, polar (O, N, S, P, Si, halogens, neutral PFAS) | gas | `auto`: AIMNet2 where its elements and a closed shell allow, else g-xTB | GFN-FF, MMFF94s, PM6-D3H4X, `refine` with GFN2-xTB | RANK-1b against r2SCAN-3c: AIMNet2 39 of 40 non-fluorinated and 18 of 20 PFAS, g-xTB 40 of 40 and 18 of 20; GFN2-xTB 34 of 40 and 15 of 20. RANK-1 (Essential 76 against ωB97X-D/6-31G*): AIMNet2 45 of 53, GFN2-xTB 36, a random pick 25 |
+| Neutral molecules, polar | water | `auto`: g-xTB + GFN1-xTB CPCM (`gxtb+cpcm`); GFN2-xTB/ALPB for the geometries | GFN2-xTB/ALPB's own ranking (`refine`) | RANK-1b: g-xTB + GFN1-xTB CPCM 26 of 28 polar organics and 19 of 20 neutral PFAS; GFN2-xTB/ALPB 16 of 28 and 14 of 20 (0.6-0.7 of a random pick's regret) |
+| PFAS ions | water | `auto`: `gxtb+cpcm`; for DFT-quality descriptors, add a QM stage on the rank step's lowest 8 in PCM (r2SCAN-3c or a diffuse basis, not def2-SVP) | GFN2-xTB (any solvent model), PM7, MMFF94s, GFN-FF | RANK-1b: g-xTB + GFN1-xTB CPCM 12 of 13 against r2SCAN-3c (regret 0.6 kJ/mol), RANK-1: 13 of 17 against ωB97X-D/def2-SVP, at about 0.1 % of a DFT single point; its 30 kJ/mol window kept DFT's lowest in 17 of 17. GFN2-xTB/ALPB: 0 of 13 (regret 36 kJ/mol, 1.6 times a random pick's) and 4 of 17; it puts short anionic O···F contacts 15-20 kJ/mol each too low |
+| Other ions (carboxylates, ammoniums) | water | `auto`, knowing that no cheap ranker did well here; their pools are flat, so misses are a few kJ/mol | trusting any cheap ranker on surfactant-like ions | RANK-1b: g-xTB + GFN1-xTB CPCM 5 of 8, GFN2-xTB/ALPB 4 of 8 (0.73 of a random pick's regret). The electrostatics-only PCM reference itself favours extended alkyl chains |
+| Any ion | gas | run it in water instead | – | gas-phase ions are unscreened; a multiply charged anion can be unbound |
+| Open-shell molecules | any | `auto`: g-xTB (unrestricted) in the gas phase, g-xTB + CPCM in water; GFN2-xTB (tblite or xtb) for the geometries | AIMNet2 (closed-shell model), force fields (spin ignored) | the AIMNet2 model card |
+
+What the rank step costs: in water 0.3-1.3 s per refined conformer on one thread (median 0.8; most of it the CPCM SCF),
+about as long as the GFN2-xTB/ALPB refinement itself for 20 refined PFAS ions; in the gas phase almost nothing.
+Without g-xTB (not installed, or a macOS build without its libgcc_s), `auto` uses AIMNet2 + CPCM in water, and
+without AIMNet2 either, the refinement's ranking, with a note on each molecule; the review says which.
 
 ## DFT levels: what each part corrects
 
@@ -162,13 +168,15 @@ basis sets cover every element.
 | Preset | Gas phase | Water |
 |---|---|---|
 | Fast screen | RDKit (30), the lowest 10 refined with AIMNet2 (or GFN2-xTB), no DFT | RDKit (30), the lowest 10 with GFN2-xTB/ALPB, no DFT; the conformer choice of polar molecules and ions is rough |
-| Recommended | RDKit (50), the lowest 20 with AIMNet2 (or GFN2-xTB), no DFT: neutral dipoles hardly depend on the conformer | RDKit (50), the lowest 20 with GFN2-xTB/ALPB; for polar molecules and ions, a 15 kcal/mol window and ωB97X-D/def2-SVP(D) in PCM on the lowest 8 |
-| Careful | CREST at GFN-FF (or 200 RDKit conformers), the lowest 30 refined, ωB97X-D/def2-TZVP (def2-SVPD for anions) on the lowest 3 | CREST at GFN-FF in ALPB water (or 200 RDKit conformers), the lowest 30, ωB97X-D/def2-SVPD in PCM on the lowest 12 |
+| Recommended | RDKit (50), the lowest 20 with AIMNet2 (or GFN2-xTB), ranked by the rank step (AIMNet2 or g-xTB), no DFT: neutral dipoles hardly depend on the conformer | RDKit (50, a 15 kcal/mol force-field window), the lowest 20 with GFN2-xTB/ALPB, ranked with g-xTB + GFN1-xTB CPCM, no DFT. Without a rank engine here: ωB97X-D/def2-SVP(D) in PCM on the lowest 8, as before RANK-2 |
+| Careful | CREST at GFN-FF (or 200 RDKit conformers), the lowest 30 refined and ranked, ωB97X-D/def2-TZVP (def2-SVPD for anions) on the lowest 3 | CREST at GFN-FF in ALPB water (or 200 RDKit conformers), the lowest 30, ranked with g-xTB + GFN1-xTB CPCM, then ωB97X-D/def2-SVPD in PCM checks the rank step's lowest 8 (without a rank engine: the lowest 12) |
+
+Every preset sets `--rank auto` and its 30 kJ/mol window.
 
 ## Not there yet
 
-- The rank step (BACKLOG RANK-2): g-xTB + GFN1-xTB CPCM as the ranker, and every descriptor from the ranked lowest
-  conformer.
-- r2SCAN-3c in the QM stage, and SMD solvation.
+- r2SCAN-3c in the QM stage (the DFT check RANK-1b recommends after the rank step), and SMD solvation.
+- A two-level rank (the QM stage ranking only the conformers within the cheap ranker's window): `--rank qm` ranks
+  every conformer at DFT cost.
 - Measured rankings for transition-metal compounds and other elements outside the benchmark sets (the review
   checks their coverage only).

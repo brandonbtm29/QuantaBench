@@ -87,8 +87,9 @@ def test_dxtb_kept_on_cpu_is_recorded(tmp_path, monkeypatch):
     monkeypatch.setattr(engines, "supports", lambda key, numbers: (True, ""))
     monkeypatch.setattr(engines, "make_calculator",
                         lambda key, numbers, q, m, dev, **_: seen.append(dev) or Harmonic(dev))
-    r = pipeline.run_molecule(from_smiles(PFOA, id="PFOA"), cfg(tmp_path, method="gfn1-xtb", batched="off"),
-                              device="cuda:0", threads=1)
+    # rank "refine": the patched engines would make 'auto' rank with the stand-in AIMNet2 on cuda:0 (chem.rank)
+    r = pipeline.run_molecule(from_smiles(PFOA, id="PFOA"), cfg(tmp_path, method="gfn1-xtb", batched="off",
+                                                               rank_method="refine"), device="cuda:0", threads=1)
     assert r.status == "ok", r.error
     assert r.device == "cpu" and set(seen) == {"cpu"} and r.notes.count(why) == 1
 

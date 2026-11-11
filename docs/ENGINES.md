@@ -21,11 +21,112 @@ the same text as Help > Methods guide... and `quantabench-cli methods NAME`.
 | `mopac-pm7`, `mopac-pm6` | PM7, PM6-D3H4X (MOPAC) | semi-empirical | external | COSMO | yes | energy = ΔHf |
 | CREST | iMTD-GC conformer search | conformers | external | ALPB | via WSL | `--conformers crest`; macOS: the fork build, not conda-forge's (below) |
 | Psi4 | DFT/HF QM stage | DFT | external (own env) | PCM | yes | `--qm wb97x-d/def2-svp` |
+| g-xTB (`gxtb`) | the official g-xTB build of xtb | tight binding | external | (its own: provisional, not used) | yes | the rank step only (`--rank`), not a refinement engine (below) |
 
 `method="auto"` tries AIMNet2 > GFN2-xTB (dxtb) > GFN2-xTB (tblite) > GFN2-xTB (xtb) > GFN1-xTB > MMFF,
 and with a solvent prefers the engines that can model it. When it passes an installed engine over for a
 molecule's elements, the notes say so ("auto: AIMNet2 (ML, wB97M-D3) has no parameters for Sn; using
 GFN2-xTB (dxtb + libcint)"), so a batch that mixes levels of theory is visible in `summary.csv`.
+
+## The rank step: which level ranks the conformers (`--rank`, RANK-2)
+
+After the refinement every refined conformer gets a single point at the **rank level**, at its refined geometry.
+Those energies decide the lowest conformer, the rank window and the Boltzmann weights, so every descriptor taken from
+the lowest conformer or the ensemble follows the rank level: `dipole_debye_best` and `_boltz`, the 3D `_best` and
+`_boltz` descriptors, the `xtb_*` properties, the frequencies and the QM stage's `--qm-top` conformers. Before the
+rank step the refined conformers are pruned only as RMSD duplicates (`--rmsd`), never by their refinement energy; the
+rank window (`--rank-window`, default 30 kJ/mol, Settings: the Conformer ranking page, in the display unit) prunes
+after it. Why: GFN2-xTB ranks polar molecules poorly and PFAS ions no better than a random pick, and its
+6 kcal/mol window dropped DFT's lowest conformer in 6 of 17 PFAS ions (docs/VALIDATION.md, RANK-1 and RANK-1b).
+
+| `--rank` | Energies | Engines |
+|---|---|---|
+| `auto` (default) | by phase: in a solvent `gxtb+cpcm`, else `aimnet2+cpcm`, else `refine`; in the gas phase `aimnet2` when its 14 elements, the charge and a closed shell take the molecule, else `gxtb`, else `refine` | as below |
+| `refine` | the refinement method's, pruned with `--window` (QuantaBench before RANK-2) | the refinement's |
+| `gxtb+cpcm` | g-xTB gas + ΔG_solv = E(GFN1-xTB CPCM) − E(GFN1-xTB gas) at the same geometry, in the run's solvent; in the gas phase `gxtb` | g-xTB, tblite (ddX) |
+| `gxtb` | g-xTB in the gas phase | g-xTB |
+| `aimnet2` | AIMNet2 in the gas phase (the refinement's own energies when it refined with AIMNet2) | AIMNet2 |
+| `aimnet2+cpcm` | AIMNet2 + the same ΔG_solv; in the gas phase `aimnet2` | AIMNet2, tblite |
+| `qm` | the QM stage's level (`--qm`) on every conformer; the QM stage then runs once, as the rank step | Psi4 |
+
+- **Fallbacks.** A level that cannot run for a molecule (a program missing or not starting, elements outside its
+  parameters, an open shell for AIMNet2, no `--qm` for `qm`) falls back: `auto` down its list, an explicit level to
+  `refine`. The molecule's notes say why ("rank auto -> aimnet2+cpcm: g-xTB not found: ..."), and `summary.csv`
+  `rank_level` gives the level each molecule used. A conformer whose single point fails is left out (noted); when
+  every one fails, or the step raises, the molecule is ranked at the refinement level and goes on.
+- **Outputs.** `summary.csv`: `rank_method` (asked), `rank_level` (used), `rank_energy_eV` (the pick's),
+  `rank_pick_changed` (the pick differs from the refinement's lowest), `rank_n_pool`; `descriptors.csv`:
+  `rank_method` (the level used). Per conformer (`<id>_summary.json`, the SDF's `QB_RankEnergy_eV`,
+  `QB_RefineRelEnergy_kcal` and `QB_RankLevel`, the GUI's conformer table): `rank_energy_ev` and `refine_rel_kcal`;
+  `rel_kcal` and the weight follow the rank level, `energy_ev` stays the refinement's. `<id>_summary.json` `rank`:
+  the level asked and used, every pooled conformer with its refinement and rank energies and the terms (g-xTB, GFN1
+  gas and CPCM, ΔG_solv), kept or not, the pick, whether it changed and where it sat in the refinement's order, the
+  engines (g-xTB release, platform, SHA-256 and xtb version line), threads and seconds. Phase notes in a solvent run:
+  `rank: g-xTB + CPCM(GFN1, water)`.
+- **Run timings.** A `rank` stage in `telemetry_stages`, its engine naming the g-xTB build ("g-xTB 2.0.1 (sha256
+  c2af5f3db917) + tblite 0.8.0 GFN1-xTB CPCM (ddX, water)"); `telemetry_runs.engines_json` records the build in
+  full, and `config_json` the rank method and window.
+- **Threads.** g-xTB runs with the molecule's threads (`OMP_NUM_THREADS`; a lane's, usually 1); tblite runs in the
+  process with the OpenMP threads it started with (the lane's); AIMNet2 on the run's device.
+- **Cost** (NOVA, 1-thread lanes at idle priority, RANK-2 integration check): g-xTB about 0.1 s per single point for
+  20-40 atoms, the program's start included; the GFN1-xTB gas + CPCM pair 0.2-1.2 s (the ddX CPCM SCF is most of it;
+  one calculator per molecule restarts from the previous conformer's wavefunction); AIMNet2 0.01 s, after 5-8 s to
+  load its model once per process. For PFAS and other ions in water with up to 20 refined conformers that was 14 s
+  per molecule (median of 8; 0.76 s per conformer), 0.7 times the GFN2-xTB/ALPB refinement's own time; in the gas
+  phase 0.07 s (median of 10 neutrals), plus the model load once per lane.
+- **Cache.** The g-xTB and tblite energies are cached per conformer (geometry rounded to 1e-6 Å, charge, spin,
+  solvent and the engine's build) in `rank_singlepoints.sqlite` in the per-machine cache folder
+  (`QUANTABENCH_CACHE_DIR`; never the run folder or the settings), so a molecule computed again after an
+  interruption, a time limit or a crashed lane reuses them.
+- **Resume.** `rank_method` and `rank_window_kj` are science settings: resuming with another value is refused unless
+  forced. A run folder from before RANK-2 has no `rank_method` and resumes as `refine`, unchanged (`build --resume`
+  and the GUI take it from the folder); the rank window does not count while both sides rank at `refine`.
+- **Several machines.** `grid build` with `--rank auto` warns: a machine without g-xTB or AIMNet2 falls back to
+  another level (`rank_level` shows it). Install the same rank engines everywhere, or pass `--rank` explicitly.
+
+## g-xTB (`gxtb`, the rank step)
+
+[g-xTB](https://github.com/grimme-lab/g-xtb) (Froitzheim, Müller, Hansen, Grimme, 2025) is a tight-binding method
+fitted toward ωB97M-V/def2-TZVPPD for H to Lr. Release v2.0.1 (2026-05-14) is the official build of the xtb program
+(a modified xtb 6.7.1 with a modified tblite) run with `--gxtb`; its release notes call it "a preliminary release for
+testing purposes" whose parameters are still being optimized. QuantaBench uses it for the rank step only
+(`chem/eng_gxtb.py`), not as a refinement engine.
+
+- **Finding it.** Its executable is also called `xtb`, so it is its own program entry, `gxtb`: this machine's path
+  in the settings (`quantabench-cli settings --engine-path gxtb=/path/to/bin/xtb`, which the installers run), else
+  `QUANTABENCH_GXTB`, else a program named `gxtb` on PATH or in a conda environment. A plain `xtb` is never taken for
+  it. `doctor` shows the build ("g-xTB 2.0.1 (sha256 ...)", or "unknown build").
+- **The command.** `xtb calc.xyz --gxtb --chrg Q --norestart`, plus `--uhf N` only for open shells (any `--uhf`, even
+  0, switches g-xTB to an unrestricted wavefunction); the energy is the `:: total energy` line (v2.0.1 exits with an
+  error when the SCF does not converge, and writes no `xtbout.json`). `OMP_STACKSIZE` is capped at 1G (the Windows
+  build's libgomp rejects 4G), and the executable's folder goes first on PATH (the Windows DLLs). This is RANK-1's
+  command (`scratch/rank1/cands.py`), with `--norestart` so a cached energy does not depend on the conformer before.
+- **Builds** (v2.0.1, all checked 2026-11-11; the installers pin the archive's SHA-256, `KNOWN_BUILDS` the
+  executable's, which every molecule's `rank` record and the run's telemetry name):
+
+  | Platform | Asset | Archive SHA-256 | Executable SHA-256 | Status |
+  |---|---|---|---|---|
+  | Windows x86-64 | `xtb-6.7.1-gxtb-140526-windows-x86_64.zip` | `fa6d6491…ca41830` | `c2af5f3d…e926cff6` | runs (NOVA; RANK-1's build) |
+  | Linux x86-64 | `xtb-6.7.1-gxtb-140526-linux-x86_64.tar.xz` | `cdfb8116…6d9e5c` | `1b4e30b6…f8121cd26` | runs (statically linked; the cloud test VM) |
+  | macOS arm64 | `xtb-6.7.1-gxtb-140526-macos-arm64.tar.gz` | `035a37f2…1e098af` | `874673d1…a7979bf` | runs once `lib/libgcc_s.1.1.dylib` is added (below) |
+  | macOS x86-64 | `xtb-6.7.1-gxtb-140526-macos-x86_64.tar.gz` | `3f5f7ee8…e3b62` | `e0616f9b…593e62e` | not run (no Intel Mac) |
+
+  The full hashes are in `scripts/fork-packages.json` and `chem/eng_gxtb.py`. The three builds that ran give the
+  same energies to 1e-12 Eh (water −76.437513740591 Eh, acetate −228.551690416626 Eh).
+- **macOS arm64.** The archive's `libgfortran.5.dylib` needs `@rpath/libgcc_s.1.1.dylib`, which the archive does not
+  ship: on a Mac without Homebrew's gcc, dyld stops the program at once. `install_macos.sh --with-engines` copies
+  conda-forge's `libgcc_s.1.1.dylib` from the `qb-tools` environment into the build's `lib` folder (or Homebrew's,
+  `brew install gcc`). `DYLD_FALLBACK_LIBRARY_PATH` is no way around it: macOS drops `DYLD_*` variables when a
+  protected program such as `nice` starts the next one. QuantaBench checks that the program starts (`xtb --version`,
+  once per process) and otherwise treats g-xTB as missing, so `auto` falls back to AIMNet2 + CPCM, then the
+  refinement, with a note.
+- **License.** The grimme-lab/g-xtb repository is GPL-3.0; xtb itself is LGPL-3.0. QuantaBench (MIT) never bundles or
+  links it: the installers download the official build to the user's programs folder, and QuantaBench runs it as the
+  user's own separate program, as with Open Babel.
+- **Installers.** `--with-engines` (`-WithEngines` on Windows) downloads the platform's build from
+  `scripts/fork-packages.json` ("programs" > "gxtb"), checks its SHA-256, unpacks it under the per-user programs folder
+  (`%LOCALAPPDATA%\QuantaBench\programs`, `~/Library/Application Support/QuantaBench/programs`,
+  `~/.local/share/QuantaBench/programs`) and sets it as this machine's `gxtb` path.
 
 ## Elements, salts, metals, charge and spin
 
