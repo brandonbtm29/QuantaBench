@@ -334,12 +334,16 @@ class Handoff:
     def closed(self) -> bool:
         return self._closed
 
-    def request(self, n: int, dest: str = "", timeout: float = 30.0) -> list[str]:
-        """Ask for up to ``n`` unstarted molecules; returns their ids (now 'moved' in the job table)."""
+    def request(self, n: int, dest: str = "", timeout: float = 30.0, want: Sequence[str] | None = None) -> list[str]:
+        """Ask for up to ``n`` unstarted molecules (``want``: exactly these ids, those not started yet); returns
+        their ids (now 'moved' in the job table)."""
+        if want is not None:
+            want = list(dict.fromkeys(want))
+            n = len(want)
         if n <= 0:
             return []
         with self._one:
-            req = {"n": int(n), "dest": str(dest), "ids": None, "event": threading.Event()}
+            req = {"n": int(n), "dest": str(dest), "ids": None, "event": threading.Event(), "want": want}
             with self._lock:
                 if self._closed:
                     return []
@@ -360,7 +364,10 @@ class Handoff:
             if req is None:
                 return
             try:
-                req["ids"] = list(take(req["n"], req["dest"]))
+                if req.get("want") is not None:
+                    req["ids"] = list(take(req["n"], req["dest"], req["want"]))
+                else:
+                    req["ids"] = list(take(req["n"], req["dest"]))
             finally:
                 req["event"].set()
 
@@ -371,6 +378,78 @@ class Handoff:
             if req is not None:
                 req["ids"] = []
                 req["event"].set()
+
+
+#: ``BatchControl.mode`` values: dispatch as usual; hand out no new molecule but keep going (a paused GUI batch, a
+#: worker waiting for its grid client after a sleep); hand out no new molecule and return once none is running
+#: (a paused worker job, which then frees its lanes and memory and resumes later from the job table)
+CONTROL_MODES = ("run", "hold", "drain")
+
+
+class BatchControl:
+    """Live control of a running batch (DIST-7: pausing a machine), read by the batch's own loop between molecules.
+
+    - ``mode``: ``"run"``, ``"hold"`` or ``"drain"`` (``CONTROL_MODES``).
+    - ``interrupt``: with hold or drain, also stop the molecules in progress at their next checkpoint (a pause
+      "now"). They are recorded ``cancelled``, so they are not started yet as far as anyone is concerned: a hold
+      puts them back at the front of its queue, a drain leaves them for the next run of the job table, and either
+      way they can be handed to another machine (``Handoff``, ``release_unstarted``). The loop clears it once
+      nothing runs.
+    - ``priority``: a run priority to apply to the batch's lane processes now (``priority.apply_to_pids``: lowered
+      live everywhere, raised only where the OS lets a process raise its own children, i.e. Windows).
+    - ``source``: optional callable polled every ``interval`` seconds that returns a dict of the same keys (or None),
+      for a control kept in a file (this machine's pause state: ``dist.control``).
+
+    Attributes are plain values (one writer at a time); the loop only reads them through ``poll``."""
+
+    def __init__(self, source: Callable[[], dict | None] | None = None, interval: float = 2.0):
+        self.mode = "run"
+        self.interrupt = False
+        self.priority: str | None = None
+        self.source = source
+        self.interval = float(interval)
+        self._polled = 0.0
+        self.applied_priority: str | None = None    # set by the batch once it applied ``priority``
+        self.idle_since: float | None = None        # monotonic time the batch last had nothing running while held
+
+    def set(self, mode: str | None = None, interrupt: bool | None = None, priority: str | None = None) -> None:
+        if mode is not None:
+            if mode not in CONTROL_MODES:
+                raise ValueError(f"mode must be one of {', '.join(CONTROL_MODES)}, not {mode!r}")
+            self.mode = mode
+        if interrupt is not None:
+            self.interrupt = bool(interrupt)
+        if priority is not None:
+            self.priority = priority
+
+    def poll(self) -> str:
+        """The mode in force (reads ``source`` when it is due). Never raises."""
+        if self.source is not None:
+            import time as _time
+
+            now = _time.monotonic()
+            if now - self._polled >= self.interval:
+                self._polled = now
+                try:
+                    got = self.source()
+                except Exception:  # noqa: BLE001 - a control that cannot be read leaves the batch as it is
+                    got = None
+                if isinstance(got, dict):
+                    mode = got.get("mode", "run")
+                    if mode in CONTROL_MODES:
+                        if mode != self.mode and mode != "run" and got.get("interrupt"):
+                            self.interrupt = True
+                        if mode == "run":
+                            self.interrupt = False
+                        self.mode = mode
+                    if got.get("priority"):
+                        self.priority = str(got["priority"])
+        return self.mode
+
+    @property
+    def stopping_running(self) -> bool:
+        """Molecules in progress should stop at their next checkpoint (a pause "now")."""
+        return self.interrupt and self.mode != "run"
 
 
 class JobStore:
@@ -541,6 +620,10 @@ class JobStore:
                                      "AND status IN ('pending', 'cancelled')", (note, _now(), mol_id)).rowcount:
                     moved.append(mol_id)
         return moved
+
+    def statuses(self) -> dict[str, str]:
+        """{id: status} of every molecule (the grid client's view of which ones a machine has not started)."""
+        return {r["id"]: r["status"] for r in self.conn.execute("SELECT id, status FROM molecules ORDER BY seq")}
 
     def counts(self) -> dict[str, int]:
         out = dict.fromkeys(STATUSES, 0)
@@ -764,7 +847,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
                   lanes: list | None = None, keep_results: bool = True,
                   speed_aware: bool | None = None,
                   handoff: Handoff | None = None,
-                  dynamic_threads: bool | None = None) -> tuple[list[MoleculeResult], Path]:
+                  dynamic_threads: bool | None = None,
+                  control: BatchControl | None = None) -> tuple[list[MoleculeResult], Path]:
     """Run (or continue) a batch in ``run_dir``; returns the results computed by this call.
 
     ``keep_results=False`` returns light copies (``light_result``: no RDKit molecule, no normal modes) so a
@@ -788,17 +872,22 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
 
     ``handoff``: lets another thread take molecules this call has not started (``Handoff``); it is closed
     when the call returns.
+
+    ``control`` (``BatchControl``): pause this batch while it runs: hold (no new molecule), drain (no new molecule,
+    return once none runs; the rest stays in the job table) and, with ``interrupt``, stop the molecules in progress
+    at their next checkpoint; also a run priority applied live to the lane processes.
     """
     try:
         return _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, retry_failed, chunk,
-                              force, lanes, keep_results, speed_aware, handoff, dynamic_threads)
+                              force, lanes, keep_results, speed_aware, handoff, dynamic_threads, control)
     finally:
         if handoff is not None:
             handoff.close()
 
 
 def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, retry_failed, chunk, force,
-                   lanes, keep_results, speed_aware, handoff, dynamic_threads=None) -> tuple[list[MoleculeResult], Path]:
+                   lanes, keep_results, speed_aware, handoff, dynamic_threads=None,
+                   control=None) -> tuple[list[MoleculeResult], Path]:
     run_dir = Path(run_dir).expanduser()
     run_dir.mkdir(parents=True, exist_ok=True)
     chunk = check_chunk(chunk)
@@ -858,7 +947,7 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
             with priority.children_at(cfg.priority):
                 results = _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, done_before,
                                     progress, should_stop, log, on_result, keep_results, speed_aware, handoff,
-                                    dynamic_threads, thread_budget)
+                                    dynamic_threads, thread_budget, control)
         finally:
             tm.close(store)          # never raises: an exception from the run itself stays the one raised
         counts = store.counts()
@@ -884,7 +973,8 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
 
 
 def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, done_before, progress, should_stop, log,
-              on_result, keep_results, speed_aware, handoff, dynamic_threads, thread_budget) -> list[MoleculeResult]:
+              on_result, keep_results, speed_aware, handoff, dynamic_threads, thread_budget,
+              control=None) -> list[MoleculeResult]:
     """The molecules of ``todo``: in lane processes (``dist.lanes.run_parallel``) or one after the other here.
     ``tm``: this call's telemetry (``chem.telemetry``); ``wide``: the dynamic CREST thread budget (0 = off)."""
     from dataclasses import replace
@@ -897,7 +987,7 @@ def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, don
                                       on_result=on_result, keep_results=keep_results,
                                       speed_aware=speed_aware, handoff=handoff,
                                       dynamic_threads=dynamic_threads, thread_budget=thread_budget,
-                                      telemetry=tm, cost_model=cost_model)
+                                      telemetry=tm, cost_model=cost_model, control=control)
     if lanes and lanes[0].device != "auto":       # one explicit lane, e.g. "cpu:1x4": its device and threads
         threads = resources.apply_thread_limits(lanes[0].threads)
         cfg_run = replace(cfg, threads=threads)
@@ -920,8 +1010,15 @@ def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, don
     queue = deque(todo)
     results: list[MoleculeResult] = []
 
-    def take(n: int, dest: str) -> list[str]:      # Handoff: the end of the queue, not started yet
-        picked = [queue.pop() for _ in range(min(n, len(queue)))]
+    def take(n: int, dest: str, want=None) -> list[str]:      # Handoff: the end of the queue, not started yet
+        if want is not None:                       # these ids (a grid client took them back: DIST-7)
+            wanted = set(want)
+            picked = [item for item in queue if item[0] in wanted]
+            for item in picked:
+                queue.remove(item)
+            picked.reverse()
+        else:
+            picked = [queue.pop() for _ in range(min(n, len(queue)))]
         moved = set(store.mark_moved([mol_id for mol_id, _ in picked], dest))
         queue.extend(item for item in reversed(picked) if item[0] not in moved)   # could not move: kept
         if moved:
@@ -929,6 +1026,11 @@ def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, don
         return [mol_id for mol_id, _ in picked if mol_id in moved]
 
     k = -1
+    held_logged = False
+
+    def stop_now() -> bool:           # a cancel, or a pause "now" (BatchControl.interrupt)
+        return should_stop() or (control is not None and control.stopping_running)
+
     while queue:
         if handoff is not None:
             handoff.serve(take)
@@ -936,6 +1038,27 @@ def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, don
                 break
         if should_stop():
             break
+        mode = control.poll() if control is not None else "run"
+        if mode != "run":
+            if control.interrupt:
+                control.interrupt = False      # nothing runs between molecules: done
+            if mode == "drain":
+                log(f"Paused: {len(queue)} molecule(s) not started stay in the job table")
+                break
+            if not held_logged:
+                held_logged = True
+                log(f"Paused: no new molecule starts ({len(queue)} waiting)")
+            if control.idle_since is None:
+                import time as _time
+
+                control.idle_since = _time.monotonic()
+            threading.Event().wait(0.2)
+            continue
+        if held_logged:
+            held_logged = False
+            log("Resumed")
+        if control is not None:
+            control.idle_since = None
         mol_id, inp = queue.popleft()
         k += 1
         i = done_before + k
@@ -944,8 +1067,16 @@ def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, don
         tm.dispatched(mol_id, inp, lane_name=lane_name, lane_device=device, lane_threads=threads, width=crest_width,
                       k=k)
         store.mark_running(mol_id)
-        res = pipeline.run_molecule_limited(inp, cfg_run, device, threads, should_stop, log,
+        res = pipeline.run_molecule_limited(inp, cfg_run, device, threads, stop_now, log,
                                             stage=lambda s, i=i, mol_id=mol_id: progress(i, total, s, mol_id))
+        if res.status == "cancelled" and not should_stop():
+            # stopped by a pause "now": not started as far as the batch is concerned; it runs again on resume
+            tm.end_attempt(mol_id, res)
+            store.record(res, "")
+            queue.appendleft((mol_id, inp))
+            k -= 1
+            log(f"Paused now: {mol_id} stopped at a checkpoint; it starts again on resume")
+            continue
         result_dir = ""
         if cfg.write_files and res.status == "ok":
             with telemetry.export_clock(res, threads):
@@ -962,6 +1093,29 @@ def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, don
         results.append(res if keep_results else light_result(res))
         progress(i + 1, total, res.status, mol_id)
     return results
+
+
+def release_unstarted(run_dir: str | Path, n: int | None = None, dest: str = "", ids: Sequence[str] | None = None,
+                      log: Callable[[str], None] = _noop) -> list[str]:
+    """Hand molecules of a run folder that is *not* running (a paused or queued worker job) to another machine:
+    they become 'moved', as a running batch's ``Handoff`` does it. ``ids``: exactly these (those that have not
+    started; finished or running rows are left alone), else up to ``n`` from the end of the queue. Takes the run
+    lock, so it refuses a folder another process is running (``RunInUseError``). Returns the ids that moved."""
+    run_dir = Path(run_dir).expanduser()
+    if not (run_dir / DB_NAME).is_file():
+        return []
+    with _RunLock(run_dir, False, log), JobStore(run_dir, create=False) as store:
+        if ids is not None:
+            wanted = list(dict.fromkeys(ids))
+        else:
+            if not n or n <= 0:
+                return []
+            todo = [mol_id for mol_id, _ in store.todo()]
+            wanted = todo[-int(n):][::-1]
+        moved = store.mark_moved(wanted, dest)
+    if moved:
+        log(f"{len(moved)} molecule(s) not started here go to {dest or 'another machine'}")
+    return moved
 
 
 # --------------------------------------------------------------------------------------- status
@@ -1029,15 +1183,23 @@ def open_run(run_dir: str | Path) -> RunStatus:
                      failures=failures, fallbacks=fallbacks)
 
 
+_SRC = "\0src"      # the run folder a row was read from (merge_tables only; never written)
+
+
 def merge_tables(run_dirs: Iterable[str | Path], out_dir: str | Path,
-                 log: Callable[[str], None] = _noop) -> list[Path]:
+                 log: Callable[[str], None] = _noop, winners: dict[str, str | Path] | None = None) -> list[Path]:
     """Combine summary.csv and descriptors.csv of several run folders (e.g. one per machine/chunk).
 
     Reads the CSV tables, which ``run_resumable`` rewrites when it ends. A folder without them (a chunk
     that crashed or is still running) is read from its job table instead, opened read-only, and reported
     through ``log``, as is a folder that does not exist. If an id appears twice, an 'ok' row wins over a
-    failed one.
+    failed one, unless ``winners`` names the run folder whose row to keep for that id (a grid's first-done
+    rule: ``dist.client.merge``); every id is written once.
     """
+    def key(d) -> str:
+        return os.path.normcase(os.path.abspath(Path(d).expanduser()))
+
+    win = {i: key(d) for i, d in (winners or {}).items()}
     run_dirs = [Path(d).expanduser() for d in run_dirs]
     out_dir = Path(out_dir).expanduser()
     tables: dict[str, list[dict]] = {"summary.csv": [], "descriptors.csv": []}
@@ -1060,12 +1222,12 @@ def merge_tables(run_dirs: Iterable[str | Path], out_dir: str | Path,
                 f"molecule(s) in {DB_NAME}. `quantabench-cli build --resume {d}` finishes it.")
             for r in stored:
                 row = {k: "" if v is None else v for k, v in r.summary_row().items()}
-                tables["summary.csv"].append(row)
                 keys["summary.csv"] += [k for k in row if k not in keys["summary.csv"]]
+                tables["summary.csv"].append({**row, _SRC: key(d)})
                 if r.descriptors:
                     drow = {k: "" if v is None else v for k, v in export.descriptor_row(r).items()}
-                    tables["descriptors.csv"].append(drow)
                     keys["descriptors.csv"] += [k for k in drow if k not in keys["descriptors.csv"]]
+                    tables["descriptors.csv"].append({**drow, _SRC: key(d)})
             continue
         for name in tables:
             path = d / name
@@ -1074,20 +1236,24 @@ def merge_tables(run_dirs: Iterable[str | Path], out_dir: str | Path,
             with open(path, newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 keys[name] += [k for k in reader.fieldnames or [] if k not in keys[name]]
-                tables[name] += list(reader)
+                tables[name] += [{**row, _SRC: key(d)} for row in reader]
     written = []
     for name, rows in tables.items():
         merged: dict[str, dict] = {}
         for row in rows:
             old = merged.get(row["id"])
-            if old is None or old.get("status") != "ok":
+            want = win.get(row["id"])
+            if want is not None:
+                if old is None or (row[_SRC] == want and old[_SRC] != want):
+                    merged[row["id"]] = row
+            elif old is None or old.get("status") != "ok":
                 merged[row["id"]] = row
         if not merged:
             continue
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / name
         with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=keys[name])
+            w = csv.DictWriter(f, fieldnames=keys[name], extrasaction="ignore")
             w.writeheader()
             w.writerows(merged.values())
         written.append(path)

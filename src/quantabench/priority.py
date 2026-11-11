@@ -315,6 +315,70 @@ def apply_to_process(level) -> str:
     return f"{level} ({', '.join(done)}){note}"
 
 
+def _pid_level(p, system: str) -> str:
+    """The level process ``p`` (psutil) runs at now."""
+    if system == "win32":
+        cls = int(p.nice())
+        return {IDLE_PRIORITY_CLASS: "background", BELOW_NORMAL_PRIORITY_CLASS: "low"}.get(cls, "normal")
+    nice = int(p.nice())
+    return "background" if nice >= NICE["background"] else "low" if nice >= NICE["low"] else "normal"
+
+
+def apply_to_pids(pids, level, *, children: bool = True, system: str | None = None) -> str:
+    """Set running processes (``pids``, and with ``children`` the programs they started: CREST, xtb, Psi4) to
+    ``level`` now, for a run priority changed while a batch runs (DIST-7: the Machines dock, ``machines set``).
+
+    Lowering works everywhere. Raising works on Windows (a process may raise its own children's class up to its own),
+    not on POSIX without privileges (a nice value only goes up): there a raised level is reported and takes effect
+    for the next lanes the batch starts. Returns a line for the log; never raises."""
+    system = system or sys.platform
+    want = normalize(level)
+    try:
+        import psutil
+    except ImportError:  # pragma: no cover - psutil is a dependency
+        return "not applied (no psutil)"
+    procs: dict[int, object] = {}
+    for pid in pids or ():
+        try:
+            p = psutil.Process(int(pid))
+        except (psutil.Error, ValueError, TypeError):
+            continue
+        procs[p.pid] = p
+        if children:
+            with contextlib.suppress(psutil.Error):
+                for c in p.children(recursive=True):
+                    procs[c.pid] = c
+    changed = kept = failed = 0
+    for p in procs.values():
+        try:
+            now = _pid_level(p, system)
+            if now == want:
+                kept += 1
+                continue
+            if _RANK[want] < _RANK[now] and system != "win32":
+                failed += 1                     # POSIX: a nice value cannot be lowered (priority raised) again
+                continue
+            if system == "win32":
+                p.nice(WINDOWS_CLASS[want])
+                with contextlib.suppress(Exception):
+                    p.ionice(WINDOWS_IO[want])
+            else:
+                p.nice(NICE[want])
+                if system.startswith("linux") and want != "normal":
+                    with contextlib.suppress(Exception):
+                        _linux_io_lower(p.pid, want)
+            changed += 1
+        except (psutil.Error, OSError, ValueError):
+            failed += 1
+    if not procs:
+        return f"{want}: no running lane to change"
+    out = f"{want}: {changed} process(es) changed, {kept} already there"
+    if failed:
+        out += (f", {failed} left as they are (a priority cannot be raised on this OS without privileges; the next "
+                "lanes start at the new level)" if system != "win32" else f", {failed} could not be changed")
+    return out
+
+
 # ------------------------------------------------------------------------- lowering the GUI's thread
 def _lower_thread(level: str):
     """Lower the calling thread; returns a function that restores it where the OS allows."""
