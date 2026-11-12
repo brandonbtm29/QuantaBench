@@ -8,7 +8,14 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
-## UI-1: App shell with task workspaces · ready
+## UI-1: App shell with task workspaces · in-PR 2026-11-12 (branch `feat/app-shell`)
+Done in the PR: the five workspaces (`gui.workspaces`), the Appearance dock, the playback bar (`gui.playback`),
+the status line, a first Library (run folders under the output folder, `gui.library_panel`), per-workspace
+layouts in QSettings with View > Reset layout, tests (`tests/test_gui_workspaces.py`) and screenshots
+(`docs/dev/screenshots/UI-1/`). Left for later items: the Simulate workspace proper (SIM-1), the Library's
+project database and search (UI-2), point group in the status bar, a properties inspector, the playback bar
+for trajectory frames and molecules. Needs-Brandon: a look on Windows and macOS (HiDPI icons, the dock
+layout at his window sizes).
 Depends on: none (everything else in the UI plugs into this, so it goes first).
 - Left activity bar switching workspaces: **Build, Calculate, Simulate, Analyze, Library**. Each is a
   page/dock set. Map the existing panels: molecule list + inputs → Build; pipeline stages → Calculate;

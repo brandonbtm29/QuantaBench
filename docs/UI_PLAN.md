@@ -46,6 +46,13 @@ when selected, off the GUI thread. A batch's finished molecules become rows, not
 **Build > Resume run folder** continues its unfinished molecules with the folder's stored settings. The
 Library workspace and the project document (UI-2) build on this.
 
+**The shell is in (UI-1, 2026-11-12):** `gui.workspaces` defines each workspace as a set of docks per area
+(the first of a tab group in front) and keeps the user's arrangement per workspace (`saveState`, in the
+window settings). The panels are the same objects in every workspace, so a new workspace or a new panel is a
+line in `WORKSPACES` plus a dock with an object name. Today's mapping: Build = molecules + Appearance;
+Calculate = pipeline, Machines, Appearance; Simulate = the surface builder and LAMMPS export (stub); Analyze =
+surfaces, Appearance, the conformer table and spectra; Library = run folders under the output folder.
+
 **Shared chrome:**
 - A playback bar for conformers, molecules and trajectory frames.
 - A status bar with counts, point group, CPU threads, GPU and VRAM.

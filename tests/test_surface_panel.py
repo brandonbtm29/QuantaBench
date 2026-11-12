@@ -60,6 +60,7 @@ def _window(tmp_path):
         pytest.skip(w.viewer.error)
     w.resize(1200, 800)
     w.show()
+    w.set_workspace("analyze")              # UI-1: the workspace that shows the Surfaces dock
     return w
 
 
@@ -78,7 +79,7 @@ def test_panel_installs_and_draws_charge_surface(tmp_path, built):
     panel = w.surface_panel
     dock = w.findChild(QDockWidget, "surfaces")
     assert dock is w.surface_dock and dock.windowTitle() == "Surfaces"
-    assert dock in w.tabifiedDockWidgets(w.pipeline_dock)
+    assert dock in w.tabifiedDockWidgets(w.appearance_dock) and not dock.isHidden()      # Analyze's right tabs
     view = sp._find_menu(w, "View")
     assert dock.toggleViewAction() in view.actions()
 
