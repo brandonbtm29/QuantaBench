@@ -447,7 +447,8 @@ def test_analyze_shows_the_table_and_the_plot(tmp_path, built):
         assert not w.table_dock.visibleRegion().isEmpty() and not w.plot_dock.visibleRegion().isEmpty()   # in front
         assert set(w.tabifiedDockWidgets(w.table_dock)) >= {w.results_dock, w.spectra_dock}
         assert set(w.tabifiedDockWidgets(w.plot_dock)) >= {w.surface_dock, w.appearance_dock}
-        assert w.viewer.width() > 400 and w.viewer.height() > 300                              # the 3D view stays
+        # the 3D view stays; a small screen (the Windows runner's 1024 x 768) clamps the 1500 x 920 window
+        assert w.viewer.width() > min(400, w.width() // 3) and w.viewer.height() > min(300, w.height() // 3)
         view = next(a.menu() for a in w.menuBar().actions() if a.text().replace("&", "") == "View")
         texts = [a.text() for a in view.actions()]
         assert "Table" in texts and "Plot" in texts
