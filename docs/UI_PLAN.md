@@ -51,7 +51,15 @@ Library workspace and the project document (UI-2) build on this.
 window settings). The panels are the same objects in every workspace, so a new workspace or a new panel is a
 line in `WORKSPACES` plus a dock with an object name. Today's mapping: Build = molecules + Appearance;
 Calculate = pipeline, Machines, Appearance; Simulate = the surface builder and LAMMPS export (stub); Analyze =
-surfaces, Appearance, the conformer table and spectra; Library = run folders under the output folder.
+the Table and Plot (UI-3) in front, surfaces, Appearance, the conformer table and spectra behind their tabs;
+Library = run folders under the output folder.
+
+**The spreadsheet is in (UI-3, 2026-11-12):** Analyze's Table dock is the molecules x properties sheet over the
+Molecules dock's rows (descriptors from results in memory or a run folder's CSVs), with formula columns (an `ast`
+whitelist evaluated with NumPy, never `eval`) and a fit helper for formulas with parameters such as the quantum
+parachor; the Plot dock scatters two of its columns. A column whose name is not an identifier is referenced by an
+alias the column chooser shows. Until the project document (UI-2) exists, the column choices and formula columns
+live in the window settings; UI-2 moves `TablePanel.state()` into the project.
 
 **Shared chrome:**
 - A playback bar for conformers, molecules and trajectory frames.

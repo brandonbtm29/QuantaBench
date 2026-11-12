@@ -42,7 +42,21 @@ Depends on: UI-1.
 - Acceptance: round-trip save/open test with built results; resume of a half-finished project;
   Windows-safe paths (no absolute paths stored for files inside the project).
 
-## UI-3: Spreadsheet, plots and formula columns · ready
+## UI-3: Spreadsheet, plots and formula columns · in-PR 2026-11-12 (branch `feat/ui3-spreadsheet`)
+Done in the branch (stacked on `feat/app-shell`, UI-1's PR #1): the Table dock (`gui.table_panel`: one row per
+molecule of the Molecules dock, row fields, posted fields, summary and descriptor values from results in memory or a
+run folder's CSVs and job table read off the GUI thread, column chooser with each column's formula name, numeric
+sort, filter, selection synced both ways, Ctrl+C / Ctrl+Shift+C as TSV, CSV and XLSX export), the Plot dock
+(`gui.plot_panel`: two columns, colour by a third, fit line with R², click a point to select), formula columns and
+the fit helper (`analysis.formula`: `ast` whitelist, NumPy tree walk, `least_squares` with standard errors, n, MAE,
+RMSE, R²), the state (column choices, formulas, plot) in the window settings (`analyze/table`), Analyze's new
+default (table at the bottom in front of Results/Spectra, plot on the right in front of Surfaces/Appearance;
+`workspaces.STATE_VERSION` 2), tests (`tests/test_gui_table.py`) and screenshots (`docs/dev/screenshots/UI-3/`).
+Left: move the state into the project document with UI-2 (`TablePanel.state()` / `restore()`); join columns from a
+CSV by id (experimental targets that are not posted fields of the input, e.g. `pubchem targets` output); a line plot
+and a parity view (fitted vs target with the 1:1 line); column order by drag; per-column number formats; plots of
+several y columns. Needs-Brandon: a look on Windows and macOS (dock sizes at his window sizes, Excel paste of the
+TSV with his locale's decimal separator).
 Depends on: UI-1 (UI-2 nice to have).
 - Analyze workspace: sortable/filterable table of molecules × properties (descriptors, energies,
   thermo), column chooser, copy/paste to Excel, CSV/XLSX export; selecting a row selects the molecule.

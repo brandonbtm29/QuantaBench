@@ -1307,6 +1307,34 @@ def molecule_rows(run_dir: str | Path) -> list[dict]:
     return rows
 
 
+def stored_tables(run_dir: str | Path, skip: Iterable[str] = ()) -> list[tuple[str, dict, dict]]:
+    """``(id, summary row, descriptors)`` of every built molecule of a run folder whose id is not in ``skip``, in
+    input order, from the job table: what summary.csv and descriptors.csv hold, for a run whose tables are not
+    written yet (interrupted, still running) or miss some molecules. Only the two JSON objects are read
+    (``json_extract``), not the structure blocks."""
+    run_dir = Path(run_dir).expanduser()
+    skip = set(skip)
+    out = []
+    with _read_store(run_dir) as store:
+        ids = [r[0] for r in store.conn.execute("SELECT id FROM molecules WHERE status = 'ok' AND summary IS NOT "
+                                                "NULL ORDER BY seq") if r[0] not in skip]
+        for k in range(0, len(ids), 500):            # SQLite's limit on bound parameters
+            part = ids[k:k + 500]
+            marks = ",".join("?" * len(part))
+            cols = "id, json_extract(summary, '$.row'), json_extract(summary, '$.descriptors')"
+            sql = f"SELECT {cols} FROM molecules WHERE id IN ({marks}) ORDER BY seq"  # noqa: S608 - placeholders only
+            try:
+                cur = store.conn.execute(sql, part)
+                for ident, row, desc in cur:
+                    out.append((ident, json.loads(row) if row else {}, json.loads(desc) if desc else {}))
+            except sqlite3.OperationalError:          # an SQLite built without its JSON functions
+                for r in store.conn.execute(f"SELECT id, summary FROM molecules WHERE id IN ({marks}) "  # noqa: S608
+                                            "ORDER BY seq", part):
+                    s = json.loads(r["summary"])
+                    out.append((r["id"], s.get("row") or {}, s.get("descriptors") or {}))
+    return out
+
+
 def load_inputs(run_dir: str | Path, ids: Sequence[str] | None = None) -> list[MoleculeInput]:
     """The stored inputs of ``ids`` (in that order; unknown ids are skipped), or of every molecule in input
     order. Structure-file inputs come back with their molecule (coordinates, explicit H, charges)."""
