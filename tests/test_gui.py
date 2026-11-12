@@ -131,6 +131,7 @@ def test_worker_callbacks_run_on_gui_thread():
 
 
 def test_esc_does_not_cancel_and_close_does_not_block(tmp_path, monkeypatch):
+    import threading
     import time
 
     from PySide6.QtCore import Qt
@@ -141,8 +142,10 @@ def test_esc_does_not_cancel_and_close_does_not_block(tmp_path, monkeypatch):
     from quantabench.chem.inputs import from_smiles
     from quantabench.gui.main_window import MainWindow
 
-    def slow_run(inputs, cfg, should_stop=lambda: False, **_kw):     # an uninterruptible step
-        time.sleep(1.5)
+    release = threading.Event()
+
+    def slow_run(inputs, cfg, should_stop=lambda: False, **_kw):     # an uninterruptible step, until released
+        release.wait(30)
         return [], None
 
     monkeypatch.setattr(pipeline, "run", slow_run)
@@ -168,6 +171,7 @@ def test_esc_does_not_cancel_and_close_does_not_block(tmp_path, monkeypatch):
     w.close()
     assert time.perf_counter() - t < 0.5                 # returns at once, closes when the step ends
     assert len(asked) == 1 and not w.closed and "Closing" in w.statusBar().currentMessage()
+    release.set()                                        # the step ends: now the window closes
     assert _wait(app, lambda: w.closed, 30)
     assert w.worker is None
 
