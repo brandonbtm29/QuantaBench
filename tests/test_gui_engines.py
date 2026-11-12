@@ -62,6 +62,18 @@ def test_pipeline_pages_map_onto_build_config_and_settings(tmp_path):
     assert cfg.solvent == "water" and cfg.optimizer == "native"
     assert cfg.qm_method == "b3lyp-d3bj/def2-tzvp" and cfg.qm_task == "optimize" and cfg.qm_top == 3
     assert cfg.qm_frequencies and cfg.qm_cubes and "spectrum" in cfg.formats
+    assert cfg.qm_properties and cfg.qm_polarizability and cfg.qm_keep_cubes        # the defaults
+    assert w.w_qm_pol.isEnabled() and w.w_qm_keep_cubes.isEnabled()
+    w.w_qm_pol.setChecked(False)                     # an ESP study: no polarizability, no cube files kept
+    w.w_qm_keep_cubes.setChecked(False)
+    cfg = w.current_config()
+    assert cfg.qm_properties and not cfg.qm_polarizability and not cfg.qm_keep_cubes
+    w.w_qm_props.setChecked(False)
+    assert not w.w_qm_pol.isEnabled()
+    w.w_qm_cubes.setChecked(False)
+    assert not w.w_qm_keep_cubes.isEnabled()
+    w.w_qm_props.setChecked(True)
+    w.w_qm_cubes.setChecked(True)
     # the persistent choices land in the build defaults and come back
     b = w.s.build
     assert (b.conformer_search, b.solvent, b.qm_method) == ("crest", "water", "b3lyp-d3bj/def2-tzvp")

@@ -28,6 +28,8 @@ hessian         Hessian (+ dipole derivatives when Psi4 provides them) of the be
 threads, memory_gb
 solvent_pcm     PCMSolver solvent name, or null for the gas phase
 optional        solvent (label), freq_optimize (true: tight re-optimization before the Hessian),
+                imag_retries (0: report imaginary modes only; N: step along the lowest one and re-optimize, at
+                most N times), imag_step_A (0.15), imag_tol_cm1 (20),
                 polarizability_method ("auto" | "analytic" | "finite_field"), field_au (0.002),
                 cube_spacing_bohr (0.2), cube_overage_bohr (4.0), temperature_k (298.15),
                 opt_convergence ("gau"), geom_maxiter (100), psi4_options ({}), output ("output.dat")
@@ -126,6 +128,11 @@ def validate_task(task: dict) -> dict:
     for key in ("properties", "polarizability", "cubes", "hessian"):
         t[key] = bool(t.get(key, False))
     t["freq_optimize"] = bool(t.get("freq_optimize", True))
+    t["imag_retries"] = max(0, int(t.get("imag_retries", 0) or 0))
+    t["imag_step_A"] = float(t.get("imag_step_A", 0.15))
+    t["imag_tol_cm1"] = float(t.get("imag_tol_cm1", 20.0))
+    if not (0.0 < t["imag_step_A"] <= 1.0):
+        raise TaskError("imag_step_A must be in (0, 1] Å")
     t["threads"] = max(1, int(t.get("threads", 1)))
     t["memory_gb"] = max(0.5, float(t.get("memory_gb", 2.0)))
     t["solvent_pcm"] = (str(t["solvent_pcm"]).strip() or None) if t.get("solvent_pcm") else None
@@ -503,6 +510,42 @@ def cubes(psi4, t: dict, wfn, warnings: list[str]) -> dict:
             "boundary_density_max_au": edge, "n_points": int(np.prod(shape))}
 
 
+#: sqrt(Eh / (bohr² amu)) as a wavenumber: an eigenvalue λ of the mass-weighted Hessian (Eh / (bohr² amu)) is a
+#: vibration of sign(λ) sqrt(|λ|) x this many cm-1
+AU_WAVENUMBER = 5140.4871
+
+
+def projected_modes(hessian_au, masses_amu, positions_A) -> tuple[np.ndarray, np.ndarray]:
+    """The vibrations of a Cartesian Hessian (Eh/bohr²), translations and rotations projected out: frequencies in
+    cm-1, lowest first (negative = imaginary), and each mode's Cartesian displacements (n_modes x N x 3), scaled so
+    the atom that moves most moves 1. Plain NumPy, for the imaginary-mode step in ``frequencies``."""
+    m = np.asarray(masses_amu, float)
+    n = len(m)
+    x = np.asarray(positions_A, float).reshape(n, 3) / BOHR_ANG
+    sq = np.repeat(np.sqrt(m), 3)
+    hmw = np.asarray(hessian_au, float).reshape(3 * n, 3 * n) / np.outer(sq, sq)
+    hmw = (hmw + hmw.T) / 2
+    r = x - (m[:, None] * x).sum(0) / m.sum()
+    vecs = []
+    for k in range(3):
+        tr = np.zeros((n, 3))
+        tr[:, k] = 1.0
+        vecs.append((tr * np.sqrt(m)[:, None]).ravel())
+        vecs.append((np.cross(np.eye(3)[k], r) * np.sqrt(m)[:, None]).ravel())
+    u, sv, _ = np.linalg.svd(np.array(vecs).T, full_matrices=False)
+    basis = u[:, sv > 1e-6 * sv.max()]                  # 6 vectors, 5 for a linear molecule
+    proj = np.eye(3 * n) - basis @ basis.T
+    w, v = np.linalg.eigh(proj @ hmw @ proj)
+    keep = ((basis.T @ v) ** 2).sum(0) < 0.5           # drop the translation/rotation directions
+    w, v = w[keep], v[:, keep]
+    freqs = np.sign(w) * np.sqrt(np.abs(w)) * AU_WAVENUMBER
+    disp = (v / sq[:, None]).T.reshape(-1, n, 3)
+    big = np.linalg.norm(disp, axis=2).max(axis=1)
+    disp = disp / np.where(big > 0, big, 1.0)[:, None, None]
+    order = np.argsort(freqs)
+    return freqs[order], disp[order]
+
+
 def hessian_kind(method: str, reference: str) -> str:
     from psi4.driver.procrouting import proc_table
 
@@ -539,6 +582,49 @@ def frequencies(psi4, t: dict, mol0, pcm: bool, warnings: list[str]) -> dict:
     say(f"frequencies: Hessian ({kind}) for {len(t['symbols'])} atoms")
     e, wfn = psi4.frequency(method, molecule=mol, return_wfn=True)
     hess = np.asarray(wfn.hessian(), float)
+    # an imaginary mode left after the tight optimization (a saddle held by symmetry, a flat torsion): step along
+    # the lowest one both ways, re-optimize both, keep the lower, a new Hessian, at most imag_retries times
+    tol, retries = t["imag_tol_cm1"], t["imag_retries"]
+    masses = [float(mol.mass(i)) for i in range(mol.natom())]
+    start_pos, e_start = np.asarray(positions_A(mol), float), float(e)
+    nu, mode = projected_modes(hess, masses, start_pos)
+    found = float(nu[0]) if len(nu) and nu[0] < -tol else None
+    steps = 0
+    while found is not None and steps < retries and len(nu) and nu[0] < -tol:
+        steps += 1
+        pos = np.asarray(positions_A(mol), float)
+        say(f"frequencies: imaginary mode {nu[0]:.1f} cm-1, step {steps}/{retries}: ±{t['imag_step_A']:.2f} Å "
+            "along it, re-optimized (gau_tight)")
+        best = None
+        for sign in (1.0, -1.0):
+            trial = make_molecule(psi4, t["symbols"], pos + sign * t["imag_step_A"] * mode[0], t["charge"],
+                                  t["multiplicity"])
+            psi4.set_options({"g_convergence": "gau_tight"})
+            try:
+                et = float(psi4.optimize(method, molecule=trial))
+                conv = True
+            except psi4.OptimizationConvergenceError as exc:
+                trial.set_geometry(exc.wfn.molecule().geometry())
+                trial.update_geometry()
+                et, conv = float(exc.wfn.energy()), False
+            finally:
+                psi4.set_options({"g_convergence": t["opt_convergence"]})
+            if best is None or et < best[0]:
+                best = (et, trial, conv)
+        mol = best[1]
+        out["opt_converged"] = best[2]
+        e, wfn = psi4.frequency(method, molecule=mol, return_wfn=True)
+        hess = np.asarray(wfn.hessian(), float)
+        nu, mode = projected_modes(hess, masses, positions_A(mol))
+    if found is not None:
+        end_pos = np.asarray(positions_A(mol), float)
+        left = float(nu[0]) if len(nu) and nu[0] < -tol else None
+        out.update(imag_found_cm1=found, imag_steps=steps, imag_left_cm1=left,
+                   imag_energy_change_ev=(float(e) - e_start) * HARTREE_EV,
+                   imag_max_shift_A=float(np.linalg.norm(end_pos - start_pos, axis=1).max()))
+        if steps:
+            say(f"frequencies: after {steps} step(s) the lowest mode is {nu[0]:.1f} cm-1, "
+                f"E {(float(e) - e_start) * HARTREE_EV * 23.060548:+.3f} kcal/mol")
     dd = wfn.variables().get("CURRENT DIPOLE GRADIENT")
     grad = wfn.gradient()
     out.update(hessian_au=hess.tolist(), hessian_kind=kind, energy_hartree=float(e), positions_A=positions_A(mol),

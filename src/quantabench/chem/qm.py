@@ -8,8 +8,11 @@ Fills ``result.qm`` (a JSON-ready dict) and adds ``qm_*`` descriptors to ``resul
 Called by ``pipeline.run_molecule`` after refinement when ``cfg.qm_method`` is set; raising is fine (the
 pipeline turns it into a note). ``cfg`` fields: ``qm_method`` ("functional/basis", e.g. "wb97x-d/def2-svp",
 "b3lyp-d3bj/def2-tzvp", "hf/6-31g*"), ``qm_task`` ("energy" | "optimize"), ``qm_top`` (conformers, lowest
-first), ``qm_properties``, ``qm_frequencies`` (best QM conformer only), ``qm_cubes`` (best only), ``solvent``
-(PCM via ``solvents.for_engine(s, "pcm")`` when Psi4 has PCMSolver; otherwise note "gas phase").
+first), ``qm_properties``, ``qm_polarizability`` (with qm_properties; off skips the CPSCF/finite-field SCFs),
+``qm_frequencies`` (best QM conformer only), ``qm_cubes`` (best only), ``qm_keep_cubes`` (off: the cube files are
+deleted once the surface descriptors and the ESP profile are computed), ``freq_imag_retries`` (imaginary modes of
+the QM Hessian), ``solvent`` (PCM via ``solvents.for_engine(s, "pcm")`` when Psi4 has PCMSolver; otherwise note
+"gas phase").
 
 How Psi4 runs: ``external.find_python_with("psi4", "psi4_python")`` gives an interpreter that can import
 psi4 (often a separate conda env). ``chem/psi4_driver.py`` (stdlib + numpy + psi4 only, no quantabench
@@ -43,7 +46,11 @@ IMPLEMENTATION NOTES
 - Frequencies: the best conformer is re-optimized tightly (gau_tight) at the QM level first, like the
   pipeline's own frequency step; the Hessian (analytic for HF/LDA, finite differences of gradients otherwise)
   and dipole derivatives come from Psi4, the normal modes, IR intensities and qRRHO thermochemistry from
-  ``chem.vibrations`` here, so ``qm["vibrations"]`` has the same layout as ``result.vibrations``.
+  ``chem.vibrations`` here, so ``qm["vibrations"]`` has the same layout as ``result.vibrations``. A mode below
+  -20 cm-1 left after the tight optimization (a saddle held by symmetry, a flat torsion) is removed as in
+  ``vibrations.analyze``: the driver steps 0.15 Å (largest atom) along it both ways, re-optimizes both, keeps the
+  lower and computes a new Hessian, at most ``freq_imag_retries`` times; ``imag_found_cm1``, ``imag_steps``,
+  ``imag_left_cm1``, ``imag_energy_change_ev`` and ``imag_max_shift_A`` record it.
 - Files kept for export (``qm["files"]``): ``log`` (Psi4's output.dat), ``density``/``esp`` (cubes) and, for
   ``qm_task="optimize"``, ``geometry`` (multi-frame XYZ of the QM-optimized conformers, lowest first). The
   stored RDKit conformers keep the refinement geometries, as for the pipeline's frequency step.
@@ -51,6 +58,7 @@ IMPLEMENTATION NOTES
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shutil
@@ -149,8 +157,12 @@ def build_task(result, cs, cfg, threads: int = 1, warnings: list[str] | None = N
     return {
         "symbols": symbols, "conformers": conformers, "charge": int(result.charge),
         "multiplicity": int(result.multiplicity or 1), "method": method, "basis": basis, "task": task_kind,
-        "properties": bool(cfg.qm_properties), "polarizability": bool(cfg.qm_properties), "cubes": bool(cfg.qm_cubes),
-        "hessian": bool(cfg.qm_frequencies) and len(symbols) > 1, "freq_optimize": True,
+        "properties": bool(cfg.qm_properties),
+        "polarizability": bool(cfg.qm_properties) and bool(getattr(cfg, "qm_polarizability", True)),
+        "cubes": bool(cfg.qm_cubes), "hessian": bool(cfg.qm_frequencies) and len(symbols) > 1, "freq_optimize": True,
+        # imaginary modes of the QM Hessian: step along the lowest and re-optimize (as vibrations.analyze does)
+        "imag_retries": max(0, int(getattr(cfg, "freq_imag_retries", 0) or 0)), "imag_step_A": 0.15,
+        "imag_tol_cm1": 20.0,
         "threads": max(1, int(threads)), "memory_gb": float(getattr(es, "qm_memory_gb", 4.0) or 4.0),
         "solvent_pcm": pcm, "solvent": solvent if pcm else "", "temperature_k": float(cfg.temperature_k),
         "output": PSI4_OUTPUT,
@@ -489,6 +501,19 @@ def run_stage(result, cs, cfg, *, threads: int = 1, should_stop: Callable[[], bo
                           psi4_frequencies_cm1=fr.get("psi4_frequencies_cm1"),
                           psi4_ir_km_mol=fr.get("psi4_ir_km_mol"), reoptimized=fr.get("optimized", False),
                           reoptimization_converged=fr.get("opt_converged"))
+                if fr.get("imag_found_cm1") is not None:       # the driver stepped along an imaginary mode
+                    vd.update(imag_found_cm1=fr["imag_found_cm1"], imag_steps=int(fr.get("imag_steps") or 0),
+                              imag_left_cm1=fr.get("imag_left_cm1"),
+                              imag_energy_change_ev=fr.get("imag_energy_change_ev"),
+                              imag_max_shift_A=fr.get("imag_max_shift_A"))
+                    if vd["imag_steps"]:
+                        warnings.append(
+                            f"frequencies: imaginary mode {fr['imag_found_cm1']:.1f} cm-1 at the optimized geometry; "
+                            f"{vd['imag_steps']} step(s) along it and re-optimization "
+                            + ("removed it" if fr.get("imag_left_cm1") is None
+                               else f"left {fr['imag_left_cm1']:.1f} cm-1")
+                            + f" (E {(fr.get('imag_energy_change_ev') or 0.0) * KCAL_PER_EV:+.3f} kcal/mol, "
+                            f"largest shift {fr.get('imag_max_shift_A') or 0.0:.2f} Å)")
                 qm["vibrations"] = vd
                 warnings += [f"frequencies: {w}" for w in vr.warnings]
                 t = vr.thermo
@@ -509,6 +534,16 @@ def run_stage(result, cs, cfg, *, threads: int = 1, should_stop: Callable[[], bo
                             "the density and ESP cubes are kept")
         except Exception as exc:
             warnings.append(f"surface descriptors failed ({type(exc).__name__}: {exc})")
+        if not getattr(cfg, "qm_keep_cubes", True):
+            if qm["surface"] is not None:       # the descriptors and the ESP profile are kept: the cubes can go
+                for label in ("density", "esp"):
+                    with contextlib.suppress(OSError):
+                        Path(files.pop(label)).unlink()
+                qm["cubes_deleted"] = True
+                warnings.append("density and ESP cubes deleted after the surface analysis (qm_keep_cubes off); "
+                                "the surface descriptors and the ESP profile are kept")
+            else:
+                warnings.append("density and ESP cubes kept: the surface analysis did not finish")
 
     qm["timings"]["wall"] = time.perf_counter() - t_start
     result.qm = qm

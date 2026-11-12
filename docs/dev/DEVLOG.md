@@ -107,3 +107,10 @@ Newest entries at the bottom. One entry per working session or nightly run.
   QEvent.DeferredDelete)` in the wait loop (the tests do this) shows the real layout.
 - `jobs.open_run` on a run folder leaves an empty `jobs.sqlite-wal` and `-shm` (SQLite's read-only WAL open); the
   Library ignores an empty -wal for "Changed", and the README's `.stignore` lines keep both out of the sync.
+
+## 2026-11-12: QM-ESP options (afternoon task, branch `afternoon/2026-11-12-qm-esp`)
+- `qm_polarizability` and `qm_keep_cubes` (BuildConfig, CLI, the GUI's QM page) for an ESP pass over many molecules,
+  and the imaginary-mode steps in `psi4_driver.frequencies` (NumPy normal modes with translations and rotations
+  projected out, `projected_modes`, since the driver runs in Psi4's Python without QuantaBench).
+- Tested on a model triatomic held linear by symmetry (a saddle like a planar NH2 on a ring): one step along the bend
+  finds the 150° minimum; and the water HF Hessian's frequencies match Psi4's to 1.5 cm-1. No Psi4 run here.

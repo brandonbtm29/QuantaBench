@@ -2,6 +2,23 @@
 
 ## 0.3.0.dev (unreleased)
 
+### QM stage: switches for an ESP study, and imaginary modes at the QM level (2026-11-12)
+- **`--no-qm-polarizability`** (BuildConfig `qm_polarizability`, a science field; the QM page's new Polarizability
+  box): skips the static polarizability of the best QM conformer. With DFT the CPSCF (or finite-field) SCFs are the
+  slowest part of the properties step: most of b02's 31-minute ESP pass. Dipole, charges and orbitals stay.
+  **`--qm-properties/--no-qm-properties`** switches the whole properties step from the command line (it was only
+  in the GUI). A run folder from before keeps its polarizability (the default).
+- **`--no-keep-cubes`** (`qm_keep_cubes`, files only; the QM page's "Keep the cube files"): deletes the density
+  and ESP cubes (~16 MB per molecule) once the surface descriptors and the 5 kJ/mol ESP profile are saved. When
+  the surface analysis did not finish, the cubes stay, with a note. The default keeps them, as before: the
+  Surfaces panel draws the QM surface from them. For an ESP pass over many molecules:
+  `--qm wb97x-d/6-31g* --cubes --no-qm-polarizability --no-keep-cubes`.
+- **Imaginary modes in the QM frequencies** (`--qm-freq`): a mode below -20 cm-1 left after the tight
+  re-optimization is removed as in the pipeline's own frequency step (`freq_imag_retries`, default 3): Psi4's
+  driver steps 0.15 Å (largest atom) along the lowest mode both ways, re-optimizes both, keeps the lower and
+  computes a new Hessian. `qm["vibrations"]` records `imag_found_cm1`, `imag_steps`, `imag_left_cm1`,
+  `imag_energy_change_ev` and `imag_max_shift_A`, and a note says what was done.
+
 ### The Analyze table: molecules x properties, a plot, formula columns and fits, UI-3 (2026-11-12)
 - **Table dock** (Analyze, in front at the bottom, with Results and Spectra as tabs): one row per molecule of the
   Molecules dock, the same rows in the same order, virtualized (14,000 rows build, sort and filter in well under a

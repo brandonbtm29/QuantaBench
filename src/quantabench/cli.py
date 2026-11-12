@@ -256,6 +256,12 @@ def _config(args, base=None, **extra):
         overrides["qm_frequencies"] = args.qm_freq
     if getattr(args, "cubes", None) is not None:
         overrides["qm_cubes"] = args.cubes
+    if getattr(args, "qm_properties", None) is not None:
+        overrides["qm_properties"] = args.qm_properties
+    if getattr(args, "qm_polarizability", None) is not None:
+        overrides["qm_polarizability"] = args.qm_polarizability
+    if getattr(args, "keep_cubes", None) is not None:
+        overrides["qm_keep_cubes"] = args.keep_cubes
     # --protonate/--no-protonate and --freq/--no-freq: None = keep settings.json (the GUI saves its
     # checkboxes there), so a box ticked in the GUI can always be overridden from the command line
     if getattr(args, "protonate", None) is not None:
@@ -926,6 +932,15 @@ def add_build_science_args(q: argparse.ArgumentParser) -> None:
                    help="QM frequencies + IR + thermochemistry of the best QM conformer")
     q.add_argument("--cubes", action=argparse.BooleanOptionalAction, default=None,
                    help="QM density + ESP cubes and molecular-surface (GIPF) descriptors")
+    q.add_argument("--keep-cubes", action=argparse.BooleanOptionalAction, default=None,
+                   help="keep the density/ESP cube files (default; ~16 MB per molecule). --no-keep-cubes deletes them "
+                        "once the surface descriptors and the ESP profile are saved")
+    q.add_argument("--qm-properties", action=argparse.BooleanOptionalAction, default=None,
+                   help="QM properties of the best conformer: dipole, quadrupole, charges, orbital energies and the "
+                        "polarizability (default on)")
+    q.add_argument("--qm-polarizability", action=argparse.BooleanOptionalAction, default=None,
+                   help="the QM static polarizability (CPSCF or finite field), the slowest part of the properties; "
+                        "--no-qm-polarizability skips it (default on)")
     q.add_argument("--protonate", action=argparse.BooleanOptionalAction, default=None,
                    help="assign the charge state at --ph (--no-protonate keeps the input's; default from settings)")
     q.add_argument("--protonation", choices=["rules", "dimorphite"])
