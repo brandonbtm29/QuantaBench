@@ -873,7 +873,7 @@ thread speed is and the temperature of the PC."
   probably in `Archive.carc`); (6) ambiguous structures (an anion under the CAS numbers of its salts): share
   the result with all its labels in the wide table, or leave it out (now); (7) a full-run timing on NOVA.
 
-### QSAR-1: The PFAS QSAR cohorts in staged batches · b01/b02 run 2026-11-11; b03 and the tranches b04-b08 staged 2026-11-11 (branch `feat/b03`); the b03 run needs-Brandon (an evening)
+### QSAR-1: The PFAS QSAR cohorts in staged batches · b01/b02 run 2026-11-11; b03 run 2026-11-11 (evening); structure fixes 2026-11-12; the tranches b04-b08 wait for Brandon's review of b03
 Decided 2026-11-11 (Brandon): no single run over all 14,223 molecules (`data_engineering/Cohort */*.sdf`: C4A 9,052,
 C1A 2,492, C5A 930, C1B 409, C4B 376, C3A 341, C2A 331, C2B 193, C3B 80, C6A 19). Batches, each analysed before
 the next. Inputs and selections in `Runs/batches/<batch>/` (input.csv, selection.csv, selection.md, design.json);
@@ -933,9 +933,7 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
     every tranche has the same mix within one molecule per stratum (C3B 4-5 each; C6A is all in b03).
   - C6A: the v6 table has no C6A rows (no Spartan document), and none of the six records fixed on 2026-11-11 joins
     a v6 row by the old or the new structure, CAS or title; b03 has all six with the fixed structures.
-  - 49 records of the PFAS cohorts have no fluorine (C3A cations 32, C1A 8, C2A 8, C3B 1: probably a salt's
-    counter-ion or the wrong fragment): kept, flagged `pfas_cohort_without_F`; 13 are in b03, 10 of its 20 C3A
-    cations (needs-Brandon).
+  - 49 records of the PFAS cohorts have no fluorine (C3A cations 32, C1A 8, C2A 8, C3B 1): fixed 2026-11-12, below.
 - **Evening runs** (`scratch/batches/run_tranche.ps1` + `run_tranche.py`, `run_b03.ps1`, `start_tranche.ps1`): the
   protocol above; before each attempt the MacBook is asked and joins when its worker answers, is idle and on this
   commit, else NOVA runs alone. A deadline (default 07:00) cancels the remote shares and stops NOVA's at its next
@@ -972,10 +970,59 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   (12 lanes; the AIMNet2 load is about 14 s per lane), the report in 0.1 min.
 - Open (needs-Brandon): TFA and PFPrA (recompute Spartan's conformers or leave them out, VAL-2); whether b02's σ
   should include values of gases above their boiling point (left out now; DESC-2: Sugden reproduces them within
-  0-3 mN/m and adding them moves the CV error by < 0.1 mN/m, so leaving them out costs nothing); ids of the baseline
-  cohorts (CAS now in b03-b08, Spartan labels in the v6 table, PubChem titles and CAS in selection.csv; QSAR-2);
-  refine top 5 or 20 for b03; the 49 fluorine-free PFAS cohort records; whether the excluded salts (405), the
-  elements outside AIMNet2 (78) and the molecules above 60 heavy atoms (152) get a batch of their own.
+  0-3 mN/m and adding them moves the CV error by < 0.1 mN/m, so leaving them out costs nothing); b02's holdout
+  (looked at twice: freeze the model or draw a new one); whether the excluded salts (405), the elements outside
+  AIMNet2 (78) and the molecules above 60 heavy atoms (152) get a batch of their own.
+- **b03 ran** 2026-11-11 19:02-19:45 (`Runs/2026-11-11_b03-strat1000_rt20`; both machines on e29f93e, refine top 20,
+  rank auto, as drawn, background): gas 998/1000 in 19 min, water 997/1000 in 22 min (the estimate was 1.2 h); the
+  Mac did 726 gas and 438 water molecules. Failures: 1423-20-7 (tblite SCF not converged, both phases), 94200-46-1
+  (SCF, gas), 447-41-6 and 2447-54-3 (water: the process crashed twice). Against PM6 (v6, 850 molecules): dipole MAE
+  0.84 D (r 0.80), CPK volume 2.2 A3 (r 1.00), area 4.6 A2 (r 0.998), HOMO 1.05 eV below (r 0.91); water dipoles
+  of 25 ions against B3LYP/C-PCM 5.94 D (origin-dependent). The rank step changed the pick for 44 % (gas, AIMNet2)
+  and 43 % (water, g-xTB + CPCM), anions 65-76 %. Outliers: imaginary frequencies 75 per phase (7.5 %; 60 of them
+  C4A), dipoles > 30 D 49 (all ions but one), solvation energies out of range 10, best conformer not converged 3
+  (C3 anions). The drift flags against b01/b02 come from their different selections. No throttling (CPU peaks 94 °C
+  Mac, 90 °C NOVA). Left before the tranches: the imaginary frequencies and the four failures.
+- **Structure fixes 2026-11-12** (Brandon: "Draw the PFAS part"; `scratch/batches/pfas_part_fix.py`,
+  `apply_structure_fixes.py`, `verify_fixes.py`; `Runs/batches/structure-fixes-2026-11-12/`): the 49 fluorine-free
+  PFAS-cohort records were PFAS salts, adducts or blends drawn as the non-fluorinated partner only (a counter-ion,
+  an amine, a phosphonite); PubChem's record for each CAS gives the whole compound. In the source SD files (a
+  `.bak-2026-11-12` beside each of the 14 changed files, byte-identical to the original; a `Structure_Fix` field per
+  record; every other record unchanged): 44 records now carry the PFAS part (the anion of a salt, the PFAS acid's
+  anion where the record was drawn as an ion, C3F7I of an adduct; 25628-08-4: PubChem's structure joins the ions into
+  an ester, so the nonaflate from its title), plus the three PubChem flagged earlier: 93894-66-7 (PubChem's
+  perfluoro-isooctyl structure), 165951-17-7 (GenX with dipropylamine: the GenX acid), 218462-19-2 (HFE-7000 in a
+  1:1 blend with trans-1,2-dichloroethylene: drawing unchanged, a note). Left out: four UVCB records with no PubChem
+  structure (68187-25-7, 160336-21-0, 65530-63-4, 65530-74-7); the copper complex 29763-53-9 stays excluded. In the
+  batches (no re-deal): 41 fixed records are now the same compound as a kept record (PFBS, PFOS, PFOA and GenX
+  anions, C3F7I, ...; for a stereocentre PubChem leaves open, the same constitution and protonation) and are computed
+  once there; 4 rows are rewritten in place (231301-26-1 b06, 2266-82-2 b05, 93894-66-7 b04, 332350-93-3 b07); the
+  tranches now hold 2,410, 2,407, 2,403, 2,408 and 2,406. b03's results for 13 of its molecules describe the old
+  drawings (`b03-strat1000/superseded.csv`): the QSAR table takes them from the kept records.
+- **Decided 2026-11-12** (Brandon): ids of the baseline cohorts = CAS RN (b02 ran with Spartan labels; its
+  selection maps each to its CAS); keep frequencies; the packing-density coefficients stay in the public code; a
+  Psi4 pass for ESP polar areas on b02, keeping TPSA too; b02 keeps the 20 % holdout (5-fold CV on the 80), the
+  5 gases stay out and the 13 CHRIS values in; the excluded salts, elements outside AIMNet2 and molecules above 60
+  heavy atoms get batches of their own later; the imaginary frequencies first, before the tranches.
+- **b02 ESP pass** 2026-11-11 (`Runs/2026-11-11_b02-st100_esp`, `scratch/batches/run_b02_esp.ps1`; gas, the b02
+  protocol plus `--qm wb97x-d/6-31g* --cubes`, both machines, 31 min; the QM stage's CPSCF polarizability was most
+  of it): `analyze_b02_esp.py`, 74 training molecules, 5-fold CV / leave-class-out MAE (mN/m): Sugden (measured ρ)
+  1.66; quantum parachor (Bosque α, measured ρ) 1.65 without a polar area, 1.66 with TPSA, 1.63 / 1.63 / 1.68 with
+  the ESP areas at 75 / 100 / 125 kJ/mol; with the packing density 2.90, 2.87 (TPSA), 2.83-3.03 (ESP); the
+  density-free ln σ regression 3.24 with TPSA, 3.09-3.25 with ESP. A polar area adds nothing measurable for these
+  non-fluorinated liquids. TPSA and ESP 75/100/125 correlate at r 0.73/0.77/0.68; 29 of 74 have TPSA 0, 7/20/27
+  have ESP area 0. Brandon then asked for the whole ESP distribution instead of three thresholds (2026-11-12:
+  `qm_surf_esp_area_*`, `<id>_esp_profile.csv`).
+- **b03's imaginary frequencies** (`scratch/batches/imag_look.py`, `imag_test.py`, `imag_summary.py`;
+  `analysis/imag_test_{gas,water}.csv`): recomputed at the stored geometries, all 150 come back (not noise). Gas:
+  55 at -20..-50 cm-1, 12 at -50..-100, 8 below -100 (water 60/11/4). The small ones sit at a residual force
+  (median 0.009 eV/Å at the Hessian, the pre-optimization's fmax 0.01): tightening to 0.002 fixes about half.
+  The large ones are saddles (planar NH2 on aromatic rings: 1072-67-9 -431, 634-93-5 -281, 360-97-4, 131-14-6,
+  134-58-7; an aldehyde and methyl rotors): tightening leaves them, one step along the mode fixes them. Both
+  (tighten, then up to 3 steps): 73 of 75 per phase become minima; the energy falls by a median 6.7 meV (gas) /
+  3.0 meV (water), more than 1 kcal/mol for 12 / 6 (those moved on to a lower nearby geometry, median largest atom
+  shift 0.5 Å); about 2 s per affected molecule. Left: 1121-07-9, 2809-69-0 (gas), 2101-86-2, 3862-12-2 (water),
+  -22 to -36 cm-1 (near-free rotors). Now the default of the frequency step (`freq_imag_retries` 3).
 - Acceptance (unchanged): one merged table for all 14,223 molecules, no manual recombination, and the overlap with
   the Spartan results compared.
 
@@ -1166,10 +1213,10 @@ pause button on a machine and the work is redistributed?"
   the client told it 20 had moved (17 dropped there, 3 it had finished), and the merge kept each of the 3 duplicates
   once (40/40, 76 s).
 - Left:
-  - needs-Brandon: install the Mac's LaunchAgent (docs/WORKERS.md, Setup on the MacBook, step 3) instead of the
-    `nohup` start, so a restart or logout does not end the worker (found gone on 2026-11-09: a clean stop at 20:10,
-    the Mac rebooted at 20:14, nothing started it again); then close the lid during a grid and check the away/back
-    log lines on both sides.
+  - The Mac's LaunchAgent (docs/WORKERS.md, Setup on the MacBook, step 3) replaced the `nohup` start on 2026-11-12
+    (Brandon asked for it): a restart or logout no longer ends the worker (found gone on 2026-11-09: a clean stop at
+    20:10, the Mac rebooted at 20:14, nothing started it again). Left: close the lid during a grid and check the
+    away/back log lines on both sides.
   - A real lid close: the freeze test stands in for it; check that macOS's monotonic clock stops during sleep on the
     M3 (the watcher works either way) and that Tailscale is back before the first poll.
   - A running lane pool is not resized when its lanes or free threads change; they apply with the next job. A

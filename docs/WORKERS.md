@@ -261,7 +261,9 @@ So: install the LaunchAgent of the setup section below. `RunAtLoad` starts it at
 - **Wake:** launchd keeps the same process across sleep. The worker notices the wake and checks with its grid client
   before it starts another molecule.
 
-The LaunchAgent is for Brandon to install; QuantaBench does not install services itself.
+The LaunchAgent is for the user to install; QuantaBench does not install services itself. On Brandon's MacBook it
+was installed on 2026-11-12, at his request (`launchctl print gui/$(id -u)/io.github.brandonbtm29.quantabench-worker`
+shows it; a test `kill -KILL` of the worker was followed by a new one within a second).
 
 ## API (version 1)
 

@@ -2,6 +2,31 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Imaginary frequencies removed in the frequency step (2026-11-12)
+- In batch b03, 75 of 1,000 molecules per phase ended with an imaginary mode below -20 cm-1. Two causes: a residual
+  force on a soft torsion (90 %: -20 to -50 cm-1; the pre-optimization stops at fmax 0.01 eV/Å and most stopped at
+  0.009), and saddle points kept by symmetry, such as a planar NH2 on an aromatic ring (-100 to -430 cm-1), which
+  no tighter optimization leaves.
+- `vibrations.analyze(imag_retries=N)` and the pipeline's `freq_imag_retries` (default 3; `--freq-imag-retries`
+  for `build`, `grid build` and `freq`): when a mode is below -20 cm-1 the geometry is re-optimized to fmax 0.002
+  eV/Å; while one is left, the analysis steps along the lowest imaginary mode both ways (largest atom 0.15 Å),
+  re-optimizes both and keeps the lower energy, at most N times, a new Hessian after each. A clean minimum costs
+  nothing extra. The result records it (`imag_found`, `imag_tightened`, `imag_steps`, `imag_energy_change_ev`,
+  `imag_max_shift_A` in the vibrations dict, a note). On b03's 150 cases: 146 become minima (the energy falls by a
+  median 0.15 kcal/mol; about 2 s per affected molecule); 4 near-free rotors stay at -22 to -36 cm-1.
+- A run folder started before this resumes with the old behaviour (`freq_imag_retries` 0), as for the rank step.
+
+### The ESP distribution on the molecular surface (2026-11-12)
+- With `--cubes` the QM stage now keeps the whole distribution of the electrostatic potential over the 0.002 au
+  density surface, not only Spartan's three polar areas (|V| > 75/100/125 kJ/mol), which stay:
+  - 22 descriptors `qm_surf_esp_area_<lo>_<hi>_A2`: the surface area in each 25 kJ/mol interval of V from -250 to
+    +250 kJ/mol (`m`/`p` = minus/plus: `qm_surf_esp_area_m025_p000_A2` is -25 <= V < 0), plus
+    `qm_surf_esp_area_below_m250_A2` and `qm_surf_esp_area_above_p250_A2`; they add up to `qm_surf_area_A2`.
+  - The finer profile, 5 kJ/mol intervals over the molecule's own range, in the summary
+    (`qm.surface.esp_profile`) and as `<id>_esp_profile.csv` (lo_kjmol, hi_kjmol, area_A2), so another binning or
+    the polar area at any multiple of 5 kJ/mol can be had later without the cubes (`chem.surfaces.profile_area`,
+    `profile_polar_area`). The ESP analogue of a COSMO-RS σ-profile.
+
 ### Machine control: the split, each machine's budget, and pausing a machine, DIST-7 (2026-11-11)
 - **Pause a machine** (the Machines dock's Pause / Resume per machine, `quantabench-cli worker pause [NAME]
   [--drain|--now]`, `worker resume`, `POST /v1/pause {"paused", "mode"}`): it takes no new molecules; `drain` (the
