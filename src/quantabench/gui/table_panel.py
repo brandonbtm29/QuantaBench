@@ -30,6 +30,7 @@ One row per molecule of the Molecules dock, the same rows in the same order (unt
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -64,6 +65,19 @@ STATE_KEY = "analyze/table"
 STATUS_TEXT = {"ok": "built", "failed": "failed", "cancelled": "cancelled", "pending": "not built"}
 XLSX_MISSING = ("Excel export needs openpyxl: pip install openpyxl (or the excel extra, "
                 "pip install \"quantabench[excel]\"). CSV export works without it.")
+
+
+def set_clipboard_text(text: str, tries: int = 6) -> bool:
+    """``QClipboard.setText``, retried. On Windows another program (clipboard history, a clipboard manager) can hold
+    the clipboard for a moment; Qt's write then fails ("OleSetClipboard: ... OpenClipboard Failed") and the old
+    content stays. Seen on BTM NOVA about one write in ten when two come quickly. At most ~0.6 s in all."""
+    clip = QApplication.clipboard()
+    for i in range(tries):
+        clip.setText(text)
+        if clip.text() == text:
+            return True
+        time.sleep(0.03 * (i + 1))
+    return False
 
 
 @dataclass
@@ -695,7 +709,7 @@ class SheetView(QTableView):
     def copy(self, headers: bool = False) -> None:
         text = self.copy_text(headers)
         if text:
-            QApplication.clipboard().setText(text)
+            set_clipboard_text(text)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt's name
         if event.matches(QKeySequence.StandardKey.Copy):

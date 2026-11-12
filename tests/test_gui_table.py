@@ -542,13 +542,17 @@ def test_copy_and_csv_export_round_trip(tmp_path, built):
         sm.select(model.index(1, ci), sm.SelectionFlag.ClearAndSelect)
         sm.select(model.index(2, cw), sm.SelectionFlag.Select)
         panel.view.setFocus()
+        clip = QApplication.clipboard()
         QTest.keyClick(panel.view, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
-        lines = QApplication.clipboard().text().splitlines()
-        assert len(lines) == 2 and lines[0].split("\t")[0] == model.row_id(1) and lines[0].split("\t")[-1] == ""
+        # Windows: another program (clipboard history, a clipboard manager) can hold the clipboard for a moment; the
+        # panel retries its write (set_clipboard_text) and the test waits for the text
+        assert _wait(app, lambda: len(clip.text().splitlines()) == 2, 5), repr(clip.text())
+        lines = clip.text().splitlines()
+        assert lines[0].split("\t")[0] == model.row_id(1) and lines[0].split("\t")[-1] == ""
         weight = float(lines[1].split("\t")[-1])
         assert weight == pytest.approx(next(r for r in res if r.input.id == model.row_id(2)).descriptors["mol_weight"])
         QTest.keyClick(panel.view, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
-        assert QApplication.clipboard().text().splitlines()[0].split("\t") == ["ID", "mol_weight"]
+        assert _wait(app, lambda: clip.text().splitlines()[:1] == ["ID\tmol_weight"], 5), repr(clip.text())
 
         model.add_formula("vol_per_weight", "molar_volume_packing_cm3 / mol_weight")
         path = tmp_path / "out" / "table.csv"
