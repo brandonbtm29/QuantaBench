@@ -10,6 +10,10 @@ CONTRACT (implemented by the surfaces builder):
         esp_sigma2_pos, esp_sigma2_neg, esp_sigma2_tot, esp_nu (balance), esp_pi (local polarity),
         esp_area_pos_A2, esp_area_neg_A2     (Murray-Politzer GIPF quantities, area-weighted)
         esp_polar_area_75_A2, _100_, _125_   (area where |V| > 75/100/125 kJ/mol, as Spartan's polar areas)
+        esp_area_below_m250_A2, esp_area_m250_m225_A2, ..., esp_area_p225_p250_A2, esp_area_above_p250_A2
+                                             (the ESP distribution: surface area per 25 kJ/mol of V, ESP_BINS_KJMOL)
+    esp_profile(surface, esp_kcal, bin_kjmol=5.0) -> dict      (the finer distribution, saved with the results)
+    profile_area(profile, lo_kjmol=None, hi_kjmol=None), profile_polar_area(profile, t_kjmol)
     charge_esp_surface(numbers, positions_A, charges, kind="vdw", scale=1.0, probe=1.4, spacing=0.25) ->
         (pyvista.PolyData, esp_kcal per vertex)
         Fallback when no QM cube exists: a vdW (or SAS) surface from atom spheres (contour of a smooth union of
@@ -46,6 +50,23 @@ triangles, so the statistics do not depend on how evenly the mesh samples the su
 Σ+ and Σ- run over vertices with V > 0 and V < 0. An empty sign class gives mean and variance 0, and ν = 0
 when σ²tot = 0.
 
+The ESP distribution
+--------------------
+The polar areas keep three numbers of the distribution of V over the surface. The whole distribution is kept as
+well, as the surface area in each interval of V (kJ/mol, like Spartan's polar areas; the area elements as above,
+so the intervals add up to ``surf_area_A2``):
+
+- ``esp_area_<lo>_<hi>_A2``: 25 kJ/mol intervals from -250 to +250 kJ/mol (``m``/``p`` = minus/plus, so
+  ``esp_area_m025_p000_A2`` is the area with -25 <= V < 0 kJ/mol), plus ``esp_area_below_m250_A2`` and
+  ``esp_area_above_p250_A2`` for the tails (anions and cations reach past ±250). 22 columns, the same for every
+  molecule, for QSAR tables. A neutral organic's surface is mostly within ±100 kJ/mol.
+- :func:`esp_profile`: the same in 5 kJ/mol intervals over the molecule's own range, saved with each result
+  (``qm["surface"]["esp_profile"]`` in the summary and ``<id>_esp_profile.csv``), so another binning or the polar
+  area at any multiple of 5 kJ/mol (:func:`profile_polar_area`) can be had later without the cubes.
+
+This is the ESP analogue of COSMO-RS's σ-profile (the area per interval of screening charge density; Klamt,
+*J. Phys. Chem.* 1995, 99, 2224), which is what such distributions are usually fed to QSPR models as.
+
 References: J. S. Murray, P. Lane, T. Brinck, K. Paulsen, M. E. Grice, P. Politzer, *J. Phys. Chem.* 1993, 97,
 9369 (σ²tot, ν); J. S. Murray, T. Brinck, P. Lane, K. Paulsen, P. Politzer, *J. Mol. Struct. THEOCHEM* 1994,
 307, 55 (the GIPF); J. S. Murray, Z. Peralta-Inga, P. Politzer, *Int. J. Quantum Chem.* 1999, 75, 267 (Π and
@@ -69,10 +90,28 @@ PROBE_A = 1.4                     # Å, solvent probe (water) for kind="sas"
 #: tab: "Polar Area Range 100 kJ/mol"); ``esp_polar_area_<T>_A2`` = area of the surface where |V| > T
 POLAR_ESP_KJMOL = (75, 100, 125)
 KJ_PER_KCAL = 4.184
+#: edges (kJ/mol) of the ESP distribution's descriptor intervals; below the first and above the last are the tails
+ESP_BINS_KJMOL = tuple(range(-250, 251, 25))
+#: interval (kJ/mol) of the saved ESP profile (``esp_profile``)
+PROFILE_BIN_KJMOL = 5.0
+
+
+def _edge_label(x: float) -> str:
+    return f"{'m' if x < 0 else 'p'}{abs(int(round(x))):03d}"
+
+
+def esp_bin_keys(edges=ESP_BINS_KJMOL) -> list[str]:
+    """Descriptor names of the ESP distribution: the low tail, one per interval, the high tail."""
+    e = list(edges)
+    return ([f"esp_area_below_{_edge_label(e[0])}_A2"]
+            + [f"esp_area_{_edge_label(a)}_{_edge_label(b)}_A2" for a, b in zip(e[:-1], e[1:])]
+            + [f"esp_area_above_{_edge_label(e[-1])}_A2"])
+
+
 DESCRIPTOR_KEYS = ("surf_area_A2", "surf_volume_A3", "esp_min_kcal", "esp_max_kcal", "esp_mean_kcal",
                    "esp_mean_pos_kcal", "esp_mean_neg_kcal", "esp_sigma2_pos", "esp_sigma2_neg", "esp_sigma2_tot",
                    "esp_nu", "esp_pi", "esp_area_pos_A2", "esp_area_neg_A2",
-                   *(f"esp_polar_area_{t}_A2" for t in POLAR_ESP_KJMOL))
+                   *(f"esp_polar_area_{t}_A2" for t in POLAR_ESP_KJMOL), *esp_bin_keys())
 
 
 class OpenSurfaceError(ValueError):
@@ -208,16 +247,83 @@ def gipf_descriptors(surface, esp_kcal: np.ndarray | None = None) -> dict:
         "esp_pi": float(np.dot(w, np.abs(v - mean)) / total),
         "esp_area_pos_A2": a_pos, "esp_area_neg_A2": a_neg,
         **{f"esp_polar_area_{t}_A2": float(w[np.abs(v) > t / KJ_PER_KCAL].sum()) for t in POLAR_ESP_KJMOL},
+        **esp_bin_areas(w, v),
     })
     return out
 
 
-def surface_descriptors(density, esp=None, iso: float = 0.002) -> dict:
+def esp_bin_areas(w: np.ndarray, esp_kcal: np.ndarray, edges=ESP_BINS_KJMOL) -> dict:
+    """Surface area (Å²) per interval of V (kJ/mol) for vertex areas ``w``: the descriptors of
+    :func:`esp_bin_keys` (intervals [lo, hi), the tails V < first edge and V >= last edge)."""
+    v = np.asarray(esp_kcal, float).reshape(-1) * KJ_PER_KCAL
+    e = np.asarray(edges, float)
+    idx = np.searchsorted(e, v, side="right")          # 0 = below the first edge, len(e) = at or above the last
+    areas = np.bincount(idx, weights=np.asarray(w, float).reshape(-1), minlength=len(e) + 1)
+    return {k: float(a) for k, a in zip(esp_bin_keys(edges), areas)}
+
+
+def esp_profile(surface, esp_kcal: np.ndarray, bin_kjmol: float = PROFILE_BIN_KJMOL) -> dict:
+    """The distribution of V over ``surface``: area (Å²) per ``bin_kjmol`` interval of V over the molecule's
+    own range. ``{"unit": "kJ/mol", "bin_kjmol", "lo_kjmol" (first edge, a multiple of the bin), "area_A2" [...],
+    "total_area_A2"}``; interval i is [lo + i·bin, lo + (i + 1)·bin)."""
+    w = vertex_areas(surface)
+    v = np.asarray(esp_kcal, float).reshape(-1) * KJ_PER_KCAL
+    if len(v) != len(w):
+        raise ValueError(f"{len(v)} ESP values for a surface with {len(w)} vertices")
+    b = float(bin_kjmol)
+    if b <= 0:
+        raise ValueError("bin_kjmol must be positive")
+    lo = float(np.floor(v.min() / b) * b) if len(v) else 0.0
+    idx = np.floor((v - lo) / b).astype(int) if len(v) else np.zeros(0, int)
+    areas = np.bincount(idx, weights=w, minlength=int(idx.max()) + 1 if len(idx) else 0)
+    return {"unit": "kJ/mol", "bin_kjmol": b, "lo_kjmol": lo, "area_A2": [round(float(a), 6) for a in areas],
+            "total_area_A2": float(w.sum())}
+
+
+def profile_edges(profile: dict) -> np.ndarray:
+    """The interval edges (kJ/mol) of an :func:`esp_profile`, one more than its areas."""
+    n = len(profile["area_A2"])
+    return profile["lo_kjmol"] + profile["bin_kjmol"] * np.arange(n + 1)
+
+
+def profile_area(profile: dict, lo_kjmol: float | None = None, hi_kjmol: float | None = None) -> float:
+    """Area (Å²) of the profile's intervals that lie within [lo, hi) (None = open). Exact when lo and hi are
+    interval edges (multiples of the profile's bin); otherwise an interval counts when its centre is inside."""
+    e = profile_edges(profile)
+    mid = 0.5 * (e[:-1] + e[1:])
+    a = np.asarray(profile["area_A2"], float)
+    keep = np.ones(len(a), bool)
+    if lo_kjmol is not None:
+        keep &= mid >= lo_kjmol
+    if hi_kjmol is not None:
+        keep &= mid < hi_kjmol
+    return float(a[keep].sum())
+
+
+def profile_polar_area(profile: dict, t_kjmol: float) -> float:
+    """Area (Å²) where |V| > t (kJ/mol), from a saved profile (for t a multiple of its bin this is the polar area
+    of the surface up to the vertices that lie exactly on ±t)."""
+    return profile_area(profile, None, -t_kjmol) + profile_area(profile, t_kjmol, None)
+
+
+def profile_csv(profile: dict) -> str:
+    """The profile as CSV text: lo_kjmol, hi_kjmol, area_A2."""
+    e = profile_edges(profile)
+    rows = ["lo_kjmol,hi_kjmol,area_A2"]
+    rows += [f"{e[i]:g},{e[i + 1]:g},{a:.6g}" for i, a in enumerate(profile["area_A2"])]
+    return "\n".join(rows) + "\n"
+
+
+def surface_descriptors(density, esp=None, iso: float = 0.002, *, profile: bool = False) -> dict:
     """GIPF descriptors of the ``iso`` density isosurface, ESP from ``esp`` (cubes or cube paths).
 
-    Without an ESP cube only the area and volume are returned (see :func:`gipf_descriptors`)."""
+    Without an ESP cube only the area and volume are returned (see :func:`gipf_descriptors`). ``profile``: also
+    the ESP distribution of :func:`esp_profile` under ``"esp_profile"`` (a dict, not a number)."""
     surf, values = qm_esp_surface(density, esp, iso)
-    return gipf_descriptors(surf, values)
+    out = gipf_descriptors(surf, values)
+    if profile and values is not None:
+        out["esp_profile"] = esp_profile(surf, values)
+    return out
 
 
 # ====================================================================== charge-based fallback

@@ -22,7 +22,8 @@ memory from ``settings.engines.qm_memory_gb``, scratch via ``PSI_SCRATCH``.
 (best conformer: dipole_debye, dipole_vector_debye, quadrupole_debye_A, homo_ev, lumo_ev, gap_ev,
 charges {mulliken, lowdin, mbis}, mbis_volumes_bohr3, polarizability_iso_A3 when computed), files
 ({"density": path, "esp": path, "log": path} in a scratch folder: ``export.write_molecule`` copies them next to
-the other results), surface (dict from ``surfaces.surface_descriptors`` when cubes were made), timings,
+the other results), surface (dict from ``surfaces.surface_descriptors`` when cubes were made, with the ESP
+distribution under ``esp_profile``; export writes it as ``<stem>_esp_profile.csv``), timings,
 warnings. Frequencies: ``result.vibrations``-compatible dict under ``qm["vibrations"]``.
 
 IMPLEMENTATION NOTES
@@ -501,7 +502,8 @@ def run_stage(result, cs, cfg, *, threads: int = 1, should_stop: Callable[[], bo
         from . import surfaces
 
         try:
-            qm["surface"] = dict(surfaces.surface_descriptors(files["density"], files["esp"]), iso_au=0.002)
+            qm["surface"] = dict(surfaces.surface_descriptors(files["density"], files["esp"], profile=True),
+                                 iso_au=0.002)
         except NotImplementedError:
             warnings.append("surface descriptors are not available yet (chem.surfaces is not implemented); "
                             "the density and ESP cubes are kept")

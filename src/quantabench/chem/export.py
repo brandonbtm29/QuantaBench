@@ -264,6 +264,13 @@ def write_qm(qm: dict, out_dir: Path, stem: str, spectrum: bool = False) -> list
         written.append(dst)
     if spectrum and qm.get("vibrations"):
         written += write_vibrations(qm["vibrations"], out_dir, f"{stem}_qm")
+    prof = (qm.get("surface") or {}).get("esp_profile")
+    if prof and prof.get("area_A2"):            # the ESP distribution on the density surface (chem.surfaces)
+        from . import surfaces
+
+        path = out_dir / f"{stem}_esp_profile.csv"
+        path.write_text(surfaces.profile_csv(prof), encoding="utf-8")
+        written.append(path)
     return written
 
 

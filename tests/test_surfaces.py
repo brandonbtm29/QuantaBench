@@ -156,6 +156,60 @@ def test_gipf_formulas_on_a_hand_checked_mesh():
     assert d["esp_polar_area_125_A2"] == pytest.approx(w[0])              # 30 only
 
 
+def test_esp_distribution_descriptors_and_profile(tmp_path):
+    """The ESP distribution: area per 25 kJ/mol interval (descriptors) and per 5 kJ/mol (the saved profile)."""
+    import pyvista as pv
+
+    pts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float)
+    faces = np.array([[3, 0, 2, 1], [3, 0, 1, 3], [3, 0, 3, 2], [3, 1, 2, 3]]).ravel()
+    mesh = pv.PolyData(pts, faces)
+    w = msurf.vertex_areas(mesh)
+    kj = np.array([-300.0, -12.0, 3.0, 110.0])               # kJ/mol: low tail, [-25, 0), [0, 25), [100, 125)
+    d = msurf.gipf_descriptors(mesh, kj / msurf.KJ_PER_KCAL)
+    keys = msurf.esp_bin_keys()
+    assert len(keys) == 22 and keys[0] == "esp_area_below_m250_A2" and keys[-1] == "esp_area_above_p250_A2"
+    assert "esp_area_m025_p000_A2" in keys and "esp_area_p000_p025_A2" in keys
+    assert set(keys) <= set(d) and set(keys) <= set(msurf.DESCRIPTOR_KEYS)
+    assert sum(d[k] for k in keys) == pytest.approx(d["surf_area_A2"])
+    assert d["esp_area_below_m250_A2"] == pytest.approx(w[0])
+    assert d["esp_area_m025_p000_A2"] == pytest.approx(w[1])
+    assert d["esp_area_p000_p025_A2"] == pytest.approx(w[2])
+    assert d["esp_area_p100_p125_A2"] == pytest.approx(w[3])
+    assert d["esp_area_m250_m225_A2"] == 0.0
+    # the finer profile over the molecule's own range: -300 ... 110 kJ/mol in 5 kJ/mol intervals
+    prof = msurf.esp_profile(mesh, kj / msurf.KJ_PER_KCAL)
+    assert prof["unit"] == "kJ/mol" and prof["bin_kjmol"] == 5.0 and prof["lo_kjmol"] == -300.0
+    edges = msurf.profile_edges(prof)
+    assert edges[0] <= kj.min() and edges[-1] > kj.max() and len(prof["area_A2"]) == len(edges) - 1
+    assert sum(prof["area_A2"]) == pytest.approx(prof["total_area_A2"]) == pytest.approx(d["surf_area_A2"])
+    assert msurf.profile_area(prof, -15, -10) == pytest.approx(w[1])
+    # polar areas from the profile agree with the descriptors (no vertex on a threshold)
+    for t in msurf.POLAR_ESP_KJMOL:
+        assert msurf.profile_polar_area(prof, t) == pytest.approx(d[f"esp_polar_area_{t}_A2"])
+    assert msurf.profile_polar_area(prof, 50) == pytest.approx(w[0] + w[3])
+    lines = msurf.profile_csv(prof).splitlines()
+    assert lines[0] == "lo_kjmol,hi_kjmol,area_A2" and lines[1].startswith("-300,-295,")
+    assert len(lines) == len(prof["area_A2"]) + 1
+    with pytest.raises(ValueError, match="positive"):
+        msurf.esp_profile(mesh, kj, bin_kjmol=0)
+
+
+def test_qm_surface_profile_is_saved_but_not_a_descriptor(tmp_path):
+    from quantabench.chem import export, qm
+
+    prof = {"unit": "kJ/mol", "bin_kjmol": 5.0, "lo_kjmol": -10.0, "area_A2": [1.5, 2.0, 0.0, 3.25],
+            "total_area_A2": 6.75}
+    q = {"level": "wb97x-d/6-31g*", "surface": {"surf_area_A2": 6.75, "esp_area_m025_p000_A2": 3.5,
+                                                 "esp_profile": prof, "iso_au": 0.002}}
+    d = qm.qm_descriptors(q)
+    assert d["qm_surf_area_A2"] == 6.75 and d["qm_surf_esp_area_m025_p000_A2"] == 3.5
+    assert not any("profile" in k for k in d)
+    paths = export.write_qm(q, tmp_path, "mol1")
+    assert [p.name for p in paths] == ["mol1_esp_profile.csv"]
+    rows = (tmp_path / "mol1_esp_profile.csv").read_text(encoding="utf-8").splitlines()
+    assert rows == ["lo_kjmol,hi_kjmol,area_A2", "-10,-5,1.5", "-5,0,2", "0,5,0", "5,10,3.25"]
+
+
 def test_open_isosurface_is_reported():
     dens, _ = _sphere_cubes(pad=-0.3)                        # the box cuts through the 0.002 au sphere
     with pytest.raises(msurf.OpenSurfaceError, match="edge of the cube grid"):

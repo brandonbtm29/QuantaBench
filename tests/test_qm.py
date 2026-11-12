@@ -265,9 +265,12 @@ def test_run_stage_with_fake_psi4(tmp_path, monkeypatch):
     monkeypatch.setenv("QB_FAKE_TASK_COPY", str(seen))
     calls = []
 
-    def fake_surface(density, esp=None, iso=0.002):
+    def fake_surface(density, esp=None, iso=0.002, profile=False):
         calls.append((density, esp))
-        return {"surf_area_A2": 40.0, "surf_volume_A3": 21.0, "esp_min_kcal": -35.0}
+        assert profile                     # the QM stage keeps the ESP distribution too
+        return {"surf_area_A2": 40.0, "surf_volume_A3": 21.0, "esp_min_kcal": -35.0,
+                "esp_profile": {"unit": "kJ/mol", "bin_kjmol": 5.0, "lo_kjmol": -150.0, "area_A2": [40.0],
+                                "total_area_A2": 40.0}}
 
     monkeypatch.setattr(surfaces, "surface_descriptors", fake_surface)
     res, cs = _result(n_conf=2)
@@ -294,6 +297,7 @@ def test_run_stage_with_fake_psi4(tmp_path, monkeypatch):
     assert d["qm_level"] == "hf/def2-svp" and d["qm_dipole_debye"] == 2.13 and d["qm_gap_ev"] == 18.35
     assert d["qm_polarizability_iso_A3"] == 0.7265 and d["qm_mbis_charge_min"] == -0.87
     assert d["qm_surf_area_A2"] == 40.0 and d["qm_surf_esp_min_kcal"] == -35.0
+    assert q["surface"]["esp_profile"]["area_A2"] == [40.0] and not any("profile" in k for k in d)
     # vibrations: normal modes and IR from the Psi4 Hessian reproduce Psi4's own analysis
     v = q["vibrations"]
     assert np.allclose(v["frequencies_cm1"], WATER_HF["psi4_frequencies_cm1"], atol=0.5)
