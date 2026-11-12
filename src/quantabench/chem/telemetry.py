@@ -377,7 +377,7 @@ def engines_info(cfg) -> dict:
 COST_FIELDS = ("method", "conformer_search", "crest_method", "crest_quick", "solvent", "max_conformers",
                "refine_top", "energy_window_kcal", "rank_method", "rank_window_kj", "rmsd_threshold", "fmax",
                "max_steps", "optimizer", "batched",
-               "xtb_properties", "frequencies", "freq_hessian", "qm_method", "qm_task", "qm_top", "qm_properties",
+               "xtb_properties", "frequencies", "freq_hessian", "freq_imag_retries", "qm_method", "qm_task", "qm_top", "qm_properties",
                "qm_frequencies", "qm_cubes", "threads", "gpu", "dxtb_gpu", "memory_budget_gb", "molecule_timeout_s",
                "protonate", "protonation_method", "priority", "free_threads")
 

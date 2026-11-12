@@ -781,6 +781,13 @@ class VibrationalResult:
     scale_factor: float = 1.0
     scale_factor_source: str = ""
     imag_tol_cm1: float = 20.0
+    # imaginary modes the analysis removed (``imag_retries``): how many there were at the first Hessian, whether the
+    # geometry was tightened, how many steps along a mode were taken, the energy change and the largest atom shift
+    imag_found: int = 0
+    imag_tightened: bool = False
+    imag_steps: int = 0
+    imag_energy_change_ev: float = 0.0
+    imag_max_shift_A: float = 0.0
     warnings: list[str] = field(default_factory=list)
     timings: dict[str, float] = field(default_factory=dict)
     displacements: np.ndarray | None = field(default=None, repr=False)   # (n_modes, N, 3), unit norm
@@ -823,6 +830,10 @@ class VibrationalResult:
 
 
 _DXTB = ("gfn1-xtb", "gfn2-xtb")
+#: max force (eV/Å) of the re-optimization that removes imaginary modes (``analyze(imag_retries=...)``)
+RETRY_FMAX = 0.002
+#: Å, the largest atom displacement of a step along an imaginary mode
+MODE_STEP_A = 0.15
 
 
 def _make_calc(method: str, atoms: Atoms, charge: int, multiplicity: int, device: str, mol) -> Calculator:
@@ -838,6 +849,7 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
             hessian: HessianMode = "auto", *, calc: Calculator | None = None, mol=None, fd_step: float = 0.01,
             ir: bool = True, qrrho: bool = True, qrrho_cutoff_cm1: float = 100.0, qrrho_alpha: float = 4.0,
             imag_tol_cm1: float = 20.0, preoptimize_fmax: float | None = None,
+            imag_retries: int = 0, retry_fmax: float = RETRY_FMAX, step_A: float = MODE_STEP_A,
             max_analytic_memory_gb: float | None = None, memory_budget_gb: float | None = None,
             should_stop: Callable[[], bool] | None = None,
             progress: Callable[[int, int], None] | None = None,
@@ -856,6 +868,13 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
     symmetry_number: rotational symmetry number σ; 0 or None detects it from the analyzed geometry
                 (``rotational_symmetry_number``), so each molecule of a batch gets its own.
     preoptimize_fmax: tighten the geometry (LBFGS) to this max force (eV/Å) before the Hessian.
+    imag_retries: when a mode is below -imag_tol_cm1, remove it: first re-optimize to ``retry_fmax`` (a residual
+                force on a soft torsion gives a small imaginary mode), then, while one is left, step along the
+                lowest imaginary mode both ways (the largest atom moving ``step_A``), re-optimize both to
+                ``retry_fmax`` and keep the lower energy (a saddle point kept by symmetry, such as a planar NH2 on
+                an aromatic ring, has no force to leave it), at most ``imag_retries`` steps, a new Hessian after
+                each. 0 (default) = report them only. The result says what was done (``imag_*`` fields, a
+                warning) and its geometry is the one analyzed.
     memory_budget_gb: the memory guard's budget for the dxtb steps (``memory_guard.frequencies_plan``):
                 over it the analytic Hessian becomes finite differences, and finite differences or the IR
                 dipole derivatives that do not fit are skipped with a note (``MemoryGuardError`` when the
@@ -925,35 +944,81 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
         for note in plan.notes:
             say(note)
 
-    t = time.perf_counter()
-    dmu = None
-    ir_source = ""
-    if analytic:
-        say(f"Hessian: analytic ({method}) for {n} atoms")
-        if method == "aimnet2" and not use_dxtb:
-            h = aimnet_hessian(calc, work)
+    def hessian_here():
+        """Hessian (and finite-difference dipole derivatives) at ``work``'s geometry, and its normal modes."""
+        nonlocal device
+        t = time.perf_counter()
+        dmu_, src = None, ""
+        if analytic:
+            say(f"Hessian: analytic ({method}) for {n} atoms")
+            if method == "aimnet2" and not use_dxtb:
+                h_ = aimnet_hessian(calc, work)
+            else:
+                if dxtb_run_device(device) != device:
+                    say(f"analytic Hessian on {dxtb_run_device(device)} instead of {device} "
+                        "(float64 dxtb; see torch_compat.dxtb_device)")
+                try:
+                    h_ = dxtb_hessian(work.numbers, work.positions, method, charge, multiplicity, device)
+                except Exception as exc:
+                    if device == "cpu":
+                        raise
+                    warnings.append(f"analytic Hessian failed on {device} ({type(exc).__name__}: {exc}); used CPU")
+                    device = "cpu"
+                    h_ = dxtb_hessian(work.numbers, work.positions, method, charge, multiplicity, device)
+            how, st = "analytic", None
         else:
-            if dxtb_run_device(device) != device:
-                say(f"analytic Hessian on {dxtb_run_device(device)} instead of {device} "
-                    "(float64 dxtb; see torch_compat.dxtb_device)")
-            try:
-                h = dxtb_hessian(work.numbers, work.positions, method, charge, multiplicity, device)
-            except Exception as exc:
-                if device == "cpu":
-                    raise
-                warnings.append(f"analytic Hessian failed on {device} ({type(exc).__name__}: {exc}); used CPU")
-                device = "cpu"
-                h = dxtb_hessian(work.numbers, work.positions, method, charge, multiplicity, device)
-        hessian_method, step = "analytic", None
-    else:
-        say(f"Hessian: central finite differences, step {fd_step} Å, {6 * n} force calls")
-        h, dmu = finite_difference_hessian(work, fd_step, dipole=ir and not use_dxtb,
-                                           should_stop=should_stop, progress=progress)
-        if dmu is not None:
-            ir_source = dipole_source(work)
-        hessian_method, step = "finite", fd_step
-    h = symmetrize(h)
-    timings["hessian"] = time.perf_counter() - t
+            say(f"Hessian: central finite differences, step {fd_step} Å, {6 * n} force calls")
+            h_, dmu_ = finite_difference_hessian(work, fd_step, dipole=ir and not use_dxtb,
+                                                 should_stop=should_stop, progress=progress)
+            if dmu_ is not None:
+                src = dipole_source(work)
+            how, st = "finite", fd_step
+        h_ = symmetrize(h_)
+        timings["hessian"] = timings.get("hessian", 0.0) + time.perf_counter() - t
+        geom = detect_geometry(work.positions, masses)
+        return h_, dmu_, src, how, st, geom, normal_modes(h_, masses, work.positions, geom)
+
+    h, dmu, ir_source, hessian_method, step, geometry, nm = hessian_here()
+    n_found = int((nm.frequencies_cm1 < -imag_tol_cm1).sum())
+    tightened, n_steps, e_start, x_start = False, 0, e_pot, work.get_positions().copy()
+    if n_found and imag_retries > 0:
+        t = time.perf_counter()
+        if preoptimize_fmax is None or preoptimize_fmax > retry_fmax:
+            say(f"{n_found} imaginary mode(s) (lowest {nm.frequencies_cm1[0]:.1f} cm-1): tightening to fmax "
+                f"{retry_fmax} eV/Å")
+            optimize(work, fmax=retry_fmax, steps=2000, should_stop=should_stop)
+            tightened = True
+            h, dmu, ir_source, hessian_method, step, geometry, nm = hessian_here()
+        while (nm.frequencies_cm1 < -imag_tol_cm1).any() and n_steps < imag_retries:
+            n_steps += 1
+            mode = np.asarray(nm.displacements[0], float).reshape(n, 3)
+            mode *= step_A / max(float(np.linalg.norm(mode, axis=1).max()), 1e-12)
+            say(f"imaginary mode {nm.frequencies_cm1[0]:.1f} cm-1: stepping {step_A} Å along it both ways "
+                f"(step {n_steps} of at most {imag_retries})")
+            best = None
+            for sign in (1.0, -1.0):
+                trial = Atoms(work.numbers, positions=work.get_positions() + sign * mode)
+                trial.calc = calc
+                optimize(trial, fmax=retry_fmax, steps=2000, should_stop=should_stop)
+                e_trial = float(trial.get_potential_energy())
+                if best is None or e_trial < best[0]:
+                    best = (e_trial, trial.get_positions().copy())
+            work.set_positions(best[1])
+            work.calc = calc
+            h, dmu, ir_source, hessian_method, step, geometry, nm = hessian_here()
+        e_pot = float(work.get_potential_energy())
+        fmax = float(np.sqrt((work.get_forces() ** 2).sum(1)).max())
+        timings["imaginary_removal"] = time.perf_counter() - t
+        left = int((nm.frequencies_cm1 < -imag_tol_cm1).sum())
+        shift = float(np.sqrt(((work.get_positions() - x_start) ** 2).sum(1)).max())
+        what = (f"tightened to fmax {retry_fmax} eV/Å" if tightened else "") + \
+               (f"{' and ' if tightened else ''}{n_steps} step(s) along the lowest imaginary mode" if n_steps else "")
+        warnings.append(f"{n_found} imaginary mode(s) at the first Hessian; {what}: "
+                        + (f"{left} left" if left else "none left")
+                        + f" (energy {(e_pot - e_start) * 1000:+.1f} meV, largest atom shift {shift:.2f} Å)")
+    imag_info = {"imag_found": n_found, "imag_tightened": tightened, "imag_steps": n_steps,
+                 "imag_energy_change_ev": float(e_pot - e_start), "imag_max_shift_A":
+                 float(np.sqrt(((work.get_positions() - x_start) ** 2).sum(1)).max())}
 
     if ir and use_dxtb and not _has_libcint():
         from .engines import libcint_status
@@ -969,11 +1034,9 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
             warnings.append(f"IR intensities unavailable ({type(exc).__name__}: {exc})")
         timings["dipole_derivatives"] = time.perf_counter() - t
 
-    geometry = detect_geometry(work.positions, masses)
     if not symmetry_number:              # 0 / None: detect σ from this (optimized) geometry
         symmetry_number = rotational_symmetry_number(work.numbers, work.positions, masses)
         say(f"rotational symmetry number σ = {symmetry_number} (detected)")
-    nm = normal_modes(h, masses, work.positions, geometry)
     freqs = nm.frequencies_cm1
     ints = ir_intensities(dmu, nm, masses) if dmu is not None else None
     if ints is None and ir and not ir_source:
@@ -1007,7 +1070,7 @@ def analyze(atoms: Atoms, method: str = "gfn1-xtb", charge: int = 0, multiplicit
         ir_intensities_km_mol=None if ints is None else [float(x) for x in ints], ir_source=ir_source,
         n_imaginary=n_imag, thermo=thermo, fd_step_A=step, max_force_ev_A=fmax,
         scale_factor=sf.value if sf else 1.0, scale_factor_source=sf.source if sf else "",
-        imag_tol_cm1=imag_tol_cm1, warnings=warnings, timings=timings, displacements=nm.displacements,
+        imag_tol_cm1=imag_tol_cm1, **imag_info, warnings=warnings, timings=timings, displacements=nm.displacements,
         hessian_ev_A2=h, positions=work.get_positions())
 
 

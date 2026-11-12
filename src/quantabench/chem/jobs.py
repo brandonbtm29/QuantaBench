@@ -69,14 +69,14 @@ SCIENCE_FIELDS = (
     "method", "ph", "protonate", "protonation_method", "keep_largest_fragment", "max_conformers",
     "refine_top", "energy_window_kcal", "rmsd_threshold", "fmax", "max_steps", "optimizer",
     "temperature_k", "xtb_properties", "seed", "frequencies", "freq_hessian", "symmetry_number", "freq_qrrho",
-    "solvent", "conformer_search", "crest_method", "crest_quick", "qm_method", "qm_task", "qm_top",
+    "freq_imag_retries", "solvent", "conformer_search", "crest_method", "crest_quick", "qm_method", "qm_task", "qm_top",
     "qm_properties", "qm_frequencies", "qm_cubes", "qm_program", "radii_set", "radii_overrides", "sasa_probe_A",
     "rank_method", "rank_window_kj",
 )
 #: Science fields added after run folders existed whose behaviour before them differs from today's default: a stored
 #: config without the field ran with this value (RANK-2: every run before the rank step ranked at the refinement
 #: level). ``stored_science`` and ``config_differences`` use it, so an old run folder resumes as it was started.
-LEGACY_DEFAULTS = {"rank_method": "refine"}
+LEGACY_DEFAULTS = {"rank_method": "refine", "freq_imag_retries": 0}   # 2026-11-12: imaginary modes removed
 #: fields that only matter with another field's value: rank_window_kj only when a rank step runs
 _ONLY_WITH = {"rank_window_kj": ("rank_method", "refine")}
 

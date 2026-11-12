@@ -240,6 +240,7 @@ def _config(args, base=None, **extra):
         "fmax": getattr(args, "fmax", None), "output_dir": getattr(args, "out", None),
         "protonation_method": getattr(args, "protonation", None), "batched": getattr(args, "batched", None),
         "freq_hessian": getattr(args, "freq_hessian", None), "symmetry_number": getattr(args, "symmetry_number", None),
+        "freq_imag_retries": getattr(args, "freq_imag_retries", None),
         "temperature_k": getattr(args, "temperature", None), "solvent": getattr(args, "solvent", None),
         "optimizer": getattr(args, "optimizer", None), "conformer_search": getattr(args, "conformers", None),
         "crest_method": getattr(args, "crest_method", None), "crest_fallback": getattr(args, "crest_fallback", None),
@@ -481,6 +482,8 @@ def _freq_as_is(args) -> int:
                                     temperature=args.temperature or 298.15, symmetry_number=args.symmetry_number or 0,
                                     hessian=args.freq_hessian or "auto",
                                     preoptimize_fmax=None if args.no_opt else (args.fmax or 0.01),
+                                    imag_retries=(0 if args.no_opt else 3) if args.freq_imag_retries is None
+                                    else args.freq_imag_retries,
                                     log=print if args.verbose else None)
         except Exception as exc:
             print(f"{stem}: FAILED {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -898,6 +901,9 @@ def add_freq_args(q: argparse.ArgumentParser) -> None:
                    help="rotational symmetry number σ for every molecule (default 0: detected per molecule "
                         "from its point group)")
     q.add_argument("--temperature", type=float, help="K, for Boltzmann weights and thermochemistry")
+    q.add_argument("--freq-imag-retries", type=int, metavar="N",
+                   help="imaginary modes below -20 cm-1: tighten the geometry to fmax 0.002 eV/Å, then step "
+                        "along the lowest one and re-optimize, at most N steps (default 3; 0 = only report them)")
 
 
 def add_build_science_args(q: argparse.ArgumentParser) -> None:

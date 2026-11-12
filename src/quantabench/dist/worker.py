@@ -131,7 +131,7 @@ RANGES: dict[str, tuple[float, float]] = {
     "max_steps": (0, 10_000_000), "temperature_k": (1e-3, 1e5), "symmetry_number": (0, 1000),
     "seed": (-(2**31), 2**31 - 1), "qm_top": (0, 10_000), "threads": (0, 4096), "gpu_index": (0, 64),
     "gpu_memory_fraction": (0.01, 1.0), "sasa_probe_A": (0.0, 10.0), "free_threads": (0, 4096),
-    "rank_window_kj": (0.0, 1e4),
+    "rank_window_kj": (0.0, 1e4), "freq_imag_retries": (0, 20),
 }
 _INPUT_LIMITS = {"id": 120, "smiles": 20_000, "name": 1_000, "source": 2_000, "molblock": 16_000_000}
 

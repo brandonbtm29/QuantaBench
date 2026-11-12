@@ -530,7 +530,9 @@ def to_vibrations_dict(calc: ImportedCalculation, temperature: float = 298.15, p
         "ir_source": f"{calc.program} output" if ints is not None else "", "n_imaginary": n_imag,
         "thermo": thermo, "fd_step_A": None, "max_force_ev_A": 0.0,
         "scale_factor": sf.value if sf else 1.0, "scale_factor_source": sf.source if sf else "",
-        "imag_tol_cm1": imag_tol_cm1, "warnings": warnings, "timings": {},
+        "imag_tol_cm1": imag_tol_cm1, "imag_found": n_imag, "imag_tightened": False, "imag_steps": 0,
+        "imag_energy_change_ev": 0.0, "imag_max_shift_A": 0.0,         # imported: nothing was re-optimized
+        "warnings": warnings, "timings": {},
         "n_modes": len(freqs), "lowest_freq_cm1": float(freqs[0]) if len(freqs) else None,
         "symbols": calc.symbols, "positions_A": np.round(pos, 6).tolist(),
         "source_file": str(calc.path), "program": calc.program,

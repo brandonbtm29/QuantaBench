@@ -69,6 +69,9 @@ class BuildConfig:
     freq_hessian: str = "auto"            # "auto" | "analytic" | "finite" (vibrations.analyze)
     symmetry_number: int = 0              # rotational symmetry number σ for the entropy; 0 = detect per molecule
     freq_qrrho: bool = True               # Grimme's quasi-RRHO entropy for low-frequency modes
+    # imaginary modes below -20 cm-1 at the first Hessian: tighten to fmax 0.002 eV/Å, then step along the lowest
+    # one both ways and re-optimize, at most this many steps (vibrations.analyze imag_retries); 0 = report only
+    freq_imag_retries: int = 3
     seed: int = 42
     solvent: str = ""                     # implicit solvent (chem.solvents name), "" = gas phase
     conformer_search: str = "rdkit"       # "rdkit" (ETKDGv3 + MMFF94s) | "crest" (CREST iMTD-GC, external)
@@ -505,7 +508,8 @@ def _frequencies(result: MoleculeResult, conf_set: confs.ConformerSet, best: Con
         vr = vibrations.analyze(atoms, result.method, result.charge, result.multiplicity, device=result.device, calc=calc,
                                 temperature=cfg.temperature_k, symmetry_number=cfg.symmetry_number,
                                 hessian=cfg.freq_hessian, mol=conf_set.mol, qrrho=cfg.freq_qrrho,
-                                preoptimize_fmax=fmax, should_stop=should_stop, log=log)
+                                preoptimize_fmax=fmax, imag_retries=cfg.freq_imag_retries,
+                                should_stop=should_stop, log=log)
     except Cancelled:
         raise
     except Exception as exc:

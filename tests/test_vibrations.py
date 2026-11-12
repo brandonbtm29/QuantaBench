@@ -159,6 +159,57 @@ def test_planar_ammonia_is_a_saddle():
     assert r.thermo.n_modes_used == r.n_modes - r.n_imaginary
 
 
+def test_imaginary_mode_is_removed_by_stepping_along_it():
+    """A saddle kept by symmetry (planar NH3, like a planar NH2 on an aromatic ring) has no force to leave it:
+    imag_retries steps along the imaginary mode, re-optimizes and ends at the pyramidal minimum."""
+    from ase.constraints import FixCartesian
+
+    mol = _mmff_mol("N")
+    a = _atoms(mol)
+    a.positions[:, 2] = 0.0
+    a.calc = vib.RdkitMMFFCalculator(mol)
+    a.set_constraint(FixCartesian(range(len(a)), mask=(False, False, True)))
+    optimize(a, fmax=1e-4, steps=500)
+    flat = vib.analyze(a, "mmff", mol=mol, symmetry_number=3)           # default: report only
+    assert flat.n_imaginary >= 1 and flat.imag_found == flat.n_imaginary and flat.imag_steps == 0
+    r = vib.analyze(a, "mmff", mol=mol, symmetry_number=3, imag_retries=3)
+    assert r.imag_found >= 1 and r.imag_steps >= 1 and r.imag_tightened
+    assert r.n_imaginary == 0 and r.frequencies_cm1[0] > -r.imag_tol_cm1
+    assert r.imag_energy_change_ev < -1e-3 and r.imag_max_shift_A > 0.05
+    assert any("none left" in w for w in r.warnings)
+    pos = np.asarray(r.positions)                                       # N out of the plane of the three H
+    normal = np.cross(pos[2] - pos[1], pos[3] - pos[1])
+    assert abs(np.dot(pos[0] - pos[1], normal / np.linalg.norm(normal))) > 0.2
+    d = r.to_dict()
+    assert d["imag_found"] == r.imag_found and d["imag_steps"] == r.imag_steps
+    assert r.thermo.n_modes_used == r.n_modes
+
+
+def test_small_imaginary_mode_from_a_loose_geometry_is_tightened():
+    """Ethane off its minimum along the torsion (an optimization stopped early) has an imaginary torsion mode:
+    the tightening re-optimization alone (no step along the mode) removes it; a clean minimum is left alone."""
+    mol = _mmff_mol("CC")
+    a = _atoms(mol)
+    clean = vib.analyze(a, "mmff", mol=mol, preoptimize_fmax=1e-4, imag_retries=3)
+    assert clean.imag_found == 0 and not clean.imag_tightened and clean.imag_steps == 0
+    assert "imaginary_removal" not in clean.timings
+    # rotate one methyl towards eclipsed: a torsional saddle region, loosely relaxed
+    pos = np.asarray(clean.positions).copy()
+    c0, c1 = pos[0], pos[1]
+    axis = (c1 - c0) / np.linalg.norm(c1 - c0)
+    ang = np.radians(55.0)
+    for i in range(len(pos)):
+        if a.numbers[i] == 1 and np.linalg.norm(pos[i] - c1) < 1.3:
+            v = pos[i] - c1
+            pos[i] = c1 + (v * np.cos(ang) + np.cross(axis, v) * np.sin(ang)
+                           + axis * np.dot(axis, v) * (1 - np.cos(ang)))
+    b = Atoms(a.numbers, positions=pos)
+    loose = vib.analyze(b, "mmff", mol=mol, imag_retries=0)
+    assert loose.n_imaginary >= 1
+    fixed = vib.analyze(b, "mmff", mol=mol, imag_retries=3)
+    assert fixed.n_imaginary == 0 and fixed.imag_found >= 1 and fixed.imag_tightened and fixed.imag_steps == 0
+
+
 def test_charges_finite_difference_ir_and_aimnet_mock(monkeypatch):
     """Fixed point charges: dmu/dR_i = q_i exactly, so the FD dipole path can be checked analytically.
 
