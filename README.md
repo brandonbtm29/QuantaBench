@@ -143,6 +143,15 @@ quantabench-cli build --file conformers.sdf --same-structures conformers --label
 quantabench-cli build --file set.sdf --import-options "post_fields=true,id_field=CAS_RN"
 ```
 
+## Workspaces
+
+The activity bar on the left switches between five workspaces, each an arrangement of docks around the
+shared 2D/3D view: **Build** (molecules, Appearance), **Calculate** (pipeline, Machines), **Simulate** (surface
+builder, LAMMPS export), **Analyze** (surfaces, spectra, conformers) and **Library** (the run folders under the
+output folder: open one, or resume its unfinished molecules). Alt+1 ... Alt+5 switch too (Control+1 ... on
+macOS). Each workspace remembers how its docks were arranged; View > Reset layout brings back its default. The
+playback bar under the view steps through the selected molecule's conformers.
+
 ## Viewer
 
 The center of the window shows the 2D structure (left) and the 3D model (right). Both views share one

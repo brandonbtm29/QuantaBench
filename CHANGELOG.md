@@ -2,6 +2,31 @@
 
 ## 0.3.0.dev (unreleased)
 
+### The app shell: task workspaces, Appearance, playback bar, status line, Library, UI-1 (2026-11-12)
+- **Workspaces:** an activity bar on the left switches the window between **Build**, **Calculate**,
+  **Simulate**, **Analyze** and **Library** (Alt+1 ... Alt+5, Control+1 ... Control+5 on macOS, or View >
+  Workspace; Ctrl+1 ... Ctrl+3 stay the mouse modes). A workspace is an arrangement of the same docks around the
+  shared 2D/3D view: Build shows the molecules and Appearance; Calculate the pipeline, Machines and Appearance;
+  Simulate the surface builder and LAMMPS export (a stub page for the MD workspace to come); Analyze surfaces and
+  spectra next to the conformer table; Library the run folders. Nothing is rebuilt on a switch: the selection, the
+  view and every panel stay as they are.
+- **Each workspace keeps its own layout:** a dock moved, closed or tabbed in Analyze stays that way in Analyze only,
+  also after a restart (kept per machine in the window settings, like the window size). View > Reset layout
+  restores the current workspace's default, View > Reset all workspace layouts every one. The dock layout saved by
+  earlier versions is not carried over: the first start shows the defaults (Calculate, the closest to the old
+  window).
+- **Appearance dock:** style, labels, colours, hydrogens in 3D and 2D and the 2D view in one place, instead of the
+  combo boxes on the view toolbar. Ctrl+D (show 2D), View > Hydrogens in 2D and the mouse modes stay where they were.
+- **Playback bar** under the view: first / previous / play / next / last, a slider and "Conformer 3 of 6, ΔE 3.15
+  kJ/mol, weight 15.2 %" for the selected molecule's conformers (1, 2, 4 or 8 per second; play wraps around). It
+  and the conformer table follow each other.
+- **Status line:** the number of molecules, the selected molecule and conformer, next to CPU threads and the GPU;
+  on a GPU also the memory PyTorch has allocated (refreshed once a second, only once torch is loaded).
+- **Library:** the run folders under the output folder (three levels deep), newest first, with their molecules
+  (built, failed), method, phase and state (finished, *n* to do, running); filter and sort them, double-click or
+  Open to list a folder's molecules, Resume to continue its unfinished ones. Read-only, off the GUI thread, scanned
+  when the Library is first shown and on Refresh.
+
 ### Imaginary frequencies removed in the frequency step (2026-11-12)
 - In batch b03, 75 of 1,000 molecules per phase ended with an imaginary mode below -20 cm-1. Two causes: a residual
   force on a soft torsion (90 %: -20 to -50 cm-1; the pre-optimization stops at fmax 0.01 eV/Å and most stopped at

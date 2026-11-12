@@ -2,8 +2,11 @@
 
 ```
             +----------------------- GUI (PySide6) -------------------------+
-            |  Molecules dock | 2D view | 3D view (PyVista) | Pipeline dock   |
-            |  Conformers + Log dock | Settings | Surface builder           |
+            | Build     |  Molecules dock | 2D view | 3D view | workspace's  |
+            | Calculate |                 | playback bar      | docks        |
+            | Simulate  |  Conformers + Log dock (+ Spectra in Analyze)      |
+            | Analyze   |  Settings | Surface builder | Library | Machines   |
+            | Library   |  (activity bar: gui.workspaces)                    |
             +-----------------------------+---------------------------------+
                                           | QThread workers (never block the UI)
             +--------------- CLI (argparse) --------------+
@@ -67,7 +70,10 @@
 | `md.params` | UFF Lennard-Jones table (Rappé 1992) and graphite presets (AMBER parm94, Steele 1973). |
 | `md.lammps` | `write_smd_setup`: `system.data`, `in.smd` (rigid adsorbate, frozen slab, Langevin, `fix smd`), README, JSON; `run_lammps` via the Python module. |
 | `md.lammps_log` | `log.lammps` thermo blocks, `pull_force.txt`, detachment work and peak force. |
-| `gui.main_window` | Window, docks, toolbars, the 2D/3D splitter and the shared selection; File > Open run folder, Build > Resume run folder. |
+| `gui.main_window` | Window, docks, toolbars, the Appearance dock, the status line, the 2D/3D splitter and the shared selection; File > Open run folder, Build > Resume run folder. |
+| `gui.workspaces` | UI-1's task workspaces: `WORKSPACES` (Build, Calculate, Simulate, Analyze, Library: the docks each shows, by object name and area) and `WorkspaceManager` (the activity bar, switching, each workspace's own `saveState` kept in the window settings, Reset layout). |
+| `gui.playback` | `PlaybackBar` under the view: first / previous / play / next / last, a slider, a label and a rate; it holds only an index and a count, so conformers now and frames or molecules later. |
+| `gui.library_panel` | The Library dock: `find_run_folders` (run folders under the output folder, read-only, off the GUI thread) and `LibraryPanel` (filter, sort, Open, Resume). |
 | `gui.molecule_list` | The Molecules dock for any number of molecules: `MoleculeTableModel` (light rows), `MoleculeFilter` (search, status), `MoleculeListView`, and `ResultStore` (`win.results`: full results read back from run folders on selection, LRU of 12; imports pinned). |
 | `gui.viewer3d` | `MoleculeViewer3D`: PyVista, instanced glyphs, NumPy ray picking, Rotate/Select/Move modes. `gui.viewer` is a compatibility shim (`MoleculeViewer`). |
 | `gui.viewer2d` | `MoleculeViewer2D`: RDKit SVG depiction in a `QGraphicsView`, full-index atom map, in-plane rotation, export. |
