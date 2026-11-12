@@ -27,7 +27,8 @@ from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPainter, 
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QToolBar, QWidget
 
 #: bump when the default layouts change incompatibly: saved arrangements of an older version are dropped
-STATE_VERSION = 1
+#: (2: Analyze gained the Table and Plot docks, UI-3)
+STATE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -66,9 +67,12 @@ WORKSPACES: tuple[Workspace, ...] = (
     Workspace("simulate", "Simulate", _key(3),
               "Simulate: molecular dynamics set-up (the surface builder and LAMMPS export today)",
               left=("molecules",), right=("simulate", "appearance"), bottom=("results",)),
+    # the table across the bottom (its plot on the right), with the selected molecule's conformers, spectra and
+    # surfaces a tab away
     Workspace("analyze", "Analyze", _key(4),
-              "Analyze: conformers, spectra and molecular surfaces of the selected molecule",
-              left=("molecules",), right=("surfaces", "appearance"), bottom=("results", "spectra")),
+              "Analyze: the molecules x properties table with formula columns and fits, its plot, and the selected "
+              "molecule's conformers, spectra and surfaces",
+              left=("molecules",), right=("plot", "surfaces", "appearance"), bottom=("table", "results", "spectra")),
     Workspace("library", "Library", _key(5),
               "Library: run folders on this computer and the synced ones; open or resume them",
               left=("molecules",), right=("library",), bottom=("results",)),
@@ -80,7 +84,7 @@ MANAGED = tuple(dict.fromkeys(name for w in WORKSPACES for name in w.docks))
 
 #: where a dock goes when a workspace does not use it (hidden)
 _HOME = {"molecules": Qt.DockWidgetArea.LeftDockWidgetArea, "results": Qt.DockWidgetArea.BottomDockWidgetArea,
-         "spectra": Qt.DockWidgetArea.BottomDockWidgetArea}
+         "spectra": Qt.DockWidgetArea.BottomDockWidgetArea, "table": Qt.DockWidgetArea.BottomDockWidgetArea}
 _AREAS = (("left", Qt.DockWidgetArea.LeftDockWidgetArea), ("right", Qt.DockWidgetArea.RightDockWidgetArea),
           ("bottom", Qt.DockWidgetArea.BottomDockWidgetArea))
 

@@ -4,7 +4,7 @@
             +----------------------- GUI (PySide6) -------------------------+
             | Build     |  Molecules dock | 2D view | 3D view | workspace's  |
             | Calculate |                 | playback bar      | docks        |
-            | Simulate  |  Conformers + Log dock (+ Spectra in Analyze)      |
+            | Simulate  |  Conformers, Log; Analyze: Table, Plot, Spectra    |
             | Analyze   |  Settings | Surface builder | Library | Machines   |
             | Library   |  (activity bar: gui.workspaces)                    |
             +-----------------------------+---------------------------------+
@@ -65,7 +65,9 @@
 | `chem.export` | Per-molecule writers and batch CSV tables; `read_molecule` reads a molecule's folder back into a `MoleculeResult` (every conformer from the SDF). |
 | `chem.pipeline` | `BuildConfig`, `MoleculeResult`, `run_molecule` (the rank step `_rank_step` between the refinement and the descriptors), `run`, `use_batched` (when to batch). |
 | `chem.method_guide`, `chem.advisor` | The methods guide as data (entries, what each corrects, the element, charge and spin `COVERAGE` of every method, basis set and CREST level) and the model advisor: `review(inputs, cfg)` profiles a batch (fast path for neutral single-fragment records, a per-process cache), checks coverage, and returns findings tied to docs/VALIDATION.md and three presets with cost estimates (docs/CHOOSING_METHODS.md). |
-| `chem.jobs` | Resumable batch runs: `JobStore` (SQLite, WAL), run lock, config guard, hash-based chunks, `run_resumable`, `open_run`, `rebuild_tables`, `merge_tables`; read helpers for the GUI: `molecule_rows` (light rows via SQLite `json_extract`), `load_result`, `load_inputs`, `stored_config`. |
+| `chem.jobs` | Resumable batch runs: `JobStore` (SQLite, WAL), run lock, config guard, hash-based chunks, `run_resumable`, `open_run`, `rebuild_tables`, `merge_tables`; read helpers for the GUI: `molecule_rows` (light rows via SQLite `json_extract`), `stored_tables` (the summary rows and descriptors of built molecules, for a run whose CSVs are missing or incomplete), `load_result`, `load_inputs`, `stored_config`. |
+| `analysis.formula` | Formula columns without `eval` (UI-3): `parse` checks an `ast` against a whitelist (numbers, names, `+ - * / **`, unary minus, `log log10 exp sqrt abs min max pow`), `Formula.evaluate` walks the tree with NumPy (NaN in, NaN out), `alias`/`aliases` (identifiers for column names), `fit` (`scipy.optimize.least_squares` of a formula's parameters to a target: values, standard errors, n, MAE, RMSE, R², the fitted formula), `linear_fit`. |
+| `analysis.sheet` | The Analyze table's data without Qt: `ColumnStore` (values per molecule id by column: float64 or object arrays), `Block` and `read_run_tables` (a run folder's summary.csv + descriptors.csv + `jobs.stored_tables`, on a worker thread), `result_values`, `write_csv` / `write_xlsx` (openpyxl, optional) / `tsv`, and `TableState` (column choices, formula columns, plot settings as JSON). |
 | `build.surfaces` | Graphite and metal slabs, orientation, placement, overlap report. |
 | `md.params` | UFF Lennard-Jones table (Rappé 1992) and graphite presets (AMBER parm94, Steele 1973). |
 | `md.lammps` | `write_smd_setup`: `system.data`, `in.smd` (rigid adsorbate, frozen slab, Langevin, `fix smd`), README, JSON; `run_lammps` via the Python module. |
@@ -75,10 +77,12 @@
 | `gui.playback` | `PlaybackBar` under the view: first / previous / play / next / last, a slider, a label and a rate; it holds only an index and a count, so conformers now and frames or molecules later. |
 | `gui.library_panel` | The Library dock: `find_run_folders` (run folders under the output folder, read-only, off the GUI thread) and `LibraryPanel` (filter, sort, Open, Resume). |
 | `gui.molecule_list` | The Molecules dock for any number of molecules: `MoleculeTableModel` (light rows), `MoleculeFilter` (search, status), `MoleculeListView`, and `ResultStore` (`win.results`: full results read back from run folders on selection, LRU of 12; imports pinned). |
+| `gui.table_panel`, `gui.table_dialogs` | The Table dock (UI-3, Analyze): `SheetModel` over the Molecules dock's rows (row fields, posted fields, `analysis.sheet` values, formula columns; its own numeric sort and filter; refreshes only while the Table or Plot dock is in view), `SheetView` (Ctrl+C / Ctrl+Shift+C as TSV), `TablePanel` (selection synced with the Molecules dock, CSV/XLSX export on a worker thread, state in the window settings under `analyze/table` until UI-2), and the column chooser, formula and fit dialogs. It follows `MainWindow.moleculeResult` and `runFolderOpened`. |
+| `gui.plot_panel` | The Plot dock (UI-3, Analyze): pyqtgraph scatter of two numeric table columns over the rows the table shows, colour by a third, least-squares line with R², click a point to select its molecule. |
 | `gui.viewer3d` | `MoleculeViewer3D`: PyVista, instanced glyphs, NumPy ray picking, Rotate/Select/Move modes. `gui.viewer` is a compatibility shim (`MoleculeViewer`). |
 | `gui.viewer2d` | `MoleculeViewer2D`: RDKit SVG depiction in a `QGraphicsView`, full-index atom map, in-plane rotation, export. |
 | `gui.selection` | `SelectionModel` (ordered atom indices, `changed` signal), measurements, the shared accent color. |
-| `gui.spectra_panel`, `gui.surface_panel`, `gui.import_action` | Optional panels installed by `MainWindow._install_panels`; they follow `MainWindow.resultChanged` (and `displayChanged` for energy units). |
+| `gui.spectra_panel`, `gui.surface_panel`, `gui.table_panel`, `gui.plot_panel`, `gui.import_action` | Optional panels installed by `MainWindow._install_panels` (one that fails is logged and left out); they follow `MainWindow.resultChanged` (and `displayChanged` for energy units). |
 | `gui.clipboard` | Edit > Paste (ChemDraw CDX, CDXML, MOL, MDLCT, text, in that order; the macOS pasteboard is also read directly for ChemDraw's type) and Copy as SMILES / MOL / CDXML; drops on the window (files, folders, text). |
 | `gui.sketcher_dock`, `gui.sketcher_view`, `gui.sketcher_web` | The Sketch dock (UI-6): Schrödinger's Sketcher (WebAssembly) in a `QWebEngineView`, served from a `qb-sketcher://` URL scheme registered before the QApplication; buttons hand MOL V3000 to `chem.sketch` (RDKit checks, `MoleculeInput`). Qt WebEngine is optional and loaded only when the dock opens. `sketcher_assets` fetches the editor's files (pinned sha256) into the programs folder. |
 | `gui.machine_monitor` | The machine monitor strip in the Pipeline dock, above the Run buttons: this computer (`sensors.Monitor`) and the workers (`RemotePoller`, `/v1/sensors`), sparklines, colours by threshold; a QTimer only copies the threads' latest samples. |

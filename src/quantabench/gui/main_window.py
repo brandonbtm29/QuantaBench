@@ -7,10 +7,11 @@ either one is highlighted in both, and the measurement for the last 2-4 picked a
 
 Around the views, the activity bar on the left switches between task workspaces (``gui.workspaces``, UI-1): Build
 (molecule list, Appearance, the 2D sketcher), Calculate (the pipeline: select a stage to edit its parameters and see
-its status for the selected molecule; the Machines dock), Simulate, Analyze (conformers, spectra, surfaces) and
-Library (run folders). A workspace only arranges the docks; every dock exists once and keeps its state, and each
-workspace remembers how the user arranged it. The status bar shows the molecule count, the shown molecule and
-conformer, the CPU threads and the GPU (with the memory in use while a GPU engine runs).
+its status for the selected molecule; the Machines dock), Simulate, Analyze (the molecules x properties table and its
+plot, conformers, spectra, surfaces) and Library (run folders). A workspace only arranges the docks; every dock
+exists once and keeps its state, and each workspace remembers how the user arranged it. The status bar shows the
+molecule count, the shown molecule and conformer, the CPU threads and the GPU (with the memory in use while a GPU
+engine runs).
 """
 
 from __future__ import annotations
@@ -137,6 +138,11 @@ class MainWindow(QMainWindow):
     resultChanged = Signal(object)
     #: Settings > Display changed (a ``units.EnergyDisplay``): panels showing energies redraw them.
     displayChanged = Signal(object)
+    #: A molecule's result arrived (MoleculeResult): a batch finished it, it was imported, or it was read from its
+    #: folder. The Table dock keeps its summary and descriptor values (``gui.table_panel``).
+    moleculeResult = Signal(object)
+    #: File > Open run folder listed a run folder (its Path): the Table dock reads its summary and descriptor tables.
+    runFolderOpened = Signal(object)
 
     def __init__(self, s: settings_mod.Settings):
         super().__init__()
@@ -212,15 +218,17 @@ class MainWindow(QMainWindow):
             import_action,
             machine_monitor,
             machines_panel,
+            plot_panel,
             review_panel,
             sketcher_dock,
             spectra_panel,
             surface_panel,
+            table_panel,
             update_action,
         )
 
-        for panel in (spectra_panel, surface_panel, import_action, machines_panel, machine_monitor, update_action,
-                      clipboard, sketcher_dock, review_panel):
+        for panel in (spectra_panel, surface_panel, table_panel, plot_panel, import_action, machines_panel,
+                      machine_monitor, update_action, clipboard, sketcher_dock, review_panel):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
@@ -897,11 +905,11 @@ class MainWindow(QMainWindow):
                  and self.dockWidgetArea(d) == Qt.DockWidgetArea.RightDockWidgetArea]
         if left:
             self.resizeDocks(left, [270], Qt.Orientation.Horizontal)
-        if right:      # the Library's table wants room; the pipeline's forms a little more than the rest
-            width = {"calculate": 440, "library": 640}.get(key, 380)
+        if right:      # the Library's table wants room; the pipeline's forms and Analyze's plot a little more
+            width = {"calculate": 440, "library": 640, "analyze": 420}.get(key, 380)
             self.resizeDocks(right[:1], [width], Qt.Orientation.Horizontal)
-        if not self.bottom_dock.isHidden():
-            self.resizeDocks([self.bottom_dock], [190], Qt.Orientation.Vertical)
+        if not self.bottom_dock.isHidden():    # Analyze's table: room for a dozen rows; elsewhere the conformers
+            self.resizeDocks([self.bottom_dock], [300 if key == "analyze" else 190], Qt.Orientation.Vertical)
 
     # ------------------------------------------------------------------ playback bar and status bar
     def _on_playback_index(self, i: int) -> None:
@@ -1288,6 +1296,7 @@ class MainWindow(QMainWindow):
             self.results.pin(res)
             for k, v in molecule_list.row_updates(res).items():
                 setattr(by_id[res.input.id], k, v)
+            self.moleculeResult.emit(res)
         self.model.add_rows(rows)
         if rows:
             self.mol_list.select_id(rows[-1].id)
@@ -1451,6 +1460,7 @@ class MainWindow(QMainWindow):
         ident, self._loading = self._loading, None
         if self.model.row(ident) is not None and res is not None:
             self.results.put(res)
+            self.moleculeResult.emit(res)
         self._after_load(ident)
 
     def _on_load_failed(self, msg: str) -> None:
@@ -1754,6 +1764,7 @@ class MainWindow(QMainWindow):
         if rows:
             self.mol_list.setCurrentRow(0)
         self._update_counts()
+        self.runFolderOpened.emit(folder)
 
     def resume_run(self, _checked=False, folder: str | Path | None = None) -> None:
         """Continue the unfinished molecules of the opened run folder (or of the last batch) with the science
@@ -1809,6 +1820,7 @@ class MainWindow(QMainWindow):
         if self._batch_dir is not None:
             fields["run_dir"] = str(self._batch_dir)
         self.model.update(ident, **fields)
+        self.moleculeResult.emit(res)                # the table keeps its values (numbers, not the result)
         selected = self.mol_list.current_id() == ident
         self.results.discard(ident)                  # an older result of it must not come back from the cache
         if res.status == "ok" and not fields["folder"]:

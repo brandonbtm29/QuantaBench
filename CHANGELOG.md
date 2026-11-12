@@ -2,6 +2,41 @@
 
 ## 0.3.0.dev (unreleased)
 
+### The Analyze table: molecules x properties, a plot, formula columns and fits, UI-3 (2026-11-12)
+- **Table dock** (Analyze, in front at the bottom, with Results and Spectra as tabs): one row per molecule of the
+  Molecules dock, the same rows in the same order, virtualized (14,000 rows build, sort and filter in well under a
+  second). Columns: #, ID, name, status, formula, conformers, best energy (in the unit of Settings > Display),
+  method, SMILES; the data fields an imported file posted; every summary and descriptor value of the built
+  molecules; and formula columns. The values come from the results in memory (a batch's finished molecules,
+  imports, results read from their folders) and, for File > Open run folder, from the folder's summary.csv and
+  descriptors.csv, read on a worker thread (the job table fills in molecules those files miss, as in an
+  interrupted batch).
+- **Columns...** shows or hides columns (remembered), grouped by where they come from, with the name each one has in
+  formulas. Sort by any column (numbers as numbers, missing values last), filter by ID, name, SMILES, formula or
+  method. Selecting a row selects the molecule in the Molecules dock and the other way round (a molecule hidden by
+  the Molecules dock's search clears that search).
+- **Copy and export:** Ctrl+C copies the selected cells as tab-separated text for Excel, Ctrl+Shift+C with the
+  column titles; Export writes the rows and columns shown to CSV (UTF-8 with a byte-order mark, so Excel reads µ
+  and Å) or to an Excel workbook when openpyxl is installed (otherwise the menu entry says
+  `pip install openpyxl`). Numbers keep 15 significant digits.
+- **Formula columns** (New column..., or right-click a header to edit or remove one): `+ - * / **`, parentheses,
+  numbers, column names and `log`, `log10`, `exp`, `sqrt`, `abs`, `min`, `max`, `pow`, evaluated row by row with
+  NumPy; a missing value gives an empty cell. Nothing else is accepted (no attribute access, indexing, other calls,
+  comparisons, lambdas, comprehensions, f-strings or `__` names), and the text never reaches `eval` or `exec`
+  (`analysis.formula`: an `ast` whitelist and a tree-walking evaluator). A column whose name is not an identifier
+  is referenced by its alias (`E (kJ/mol)` -> `E_kJ_mol`, `σ` -> `sigma`), shown in the column chooser; the best
+  energy is `best_energy_eV`, in eV.
+- **Fit...** fits the parameters of a formula (its names that are not columns, e.g. a, b, c in the quantum parachor
+  `((a*alpha + b*mu**2 + c)/Vm)**4`) to a target column with `scipy.optimize.least_squares` on the rows the table
+  shows where every value is present: the parameters with standard errors, n, MAE, RMSE and R², and Add as column
+  puts the fitted formula in the table.
+- **Plot dock** (Analyze, in front on the right, with Surfaces and Appearance as tabs): any two numeric columns,
+  colour by a third (viridis), a least-squares line with slope, intercept, R² and n; the table's filter filters it;
+  clicking a point selects that molecule, which is ringed.
+- **Kept:** the column choices, formula columns and plot settings are kept in the window settings until the project
+  document (UI-2) holds them. The workspace layouts' version is now 2: layouts saved by the UI-1 build are dropped
+  once, and Analyze starts with its new default.
+
 ### The app shell: task workspaces, Appearance, playback bar, status line, Library, UI-1 (2026-11-12)
 - **Workspaces:** an activity bar on the left switches the window between **Build**, **Calculate**,
   **Simulate**, **Analyze** and **Library** (Alt+1 ... Alt+5, Control+1 ... Control+5 on macOS, or View >
