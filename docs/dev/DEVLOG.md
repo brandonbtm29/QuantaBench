@@ -96,3 +96,9 @@ Newest entries at the bottom. One entry per working session or nightly run.
   MMFF 14.6 s (1 lane) vs 9.0 s (`--lanes auto`, 12 lanes, mostly start-up); PFBA + PFOA with AIMNet2 on the
   GPU in 15.5 s including model load.
 
+## 2026-11-12: QM-ESP options (afternoon task, branch `afternoon/2026-11-12-qm-esp`)
+- `qm_polarizability` and `qm_keep_cubes` (BuildConfig, CLI, the GUI's QM page) for an ESP pass over many molecules,
+  and the imaginary-mode steps in `psi4_driver.frequencies` (NumPy normal modes with translations and rotations
+  projected out, `projected_modes`, since the driver runs in Psi4's Python without QuantaBench).
+- Tested on a model triatomic held linear by symmetry (a saddle like a planar NH2 on a ring): one step along the bend
+  finds the 150° minimum; and the water HF Hessian's frequencies match Psi4's to 1.5 cm-1. No Psi4 run here.

@@ -87,8 +87,14 @@ class BuildConfig:
     qm_task: str = "energy"               # "energy" (single point) | "optimize"
     qm_top: int = 1                       # how many of the lowest conformers get the QM stage
     qm_properties: bool = True            # dipole, quadrupole, Mulliken/Lowdin/MBIS charges, orbital energies
+    # the static polarizability of the best QM conformer (with qm_properties): CPSCF or finite-field SCFs, the slowest
+    # part of a DFT properties step. False skips it (an ESP study needs the density, not α)
+    qm_polarizability: bool = True
     qm_frequencies: bool = False          # QM Hessian + IR + thermochemistry of the best QM conformer
     qm_cubes: bool = False                # density + ESP cubes and molecular-surface descriptors (best conformer)
+    # keep the density/ESP cube files after the surface descriptors and the ESP profile are computed (the Surfaces
+    # panel draws the QM surface from them; ~16 MB per molecule). False deletes them: files only, not science
+    qm_keep_cubes: bool = True
     qm_program: str = "psi4"
     threads: int = 0                      # 0 = auto: the logical threads minus free_threads (quantabench.priority)
     # this machine's run priority ("normal" | "low" | "background") and the logical threads the automatic budgets

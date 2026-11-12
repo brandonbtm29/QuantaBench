@@ -70,7 +70,8 @@ SCIENCE_FIELDS = (
     "refine_top", "energy_window_kcal", "rmsd_threshold", "fmax", "max_steps", "optimizer",
     "temperature_k", "xtb_properties", "seed", "frequencies", "freq_hessian", "symmetry_number", "freq_qrrho",
     "freq_imag_retries", "solvent", "conformer_search", "crest_method", "crest_quick", "qm_method", "qm_task", "qm_top",
-    "qm_properties", "qm_frequencies", "qm_cubes", "qm_program", "radii_set", "radii_overrides", "sasa_probe_A",
+    "qm_properties", "qm_polarizability", "qm_frequencies", "qm_cubes", "qm_program", "radii_set", "radii_overrides",
+    "sasa_probe_A",
     "rank_method", "rank_window_kj",
 )
 #: Science fields added after run folders existed whose behaviour before them differs from today's default: a stored

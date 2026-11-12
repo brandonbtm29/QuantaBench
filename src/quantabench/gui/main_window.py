@@ -560,16 +560,28 @@ class MainWindow(QMainWindow):
             self.w_qm_top.setRange(1, 100)
             self.w_qm_top.setToolTip("How many of the lowest refined conformers get the QM stage")
             self.w_qm_task.setToolTip("Single point at the refined geometry, or a QM optimization (optking)")
-            self.w_qm_props = QCheckBox("Properties and polarizability")
-            self.w_qm_props.setToolTip("Best conformer: dipole, quadrupole, Mulliken/Löwdin/MBIS charges, HOMO/LUMO, "
-                                       "static polarizability (analytic or finite field)")
+            self.w_qm_props = QCheckBox("Properties")
+            self.w_qm_props.setToolTip("Best conformer: dipole, quadrupole, Mulliken/Löwdin/MBIS charges, HOMO/LUMO")
             self.w_qm_props.setChecked(True)
+            self.w_qm_pol = QCheckBox("Polarizability")
+            self.w_qm_pol.setToolTip("Best conformer: static polarizability (analytic CPSCF or finite field). The "
+                                     "slowest part of the properties with DFT; an ESP study does not need it "
+                                     "(--no-qm-polarizability)")
+            self.w_qm_pol.setChecked(True)
+            self.w_qm_props.toggled.connect(lambda on: self.w_qm_pol.setEnabled(on and self.w_qm_on.isChecked()))
             self.w_qm_freq = QCheckBox("Frequencies + thermochemistry")
             self.w_qm_freq.setToolTip("Best conformer: QM Hessian, IR intensities, ZPE/H/S/G. Slow for DFT "
                                       "(finite differences: about 6N gradients)")
             self.w_qm_cubes = QCheckBox("Density/ESP cubes + surfaces")
             self.w_qm_cubes.setToolTip("0.002 au density surface: area, enclosed volume, ESP extrema and "
                                        "Murray-Politzer statistics. Shown in the Surfaces panel.")
+            self.w_qm_keep_cubes = QCheckBox("Keep the cube files")
+            self.w_qm_keep_cubes.setToolTip("Keep the density and ESP cubes (~16 MB per molecule) after the surface "
+                                            "descriptors and the ESP profile are saved; the Surfaces panel draws "
+                                            "the QM surface from them (--no-keep-cubes deletes them)")
+            self.w_qm_keep_cubes.setChecked(True)
+            self.w_qm_cubes.toggled.connect(
+                lambda on: self.w_qm_keep_cubes.setEnabled(on and self.w_qm_on.isChecked()))
             self.w_qm_on.toggled.connect(self._update_qm_widgets)
             if hasattr(self, "w_rank_method"):      # rank level 'qm' needs the QM stage
                 self.w_qm_on.toggled.connect(self._update_rank_info)
@@ -581,8 +593,10 @@ class MainWindow(QMainWindow):
             form.addRow("Task", self.w_qm_task)
             form.addRow("Conformers", self.w_qm_top)
             form.addRow(self.w_qm_props)
+            form.addRow(self.w_qm_pol)
             form.addRow(self.w_qm_freq)
             form.addRow(self.w_qm_cubes)
+            form.addRow(self.w_qm_keep_cubes)
         elif key == "export":
             self.w_formats = {}
             for fmt, desc in export.FORMATS.items():
@@ -956,6 +970,8 @@ class MainWindow(QMainWindow):
         for w in (self.w_qm_func, self.w_qm_basis, self.w_qm_task, self.w_qm_top, self.w_qm_props, self.w_qm_freq,
                   self.w_qm_cubes):
             w.setEnabled(on)
+        self.w_qm_pol.setEnabled(on and self.w_qm_props.isChecked())
+        self.w_qm_keep_cubes.setEnabled(on and self.w_qm_cubes.isChecked())
 
     def current_config(self) -> BuildConfig:
         self._store_stage_values()
@@ -970,8 +986,9 @@ class MainWindow(QMainWindow):
             crest_method=self.w_crest_method.currentData(), crest_quick=self.w_crest_quick.isChecked(),
             crest_fallback="rdkit" if self.w_crest_fallback.isChecked() else "fail",
             qm_task=self.w_qm_task.currentData(), qm_top=self.w_qm_top.value(),
-            qm_properties=self.w_qm_props.isChecked(), qm_frequencies=self.w_qm_freq.isChecked(),
-            qm_cubes=self.w_qm_cubes.isChecked())
+            qm_properties=self.w_qm_props.isChecked(), qm_polarizability=self.w_qm_pol.isChecked(),
+            qm_frequencies=self.w_qm_freq.isChecked(), qm_cubes=self.w_qm_cubes.isChecked(),
+            qm_keep_cubes=self.w_qm_keep_cubes.isChecked())
 
     def _refresh_engine_lists(self) -> None:
         """Re-label methods/CREST/QM after the user changed program paths (availability may differ)."""

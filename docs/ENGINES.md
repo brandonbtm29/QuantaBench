@@ -891,6 +891,16 @@ quantabench-cli build "OC(=O)C(F)(F)C(F)(F)C(F)(F)F PFBA" --method xtb-gfn2 --so
   - density and ESP cubes with surface descriptors;
   - frequencies with IR intensities and qRRHO thermochemistry, computed with QuantaBench's own
     vibrational code.
+- **Switches** (`build`, `grid build`; the QM page in the GUI):
+  - `--no-qm-properties` skips the whole properties step.
+  - `--no-qm-polarizability` skips only the polarizability, the slowest part of it with DFT. Dipoles, charges and orbitals stay.
+  - `--cubes` makes the density and ESP cubes and the surface descriptors.
+  - `--no-keep-cubes` deletes the two cube files (about 16 MB per molecule) once the surface descriptors and the ESP profile are saved. The Surfaces panel then has no QM surface to draw for that molecule.
+  - For an ESP study of many molecules: `--qm wb97x-d/6-31g* --cubes --no-qm-polarizability --no-keep-cubes`.
+- **Imaginary modes at the QM level.** With `--qm-freq`, a mode below -20 cm⁻¹ left after the tight re-optimization is handled as in the pipeline's own frequency step (`--freq-imag-retries`, default 3):
+  - the driver steps 0.15 Å (largest atom) along the mode both ways;
+  - it re-optimizes both, keeps the lower one and computes a new Hessian.
+  - `qm["vibrations"]` records what happened: `imag_found_cm1`, `imag_steps`, `imag_left_cm1`, `imag_energy_change_ev`, `imag_max_shift_A`.
 - **Descriptors.** `qm_energy_ev`, `qm_dipole_debye`, `qm_homo_ev`, `qm_lumo_ev`, `qm_gap_ev`,
   `qm_polarizability_iso_A3`, `qm_mbis_*`, `qm_zpe_kcal`, ..., `qm_surf_*`.
 - **Files.** `<id>_qm_log.out`, `<id>_qm_density.cube`, `<id>_qm_esp.cube`, `<id>_qm_geometry.xyz`

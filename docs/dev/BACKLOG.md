@@ -1013,6 +1013,10 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   non-fluorinated liquids. TPSA and ESP 75/100/125 correlate at r 0.73/0.77/0.68; 29 of 74 have TPSA 0, 7/20/27
   have ESP area 0. Brandon then asked for the whole ESP distribution instead of three thresholds (2026-11-12:
   `qm_surf_esp_area_*`, `<id>_esp_profile.csv`).
+- **QM-ESP options** · in-PR 2026-11-12 (branch `afternoon/2026-11-12-qm-esp`): `--no-qm-polarizability`, `--qm-properties/--no-qm-properties`,
+  `--keep-cubes/--no-keep-cubes`, and the imaginary-mode steps in the Psi4 frequency path. Then the staged ESP pass over b03 (gas, `--qm
+  wb97x-d/6-31g* --cubes --no-qm-polarizability --no-keep-cubes`; `scratch/batches/run_b03_esp.ps1` on NOVA) for the ESP PCA substudy,
+  appended to a night's chain once this is merged.
 - **b03's imaginary frequencies** (`scratch/batches/imag_look.py`, `imag_test.py`, `imag_summary.py`;
   `analysis/imag_test_{gas,water}.csv`): recomputed at the stored geometries, all 150 come back (not noise). Gas:
   55 at -20..-50 cm-1, 12 at -50..-100, 8 below -100 (water 60/11/4). The small ones sit at a residual force

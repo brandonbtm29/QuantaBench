@@ -4,6 +4,7 @@ with a fake Psi4 interpreter, and real Psi4 runs on water and HF (marked ``exter
 from __future__ import annotations
 
 import json
+import math
 import sys
 import textwrap
 import threading
@@ -241,10 +242,10 @@ if MODE == "hang":            # Psi4 stuck at exit after a failed SCF left its t
 '''
 
 
-def _fake_python(tmp_path: Path, monkeypatch, mode: str = "ok") -> Path:
+def _fake_python(tmp_path: Path, monkeypatch, mode: str = "ok", freq: dict | None = None) -> Path:
     """An executable that behaves like ``<psi4 python> -I psi4_driver.py task.json`` (Windows and Linux)."""
     script = tmp_path / f"fake_psi4_{mode}.py"
-    body = FAKE_DRIVER.replace("__MODE__", mode).replace("__FREQ__", repr(json.dumps(WATER_HF)))
+    body = FAKE_DRIVER.replace("__MODE__", mode).replace("__FREQ__", repr(json.dumps(freq or WATER_HF)))
     script.write_text(textwrap.dedent(body), encoding="utf-8")
     if sys.platform == "win32":
         exe = tmp_path / f"python_{mode}.bat"
@@ -554,3 +555,200 @@ print(sys.getfilesystemencoding(), open(files[0], "rb").read().decode("utf-8").s
                          encoding="utf-8", timeout=300)      # the child prints UTF-8 (PYTHONIOENCODING)
     assert out.returncode == 0, out.stderr[-2000:]
     assert "Β-Tocopherol test" in out.stdout
+
+
+# ----------------------------------------------------------------------------- QM-ESP options (2026-11-12)
+def test_build_task_polarizability_and_imaginary_mode_options():
+    res, cs = _result(n_conf=1)
+    t = qm.build_task(res, cs, _cfg(qm_top=1))
+    assert t["properties"] and t["polarizability"] and t["imag_retries"] == 3 and t["imag_step_A"] == 0.15
+    t = qm.build_task(res, cs, _cfg(qm_top=1, qm_polarizability=False, freq_imag_retries=0))
+    assert t["properties"] and not t["polarizability"] and t["imag_retries"] == 0
+    t = qm.build_task(res, cs, _cfg(qm_top=1, qm_properties=False))
+    assert not t["properties"] and not t["polarizability"]
+    v = psi4_driver.validate_task(t)
+    assert v["imag_retries"] == 3 and v["imag_tol_cm1"] == 20.0 and not v["polarizability"]
+    with pytest.raises(psi4_driver.TaskError, match="imag_step_A"):
+        psi4_driver.validate_task({**t, "imag_step_A": 0})
+
+
+def test_qm_switches_on_the_command_line_and_in_the_job_table():
+    from quantabench import cli
+    from quantabench.chem import jobs
+
+    args = cli.build_parser().parse_args(["build", "CCO", "--qm", "wb97x-d/6-31g*", "--cubes", "--no-keep-cubes",
+                                          "--no-qm-polarizability"])
+    c = cli.config_from_args(args)
+    assert c.qm_cubes and not c.qm_keep_cubes and not c.qm_polarizability and c.qm_properties
+    c = cli.config_from_args(cli.build_parser().parse_args(["build", "CCO", "--no-qm-properties"]))
+    assert not c.qm_properties and c.qm_polarizability and c.qm_keep_cubes
+    c = cli.config_from_args(cli.build_parser().parse_args(["build", "CCO"]))
+    assert c.qm_properties and c.qm_polarizability and c.qm_keep_cubes
+    # skipping the polarizability changes the results (a science field); deleting the cubes does not
+    assert "qm_polarizability" in jobs.SCIENCE_FIELDS and "qm_keep_cubes" not in jobs.SCIENCE_FIELDS
+    from quantabench.chem.pipeline import BuildConfig
+
+    stored = {k: getattr(BuildConfig(), k) for k in jobs.SCIENCE_FIELDS}
+    stored.pop("qm_polarizability")                       # a run folder from before the field
+    assert jobs.config_differences(stored, BuildConfig()) == {}
+
+
+def test_projected_modes_reproduce_psi4_frequencies():
+    m = [15.99491462, 1.00782503, 1.00782503]
+    nu, disp = psi4_driver.projected_modes(WATER_HF["hessian_au"], m, WATER_HF["positions_A"])
+    assert np.allclose(nu, WATER_HF["psi4_frequencies_cm1"], atol=1.5)
+    assert disp.shape == (3, 3, 3) and np.allclose(np.linalg.norm(disp, axis=2).max(axis=1), 1.0)
+
+
+class _Model:
+    """A bent triatomic (bonds of 2 bohr, a 150° angle): E = kb Σ(r - r0)² + a (cos θ - cos 150°)². The linear
+    geometry is a saddle held by symmetry, as a planar NH2 on an aromatic ring is."""
+
+    kb, r0, a, c0 = 0.4, 2.0, 0.08, math.cos(math.radians(150.0))
+
+    def energy(self, x):
+        x = np.asarray(x, float).reshape(3, 3)
+        u, v = x[0] - x[1], x[2] - x[1]
+        r1, r2 = np.linalg.norm(u), np.linalg.norm(v)
+        cos = float(u @ v / (r1 * r2))
+        return self.kb * ((r1 - self.r0) ** 2 + (r2 - self.r0) ** 2) + self.a * (cos - self.c0) ** 2
+
+    def gradient(self, x, h=1e-6):
+        x = np.asarray(x, float).ravel()
+        return np.array([(self.energy(x + h * e) - self.energy(x - h * e)) / (2 * h) for e in np.eye(x.size)])
+
+    def hessian(self, x, h=1e-4):
+        x = np.asarray(x, float).ravel()
+        cols = [(self.gradient(x + h * e) - self.gradient(x - h * e)) / (2 * h) for e in np.eye(x.size)]
+        hm = np.array(cols).T
+        return (hm + hm.T) / 2
+
+    def angle(self, x):
+        x = np.asarray(x, float).reshape(3, 3)
+        u, v = x[0] - x[1], x[2] - x[1]
+        return math.degrees(math.acos(float(u @ v / np.linalg.norm(u) / np.linalg.norm(v))))
+
+
+class _FakeMol:
+    def __init__(self, geom_bohr, masses):
+        self.x, self.m = np.asarray(geom_bohr, float).reshape(-1, 3).copy(), list(masses)
+
+    def update_geometry(self):
+        pass
+
+    def geometry(self):
+        return self.x.copy()
+
+    def set_geometry(self, g):
+        self.x = np.asarray(g, float).reshape(-1, 3).copy()
+
+    def mass(self, i):
+        return self.m[i]
+
+    def natom(self):
+        return len(self.m)
+
+
+class _FakePsi4:
+    """Just what ``psi4_driver.frequencies`` calls, on ``_Model``."""
+
+    class OptimizationConvergenceError(Exception):
+        pass
+
+    def __init__(self, model, masses):
+        from types import SimpleNamespace
+
+        self.model, self.masses, self.n_opt, self.n_hess = model, masses, 0, 0
+        self.core = SimpleNamespace(Molecule=SimpleNamespace(from_arrays=self._from_arrays))
+
+    def _from_arrays(self, elem, geom, units, **_kw):
+        assert units == "Angstrom"
+        return _FakeMol(np.asarray(geom, float) / psi4_driver.BOHR_ANG, self.masses)
+
+    def set_options(self, _opts):
+        pass
+
+    def optimize(self, _method, molecule):
+        from scipy.optimize import minimize
+
+        self.n_opt += 1
+        r = minimize(self.model.energy, molecule.x.ravel(), jac=self.model.gradient, method="BFGS",
+                     options={"gtol": 1e-9, "maxiter": 2000})
+        molecule.set_geometry(r.x)
+        return float(self.model.energy(r.x))
+
+    def frequency(self, _method, molecule, return_wfn=True):
+        from types import SimpleNamespace
+
+        self.n_hess += 1
+        hm = self.model.hessian(molecule.x)
+        wfn = SimpleNamespace(hessian=lambda: hm, variables=lambda: {}, gradient=lambda: None)
+        return float(self.model.energy(molecule.x)), wfn
+
+
+def _linear_task(retries):
+    lin = [[-2.0 * psi4_driver.BOHR_ANG, 0, 0], [0, 0, 0], [2.0 * psi4_driver.BOHR_ANG, 0, 0]]
+    return psi4_driver.validate_task({"symbols": ["C", "O", "C"], "conformers": [{"id": 0, "positions_A": lin}],
+                                      "method": "hf", "basis": "sto-3g", "hessian": True, "imag_retries": retries})
+
+
+@pytest.mark.parametrize("retries", [3, 0])
+def test_qm_frequencies_step_off_a_symmetric_saddle(monkeypatch, retries):
+    model, masses = _Model(), [12.0, 16.0, 12.0]
+    fake = _FakePsi4(model, masses)
+    monkeypatch.setattr(psi4_driver, "hessian_kind", lambda *_a: "analytic")
+    t = _linear_task(retries)
+    mol0 = fake._from_arrays(t["symbols"], t["conformers"][0]["positions_A"], "Angstrom")
+    warnings: list[str] = []
+    out = psi4_driver.frequencies(fake, t, mol0, False, warnings)
+    pos = np.asarray(out["positions_A"]) / psi4_driver.BOHR_ANG
+    assert out["imag_found_cm1"] < -20                    # the linear saddle: the bend is imaginary
+    if retries:
+        assert out["imag_steps"] == 1 and out["imag_left_cm1"] is None
+        assert model.angle(pos) == pytest.approx(150.0, abs=0.5)
+        assert out["imag_energy_change_ev"] < 0 and 0.05 < out["imag_max_shift_A"] < 1.0
+        assert fake.n_hess == 2 and fake.n_opt == 3        # tight opt, then both directions
+        nu, _ = psi4_driver.projected_modes(out["hessian_au"], masses, out["positions_A"])
+        assert len(nu) == 3 and nu[0] > 20                 # a bent minimum: 3 real modes
+    else:
+        assert out["imag_steps"] == 0 and out["imag_left_cm1"] == out["imag_found_cm1"]
+        assert model.angle(pos) == pytest.approx(180.0, abs=1e-6) and fake.n_hess == 1
+
+
+def test_run_stage_reports_the_imaginary_mode_steps(tmp_path, monkeypatch):
+    freq = dict(WATER_HF, imag_found_cm1=-212.4, imag_steps=1, imag_left_cm1=None, imag_energy_change_ev=-0.0123,
+                imag_max_shift_A=0.31)
+    _fake_python(tmp_path, monkeypatch, freq=freq)
+    res, cs = _result(n_conf=1)
+    qm.run_stage(res, cs, _cfg(qm_top=1, qm_frequencies=True), threads=1, log=lambda _m: None)
+    v = res.qm["vibrations"]
+    assert v["imag_found_cm1"] == -212.4 and v["imag_steps"] == 1 and v["imag_left_cm1"] is None
+    assert any("imaginary mode -212.4 cm-1" in n and "removed it" in n for n in res.notes)
+
+
+@pytest.mark.parametrize("surface_ok", [True, False])
+def test_run_stage_deletes_the_cubes_after_the_surface_analysis(tmp_path, monkeypatch, surface_ok):
+    from quantabench.chem import surfaces
+
+    _fake_python(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake_surface(density, esp=None, iso=0.002, profile=False):
+        seen["files"] = (Path(density).is_file(), Path(esp).is_file())
+        if not surface_ok:
+            raise RuntimeError("no surface")
+        return {"surf_area_A2": 40.0, "esp_profile": {"unit": "kJ/mol", "bin_kjmol": 5.0, "lo_kjmol": -150.0,
+                                                      "area_A2": [40.0], "total_area_A2": 40.0}}
+
+    monkeypatch.setattr(surfaces, "surface_descriptors", fake_surface)
+    res, cs = _result(n_conf=1)
+    qm.run_stage(res, cs, _cfg(qm_top=1, qm_cubes=True, qm_keep_cubes=False), threads=1, log=lambda _m: None)
+    q = res.qm
+    assert seen["files"] == (True, True)                   # the analysis saw both cubes
+    if surface_ok:
+        assert "density" not in q["files"] and "esp" not in q["files"] and q.get("cubes_deleted")
+        assert q["surface"]["esp_profile"]["area_A2"] == [40.0] and res.descriptors["qm_surf_area_A2"] == 40.0
+        assert any("cubes deleted" in n for n in res.notes) and Path(q["files"]["log"]).is_file()
+    else:                                                  # nothing to keep them for: they stay
+        assert Path(q["files"]["density"]).is_file() and Path(q["files"]["esp"]).is_file()
+        assert not q.get("cubes_deleted") and any("cubes kept" in n for n in res.notes)
