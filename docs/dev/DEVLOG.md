@@ -96,6 +96,18 @@ Newest entries at the bottom. One entry per working session or nightly run.
   MMFF 14.6 s (1 lane) vs 9.0 s (`--lanes auto`, 12 lanes, mostly start-up); PFBA + PFOA with AIMNet2 on the
   GPU in 15.5 s including model load.
 
+## 2026-11-12: UI-1 app shell (branch `feat/app-shell`)
+- Task workspaces with an activity bar, one Appearance dock, a conformer playback bar, a status line with the
+  selected molecule and conformer, and a first Library of run folders. Each workspace keeps its own dock layout.
+- Qt notes: `QMainWindow.saveState` records only the docks that are in the layout, and `restoreState` leaves an
+  unrecorded dock as it is. A workspace's default therefore takes every managed dock out, adds its own docks
+  (tabbed per area) and puts the others back hidden in their home areas, so every saved state names every dock.
+  Qt retires a broken-up tab group's tab bar with `deleteLater`: a script or test that spins with
+  `processEvents()` outside `exec()` never deletes it and sees stale tab strips; `sendPostedEvents(None,
+  QEvent.DeferredDelete)` in the wait loop (the tests do this) shows the real layout.
+- `jobs.open_run` on a run folder leaves an empty `jobs.sqlite-wal` and `-shm` (SQLite's read-only WAL open); the
+  Library ignores an empty -wal for "Changed", and the README's `.stignore` lines keep both out of the sync.
+
 ## 2026-11-12: QM-ESP options (afternoon task, branch `afternoon/2026-11-12-qm-esp`)
 - `qm_polarizability` and `qm_keep_cubes` (BuildConfig, CLI, the GUI's QM page) for an ESP pass over many molecules,
   and the imaginary-mode steps in `psi4_driver.frequencies` (NumPy normal modes with translations and rotations

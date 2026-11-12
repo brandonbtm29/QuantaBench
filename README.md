@@ -143,6 +143,23 @@ quantabench-cli build --file conformers.sdf --same-structures conformers --label
 quantabench-cli build --file set.sdf --import-options "post_fields=true,id_field=CAS_RN"
 ```
 
+## Workspaces
+
+The activity bar on the left switches between five workspaces, each an arrangement of docks around the
+shared 2D/3D view: **Build** (molecules, Appearance), **Calculate** (pipeline, Machines), **Simulate** (surface
+builder, LAMMPS export), **Analyze** (the table and its plot, surfaces, spectra, conformers) and **Library** (the
+run folders under the output folder: open one, or resume its unfinished molecules). Alt+1 ... Alt+5 switch too
+(Control+1 ... on macOS). Each workspace remembers how its docks were arranged; View > Reset layout brings back its
+default. The playback bar under the view steps through the selected molecule's conformers.
+
+Analyze's **Table** has one row per molecule with its descriptors and summary values (from the run folder's
+descriptors.csv and summary.csv, or the molecules built in this session): choose columns, sort, filter, Ctrl+C into
+Excel, export CSV or XLSX. **New column...** adds a formula column (`polarizability_bosque_A3 /
+molar_volume_packing_cm3`; `+ - * / **`, `log`, `exp`, `sqrt`, ...; columns by the names the column chooser lists),
+and **Fit...** fits a formula's parameters to a column, e.g. `((a*alpha + b*mu**2 + c)/Vm)**4` for the quantum
+parachor, with n, MAE, RMSE and R². The **Plot** next to it scatters any two columns, coloured by a third, with a
+fit line; clicking a point selects the molecule.
+
 ## Viewer
 
 The center of the window shows the 2D structure (left) and the 3D model (right). Both views share one

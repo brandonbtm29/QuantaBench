@@ -1,19 +1,24 @@
 """Main window.
 
-Layout borrows from OVITO: the structure views are the center of attention, the "pipeline" on the right
-lists the processing stages (select one to edit its parameters, see its status for the selected
-molecule), the molecule list sits on the left, and conformers + log share the bottom panel.
+The structure views are the center of attention: a splitter with a 2D depiction (RDKit, left, narrower) and the 3D
+viewer (PyVista), and under them the playback bar that steps through the selected molecule's conformers
+(``gui.playback``). Both views hold the same :class:`~quantabench.gui.selection.SelectionModel`, so an atom picked in
+either one is highlighted in both, and the measurement for the last 2-4 picked atoms is shown in the status bar.
 
-The center is a splitter with a 2D depiction (RDKit, left, narrower) and the 3D viewer (PyVista).
-Both views hold the same :class:`~quantabench.gui.selection.SelectionModel`, so an atom picked in
-either one is highlighted in both, and the measurement for the last 2-4 picked atoms is shown in the
-status bar.
+Around the views, the activity bar on the left switches between task workspaces (``gui.workspaces``, UI-1): Build
+(molecule list, Appearance, the 2D sketcher), Calculate (the pipeline: select a stage to edit its parameters and see
+its status for the selected molecule; the Machines dock), Simulate, Analyze (the molecules x properties table and its
+plot, conformers, spectra, surfaces) and Library (run folders). A workspace only arranges the docks; every dock
+exists once and keeps its state, and each workspace remembers how the user arranged it. The status bar shows the
+molecule count, the shown molecule and conformer, the CPU threads and the GPU (with the memory in use while a GPU
+engine runs).
 """
 
 from __future__ import annotations
 
 import html
 import os
+import sys
 import threading
 from pathlib import Path
 
@@ -58,6 +63,7 @@ from ..chem import inputs as inputs_mod
 from ..chem import method_guide as guide
 from ..chem.pipeline import BuildConfig, MoleculeResult, fallback_count
 from . import molecule_list, workers
+from . import workspaces as workspaces_mod
 from .energy_widgets import EnergySpinBox
 from .molecule_list import (
     STATUS_FILTERS,
@@ -67,6 +73,7 @@ from .molecule_list import (
     MoleculeTableModel,
     ResultStore,
 )
+from .playback import PlaybackBar
 from .selection import SelectionModel
 from .settings_dialog import SettingsDialog, method_keys, method_label
 from .viewer2d import MoleculeViewer2D
@@ -131,6 +138,11 @@ class MainWindow(QMainWindow):
     resultChanged = Signal(object)
     #: Settings > Display changed (a ``units.EnergyDisplay``): panels showing energies redraw them.
     displayChanged = Signal(object)
+    #: A molecule's result arrived (MoleculeResult): a batch finished it, it was imported, or it was read from its
+    #: folder. The Table dock keeps its summary and descriptor values (``gui.table_panel``).
+    moleculeResult = Signal(object)
+    #: File > Open run folder listed a run folder (its Path): the Table dock reads its summary and descriptor tables.
+    runFolderOpened = Signal(object)
 
     def __init__(self, s: settings_mod.Settings):
         super().__init__()
@@ -170,7 +182,16 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(1, 2)
         self.splitter.setSizes([380, 620])
         self.splitter.setCollapsible(1, False)
-        self.setCentralWidget(self.splitter)
+        self.playback = PlaybackBar(self, kind="Conformer")
+        self.playback.indexChanged.connect(self._on_playback_index)
+        center = QWidget()
+        center.setObjectName("center")
+        center_lay = QVBoxLayout(center)
+        center_lay.setContentsMargins(0, 0, 0, 0)
+        center_lay.setSpacing(0)
+        center_lay.addWidget(self.splitter, 1)
+        center_lay.addWidget(self.playback)
+        self.setCentralWidget(center)
         # The Pipeline widgets hold settings only once _load_stage_values has filled them: until then, storing
         # them (current_config, e.g. from a panel built during start-up) would write their minimums into the
         # settings, and closing the window would save those (pH 0, 1 conformer, 1 K).
@@ -179,9 +200,13 @@ class MainWindow(QMainWindow):
         self._build_pipeline_dock()
         self._build_bottom_dock()
         self._build_toolbar_and_menus()
+        self._build_appearance_dock()
+        self._build_workspace_docks()
         self._build_statusbar()
         self._load_stage_values()
         self._install_panels()
+        self.workspaces = workspaces_mod.WorkspaceManager(self)
+        self._build_workspace_menu()
         self._restore_window()
         QTimer.singleShot(50, self._detect_hardware)
 
@@ -193,15 +218,17 @@ class MainWindow(QMainWindow):
             import_action,
             machine_monitor,
             machines_panel,
+            plot_panel,
             review_panel,
             sketcher_dock,
             spectra_panel,
             surface_panel,
+            table_panel,
             update_action,
         )
 
-        for panel in (spectra_panel, surface_panel, import_action, machines_panel, machine_monitor, update_action,
-                      clipboard, sketcher_dock, review_panel):
+        for panel in (spectra_panel, surface_panel, table_panel, plot_panel, import_action, machines_panel,
+                      machine_monitor, update_action, clipboard, sketcher_dock, review_panel):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
@@ -254,6 +281,7 @@ class MainWindow(QMainWindow):
         self.status_filter.currentIndexChanged.connect(self._apply_search)
         self.count_label = QLabel()
         self.count_label.setStyleSheet("color: gray;")
+        self.count_label.setWordWrap(True)        # "No molecules. Add SMILES ..." must not set the dock's width
         lay.addWidget(self.count_label)
         self._count_timer = QTimer(self)           # at most a few count updates a second during a batch
         self._count_timer.setSingleShot(True)
@@ -291,6 +319,8 @@ class MainWindow(QMainWindow):
 
     def _update_counts(self) -> None:
         n = self.model.rowCount()
+        if hasattr(self, "mol_status"):
+            self._update_molecule_status()
         if not n:
             self.count_label.setText("No molecules. Add SMILES or names, open a file or a run folder.")
             return
@@ -665,6 +695,7 @@ class MainWindow(QMainWindow):
                 self.conf_table.setCurrentCell(row, 0)
                 self.conf_table.blockSignals(False)
             self._show_info(res)
+        self.playback.refresh_label()
         self.displayChanged.emit(d)
 
     def _build_toolbar_and_menus(self) -> None:
@@ -715,35 +746,11 @@ class MainWindow(QMainWindow):
             vt.addAction(a)
         self.mode_actions["rotate"].setChecked(True)
         vt.addSeparator()
-        self.style_box = QComboBox()
-        self.style_box.addItems(STYLES)
-        self.style_box.currentTextChanged.connect(self.viewer.set_style)
-        vt.addWidget(QLabel(" Style "))
-        vt.addWidget(self.style_box)
-        self.label_box = QComboBox()
-        for m in LABEL_MODES:
-            self.label_box.addItem(m.replace("+", " + ").capitalize(), m)
-        self.label_box.setToolTip("Atom labels in both views (indices are 0-based, like ASE and RDKit)")
-        self.label_box.currentIndexChanged.connect(self._on_label_mode)
-        vt.addWidget(QLabel(" Labels "))
-        vt.addWidget(self.label_box)
-        self.color_box = QComboBox()
-        for m in COLOR_MODES:
-            self.color_box.addItem(m.capitalize(), m)
-        self.color_box.setToolTip("Element (Jmol), Charge (red = negative, blue = positive), "
-                                  "Tag (surface gray, adsorbate orange)")
-        self.color_box.currentIndexChanged.connect(lambda _i: self.viewer.set_color_mode(self.color_box.currentData()))
-        vt.addWidget(QLabel(" Color "))
-        vt.addWidget(self.color_box)
-        self.h_box = QCheckBox("Hydrogens")
-        self.h_box.setChecked(True)
-        self.h_box.setToolTip("Hydrogens in the 3D view (the 2D view: View > Hydrogens in 2D)")
-        self.h_box.toggled.connect(self.viewer.set_show_hydrogens)
-        vt.addWidget(self.h_box)
+        # Style, labels, colours and hydrogens are in the Appearance dock (_build_appearance_dock); these two stay
+        # actions so their shortcuts and View menu entries work in every workspace
         self.a_show2d = act("Show 2D", self._set_2d_visible, "Ctrl+D", "Show the 2D structure next to the 3D view")
         self.a_show2d.setCheckable(True)
         self.a_show2d.setChecked(True)
-        vt.addAction(self.a_show2d)
         vt.addAction(act("Reset view", self.reset_views, "R", "Default orientation, fit both views"))
         vt.addAction(act("Screenshot...", self.save_screenshot))
 
@@ -760,7 +767,7 @@ class MainWindow(QMainWindow):
         b.addAction(self.a_surface)
         v = m.addMenu("&View")
         v.addAction(self.a_show2d)
-        self.a_h2d = act("Hydrogens in 2D", lambda on: self.viewer2d.set_show_hydrogens(on))
+        self.a_h2d = act("Hydrogens in 2D", lambda _on: None)     # toggled -> the 2D view (_build_appearance_dock)
         self.a_h2d.setCheckable(True)
         v.addAction(self.a_h2d)
         mm = v.addMenu("Mouse mode")
@@ -785,7 +792,197 @@ class MainWindow(QMainWindow):
         h.addSeparator()
         h.addAction(act("About QuantaBench", self.about))
 
+    def _build_appearance_dock(self) -> None:
+        """One place for how the molecule looks (UI-1): style, labels, colours, hydrogens and the 2D view. The
+        widgets keep their names (``style_box``, ``label_box``, ``color_box``, ``h_box``) for the panels and tests;
+        Show 2D (Ctrl+D) and Hydrogens in 2D stay actions, mirrored here by check boxes."""
+        w = QWidget()
+        form = QFormLayout(w)
+        self.style_box = QComboBox()
+        self.style_box.addItems(STYLES)
+        self.style_box.setToolTip("How atoms and bonds are drawn in the 3D view")
+        self.style_box.currentTextChanged.connect(self.viewer.set_style)
+        form.addRow("Style", self.style_box)
+        self.label_box = QComboBox()
+        for m in LABEL_MODES:
+            self.label_box.addItem(m.replace("+", " + ").capitalize(), m)
+        self.label_box.setToolTip("Atom labels in both views (indices are 0-based, like ASE and RDKit)")
+        self.label_box.currentIndexChanged.connect(self._on_label_mode)
+        form.addRow("Labels", self.label_box)
+        self.color_box = QComboBox()
+        for m in COLOR_MODES:
+            self.color_box.addItem(m.capitalize(), m)
+        self.color_box.setToolTip("Element (Jmol), Charge (red = negative, blue = positive), "
+                                  "Tag (surface gray, adsorbate orange)")
+        self.color_box.currentIndexChanged.connect(lambda _i: self.viewer.set_color_mode(self.color_box.currentData()))
+        form.addRow("Color", self.color_box)
+        self.h_box = QCheckBox("Hydrogens in 3D")
+        self.h_box.setChecked(True)
+        self.h_box.setToolTip("Hydrogens in the 3D view")
+        self.h_box.toggled.connect(self.viewer.set_show_hydrogens)
+        form.addRow(self.h_box)
+        self.h2d_box = QCheckBox("Hydrogens in 2D")
+        self.h2d_box.setToolTip("Explicit hydrogens in the 2D depiction (View > Hydrogens in 2D)")
+        self.h2d_box.setChecked(self.a_h2d.isChecked())
+        self.h2d_box.toggled.connect(self.a_h2d.setChecked)
+        self.a_h2d.toggled.connect(self.h2d_box.setChecked)
+        self.a_h2d.toggled.connect(lambda on: self.viewer2d.set_show_hydrogens(on))
+        form.addRow(self.h2d_box)
+        self.show2d_box = QCheckBox("Show the 2D structure")
+        self.show2d_box.setToolTip("The 2D depiction next to the 3D view (Ctrl+D)")
+        self.show2d_box.setChecked(self.a_show2d.isChecked())
+        self.show2d_box.toggled.connect(self._set_2d_visible)
+        self.a_show2d.toggled.connect(self.show2d_box.setChecked)
+        form.addRow(self.show2d_box)
+        hint = QLabel("Mouse modes, Reset view and Screenshot are on the View toolbar; the surface and spectra "
+                      "panels have their own colours.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
+        form.addRow(hint)
+        dock = QDockWidget("Appearance", self)
+        dock.setObjectName("appearance")
+        dock.setWidget(w)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        self.appearance_dock = dock
+
+    def _build_workspace_docks(self) -> None:
+        """The Simulate and Library docks (``gui.library_panel``)."""
+        from .library_panel import LibraryPanel
+
+        sim = QWidget()
+        lay = QVBoxLayout(sim)
+        text = QLabel(
+            "<b>Molecular dynamics</b><br>What runs today: the <b>Surface builder</b> puts the selected molecule on a "
+            "graphite slab, lets you move it in the 3D view, and writes the system and a LAMMPS steered-MD set-up "
+            "(<code>system.data</code>, <code>in.smd</code>). <code>quantabench-cli md smd</code> does the same from "
+            "the command line and <code>md parse</code> reads the run back.<br><br>"
+            "Next: the Simulate workspace proper (system, force field, protocol, engine, live telemetry), designed "
+            "in the MD front-end survey (BACKLOG RES-1, SIM-1).")
+        text.setWordWrap(True)
+        text.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(text)
+        btn = QPushButton("Surface builder...")
+        btn.clicked.connect(self.open_surface_builder)
+        lay.addWidget(btn)
+        ovito = QPushButton(self.a_ovito.text())
+        ovito.setEnabled(self.a_ovito.isEnabled())
+        ovito.clicked.connect(self.open_in_ovito)
+        lay.addWidget(ovito)
+        lay.addStretch(1)
+        dock = QDockWidget("Simulate", self)
+        dock.setObjectName("simulate")
+        dock.setWidget(sim)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        dock.hide()
+        self.simulate_dock = dock
+        self.library_panel = LibraryPanel(self)
+        dock = QDockWidget("Library", self)
+        dock.setObjectName("library")
+        dock.setWidget(self.library_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        dock.hide()
+        dock.visibilityChanged.connect(lambda on: on and self.library_panel.ensure_scanned())
+        self.library_dock = dock
+
+    def _build_workspace_menu(self) -> None:
+        """View > Workspace (Alt+1 ... Alt+5), Reset layout, and toggles for the docks UI-1 added."""
+        view = next((a.menu() for a in self.menuBar().actions()
+                     if a.menu() is not None and a.text().replace("&", "") == "View"), None)
+        if view is None:
+            return
+        first = view.actions()[0] if view.actions() else None
+        sub = view.addMenu("Workspace")
+        for ws in workspaces_mod.WORKSPACES:
+            sub.addAction(self.workspaces.actions[ws.key])
+        reset = QAction("Reset layout", self)
+        reset.setToolTip("This workspace's default arrangement of the docks")
+        reset.triggered.connect(lambda _checked=False: self.workspaces.reset())
+        view.addAction(reset)
+        reset_all = QAction("Reset all workspace layouts", self)
+        reset_all.triggered.connect(lambda _checked=False: self.workspaces.reset_all())
+        view.addAction(reset_all)
+        if first is not None:
+            view.insertMenu(first, sub)
+            view.insertSeparator(first)
+        view.addSeparator()
+        for d in (self.appearance_dock, self.simulate_dock, self.library_dock):
+            view.addAction(d.toggleViewAction())
+
+    def set_workspace(self, key: str) -> None:
+        """Switch to workspace ``key`` ("build", "calculate", "simulate", "analyze", "library")."""
+        self.workspaces.switch(key)
+
+    def default_dock_sizes(self, key: str) -> None:
+        """Dock sizes of a workspace's default arrangement (``WorkspaceManager.apply_default`` calls this)."""
+        left = [d for d in (self.mol_dock,) if not d.isHidden()]
+        right = [d for d in self.findChildren(QDockWidget) if d.parent() is self and not d.isHidden()
+                 and self.dockWidgetArea(d) == Qt.DockWidgetArea.RightDockWidgetArea]
+        if left:
+            self.resizeDocks(left, [270], Qt.Orientation.Horizontal)
+        if right:      # the Library's table wants room; the pipeline's forms and Analyze's plot a little more
+            width = {"calculate": 440, "library": 640, "analyze": 420}.get(key, 380)
+            self.resizeDocks(right[:1], [width], Qt.Orientation.Horizontal)
+        if not self.bottom_dock.isHidden():    # Analyze's table: room for a dozen rows; elsewhere the conformers
+            self.resizeDocks([self.bottom_dock], [300 if key == "analyze" else 190], Qt.Orientation.Vertical)
+
+    # ------------------------------------------------------------------ playback bar and status bar
+    def _on_playback_index(self, i: int) -> None:
+        """The playback bar moved: select that conformer (the table's selection shows it in both views)."""
+        if 0 <= i < self.conf_table.rowCount() and self.conf_table.currentRow() != i:
+            self.conf_table.setCurrentCell(i, 0)
+
+    def _conformer_detail(self, i: int) -> str:
+        res = self._shown_res
+        if res is None or not 0 <= i < len(res.conformers):
+            return ""
+        c = res.conformers[i]
+        u = self.energy_display()
+        text = f"ΔE {u.text(c.rel_kcal, units.KCAL, 'relative', 2)} {u.label('relative')}"
+        if c.weight is not None:
+            text += f", weight {100 * c.weight:.1f} %"
+        return text
+
+    def _update_molecule_status(self) -> None:
+        """Status bar: molecules in the list, the shown molecule and its conformer."""
+        n = self.model.rowCount()
+        parts = [f"{n:,} molecule{'s' if n != 1 else ''}"]
+        row = self._current_row()
+        if row is not None:
+            parts.append(row.id)
+            res = self._shown_res
+            if res is not None and res.conformers:
+                k = max(0, self.conf_table.currentRow())
+                parts.append(f"conformer {k + 1} of {len(res.conformers)}")
+        self.mol_status.setText("  ·  ".join(parts))
+
+    def _gpu_memory_text(self) -> str:
+        """GPU memory in use by this process while a GPU engine has loaded torch, else "" (never imports torch)."""
+        torch = sys.modules.get("torch")
+        if torch is None:
+            return ""
+        try:
+            if torch.cuda.is_available() and torch.cuda.is_initialized():
+                used = torch.cuda.memory_allocated() / 1e9
+                total = torch.cuda.get_device_properties(0).total_memory / 1e9
+                return f" | VRAM {used:.1f} / {total:.0f} GB"
+            mps = getattr(torch, "mps", None)
+            if mps is not None and torch.backends.mps.is_available():
+                used = mps.current_allocated_memory() / 1e9
+                return f" | GPU memory {used:.1f} GB" if used > 0 else ""
+        except Exception:  # noqa: BLE001 - a backend without these calls: no figure
+            return ""
+        return ""
+
+    def _refresh_hw_label(self) -> None:
+        base = getattr(self, "_hw_text", "")
+        if base:
+            self.hw_label.setText(base + self._gpu_memory_text())
+
     def _build_statusbar(self) -> None:
+        self.mol_status = QLabel("")
+        self.mol_status.setObjectName("mol_status")
+        self.mol_status.setStyleSheet("padding: 0 8px;")
+        self.statusBar().addPermanentWidget(self.mol_status)
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(260)
         self.progress.setVisible(False)
@@ -798,6 +995,10 @@ class MainWindow(QMainWindow):
         self.hw_label = QLabel("Detecting hardware...")
         self.statusBar().addPermanentWidget(self.hw_label)
         self.statusBar().addPermanentWidget(self.progress)
+        self._hw_timer = QTimer(self)              # GPU memory in use, at most once a second, only once torch is in
+        self._hw_timer.setInterval(1000)
+        self._hw_timer.timeout.connect(self._refresh_hw_label)
+        self._hw_timer.start()
 
     # ================================================================== settings <-> widgets
     def _load_stage_values(self) -> None:
@@ -1073,7 +1274,8 @@ class MainWindow(QMainWindow):
         gpu_text = f"{gpu.name} {gpu.total_memory_gb:.0f} GB ({gpu.backend.upper()})" if gpu else "no GPU (CPU only)"
         if self.s.resources.gpu == "off":
             gpu_text += " [disabled]"
-        self.hw_label.setText(f"CPU {threads}/{rep.logical_cores} threads | GPU: {gpu_text}")
+        self._hw_text = f"CPU {threads}/{rep.logical_cores} threads | GPU: {gpu_text}"
+        self.hw_label.setText(self._hw_text + self._gpu_memory_text())
         self.hw_label.setToolTip(rep.summary() + ("\n" + "\n".join(rep.notes) if rep.notes else ""))
         self.log(f"Hardware: {rep.summary()}")
         for n in rep.notes:
@@ -1111,6 +1313,7 @@ class MainWindow(QMainWindow):
             self.results.pin(res)
             for k, v in molecule_list.row_updates(res).items():
                 setattr(by_id[res.input.id], k, v)
+            self.moleculeResult.emit(res)
         self.model.add_rows(rows)
         if rows:
             self.mol_list.select_id(rows[-1].id)
@@ -1274,6 +1477,7 @@ class MainWindow(QMainWindow):
         ident, self._loading = self._loading, None
         if self.model.row(ident) is not None and res is not None:
             self.results.put(res)
+            self.moleculeResult.emit(res)
         self._after_load(ident)
 
     def _on_load_failed(self, msg: str) -> None:
@@ -1334,6 +1538,8 @@ class MainWindow(QMainWindow):
             self._show_conformer(res, 0, reset_camera=True)
         else:
             self._preview_input(inp)
+        self.playback.refresh_label()              # _shown_res is set now: the ΔE of conformer 1
+        self._update_molecule_status()
         self.resultChanged.emit(res if built else None)   # after the views: panels add to the 3D scene
 
     def _show_conformer(self, res: MoleculeResult, row: int, reset_camera: bool) -> None:
@@ -1449,11 +1655,16 @@ class MainWindow(QMainWindow):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     self.conf_table.setItem(r, col, item)
         self.conf_table.blockSignals(False)
+        n = len(res.conformers) if res and res.status == "ok" else 0
+        self.playback.set_count(n, self._conformer_detail)
 
     def _on_conformer_selected(self, row, _col, _prow, _pcol) -> None:
         res = self._shown_res
         if res and 0 <= row < len(res.conformers) and not self._surface_preview:
             self._show_conformer(res, row, reset_camera=False)
+        if 0 <= row < self.playback.count():
+            self.playback.set_index(row)
+        self._update_molecule_status()
 
     def _on_stage_selected(self, cur, _prev) -> None:
         if cur is not None:
@@ -1570,6 +1781,7 @@ class MainWindow(QMainWindow):
         if rows:
             self.mol_list.setCurrentRow(0)
         self._update_counts()
+        self.runFolderOpened.emit(folder)
 
     def resume_run(self, _checked=False, folder: str | Path | None = None) -> None:
         """Continue the unfinished molecules of the opened run folder (or of the last batch) with the science
@@ -1625,6 +1837,7 @@ class MainWindow(QMainWindow):
         if self._batch_dir is not None:
             fields["run_dir"] = str(self._batch_dir)
         self.model.update(ident, **fields)
+        self.moleculeResult.emit(res)                # the table keeps its values (numbers, not the result)
         selected = self.mol_list.current_id() == ident
         self.results.discard(ident)                  # an older result of it must not come back from the cache
         if res.status == "ok" and not fields["folder"]:
@@ -1839,15 +2052,23 @@ class MainWindow(QMainWindow):
                           "<a href='https://github.com/brandonbtm29/QuantaBench'>github.com/brandonbtm29/QuantaBench</a>")
 
     # ================================================================== window state
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not getattr(self, "_shown_once", False):
+            self._shown_once = True
+            if self.workspaces.showing_default:
+                # a default arrangement made before the window had its size: its dock widths again, now that it has
+                key = self.workspaces.current
+                QTimer.singleShot(0, lambda: self.workspaces.current == key and self.workspaces.showing_default
+                                  and self.default_dock_sizes(key))
+
     def _restore_window(self) -> None:
+        """Window geometry, the workspace and its dock arrangement (``gui.workspaces``), the view splitter."""
         qs = _window_settings()
-        geo, state = qs.value("geometry"), qs.value("state")
-        self.resizeDocks([self.bottom_dock], [190], Qt.Orientation.Vertical)
-        self.resizeDocks([self.mol_dock, self.pipeline_dock], [270, 440], Qt.Orientation.Horizontal)
+        geo = qs.value("geometry")
         if geo is not None:
             self.restoreGeometry(geo)
-        if state is not None:
-            self.restoreState(state)
+        self.workspaces.load(qs)
         split = qs.value("splitter")
         if split is not None:
             self.splitter.restoreState(split)
@@ -1898,9 +2119,12 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._closing = True
+        self.playback.stop()
+        self._hw_timer.stop()
         qs = _window_settings()
         qs.setValue("geometry", self.saveGeometry())
-        qs.setValue("state", self.saveState())
+        self.workspaces.save(qs)
+        qs.remove("state")                  # the dock layout of the window before workspaces (UI-1)
         qs.setValue("splitter", self.splitter.saveState())
         qs.setValue("show2d", self.a_show2d.isChecked())
         try:

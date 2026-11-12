@@ -53,6 +53,7 @@ def _window(tmp_path):
     app = _app()
     w = MainWindow(sm.Settings(output_dir=str(tmp_path)))
     w.show()
+    w.set_workspace("analyze")              # UI-1: the workspace that shows the Spectra dock (a tab next to Results)
     w.spectra_dock.raise_()
     app.processEvents()
     return app, w
@@ -135,7 +136,7 @@ def test_dock_menus_plot_table_and_overlay(tmp_path, gui):
     app, w = gui
     dock, panel = w.spectra_dock, w.spectra_panel
     assert dock.objectName() == "spectra" and dock.windowTitle() == "Spectra"
-    assert dock in w.tabifiedDockWidgets(w.results_dock)
+    assert dock in w.tabifiedDockWidgets(w.results_dock) and not dock.isHidden()
     view = next(a.menu() for a in w.menuBar().actions() if a.text().replace("&", "") == "View")
     texts = [a.text() for a in view.actions()]
     assert texts[texts.index("Results") + 1] == "Spectra"

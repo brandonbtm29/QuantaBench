@@ -19,6 +19,66 @@
   computes a new Hessian. `qm["vibrations"]` records `imag_found_cm1`, `imag_steps`, `imag_left_cm1`,
   `imag_energy_change_ev` and `imag_max_shift_A`, and a note says what was done.
 
+### The Analyze table: molecules x properties, a plot, formula columns and fits, UI-3 (2026-11-12)
+- **Table dock** (Analyze, in front at the bottom, with Results and Spectra as tabs): one row per molecule of the
+  Molecules dock, the same rows in the same order, virtualized (14,000 rows build, sort and filter in well under a
+  second). Columns: #, ID, name, status, formula, conformers, best energy (in the unit of Settings > Display),
+  method, SMILES; the data fields an imported file posted; every summary and descriptor value of the built
+  molecules; and formula columns. The values come from the results in memory (a batch's finished molecules,
+  imports, results read from their folders) and, for File > Open run folder, from the folder's summary.csv and
+  descriptors.csv, read on a worker thread (the job table fills in molecules those files miss, as in an
+  interrupted batch).
+- **Columns...** shows or hides columns (remembered), grouped by where they come from, with the name each one has in
+  formulas. Sort by any column (numbers as numbers, missing values last), filter by ID, name, SMILES, formula or
+  method. Selecting a row selects the molecule in the Molecules dock and the other way round (a molecule hidden by
+  the Molecules dock's search clears that search).
+- **Copy and export:** Ctrl+C copies the selected cells as tab-separated text for Excel, Ctrl+Shift+C with the
+  column titles; Export writes the rows and columns shown to CSV (UTF-8 with a byte-order mark, so Excel reads µ
+  and Å) or to an Excel workbook when openpyxl is installed (otherwise the menu entry says
+  `pip install openpyxl`). Numbers keep 15 significant digits.
+- **Formula columns** (New column..., or right-click a header to edit or remove one): `+ - * / **`, parentheses,
+  numbers, column names and `log`, `log10`, `exp`, `sqrt`, `abs`, `min`, `max`, `pow`, evaluated row by row with
+  NumPy; a missing value gives an empty cell. Nothing else is accepted (no attribute access, indexing, other calls,
+  comparisons, lambdas, comprehensions, f-strings or `__` names), and the text never reaches `eval` or `exec`
+  (`analysis.formula`: an `ast` whitelist and a tree-walking evaluator). A column whose name is not an identifier
+  is referenced by its alias (`E (kJ/mol)` -> `E_kJ_mol`, `σ` -> `sigma`), shown in the column chooser; the best
+  energy is `best_energy_eV`, in eV.
+- **Fit...** fits the parameters of a formula (its names that are not columns, e.g. a, b, c in the quantum parachor
+  `((a*alpha + b*mu**2 + c)/Vm)**4`) to a target column with `scipy.optimize.least_squares` on the rows the table
+  shows where every value is present: the parameters with standard errors, n, MAE, RMSE and R², and Add as column
+  puts the fitted formula in the table.
+- **Plot dock** (Analyze, in front on the right, with Surfaces and Appearance as tabs): any two numeric columns,
+  colour by a third (viridis), a least-squares line with slope, intercept, R² and n; the table's filter filters it;
+  clicking a point selects that molecule, which is ringed.
+- **Kept:** the column choices, formula columns and plot settings are kept in the window settings until the project
+  document (UI-2) holds them. The workspace layouts' version is now 2: layouts saved by the UI-1 build are dropped
+  once, and Analyze starts with its new default.
+
+### The app shell: task workspaces, Appearance, playback bar, status line, Library, UI-1 (2026-11-12)
+- **Workspaces:** an activity bar on the left switches the window between **Build**, **Calculate**,
+  **Simulate**, **Analyze** and **Library** (Alt+1 ... Alt+5, Control+1 ... Control+5 on macOS, or View >
+  Workspace; Ctrl+1 ... Ctrl+3 stay the mouse modes). A workspace is an arrangement of the same docks around the
+  shared 2D/3D view: Build shows the molecules and Appearance; Calculate the pipeline, Machines and Appearance;
+  Simulate the surface builder and LAMMPS export (a stub page for the MD workspace to come); Analyze surfaces and
+  spectra next to the conformer table; Library the run folders. Nothing is rebuilt on a switch: the selection, the
+  view and every panel stay as they are.
+- **Each workspace keeps its own layout:** a dock moved, closed or tabbed in Analyze stays that way in Analyze only,
+  also after a restart (kept per machine in the window settings, like the window size). View > Reset layout
+  restores the current workspace's default, View > Reset all workspace layouts every one. The dock layout saved by
+  earlier versions is not carried over: the first start shows the defaults (Calculate, the closest to the old
+  window).
+- **Appearance dock:** style, labels, colours, hydrogens in 3D and 2D and the 2D view in one place, instead of the
+  combo boxes on the view toolbar. Ctrl+D (show 2D), View > Hydrogens in 2D and the mouse modes stay where they were.
+- **Playback bar** under the view: first / previous / play / next / last, a slider and "Conformer 3 of 6, ΔE 3.15
+  kJ/mol, weight 15.2 %" for the selected molecule's conformers (1, 2, 4 or 8 per second; play wraps around). It
+  and the conformer table follow each other.
+- **Status line:** the number of molecules, the selected molecule and conformer, next to CPU threads and the GPU;
+  on a GPU also the memory PyTorch has allocated (refreshed once a second, only once torch is loaded).
+- **Library:** the run folders under the output folder (three levels deep), newest first, with their molecules
+  (built, failed), method, phase and state (finished, *n* to do, running); filter and sort them, double-click or
+  Open to list a folder's molecules, Resume to continue its unfinished ones. Read-only, off the GUI thread, scanned
+  when the Library is first shown and on Refresh.
+
 ### Imaginary frequencies removed in the frequency step (2026-11-12)
 - In batch b03, 75 of 1,000 molecules per phase ended with an imaginary mode below -20 cm-1. Two causes: a residual
   force on a soft torsion (90 %: -20 to -50 cm-1; the pre-optimization stops at fmax 0.01 eV/Å and most stopped at

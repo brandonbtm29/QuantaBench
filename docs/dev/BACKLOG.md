@@ -8,7 +8,14 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
-## UI-1: App shell with task workspaces · ready
+## UI-1: App shell with task workspaces · in-PR 2026-11-12 (branch `feat/app-shell`)
+Done in the PR: the five workspaces (`gui.workspaces`), the Appearance dock, the playback bar (`gui.playback`),
+the status line, a first Library (run folders under the output folder, `gui.library_panel`), per-workspace
+layouts in QSettings with View > Reset layout, tests (`tests/test_gui_workspaces.py`) and screenshots
+(`docs/dev/screenshots/UI-1/`). Left for later items: the Simulate workspace proper (SIM-1), the Library's
+project database and search (UI-2), point group in the status bar, a properties inspector, the playback bar
+for trajectory frames and molecules. Needs-Brandon: a look on Windows and macOS (HiDPI icons, the dock
+layout at his window sizes).
 Depends on: none (everything else in the UI plugs into this, so it goes first).
 - Left activity bar switching workspaces: **Build, Calculate, Simulate, Analyze, Library**. Each is a
   page/dock set. Map the existing panels: molecule list + inputs → Build; pipeline stages → Calculate;
@@ -35,7 +42,21 @@ Depends on: UI-1.
 - Acceptance: round-trip save/open test with built results; resume of a half-finished project;
   Windows-safe paths (no absolute paths stored for files inside the project).
 
-## UI-3: Spreadsheet, plots and formula columns · ready
+## UI-3: Spreadsheet, plots and formula columns · in-PR 2026-11-12 (branch `feat/ui3-spreadsheet`)
+Done in the branch (stacked on `feat/app-shell`, UI-1's PR #1): the Table dock (`gui.table_panel`: one row per
+molecule of the Molecules dock, row fields, posted fields, summary and descriptor values from results in memory or a
+run folder's CSVs and job table read off the GUI thread, column chooser with each column's formula name, numeric
+sort, filter, selection synced both ways, Ctrl+C / Ctrl+Shift+C as TSV, CSV and XLSX export), the Plot dock
+(`gui.plot_panel`: two columns, colour by a third, fit line with R², click a point to select), formula columns and
+the fit helper (`analysis.formula`: `ast` whitelist, NumPy tree walk, `least_squares` with standard errors, n, MAE,
+RMSE, R²), the state (column choices, formulas, plot) in the window settings (`analyze/table`), Analyze's new
+default (table at the bottom in front of Results/Spectra, plot on the right in front of Surfaces/Appearance;
+`workspaces.STATE_VERSION` 2), tests (`tests/test_gui_table.py`) and screenshots (`docs/dev/screenshots/UI-3/`).
+Left: move the state into the project document with UI-2 (`TablePanel.state()` / `restore()`); join columns from a
+CSV by id (experimental targets that are not posted fields of the input, e.g. `pubchem targets` output); a line plot
+and a parity view (fitted vs target with the 1:1 line); column order by drag; per-column number formats; plots of
+several y columns. Needs-Brandon: a look on Windows and macOS (dock sizes at his window sizes, Excel paste of the
+TSV with his locale's decimal separator).
 Depends on: UI-1 (UI-2 nice to have).
 - Analyze workspace: sortable/filterable table of molecules × properties (descriptors, energies,
   thermo), column chooser, copy/paste to Excel, CSV/XLSX export; selecting a row selects the molecule.
