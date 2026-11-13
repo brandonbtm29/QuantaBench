@@ -51,7 +51,7 @@ from types import SimpleNamespace
 from rdkit import Chem
 
 from .. import __version__, priority, resources
-from . import export, pipeline, telemetry
+from . import export, external, pipeline, telemetry
 from .inputs import MoleculeInput, dedupe_ids
 from .pipeline import BuildConfig, MoleculeResult, ProgressFn
 
@@ -896,6 +896,8 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
     results: list[MoleculeResult] = []
     with _RunLock(run_dir, force, log), JobStore(run_dir) as store:
         chunk = _prepare_run(store, cfg, chunk, force, log)
+        # what ended runs and killed lanes left in scratch (Psi4's DF integrals: 10-20 GB per large molecule)
+        external.sweep_scratch_quietly(log=log, what="left by ended runs")
         if cfg.method == "auto" and chunk is not None:
             log("Note: method 'auto' picks the engine per machine; when splitting a list across machines, "
                 "set the method explicitly so all chunks use the same level of theory.")

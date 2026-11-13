@@ -12,7 +12,10 @@ This module is the shared contract every external engine uses:
                             running environment, common conda/mamba environments; ``wsl:<cmd>`` paths)
 ``find_python_with(mod)``   a Python interpreter that can import ``mod`` (Psi4 lives in its own env)
 ``program_env(threads)``    OpenMP/BLAS thread caps, ``OMP_STACKSIZE``, ``PSI_SCRATCH`` for the child
-``work_dir(prefix)``        a scratch job folder, removed on success unless ``keep_scratch`` is set
+``work_dir(prefix)``        a scratch job folder, removed on success unless ``keep_scratch`` is set; after a
+                            failure only its inputs and logs stay (``prune_scratch``)
+``sweep_scratch()``         remove what ended processes left in the scratch root: a lane killed at the time
+                            limit, a crashed or killed run (each folder names its owner process)
 ``run_program(cmd, cwd)``   run, stream output to a log file, honour cancellation and timeouts,
                             raise ``ExternalProgramError`` with the log tail on failure; the program runs at the
                             run priority in force (``quantabench.priority``; ``popen_args`` builds the call)
@@ -449,12 +452,213 @@ def program_env(threads: int, extra: dict[str, str] | None = None, *, via_wsl: b
 
 
 # ----------------------------------------------------------------------------------- scratch
+#: the owner record in every scratch folder QuantaBench makes (``work_dir``, ``make_scratch_dir``): the process
+#: that made it (pid, start time, host). ``sweep_scratch`` treats a folder whose owner has ended as left behind.
+OWNER_FILE = ".qb_owner.json"
+#: what a failed job keeps for inspection: files up to this size (inputs, logs, outputs); bigger ones go
+KEEP_FAILED_MAX_BYTES = 8 * 1024 * 1024
+#: scratch files that go whatever their size: Psi4's ``psi.<pid>.<unit>`` (DF integrals, 10-20 GB for a large
+#: molecule with too little memory), ``psi.<pid>.clean`` and its ``timer.dat``
+SCRATCH_FILE_RE = re.compile(r"^psi\.\d+\.\w+$|^timer\.dat$")
+#: a left-behind folder's logs stay this many days (``quantabench-cli scratch --clean --older-than``)
+SCRATCH_KEEP_DAYS = 3.0
+#: a folder without an owner record (QuantaBench before 0.3.0.dev4) counts as left behind after this long unchanged
+UNOWNED_GRACE_H = 12.0
+
+
+#: a scratch root for when the settings name none, before the system's temp folder (the test suite sets it, so a
+#: test's run never sweeps the real scratch folder)
+SCRATCH_ENV = "QUANTABENCH_SCRATCH_DIR"
+
+
 def scratch_root() -> Path:
+    """Settings > Engines > scratch folder, else ``$QUANTABENCH_SCRATCH_DIR``, else <system temp>/QuantaBench."""
     es = _engine_settings()
-    root = str(getattr(es, "scratch_dir", "") or "").strip()
+    root = str(getattr(es, "scratch_dir", "") or "").strip() or os.environ.get(SCRATCH_ENV, "").strip()
     p = Path(os.path.expanduser(root)) if root else Path(tempfile.gettempdir()) / "QuantaBench"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _this_process_started() -> float:
+    import psutil
+
+    try:
+        return psutil.Process(os.getpid()).create_time()
+    except psutil.Error:
+        return 0.0
+
+
+def make_scratch_dir(prefix: str) -> Path:
+    """A new folder in the scratch root with this process's owner record (``OWNER_FILE``)."""
+    import socket
+
+    d = Path(tempfile.mkdtemp(prefix=f"{ascii_name(prefix)}_", dir=scratch_root()))
+    with contextlib.suppress(OSError):
+        (d / OWNER_FILE).write_text(json.dumps({"pid": os.getpid(), "started": _this_process_started(),
+                                                "host": socket.gethostname(), "created": time.time()}),
+                                    encoding="utf-8")
+    return d
+
+
+def remove_if_empty(folder: str | Path) -> bool:
+    """Remove a scratch folder whose files have all been moved out (only the owner record left)."""
+    d = Path(folder)
+    with contextlib.suppress(OSError):
+        if {p.name for p in d.iterdir()} <= {OWNER_FILE}:
+            (d / OWNER_FILE).unlink(missing_ok=True)
+            d.rmdir()
+            return True
+    return False
+
+
+def _folder_bytes(d: Path) -> int:
+    total = 0
+    for p in d.rglob("*"):
+        with contextlib.suppress(OSError):
+            if p.is_file():
+                total += p.stat().st_size
+    return total
+
+
+def prune_scratch(folder: str | Path) -> int:
+    """Delete the bulky files of a job folder that is kept for inspection: Psi4's scratch files and anything
+    over ``KEEP_FAILED_MAX_BYTES``; the inputs and logs stay. Returns the bytes freed (files still open, on
+    Windows, are left)."""
+    freed = 0
+    for p in sorted(Path(folder).rglob("*"), reverse=True):
+        try:
+            if not p.is_file() or p.name == OWNER_FILE:
+                continue
+            size = p.stat().st_size
+            if SCRATCH_FILE_RE.match(p.name) or size > KEEP_FAILED_MAX_BYTES:
+                p.unlink()
+                freed += size
+        except OSError:
+            continue
+    return freed
+
+
+def _prunable_bytes(folder: Path) -> int:
+    """What ``prune_scratch`` would free (``sweep_scratch(dry_run=True)``)."""
+    total = 0
+    for p in folder.rglob("*"):
+        with contextlib.suppress(OSError):
+            if p.is_file() and p.name != OWNER_FILE:
+                size = p.stat().st_size
+                if SCRATCH_FILE_RE.match(p.name) or size > KEEP_FAILED_MAX_BYTES:
+                    total += size
+    return total
+
+
+def _owner(d: Path) -> dict | None:
+    try:
+        info = json.loads((d / OWNER_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return info if isinstance(info, dict) else None
+
+
+def _owner_running(info: dict) -> bool:
+    """Is the process that made the folder still running here? (Another host's folder counts as running:
+    a scratch root on a shared drive is never swept from the wrong machine.)"""
+    import socket
+
+    import psutil
+
+    if info.get("host") and info.get("host") != socket.gethostname():
+        return True
+    try:
+        pid = int(info.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        started = psutil.Process(pid).create_time()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except psutil.AccessDenied:
+        return True
+    return not info.get("started") or abs(started - float(info["started"])) < 1.0
+
+
+def _newest_change(d: Path) -> float:
+    newest = 0.0
+    with contextlib.suppress(OSError):
+        newest = d.stat().st_mtime
+    for p in d.rglob("*"):
+        with contextlib.suppress(OSError):
+            newest = max(newest, p.stat().st_mtime)
+    return newest
+
+
+@dataclass
+class SweepResult:
+    """What ``sweep_scratch`` found and did."""
+    folders: int = 0              # left-behind folders found
+    pruned: int = 0               # of them, folders whose bulky files were removed (logs kept)
+    removed: int = 0              # of them, folders removed whole (older than the keep time)
+    freed_bytes: int = 0
+    running: int = 0              # folders of processes still running (left alone)
+
+    def summary(self) -> str:
+        return (f"{self.freed_bytes / 1e9:.1f} GB freed in {self.folders} left-behind scratch folder(s) "
+                f"({self.removed} removed, {self.pruned} kept with their logs)")
+
+
+def sweep_scratch(owners: set[int] | None = None, keep_days: float = SCRATCH_KEEP_DAYS,
+                  dry_run: bool = False) -> SweepResult:
+    """Clean what ended processes left in the scratch root (a lane killed at the time limit leaves its Psi4
+    integrals behind; so does a crashed or killed run): the bulky files of such a folder go at once
+    (``prune_scratch``), the folder itself, with its logs, once it is ``keep_days`` old. A folder of a process
+    that is still running is never touched, nor one of another host. ``owners``: only folders made by these
+    pids (the lanes just killed). Without an owner record (older versions) a folder counts as left behind after
+    ``UNOWNED_GRACE_H`` hours unchanged. ``settings.engines.keep_scratch`` turns the sweep off."""
+    res = SweepResult()
+    if bool(getattr(_engine_settings(), "keep_scratch", False)):
+        return res
+    root = scratch_root()
+    now = time.time()
+    try:
+        folders = [d for d in root.iterdir() if d.is_dir()]
+    except OSError:
+        return res
+    for d in folders:
+        info = _owner(d)
+        if info is not None:
+            if owners is not None and info.get("pid") not in owners:
+                continue
+            if _owner_running(info):
+                res.running += 1
+                continue
+        elif owners is not None or now - _newest_change(d) < UNOWNED_GRACE_H * 3600:
+            continue
+        res.folders += 1
+        if now - _newest_change(d) >= keep_days * 86400:
+            size = _folder_bytes(d)
+            if not dry_run:
+                shutil.rmtree(d, ignore_errors=True)
+                if d.exists():
+                    size -= _folder_bytes(d)
+            res.freed_bytes += max(0, size)
+            res.removed += 1
+        else:
+            res.freed_bytes += _prunable_bytes(d) if dry_run else prune_scratch(d)
+            res.pruned += 1
+    return res
+
+
+def sweep_scratch_quietly(owners: set[int] | None = None, log: Callable[[str], None] | None = None,
+                          what: str = "") -> SweepResult | None:
+    """``sweep_scratch`` for a run: never raises; logs a line when it freed something."""
+    try:
+        res = sweep_scratch(owners=owners)
+    except Exception:  # noqa: BLE001 - best effort, must not end a run
+        return None
+    if log is not None and res.freed_bytes >= 1e6:
+        log(f"Scratch{(' ' + what) if what else ''}: {res.summary()}")
+    return res
 
 
 def ascii_name(text: str, limit: int = 60) -> str:
@@ -465,20 +669,28 @@ def ascii_name(text: str, limit: int = 60) -> str:
 
 @contextlib.contextmanager
 def work_dir(prefix: str, keep: bool | None = None) -> Iterator[Path]:
-    """A fresh scratch folder for one job. Removed when the block succeeds (unless ``keep`` or
-    ``settings.engines.keep_scratch``); kept on an exception so the input and log can be inspected,
-    and the exception message gets the folder appended."""
+    """A fresh scratch folder for one job (with an owner record, ``make_scratch_dir``). Removed when the block
+    succeeds (unless ``keep`` or ``settings.engines.keep_scratch``) or is cancelled; after a failure its inputs
+    and logs are kept for inspection but its bulky files go (``prune_scratch``: Psi4's integral files, anything
+    over ``KEEP_FAILED_MAX_BYTES``), and an ``ExternalProgramError`` gets the folder appended. A process killed
+    inside the block cannot clean up: ``sweep_scratch`` does it later."""
     if keep is None:
         keep = bool(getattr(_engine_settings(), "keep_scratch", False))
-    safe = ascii_name(prefix)
-    d = Path(tempfile.mkdtemp(prefix=f"{safe}_", dir=scratch_root()))
+    d = make_scratch_dir(prefix)
     try:
         yield d
     except Cancelled:
         shutil.rmtree(d, ignore_errors=True)
         raise
     except ExternalProgramError as exc:
-        raise ExternalProgramError(f"{exc}\n(job files kept in {d})") from exc
+        freed = 0 if keep else prune_scratch(d)
+        raise ExternalProgramError(f"{exc}\n(job files kept in {d}"
+                                   + (f"; {freed / 1e9:.1f} GB of scratch removed" if freed >= 1e8 else "")
+                                   + ")") from exc
+    except BaseException:
+        if not keep:
+            prune_scratch(d)
+        raise
     else:
         if not keep:
             shutil.rmtree(d, ignore_errors=True)

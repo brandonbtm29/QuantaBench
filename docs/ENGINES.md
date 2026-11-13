@@ -344,9 +344,20 @@ Ready-made environments are in [`envs/`](../envs): `tools.yml` (xtb, CREST, MOPA
 `tools-windows.yml` (xtb, MOPAC; Windows) and `psi4.yml` (Psi4 with the pins below). Keep Psi4 in its
 own environment.
 
-Each run gets a scratch folder (Settings > Engines > Scratch folder; default `%TEMP%\QuantaBench` or
-`/tmp/QuantaBench`). It is deleted on success and kept on failure, and the error message gives its
-path. Programs run at this machine's run priority (Run priority and free threads, below). Threads come from the
+Each external job gets a scratch folder (Settings > Engines > Scratch folder; default `%TEMP%\QuantaBench` or
+`/tmp/QuantaBench`):
+- **Success:** the folder is deleted.
+- **Failure:** the folder is kept, and the error message gives its path. Its bulky files are deleted: Psi4's `psi.<pid>.*` and anything over 8 MB. The inputs and logs stay.
+- **A killed process** (a lane past the time limit, a crash, a closed window) cannot clean up. Each folder therefore holds an owner record (`.qb_owner.json`: pid, start time, host).
+  - The parent cleans a killed lane's folders at once, and every lane's when the run ends.
+  - Every run, when it starts, cleans what ended processes left. The kept logs go after 3 days.
+  - A folder of a process that is still running, or of another machine, is never touched.
+  - A folder without an owner record (from 0.3.0.dev3 or older) counts as left behind after 12 hours without a change.
+  - 2026-11-13: lanes killed at the 30-minute limit in b03's ESP pass left 59 Psi4 folders with 479 GB of DF integrals.
+- **`quantabench-cli scratch`** shows the folder. `--clean [--dry-run] [--older-than DAYS]` does the same clean-up on demand.
+- **Settings > Engines > Keep job folders** keeps everything: for debugging, it also turns the clean-up off.
+
+Programs run at this machine's run priority (Run priority and free threads, below). Threads come from the
 Compute settings; `OMP_STACKSIZE` (default 4G) avoids stack overflows in
 xtb and CREST.
 
@@ -897,6 +908,13 @@ quantabench-cli build "OC(=O)C(F)(F)C(F)(F)C(F)(F)F PFBA" --method xtb-gfn2 --so
   - `--cubes` makes the density and ESP cubes and the surface descriptors.
   - `--no-keep-cubes` deletes the two cube files (about 16 MB per molecule) once the surface descriptors and the ESP profile are saved. The Surfaces panel then has no QM surface to draw for that molecule.
   - For an ESP study of many molecules: `--qm wb97x-d/6-31g* --cubes --no-qm-polarizability --no-keep-cubes`.
+  - `--qm-memory GB` sets the memory of each Psi4 job (default: Settings > Engines > QM memory, 4 GB). The lane plan then runs as many QM lanes as the RAM holds (three quarters of it), sharing the thread budget.
+- **Memory and density fitting.** DF-SCF keeps its three-index integrals, naux · nbf(nbf+1)/2 · 8 bytes, in memory only when they fit (`MemDFJK`). Otherwise they go to disk (`DiskDFJK`): many times slower, and as large in scratch.
+  - Example, ωB97X-D/6-31G*: 784 basis functions and 4,901 auxiliary for b03's 302-27-2 (45 heavy atoms) give 12.1 GB; its DiskDFJK file was 15 GB.
+  - With 4 GB per job, 55 of 65 large molecules (median 40 heavy atoms) on NOVA hit the 30-minute limit (2026-11-13).
+  - The driver says before the SCF when the integrals will not fit ("DF-SCF: ... give the QM stage more memory"). `qm["df"]` records `nbf`, `naux`, `tensor_gb` and `algorithm` (disk or memory).
+  - Rough sizes with 6-31G*: under 20 heavy atoms, below 1 GB; about 35, 4-5 GB; about 60, 12-20 GB.
+  - For a set with large molecules, run the large ones separately with a larger `--qm-memory` (fewer lanes, more threads each).
 - **Imaginary modes at the QM level.** With `--qm-freq`, a mode below -20 cm⁻¹ left after the tight re-optimization is handled as in the pipeline's own frequency step (`--freq-imag-retries`, default 3):
   - the driver steps 0.15 Å (largest atom) along the mode both ways;
   - it re-optimizes both, keeps the lower one and computes a new Hessian.
