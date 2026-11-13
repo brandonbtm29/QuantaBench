@@ -11,6 +11,13 @@ One row per molecule of the Molecules dock, the same rows in the same order (unt
 - **Columns... (the chooser)** shows or hides each column and lists the name a formula uses for it (its alias).
   **New column...** adds a formula column, **Fit...** fits a formula's parameters to a target column
   (``gui.table_dialogs``). Right-click a header for Hide, Edit formula, Remove.
+- **Features** (the feature builder, DESC-3) adds ready-made formula columns (``analysis.features``): the
+  dimensionless liquid-state groups of ``chem.liquid`` (Lorentz-Lorenz, refractive index, dipole orientation ratio,
+  packing fraction, sphericity, the Lifshitz Hamaker constant and surface tension, the kT/v_m^⅔ unit), ratios of α,
+  μ, V and A, and the reduced target σ* of any column. A group the run already has as a descriptor is not added
+  again; one that needs another is added after it.
+- **Join...** brings in columns of a CSV file by id (measured surface tensions or densities, ``pubchem targets``
+  output): the file, its id column and the columns are part of the table's state, read again at the next start.
 - **Sort** by any column (numbers as numbers, missing values last), **filter** by ID, name, SMILES, formula or
   method. **Selecting a row selects the molecule** in the Molecules dock, and the other way round.
 - **Ctrl+C** copies the selected cells as tab-separated text (Excel, LibreOffice, Origin), **Ctrl+Shift+C** with the
@@ -18,7 +25,8 @@ One row per molecule of the Molecules dock, the same rows in the same order (unt
   installed.
 - **Energies** (the best energy) are shown, copied and exported in the unit of Settings > Display; formulas see them
   in eV, the unit in their alias (``best_energy_eV``).
-- **Persistence:** the column choices, the formula columns and the plot's settings are a ``sheet.TableState``, kept in
+- **Persistence:** the column choices, the formula columns, the joined files and the plot's settings are a
+  ``sheet.TableState``, kept in
   the window settings (``STATE_KEY``) until the project document (UI-2) holds them: ``TablePanel.state()`` and
   ``TablePanel.restore()`` are what it will call.
 
@@ -56,9 +64,10 @@ from PySide6.QtWidgets import (
 )
 
 from .. import units
+from ..analysis import features as feat
 from ..analysis import formula as fm
 from ..analysis import sheet
-from ..analysis.sheet import ColumnStore, FormulaSpec, TableState
+from ..analysis.sheet import ColumnStore, FormulaSpec, JoinRead, JoinSpec, TableState
 
 #: the window settings key of the table's state (until UI-2's project document keeps it)
 STATE_KEY = "analyze/table"
@@ -82,10 +91,11 @@ def set_clipboard_text(text: str, tries: int = 6) -> bool:
 
 @dataclass
 class Column:
-    key: str                 # unique: row field name, "field:<name>", a summary/descriptor name, "fx:<name>"
+    key: str                 # unique: row field name, "field:<name>", a summary/descriptor name, "fx:<name>",
+                             # "join:<file label>::<name>"
     title: str
     alias: str               # how a formula names it
-    source: str              # "row" | "field" | "data" | "formula"
+    source: str              # "row" | "field" | "data" | "joined" | "formula"
     numeric: bool
     width: int = 96
     energy: bool = False     # stored in eV, shown in the display unit
@@ -96,7 +106,7 @@ class Column:
     @property
     def group(self) -> str:
         return {"row": "Molecule", "field": "Imported data fields", "data": "Summary and descriptors",
-                "formula": "Formula columns"}[self.source]
+                "joined": "Joined from files", "formula": "Formula columns"}[self.source]
 
 
 #: (key, title, numeric, width): the light row fields, as the Molecules dock has them
@@ -192,6 +202,11 @@ class SheetModel(QAbstractTableModel):
         self._cols: list[Column] = []
         self._choices: dict[str, bool] = {}
         self._formulas: list[FormulaSpec] = []
+        self.joined = ColumnStore()                  # joined files' columns, by norm_id; stored as "<label>::<name>"
+        self._joins: list[JoinSpec] = []
+        self._join_reads: dict[str, JoinRead] = {}   # label -> what was read (None-free: unreadable files are left out)
+        self.join_errors: dict[str, str] = {}        # label -> why a joined file could not be read
+        self._jslots = np.empty(0, dtype=np.int64)
         self._cache: dict[str, np.ndarray] = {}
         self._view = np.empty(0, dtype=np.int64)       # positions in _rows, filtered and sorted
         self._view_pos: dict[str, int] | None = None
@@ -240,6 +255,8 @@ class SheetModel(QAbstractTableModel):
         old_titles = [self._title(c) for c in self._cols]
         self._rows = rows
         self._slots = self.store.slots(ids)
+        self._jslots = self.joined.slots([sheet.norm_id(i) for i in ids]) if self._joins else \
+            np.full(len(ids), -1, dtype=np.int64)
         self._cache = {}
         self._build_columns()
         for c in self._all:
@@ -293,6 +310,17 @@ class SheetModel(QAbstractTableModel):
             out.append(Column(f"field:{name}", name, field_alias[name], "field", numeric))
         for name in data:
             out.append(Column(name, name, data_alias[name], "data", self.store.is_numeric(name)))
+        joined = [(spec, name) for spec in self._joins if spec.label in self._join_reads
+                  for name in self._join_reads[spec.label].block.names]
+        plain = [name for _spec, name in joined]
+        wanted = [name if plain.count(name) == 1 else f"{spec.label}_{name}" for spec, name in joined]
+        join_alias = fm.aliases(wanted, reserved)
+        reserved |= set(join_alias.values())
+        for (spec, name), want in zip(joined, wanted):
+            stored = f"{spec.label}::{name}"
+            out.append(Column(f"join:{stored}", name if plain.count(name) == 1 else f"{name} ({spec.label})",
+                              join_alias[want], "joined", self.joined.is_numeric(stored),
+                              note=f"joined from {spec.path} by {spec.id_column}"))
         for f in self._formulas:
             out.append(Column(f"fx:{f.name}", f.name, f.name, "formula", True, expression=f.expression,
                               note=f.note))
@@ -352,6 +380,8 @@ class SheetModel(QAbstractTableModel):
                 out[:] = [None if v is None else str(v) for v in vals]
         elif col.source == "data":
             out = self.store.column(key, self._slots)
+        elif col.source == "joined":
+            out = self.joined.column(key[len("join:"):], self._jslots)
         else:
             col.error = ""
             try:
@@ -525,11 +555,101 @@ class SheetModel(QAbstractTableModel):
         self.refresh()
         self.stateChanged.emit()
 
+    def add_formulas(self, items) -> list[Column]:
+        """Several formula columns at once, in order (a later one may use an earlier one), one refresh: [(name,
+        expression, note)]. All or none: a formula that is refused takes the ones before it back out."""
+        before = list(self._formulas)
+        try:
+            for name, expression, note in items:
+                f = self.check_formula(name, expression)
+                self._formulas.append(FormulaSpec(name.strip(), f.text, note))
+                self._choices.pop(f"fx:{name.strip()}", None)
+                self._build_columns()
+        except Exception:
+            self._formulas = before
+            self._build_columns()
+            raise
+        self.refresh()
+        self.stateChanged.emit()
+        return [self._by_key[f"fx:{name.strip()}"] for name, _e, _n in items]
+
+    # ------------------------------------------------------------------ feature presets (analysis.features)
+    def feature_status(self, name: str) -> str:
+        """"" when the preset ``name`` can be added; else why not."""
+        return feat.status(name, self.aliases(), [f.name for f in self._formulas])
+
+    def add_features(self, names) -> list[Column]:
+        """The formula columns of the presets ``names`` (their dependencies first; ``FeatureError`` when an input
+        column is missing)."""
+        return self.add_formulas(feat.plan(list(names), self.aliases(), [f.name for f in self._formulas]))
+
+    def add_reduced_target(self, target_alias: str, name: str | None = None) -> list[Column]:
+        """σ* = target / (kT/v_m^⅔) as a formula column (and the scale's, when the run has no descriptor for it)."""
+        return self.add_formulas(feat.reduced_target(target_alias, self.aliases(), [f.name for f in self._formulas],
+                                                     name))
+
+    # ------------------------------------------------------------------ joined files
+    def joins(self) -> list[JoinSpec]:
+        return [replace(j, columns=list(j.columns)) for j in self._joins]
+
+    def _rebuild_joined(self) -> None:
+        self.joined = ColumnStore()
+        for spec in self._joins:
+            got = self._join_reads.get(spec.label)
+            if got is None:
+                continue
+            b = got.block
+            self.joined.merge(sheet.Block(ids=list(b.ids), columns={f"{spec.label}::{n}": v
+                                                                    for n, v in b.columns.items()}))
+
+    def set_joins(self, pairs, refresh: bool = True) -> None:
+        """The joined files: [(spec, JoinRead or an error text)]; an error keeps the spec (it is part of the
+        state) without its columns, and ``join_errors`` says why."""
+        self._joins, self._join_reads, self.join_errors = [], {}, {}
+        for spec, got in pairs:
+            if any(j.label == spec.label for j in self._joins):
+                continue
+            self._joins.append(replace(spec, columns=list(spec.columns)))
+            if isinstance(got, JoinRead):
+                self._join_reads[spec.label] = got
+            else:
+                self.join_errors[spec.label] = str(got)
+        self._rebuild_joined()
+        if refresh:
+            self.refresh()
+
+    def add_join(self, spec: JoinSpec, got: JoinRead) -> int:
+        """Join ``spec``'s columns (replacing a file of the same label); the number of rows that matched."""
+        pairs = [(j, self._join_reads.get(j.label, self.join_errors.get(j.label, ""))) for j in self._joins
+                 if j.label != spec.label]
+        self.set_joins(pairs + [(spec, got)])
+        self.stateChanged.emit()
+        return self.join_matches(spec.label)
+
+    def remove_join(self, label: str) -> None:
+        pairs = [(j, self._join_reads.get(j.label, self.join_errors.get(j.label, ""))) for j in self._joins
+                 if j.label != label]
+        for key in [k for k in self._choices if k.startswith(f"join:{label}::")]:
+            self._choices.pop(key)
+        self.set_joins(pairs)
+        self.stateChanged.emit()
+
+    def join_matches(self, label: str) -> int:
+        """How many of the table's rows have a row in the joined file ``label``."""
+        got = self._join_reads.get(label)
+        if got is None:
+            return 0
+        have = set(got.block.ids)
+        return sum(1 for r in self._rows if sheet.norm_id(r.id) in have)
+
     # ------------------------------------------------------------------ state
     def state(self) -> TableState:
-        return TableState(columns=dict(self._choices), formulas=self.formulas())
+        return TableState(columns=dict(self._choices), formulas=self.formulas(), joins=self.joins())
 
-    def restore(self, state: TableState) -> None:
+    def restore(self, state: TableState, joins=None) -> None:
+        """``joins``: [(spec, JoinRead or error)] for ``state.joins`` (the panel reads the files); None keeps no
+        joined file."""
+        self.set_joins(list(joins or ()), refresh=False)
         self._choices = dict(state.columns)
         self._formulas = []
         seen = set()
@@ -760,6 +880,22 @@ class TablePanel(QWidget):
         self.fit_btn.setToolTip("Fit the parameters of a formula to a column (least squares), e.g. the quantum "
                                 "parachor ((a*alpha + b*mu**2 + c)/Vm)**4")
         self.fit_btn.clicked.connect(lambda: self.open_fit())
+        self.features_btn = QToolButton()
+        self.features_btn.setObjectName("table_features")
+        self.features_btn.setText("Features")
+        self.features_btn.setToolTip("Ready-made formula columns: dimensionless liquid-state groups (Lorentz-Lorenz, "
+                                     "packing fraction, sphericity, Lifshitz σ, ...), ratios of α, μ, V and A, and "
+                                     "the reduced target σ* = σ·v_m^⅔/kT")
+        self.features_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.features_menu = QMenu(self.features_btn)
+        self.features_menu.setToolTipsVisible(True)
+        self.features_menu.aboutToShow.connect(self._fill_features_menu)
+        self.features_btn.setMenu(self.features_menu)
+        self.join_btn = QPushButton("Join...")
+        self.join_btn.setObjectName("table_join")
+        self.join_btn.setToolTip("Bring in columns of a CSV file by id: measured surface tensions, densities, "
+                                 "`pubchem targets` output")
+        self.join_btn.clicked.connect(lambda: self.join_dialog())
         self.export_btn = QToolButton()
         self.export_btn.setText("Export")
         self.export_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -783,7 +919,8 @@ class TablePanel(QWidget):
         top.setContentsMargins(4, 2, 4, 2)
         top.addWidget(self.filter, 1)
         top.addWidget(self.count)
-        for b in (self.columns_btn, self.formula_btn, self.fit_btn, self.export_btn):
+        for b in (self.columns_btn, self.formula_btn, self.fit_btn, self.features_btn, self.join_btn,
+                  self.export_btn):
             top.addWidget(b)
 
         self.view = SheetView(self.model)
@@ -979,6 +1116,9 @@ class TablePanel(QWidget):
         if 0 <= i < len(cols):
             col = cols[i]
             m.addAction(f"Hide {self.model.title(col.key)}", lambda: self.model.set_shown(col.key, False))
+            if col.source == "joined":
+                label = col.key[len("join:"):].split("::", 1)[0]
+                m.addAction(f"Remove the columns joined from {label}", lambda: self.remove_join(label))
             if col.source == "formula":
                 m.addAction("Edit formula...", lambda: self.edit_formula(col.alias))
                 m.addAction("Remove formula column", lambda: self.remove_formula(col.alias))
@@ -1015,6 +1155,88 @@ class TablePanel(QWidget):
         if modal:
             dlg.exec()
         return dlg
+
+    # ------------------------------------------------------------------ feature builder (analysis.features)
+    def _fill_features_menu(self) -> None:
+        m = self.features_menu
+        m.clear()
+        for group in (feat.GROUPS, feat.RATIOS):
+            m.addSection(group)
+            names = [p.name for p in feat.PRESETS if p.group == group]
+            for p in (feat.BY_NAME[n] for n in names):
+                why = self.model.feature_status(p.name)
+                a = m.addAction(f"{p.label}    [{p.name}]", lambda n=p.name: self.add_features([n]))
+                a.setEnabled(not why)
+                a.setToolTip(why or p.note)
+            if group == feat.GROUPS:
+                todo = [n for n in names if not self.model.feature_status(n)]
+                a = m.addAction("All of these", lambda t=todo: self.add_features(t))
+                a.setEnabled(bool(todo))
+        m.addSection("Target")
+        a = m.addAction("Reduced target σ* = σ·v_m^⅔/kT of a column...", lambda: self.reduced_target_dialog())
+        a.setToolTip("A formula column σ* = <column> / (kT/v_m^⅔): fit or model σ* instead of σ, then multiply back")
+
+    def add_features(self, names) -> list:
+        """The presets ``names`` as formula columns (a message when an input is missing)."""
+        try:
+            cols = self.model.add_features(names)
+        except (feat.FeatureError, fm.FormulaError) as exc:
+            QMessageBox.information(self, "Features", str(exc))
+            return []
+        if cols:
+            self.win.statusBar().showMessage("Added " + ", ".join(c.alias for c in cols), 8000)
+        return cols
+
+    def reduced_target_dialog(self, target: str | None = None) -> list:
+        """Ask for the target column (unless ``target``, an alias, is given) and add its σ*."""
+        from PySide6.QtWidgets import QInputDialog
+
+        if target is None:
+            cols = [c for c in self.model.numeric_columns() if c.source in ("data", "field", "joined", "formula")]
+            if not cols:
+                QMessageBox.information(self, "Reduced target", "The table has no numeric column yet.")
+                return []
+            names = [c.alias for c in cols]
+            guess = next((i for i, a in enumerate(names) if any(w in a.lower() for w in
+                                                               ("sigma", "surface_tension", "st25", "gamma"))), 0)
+            target, ok = QInputDialog.getItem(self, "Reduced target", "Surface tension column (mN/m):", names,
+                                              guess, False)
+            if not ok:
+                return []
+        try:
+            cols = self.model.add_reduced_target(target)
+        except (feat.FeatureError, fm.FormulaError) as exc:
+            QMessageBox.information(self, "Reduced target", str(exc))
+            return []
+        self.win.statusBar().showMessage("Added " + ", ".join(c.alias for c in cols), 8000)
+        return cols
+
+    # ------------------------------------------------------------------ joined files
+    def join_dialog(self, path: str | None = None, modal: bool = True):
+        from .table_dialogs import JoinDialog
+
+        if path is None:
+            base = Path(getattr(self.win, "run_folder", None) or self.win.s.output_path())
+            path, _ = QFileDialog.getOpenFileName(self, "Join columns from a CSV file", str(base),
+                                                  "CSV (*.csv *.tsv *.txt);;All files (*)")
+            if not path:
+                return None
+        dlg = JoinDialog(self, path)
+        if modal:
+            dlg.exec()
+        return dlg
+
+    def join_csv(self, path, id_column: str, columns=None, label: str = "") -> int:
+        """Join ``columns`` (None: all) of the CSV at ``path`` matched on ``id_column``; the rows matched."""
+        spec = JoinSpec(str(Path(path).expanduser()), id_column, list(columns or ()), label)
+        got = sheet.read_join(spec)
+        n = self.model.add_join(spec, got)
+        self.win.statusBar().showMessage(f"Joined {len(got.block.names)} column(s) of {spec.label}: {n:,} of "
+                                         f"{self.model.total_rows():,} rows matched", 10000)
+        return n
+
+    def remove_join(self, label: str) -> None:
+        self.model.remove_join(label)
 
     # ------------------------------------------------------------------ export
     def export_dialog(self, kind: str) -> None:
@@ -1064,7 +1286,13 @@ class TablePanel(QWidget):
 
     def restore(self, state: TableState) -> None:
         self.plot_settings = dict(state.plot)
-        self.model.restore(state)
+        joins = []
+        for spec in state.joins:              # small files: read here, so formula columns that use them resolve
+            try:
+                joins.append((spec, sheet.read_join(spec)))
+            except (OSError, ValueError, UnicodeDecodeError) as exc:
+                joins.append((spec, f"{type(exc).__name__}: {exc}"))
+        self.model.restore(state, joins)
 
     def save_state(self) -> None:
         store_state(self.state())

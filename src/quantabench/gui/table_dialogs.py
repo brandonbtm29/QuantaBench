@@ -4,6 +4,7 @@
     FormulaDialog   a new or edited formula column, checked as it is typed (``analysis.formula``)
     FitDialog       fit a formula's parameters to a target column (``formula.fit`` on a worker thread) and add the
                     fitted formula as a column
+    JoinDialog      columns of a CSV file joined by id (DESC-3): the id column, the columns, how many rows match
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -19,6 +21,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
     QTableWidget,
@@ -30,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from ..analysis import formula as fm
 
-GROUPS = ("Molecule", "Imported data fields", "Summary and descriptors", "Formula columns")
+GROUPS = ("Molecule", "Imported data fields", "Summary and descriptors", "Joined from files", "Formula columns")
 SYNTAX = ("Numbers, column names (their formula names: Columns...), + - * / ** and parentheses; functions log "
           "(natural), log10, exp, sqrt, abs, min(a, b, ...), max(a, b, ...), pow(a, b). A missing value gives an "
           "empty cell in that row. Energies are in eV (best_energy_eV).")
@@ -451,3 +455,132 @@ class FitDialog(QDialog):
         _set_status(self.status, f"Added the column {col.alias}.", True)
         self.add_btn.setEnabled(False)
         return col
+
+
+class JoinDialog(QDialog):
+    """Columns of a CSV file joined to the table by id (``TablePanel.join_csv``): pick the column that holds the
+    molecule ids and the columns to bring in; the count of matching rows updates as the id column changes."""
+
+    def __init__(self, panel, path: str, parent=None):
+        from pathlib import Path
+
+        from ..analysis import sheet
+
+        super().__init__(parent or panel)
+        self.panel, self.path = panel, str(Path(path).expanduser())
+        self.setWindowTitle("Join columns from a file")
+        self.setMinimumWidth(460)
+        self.joined = None
+        try:
+            names = sheet.csv_columns(self.path)
+        except (OSError, UnicodeDecodeError) as exc:
+            names = []
+            self._error = f"Cannot read {self.path}: {exc}"
+        else:
+            self._error = "" if names else f"{self.path} has no header row"
+        self.id_box = QComboBox()
+        self.id_box.setObjectName("join_id")
+        for n in names:
+            self.id_box.addItem(n, n)
+        low = [n.lower() for n in names]
+        guess = next((low.index(w) for w in ("id", "cas", "cas_rn", "casrn", "identifier", "name") if w in low), 0)
+        self.id_box.setCurrentIndex(guess)
+        self.columns = QListWidget()
+        self.columns.setObjectName("join_columns")
+        for n in names:
+            it = QListWidgetItem(n)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Checked)
+            self.columns.addItem(it)
+        self.all_box = QCheckBox("All columns")
+        self.all_box.setChecked(True)
+        self.all_box.toggled.connect(self._all)
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        form = QFormLayout()
+        form.addRow("File", QLabel(Path(self.path).name))
+        form.addRow("Molecule ids in", self.id_box)
+        lay = QVBoxLayout(self)
+        lay.addLayout(form)
+        lay.addWidget(QLabel("Columns to join (matched on the molecule id, ignoring case and spaces):"))
+        lay.addWidget(self.columns, 1)
+        lay.addWidget(self.all_box)
+        lay.addWidget(self.status)
+        lay.addWidget(self.buttons)
+        self.id_box.currentIndexChanged.connect(self._mark_id)
+        self.columns.itemChanged.connect(lambda _it: self._check())
+        self._mark_id()
+
+    def _mark_id(self, *_args) -> None:
+        """The id column is not one to join: its item is greyed out."""
+        ident = self.id_box.currentData()
+        self.columns.blockSignals(True)
+        for i in range(self.columns.count()):
+            it = self.columns.item(i)
+            name = it.data(Qt.ItemDataRole.UserRole) or it.text()
+            it.setData(Qt.ItemDataRole.UserRole, name)
+            on = name != ident
+            it.setFlags((it.flags() | Qt.ItemFlag.ItemIsEnabled) if on else (it.flags() & ~Qt.ItemFlag.ItemIsEnabled))
+            it.setText(name if on else f"{name}   (the molecule ids)")
+        self.columns.blockSignals(False)
+        self._check()
+
+    def _all(self, on: bool) -> None:
+        self.columns.blockSignals(True)
+        for i in range(self.columns.count()):
+            self.columns.item(i).setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+        self.columns.blockSignals(False)
+        self._check()
+
+    def chosen(self) -> list[str]:
+        ident = self.id_box.currentData()
+        out = []
+        for i in range(self.columns.count()):
+            it = self.columns.item(i)
+            name = it.data(Qt.ItemDataRole.UserRole) or it.text()
+            if it.checkState() == Qt.CheckState.Checked and name != ident:
+                out.append(name)
+        return out
+
+    def _check(self) -> None:
+        from ..analysis import sheet
+
+        ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
+        if self._error:
+            _set_status(self.status, self._error, False)
+            ok.setEnabled(False)
+            return
+        cols, ident = self.chosen(), self.id_box.currentData()
+        if not cols:
+            _set_status(self.status, "Choose at least one column besides the id column.", False)
+            ok.setEnabled(False)
+            return
+        try:
+            got = sheet.read_join(sheet.JoinSpec(self.path, ident, cols))
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            _set_status(self.status, str(exc), False)
+            ok.setEnabled(False)
+            return
+        have = set(got.block.ids)
+        rows = [r for r in self.panel.model.molecules.rows()]
+        n = sum(1 for r in rows if sheet.norm_id(r.id) in have)
+        extra = []
+        if got.duplicates:
+            extra.append(f"{got.duplicates} repeated id(s): the last row wins")
+        if got.no_id:
+            extra.append(f"{got.no_id} row(s) without an id")
+        _set_status(self.status, f"{n:,} of the table's {len(rows):,} molecules match ({got.rows:,} rows in the "
+                    "file)" + (f"; {'; '.join(extra)}" if extra else "") + ".", n > 0)
+        ok.setEnabled(True)
+
+    def accept(self) -> None:
+        try:
+            self.panel.join_csv(self.path, self.id_box.currentData(), self.chosen())
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            _set_status(self.status, str(exc), False)
+            return
+        self.joined = self.chosen()
+        super().accept()

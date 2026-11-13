@@ -126,3 +126,8 @@ Newest entries at the bottom. One entry per working session or nightly run.
 ## 2026-11-13: conformer checks pilot; `conformers compare` reads grid shares (afternoon task, branch `afternoon/2026-11-13-compare-grid-shares`)
 - The pilot (10 tranche molecules) compared the tranches' conformers with a 200-embedding rebuild and with Spartan's MMFF search. Results are in `Runs\conformer-checks-2026-11-13\report.md`, not here.
 - Pointed at a tranche's gas phase folder, `conformers compare` would have missed 4 of the 10: the MacBook ran them, and its shares (78 to 547 molecules of a tranche's ~1,000) are in the grid folder's `parts/brandons-macbook-pro[-<job id>]/<run folder>` (downloaded) and synced into `Runs\`. The pilot worked around it by copying the molecule folders; `read_sources` now follows `grid.json`.
+
+## 2026-11-13: DESC-3 feature builder (branch `feat/feature-builder`)
+- Brandon's question was whether ratios of α, μ and V, made dimensionless, would predict σ better. In his QSAR study (results in `Runs\qsar-2026-11-13\report.md`, not here), the groups of `chem.liquid` plus the *reduced target* σ* = σ·v_m^⅔/kT were what helped: the target more than the features.
+- The Lorentz-Lorenz group needs an optical-like polarizability: GFN2-xTB's α pushes (4π/3)α/v_m towards 1. Bosque's α gives n_D within 0.02 for hexane (1.380 vs 1.375), perfluorohexane (1.251 vs 1.252) and benzene (1.518 vs 1.501).
+- The table's presets are formula columns, not hidden code, so the user can read and edit them. `tests/test_liquid.py` checks them against `chem.liquid` on random inputs, so the two cannot drift apart.

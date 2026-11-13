@@ -2,6 +2,18 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Feature builder: dimensionless liquid-state groups, joined targets and a parity plot, DESC-3 (2026-11-13)
+- **New descriptors in every phase** (`chem/liquid.py`), from Bosque's α, the dipole, the van der Waals volume and area, and the packing molar volume. With v_m = V_m/N_A, one molecule's volume in the liquid:
+  - `lorentz_lorenz_bosque` = (4π/3)α/v_m = (n²−1)/(n²+2), and `refractive_index_bosque`: within 0.02 of n_D for hexane, perfluorohexane and benzene;
+  - `dipole_orientation_ratio`, `packing_fraction_vdw`, `sphericity_vdw`;
+  - `hamaker_lifshitz_zJ` and `sigma_lifshitz_mN_m`, Israelachvili's Lifshitz approximation: a feature, off by several mN/m;
+  - `sigma_scale_kT_mN_m` = kT/v_m^⅔, the unit of the reduced surface tension σ* = σ·v_m^⅔/kT.
+  - A run without a dipole (MMFF, no xTB properties) gets all but the dipole groups.
+- **Analyze table, Features:** the same groups as formula columns for run folders made before them (`analysis/features.py`; a group the run has as a descriptor is greyed out), ratios of α, μ, V and A, and the reduced target σ* of any column.
+- **Analyze table, Join...:** columns of a CSV file joined by id (case and spaces ignored; comma, semicolon or tab separated). Use it for measured surface tensions or densities, or `pubchem targets` output. The dialog counts the matching molecules. The file, its id column and the columns are part of the table's state and are read again at the next start; a missing file is reported and its columns left out.
+- **Plot, 1:1:** the parity view. It draws y = x on one range for both axes and gives MAE, RMSE, bias (y − x) and R² about the line (`formula.parity_stats`).
+- **Methods guide:** a `liquid-groups` entry. docs/SURFACE_TENSION.md has a new section, "Dimensionless groups and the reduced target".
+
 ### `conformers compare` reads every machine's share of a grid run (2026-11-13)
 - **The bug.** Given a grid run's phase folder (or its grid folder), `conformers compare` read only this machine's run folder. The other machines' molecules were silently left out.
   - Those shares live in the grid folder's `parts/<machine>/<run folder>` when the grid build downloaded them, or in the output folder when SyncThing brought them.

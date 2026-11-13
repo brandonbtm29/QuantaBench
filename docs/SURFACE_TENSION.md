@@ -187,6 +187,34 @@ Models: start with ridge/PLS on about 10-15 standardized descriptors, to keep th
 coefficients physically signed. Then try GPR and gradient boosting, which give uncertainties and catch
 nonlinearity. Report against the parachor and TEST baselines in MAE and RMSE (mN/m).
 
+### Dimensionless groups and the reduced target (DESC-3)
+Ratios with units (α/V in Å³/Å³ is fine, μ²/V is not) mix the size of a molecule with its cohesion. Written in
+the liquid's own scale, v_m = V_m / N_A the volume one molecule takes (the packing molar volume when no density is
+measured), α, μ, V and A give pure numbers with a physical reading. Every run writes them (`chem.liquid`); the
+Analyze table's **Features** menu makes the same groups as formula columns for older run folders
+(`analysis.features`), and **Join...** brings measured σ or ρ in from a CSV by id.
+
+| column | group | reads as |
+|---|---|---|
+| `lorentz_lorenz_bosque` | (4π/3) α / v_m = (n²−1)/(n²+2) | dispersion: the optical dielectric function of the liquid |
+| `refractive_index_bosque` | n from it | within ~0.02 of n_D for hexane, perfluorohexane, benzene |
+| `dipole_orientation_ratio` | (4π/3) μ²/(3·4πε₀kT) / v_m | dipole-dipole cohesion against kT (Debye's term) |
+| `packing_fraction_vdw` | V_vdW / v_m | how tightly the molecules fill the liquid |
+| `sphericity_vdw` | π^⅓ (6V)^⅔ / A | 1 for a sphere, lower for chains |
+| `hamaker_lifshitz_zJ`, `sigma_lifshitz_mN_m` | A_H (Israelachvili's Lifshitz approximation), σ = A_H / (24π D₀²) | a no-fit σ from n and ε: dispersion only, off by several mN/m |
+| `sigma_scale_kT_mN_m` | kT / v_m^⅔ | the unit of the reduced surface tension σ* = σ / this |
+
+**The reduced surface tension** σ* = σ·v_m^⅔/kT is the surface energy of one molecular cross-section in units of kT,
+the quantity Eötvös' rule (σ V_m^⅔ ∝ T_c − T) and corresponding states make dimensionless. A model of σ* (then
+σ = σ*·kT/v_m^⅔) no longer has to learn that bigger molecules have bigger cross-sections, only how strongly they
+cohere. That is the part a fluorinated liquid changes: a perfluoroalkane's Lorentz-Lorenz function is about 30 %
+below that of the alkane with the same carbons (hexane 0.23, perfluorohexane 0.16). The groups and the reduced target are candidates to
+test under the splits below, against the 26-descriptor models, not defaults.
+
+The Lorentz-Lorenz group needs an optical-like polarizability: GFN2-xTB's static responses run too high and push
+it towards 1 (a diverging n), so it uses Bosque's additive α. The dipole groups need a dipole (xTB properties or
+a QM stage); a run without one gets the other groups only.
+
 ### Splits, validation and applicability domain
 - **Splits by cohort and by class, not only at random.** Leave-cohort-out (QuantaBench's cohort labels,
   `chem.validate.cohort_of`). Leave-class-out (PFCA, PFSA, FTOH, perfluoroalkane, ether PFAS, hydrocarbons,

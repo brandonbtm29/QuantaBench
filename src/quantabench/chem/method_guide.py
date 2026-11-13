@@ -263,6 +263,11 @@ R_CRIPPEN = _ref("Wildman, Crippen", "Prediction of physicochemical parameters b
                  "J. Chem. Inf. Comput. Sci.", 1999, "39", "868-873", "10.1021/ci990307l")
 R_MILLER = _ref("Miller", "Additivity methods in molecular polarizability", "J. Am. Chem. Soc.", 1990, "112",
                 "8533-8542", "10.1021/ja00179a044")
+R_ISRAELACHVILI = _ref("Israelachvili", "Intermolecular and Surface Forces, 3rd ed. (Hamaker constants from "
+                       "Lifshitz theory; surface energies)", "Academic Press", 2011, "", "ch. 13",
+                       "10.1016/C2009-0-21560-1")
+R_GUGGENHEIM = _ref("Guggenheim", "The principle of corresponding states", "J. Chem. Phys.", 1945, "13", "253-261",
+                    "10.1063/1.1724033")
 R_D4 = _ref("Caldeweyher, Ehlert, Hansen, Neugebauer, Spicher, Bannwarth, Grimme", "A generally applicable "
             "atomic-charge dependent London dispersion correction", "J. Chem. Phys.", 2019, "150", "154122",
             "10.1063/1.5090222")
@@ -1508,7 +1513,32 @@ _ENTRIES: tuple[Entry, ...] = (
         "None: a pure-liquid property.",
         (R_SUGDEN, R_QUAYLE),
         aliases=("sugden", "parachor", "parachor_sugden"),
-        see_also=("density-packing", "density-girolami"),
+        see_also=("density-packing", "density-girolami", "liquid-groups"),
+    ),
+    Entry(
+        "liquid-groups", "Dimensionless liquid-state groups", _FAMILY_EST,
+        "Pure numbers from α, μ, V, A and V_m, and a Lifshitz σ: `lorentz_lorenz_bosque`, `sigma_scale_kT_mN_m`, ...",
+        "With v_m the volume of one molecule in the liquid (the [[density-packing|packing]] molar volume / N_A): "
+        "the Lorentz-Lorenz function (4π/3)α/v_m = (n²−1)/(n²+2) with [[polarizability-bosque|Bosque's]] α and the "
+        "refractive index it implies; the dipole orientation ratio μ²/(3·4πε₀kT) per v_m; the packing fraction "
+        "V_vdW/v_m; the sphericity π^⅓(6V)^⅔/A; the Hamaker constant from Lifshitz theory in Israelachvili's "
+        "approximation and σ = A_H/(24πD₀²); and kT/v_m^⅔, the unit of the reduced surface tension σ* = σ·v_m^⅔/kT "
+        "(Eötvös' rule, σ·V_m^⅔ ∝ T_c − T; corresponding states). They are written in every phase; the Analyze table's Features menu makes the "
+        "same groups as formula columns for older runs.",
+        "Features of a σ model that has to extrapolate (PFAS are less polarizable per volume and less spherical "
+        "than most training liquids), and the reduced target σ* in place of σ.",
+        "The refractive index is within about 0.02 of measured n_D for alkanes, perfluoroalkanes and aromatics "
+        "(tests/test_liquid.py). The Lifshitz σ ignores H-bonding and is off by several mN/m: a feature, not a "
+        "prediction. The dipole groups need a dipole (xTB properties or a QM stage); polarizabilities from GFN2-xTB "
+        "run too high for the Lorentz-Lorenz function, so it uses Bosque's.",
+        "None: arithmetic on other descriptors.",
+        "Not applicable.",
+        "The dipole is the phase's (ALPB in water); the other groups are the same in every phase.",
+        (R_ISRAELACHVILI, R_GUGGENHEIM, R_BOSQUE),
+        aliases=("dimensionless groups", "lorentz-lorenz", "lorentz_lorenz_bosque", "refractive_index_bosque",
+                 "hamaker", "lifshitz", "reduced surface tension", "sigma_scale_kT_mN_m", "packing fraction",
+                 "sphericity"),
+        see_also=("parachor-sugden", "density-packing", "polarizability-bosque"),
     ),
 )
 
