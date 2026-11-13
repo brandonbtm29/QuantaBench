@@ -122,3 +122,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
   - The lane was killed at the time limit, so `work_dir` never ran its cleanup, and its except branch kept failed folders whole anyway.
 - Owner records (pid + process start time + host) make "left behind" decidable without guessing from ages. A pid reused after a reboot has another start time.
 - The test suite now points the scratch root at a temp folder (`QUANTABENCH_SCRATCH_DIR` in conftest). Otherwise the sweep at run start would have reached the real scratch folder of the machine running the tests.
+
+## 2026-11-13: conformer checks pilot; `conformers compare` reads grid shares (afternoon task, branch `afternoon/2026-11-13-compare-grid-shares`)
+- The pilot (10 tranche molecules) compared the tranches' conformers with a 200-embedding rebuild and with Spartan's MMFF search. Results are in `Runs\conformer-checks-2026-11-13\report.md`, not here.
+- Pointed at a tranche's gas phase folder, `conformers compare` would have missed 4 of the 10: the MacBook ran them, and its shares (78 to 547 molecules of a tranche's ~1,000) are in the grid folder's `parts/brandons-macbook-pro[-<job id>]/<run folder>` (downloaded) and synced into `Runs\`. The pilot worked around it by copying the molecule folders; `read_sources` now follows `grid.json`.

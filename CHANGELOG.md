@@ -2,6 +2,15 @@
 
 ## 0.3.0.dev (unreleased)
 
+### `conformers compare` reads every machine's share of a grid run (2026-11-13)
+- **The bug.** Given a grid run's phase folder (or its grid folder), `conformers compare` read only this machine's run folder. The other machines' molecules were silently left out.
+  - Those shares live in the grid folder's `parts/<machine>/<run folder>` when the grid build downloaded them, or in the output folder when SyncThing brought them.
+  - In the 2026-11-13 conformer checks, 4 of 10 pilot molecules had run on the MacBook.
+- **The fix.** `read_sources` follows `grid.json`'s shares to wherever this machine has them: the downloaded archive first, else the synced copy beside the grid folder or up to two levels above it. Each run folder is read once.
+  - A share found nowhere is logged with its molecule count.
+  - A share name from `grid.json` (a synced file) must be a plain folder name.
+  - The log now gives each run folder's molecule count.
+
 ### Scratch never piles up; Psi4 memory per run, SCRATCH-1 (2026-11-13)
 - **What happened.** In b03's ESP pass, lanes killed at the 30-minute per-molecule limit could not delete their Psi4 job folders. By morning NOVA's `%TEMP%\QuantaBench` held 59 of them with 479 GB of DF integrals (`psi.<pid>.97`, 13-21 GB each).
 - **A failed job's folder** keeps its inputs and logs for inspection. Psi4's scratch files and anything over 8 MB are deleted, and the error says how much was freed.

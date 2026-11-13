@@ -974,29 +974,72 @@ def _is_run_folder(p: Path) -> bool:
     return any((s / f"{s.name}_summary.json").is_file() for s in p.iterdir() if s.is_dir())
 
 
+_RUN_NAME_RE = re.compile(r"[\w.-]+")
+
+
+def _grid_shares(grid: Path, log: Callable[[str], None] | None = None) -> list[Path]:
+    """The run folders of the other machines' shares of the grid run in ``grid`` (a folder with ``grid.json``),
+    where this machine has them: the archive a grid build downloaded into ``parts/<machine>[-<job id>]/<run
+    folder>``, else the synced copy in the output folder (beside the grid folder or up to two levels above it: a
+    worker writes to its own output folder, a phase folder sits inside the batch's). A share found nowhere is
+    logged: its molecules are missing from the comparison."""
+    try:
+        info = json.loads((grid / "grid.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    out = []
+    for share in info.get("shares") or []:
+        name = share.get("run_folder") if isinstance(share, dict) else None
+        if not isinstance(name, str) or not _RUN_NAME_RE.fullmatch(name):      # grid.json is a synced file
+            continue
+        cands = [d / name for d in sorted((grid / "parts").glob("*")) if d.is_dir()]
+        cands += [a / name for a in list(grid.parents)[:3]]
+        found = next((c for c in cands if c.is_dir() and _is_run_folder(c)), None)
+        if found is not None:
+            out.append(found)
+        elif log and share.get("machine") != "local":
+            log(f"{grid.name}: {share.get('machine')}'s share ({share.get('n', '?')} molecules, {name}) is not "
+                "here; its molecules are left out")
+    return out
+
+
+def _run_folders(p: Path, log: Callable[[str], None] | None = None) -> list[Path]:
+    """The run folders ``p`` stands for: itself when it is one, else its subfolders that are (a grid run's phase
+    folder); with each grid folder, the other machines' shares (:func:`_grid_shares`). Each folder once."""
+    tops = [p] if _is_run_folder(p) else [s for s in sorted(p.iterdir()) if s.is_dir() and _is_run_folder(s)]
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for f in tops:
+        for r in (f, *(_grid_shares(f, log) if (f / "grid.json").is_file() else ())):
+            k = r.resolve()
+            if k not in seen:
+                seen.add(k)
+                out.append(r)
+    return out
+
+
 def read_sources(paths: Iterable[str | Path], include: Sequence[str] = (),
                  log: Callable[[str], None] | None = None) -> list[ConformerSet]:
     """Conformer sets from any mix of: QuantaBench run folders (and folders of them, one level down: a grid run's
-    phase folder), ``.spartan`` documents (and folders of them), and a Spartan import's long table ``.csv`` with its
-    ``.sdf`` (given together, paired in order). Merged by constitution (:func:`merge_sets`)."""
+    phase folder, with the other machines' shares of its grid runs: :func:`_grid_shares`), ``.spartan`` documents
+    (and folders of them), and a Spartan import's long table ``.csv`` with its ``.sdf`` (given together, paired in
+    order). Merged by constitution (:func:`merge_sets`)."""
     sets: list[ConformerSet] = []
     docs: list[Path] = []
     tables: list[Path] = []
     sdfs: list[Path] = []
     for p in map(lambda x: Path(x).expanduser(), paths):
         if p.is_dir():
+            runs = _run_folders(p, log)
+            for s in runs:
+                got = read_run(s)
+                sets += got
+                if log and (got or s == p or not (s / "grid.json").is_file()):   # not a grid folder's own 0
+                    log(f"{s}: QuantaBench run, {len(got)} molecule(s)")
             if _is_run_folder(p):
-                sets += read_run(p)
-                if log:
-                    log(f"{p}: QuantaBench run")
                 continue
-            subs = [s for s in sorted(p.iterdir()) if s.is_dir() and _is_run_folder(s)]
-            for s in subs:
-                sets += read_run(s)
-                if log:
-                    log(f"{s}: QuantaBench run")
             docs += sorted(p.glob("*.spartan"))
-            if not subs and not list(p.glob("*.spartan")):
+            if not runs and not list(p.glob("*.spartan")):
                 raise ValueError(f"{p}: neither a QuantaBench run folder nor a folder of run folders or .spartan files")
         elif p.suffix.lower() == ".spartan":
             docs.append(p)
