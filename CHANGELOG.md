@@ -2,6 +2,15 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Property models in the Analyze table: Model..., QSAR-4 (2026-11-13)
+- **Model...** in the Table dock fits a model of one column (a measured σ joined from a CSV, an imported field) on other columns, and joins its predictions back into the table:
+  - models: ridge regression (NumPy only; its penalty chosen by efficient leave-one-out), and with scikit-learn (the new `qsar` extra, also in `all`) elastic net, random forest and histogram gradient boosting;
+  - features: a filterable, checkable list of the numeric columns, with two presets: **Liquid groups** (Lorentz-Lorenz, dipole orientation ratio, packing fraction, sphericity; DESC-3) and **α, μ, V** (the raw descriptors);
+  - **σ\***: model target/(kT/v_m^⅔) and multiply the predictions back, guessed for a surface-tension column;
+  - validation: k-fold with a fixed seed, leave one group out by any column, and a holdout column whose rows never train and are scored separately; MAE, RMSE, R² and bias for each, the standardized coefficients or the importances.
+- Missing feature values are filled with the training rows' medians inside each fold; the fit runs on a worker thread and uses the rows the table shows.
+- **Add to table** writes `<name>.csv` (`id`, `<name>_pred`, `<name>_oof`) and `<name>.json` (the spec, metrics, coefficients) into the project's new `models/` folder (without a project: `models/` in the output folder) and joins the CSV, so the columns persist with the table and the project. **Plot 1:1** plots the target against the out-of-fold prediction.
+
 ### Projects: save and reopen a molecule list with its results, UI-2 (2026-11-13)
 - **File > New / Open / Open recent / Save / Save as / Close project** (Ctrl+N, Ctrl+Alt+O, Ctrl+S, Ctrl+Shift+S). A project is a `<name>.qbproj` folder:
   - `project.json`: the build settings of the Pipeline dock, the Analyze table's state (columns, formula columns, joined files, plot), the workspace and the selected molecule;

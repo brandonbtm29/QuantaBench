@@ -11,6 +11,8 @@
         runs/             where the project's builds write: one run folder per batch, as the output folder holds them
         results/          results that existed only in memory (imported outputs, builds with file writing off),
                           written there when the project is saved
+        models/           property models of the Analyze table (Model...): <name>.csv, the predictions the table
+                          joins, and <name>.json, the spec, metrics and coefficients (``analysis.models``)
 
 Paths inside the project folder are stored relative to it with forward slashes, so a project can be moved, synced
 or opened on Windows and macOS alike; paths outside it (a run folder elsewhere, a joined CSV) are stored absolute.
@@ -35,6 +37,7 @@ PROJECT_FILE = "project.json"
 MOLECULES_FILE = "molecules.jsonl"
 RUNS_DIR = "runs"
 RESULTS_DIR = "results"
+MODELS_DIR = "models"
 
 #: the light row fields a molecule keeps in molecules.jsonl (``gui.molecule_list.MoleculeRow``'s, less the
 #: transient ``stage`` and the ``input`` object)
@@ -231,3 +234,7 @@ def runs_dir(folder: str | os.PathLike) -> Path:
 
 def results_dir(folder: str | os.PathLike) -> Path:
     return project_path(folder) / RESULTS_DIR
+
+
+def models_dir(folder: str | os.PathLike) -> Path:
+    return project_path(folder) / MODELS_DIR

@@ -458,7 +458,9 @@ program are in [ENGINES.md](ENGINES.md).
 | `md` | `lammps` | LAMMPS Python module: `md smd --run` and quick checks of SMD setups |
 | `excel` | `openpyxl` | `.xlsx`/`.xlsm` input (CompTox dashboard exports) |
 | `editor` | `PySide6` (its Qt WebEngine) | The Sketch dock: Schrödinger's 2D Sketcher, downloaded on first use (below) |
-| `all` | ml, xtb, protonate, md, excel, interop | (not `editor`: Qt WebEngine is a large download) |
+| `validate` | `matplotlib` | Parity plots of `quantabench-cli validate` |
+| `qsar` | `scikit-learn` | The Analyze table's Model... dialog: elastic net, random forest, gradient boosting (ridge regression needs nothing extra) |
+| `all` | ml, xtb, protonate, md, excel, interop, validate, qsar | (not `editor`: Qt WebEngine is a large download) |
 
 Notes on the new extras:
 

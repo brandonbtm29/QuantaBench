@@ -65,6 +65,7 @@ project open also in the project (UI-2).
 state, workspace, selected molecule), `molecules.jsonl` (light rows and inputs), `runs/` and `results/`; File > New /
 Open / Open recent / Save / Save as / Close project, the title's unsaved mark and question, resume. The feature builder
 (DESC-3) adds the table's Features menu, Join... and the Plot's 1:1 view. The playback bar steps through molecules too.
+Model... (QSAR-4) fits cross-validated property models on the table's columns and joins their predictions back.
 
 **Shared chrome:**
 - A playback bar for conformers, molecules and trajectory frames.
