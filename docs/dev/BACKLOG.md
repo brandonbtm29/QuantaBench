@@ -49,7 +49,7 @@ Depends on: none (everything else in the UI plugs into this, so it goes first).
 - Acceptance: all existing features reachable, existing tests pass, new tests for workspace switching
   and playback stepping, screenshots of each workspace committed in the PR.
 
-## UI-2: Project document model · in-PR 2026-11-13 (branch `feat/project-documents`, stacked on DESC-3)
+## UI-2: Project document model · done 2026-11-13 (PR #9)
 Brandon (2026-11-13): "I'd like you to also move onto the other UI-2 as well".
 Done in the branch:
 - `quantabench/project.py`: the `.qbproj` folder: `project.json` (format, version, name, times, the build settings,
@@ -1182,7 +1182,30 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   tension values to train on"). Next: Jasper's coefficients (the `chemicals` package) as a second, independent
   value per molecule; ThermoML.
 
-### DESC-3: Feature builder (dimensionless groups, joined targets, parity plot) · in-PR 2026-11-13 (branch `feat/feature-builder`)
+### QSAR-4: Property models in the Analyze table (Model...) · in-PR 2026-11-13 (branch `feat/model-builder`)
+Brandon (2026-11-13 evening): "Could you continue further work on the UI?" The DESC-3 follow-up: the σ model of the
+QSAR-3 scripts (dimensionless groups, the reduced target σ*, k-fold and leave-class-out CV) inside the table.
+Done in the branch:
+- `analysis/models.py`: ridge regression in NumPy (standardized features, α by efficient leave-one-out, as
+  RidgeCV), elastic net / random forest / histogram gradient boosting through scikit-learn (the new `qsar` extra);
+  median imputation inside each fold; k-fold out-of-fold predictions (seeded), leave one group out, a holdout
+  column; the reduced target y/scale multiplied back; `write` (CSV for the join, JSON report).
+- `gui/model_dialog.py`: Table > Model... (non-modal): target guess (a joined or imported σ), feature presets
+  (Liquid groups, α μ V), σ*, folds, seed, group and holdout columns; the fit on a worker thread; Add to table
+  writes `models/<name>.csv/.json` in the project (or the output folder) and joins `<name>_pred`, `<name>_oof`;
+  Plot 1:1. `project.MODELS_DIR`.
+- Tests: `tests/test_models.py` (ridge against the closed form, the scores, σ*, errors, scikit-learn models when
+  installed, the files); `tests/test_gui_table.py::test_model_dialog_fits_joins_and_plots`. Screenshot:
+  `docs/dev/screenshots/QSAR-4/`.
+Follow-ups (ready):
+- Applicability domain in the dialog: leverage and the kNN distance to the training rows as two more joined
+  columns, and a flag beyond the 95th percentile (the PCA check of 2026-11-13 found most fluorinated molecules
+  outside the non-fluorinated training domain).
+- Gaussian-process regression (scikit-learn) with its predictive σ as an uncertainty column.
+- Apply a saved model (its JSON) to another project's table: the JSON needs the coefficients and the
+  standardization (ridge), or a pickled estimator (the others).
+
+### DESC-3: Feature builder (dimensionless groups, joined targets, parity plot) · done 2026-11-13 (PR #8)
 Brandon (2026-11-13): "Maybe certain combinations of those three terms (polarizability, dipole, and molecular
 volume) or ratios would be useful for predictions? Maybe we could do some unit dimensionalization?" and "integrating
 a feature building into QuantaBench would be a great idea".
@@ -1198,7 +1221,7 @@ Done in the branch:
   `docs/dev/screenshots/DESC-3/` (`scratch/shot_desc3.py`, not committed).
 Follow-ups (ready):
 - A Model dock: ridge / elastic net / random forest with k-fold and leave-class-out CV, the reduced-target switch,
-  coefficients and the parity plot, on the table's columns (today: the scripts and Fit...).
+  coefficients and the parity plot, on the table's columns: QSAR-4 (below).
 - Join on an imported field (CAS, InChIKey) as well as the id; a join by InChIKey would match across id schemes.
 - An Onsager static dielectric in place of Debye's for polar liquids (the zero-frequency Hamaker term).
 
