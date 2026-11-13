@@ -58,8 +58,13 @@ Library = run folders under the output folder.
 Molecules dock's rows (descriptors from results in memory or a run folder's CSVs), with formula columns (an `ast`
 whitelist evaluated with NumPy, never `eval`) and a fit helper for formulas with parameters such as the quantum
 parachor; the Plot dock scatters two of its columns. A column whose name is not an identifier is referenced by an
-alias the column chooser shows. Until the project document (UI-2) exists, the column choices and formula columns
-live in the window settings; UI-2 moves `TablePanel.state()` into the project.
+alias the column chooser shows. The column choices and formula columns live in the window settings, and with a
+project open also in the project (UI-2).
+
+**Projects are in (UI-2, 2026-11-13):** a `<name>.qbproj` folder with `project.json` (build settings, the table's
+state, workspace, selected molecule), `molecules.jsonl` (light rows and inputs), `runs/` and `results/`; File > New /
+Open / Open recent / Save / Save as / Close project, the title's unsaved mark and question, resume. The feature builder
+(DESC-3) adds the table's Features menu, Join... and the Plot's 1:1 view. The playback bar steps through molecules too.
 
 **Shared chrome:**
 - A playback bar for conformers, molecules and trajectory frames.

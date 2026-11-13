@@ -150,15 +150,28 @@ shared 2D/3D view: **Build** (molecules, Appearance), **Calculate** (pipeline, M
 builder, LAMMPS export), **Analyze** (the table and its plot, surfaces, spectra, conformers) and **Library** (the
 run folders under the output folder: open one, or resume its unfinished molecules). Alt+1 ... Alt+5 switch too
 (Control+1 ... on macOS). Each workspace remembers how its docks were arranged; View > Reset layout brings back its
-default. The playback bar under the view steps through the selected molecule's conformers.
+default. The playback bar under the view steps through the selected molecule's conformers, or (its Conformers /
+Molecules box) through the molecules of the list.
+
+**Projects** (File > New / Open / Save project, Ctrl+N, Ctrl+Alt+O, Ctrl+S): a `<name>.qbproj` folder holds the
+molecule list, the results, the build settings, the Analyze table (columns, formulas, joined files, plot) and the
+workspace. Builds in a project write into its `runs/` folder, results that existed only in memory (an imported
+output) are written into it when it is saved, and paths inside it are relative, so a project can be moved or synced
+to another machine. Opening one is quick (the results are read when a molecule is selected); Build > Resume run
+folder continues its unfinished molecules. The title bar marks unsaved changes, and New, Open, Close and Quit ask
+about them.
 
 Analyze's **Table** has one row per molecule with its descriptors and summary values (from the run folder's
 descriptors.csv and summary.csv, or the molecules built in this session): choose columns, sort, filter, Ctrl+C into
 Excel, export CSV or XLSX. **New column...** adds a formula column (`polarizability_bosque_A3 /
 molar_volume_packing_cm3`; `+ - * / **`, `log`, `exp`, `sqrt`, ...; columns by the names the column chooser lists),
 and **Fit...** fits a formula's parameters to a column, e.g. `((a*alpha + b*mu**2 + c)/Vm)**4` for the quantum
-parachor, with n, MAE, RMSE and R². The **Plot** next to it scatters any two columns, coloured by a third, with a
-fit line; clicking a point selects the molecule.
+parachor, with n, MAE, RMSE and R². **Features** adds ready-made columns: dimensionless liquid-state groups (the
+Lorentz-Lorenz function and refractive index, packing fraction, sphericity, a Lifshitz σ, the reduced surface
+tension's unit kT/v_m^⅔), ratios of α, μ, V and A, and the reduced target σ* of any column. **Join...** brings in
+columns of a CSV by id (measured surface tensions or densities). The **Plot** next to it scatters any two columns,
+coloured by a third, with a fit line or a 1:1 parity view (MAE, RMSE, bias, R²); clicking a point selects the
+molecule.
 
 ## Viewer
 
