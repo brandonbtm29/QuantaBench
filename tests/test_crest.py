@@ -47,15 +47,21 @@ def _fake_program(folder: Path, name: str, body: str) -> Path:
 
 # A fake CREST: three "conformers" of the input; the lowest-energy one has C0 and O2 swapped (bonds changed).
 FAKE_CREST = r'''
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
+def _log_call(record):
+    """One file per call: two fake CRESTs appending to one log at once lose a line on Windows."""
+    folder = Path(os.environ["FAKE_CREST_LOG"])
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / f"{time.time_ns():020d}_{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(record))
+    os.replace(tmp, tmp.with_suffix(".json"))
 args = sys.argv[1:]
 if "--version" in args:
     print("       Version 3.0.2, fake")
     sys.exit(0)
-with open(os.environ["FAKE_CREST_LOG"], "a") as f:
-    f.write(json.dumps({"argv": args, "path": os.environ.get("PATH", ""),
-                        "threads": os.environ.get("OMP_NUM_THREADS")}) + "\n")
+_log_call({"argv": args, "path": os.environ.get("PATH", ""),
+           "threads": os.environ.get("OMP_NUM_THREADS")})
 lines = Path(args[0]).read_text().splitlines()
 n = int(lines[0])
 sym = [ln.split()[0] for ln in lines[2:2 + n]]
@@ -86,15 +92,20 @@ print(" CREST terminated normally.")
 '''
 
 
+def _calls(log: Path) -> list[dict]:
+    """The fake CREST's calls in the order they finished (one JSON file each)."""
+    return [json.loads(p.read_text()) for p in sorted(log.glob("*.json"))] if log.is_dir() else []
+
+
 @pytest.fixture
 def fake_crest(tmp_path, monkeypatch):
     exe = _fake_program(tmp_path / "crestbin", "crest", FAKE_CREST)
     xtb = _fake_program(tmp_path / "xtbbin", "xtb", 'print("      * xtb version 6.7.1 (fake)")\n')
-    log = tmp_path / "crest_calls.jsonl"
+    log = tmp_path / "crest_calls"
     monkeypatch.setenv("QUANTABENCH_CREST", str(exe))
     monkeypatch.setenv("QUANTABENCH_XTB", str(xtb))
     monkeypatch.setenv("FAKE_CREST_LOG", str(log))
-    return {"calls": lambda: [json.loads(x) for x in log.read_text().splitlines()], "xtb_dir": str(xtb.parent)}
+    return {"calls": lambda: _calls(log), "xtb_dir": str(xtb.parent)}
 
 
 def _ethanol():

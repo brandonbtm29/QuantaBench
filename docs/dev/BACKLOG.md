@@ -8,13 +8,13 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
-## SCRATCH-1: Scratch cleanup and Psi4 memory · in-PR 2026-11-13 (branch `fix/scratch-cleanup`)
+## SCRATCH-1: Scratch cleanup and Psi4 memory · done 2026-11-13 (PR #5)
 Brandon (2026-11-13): "The hard drive was nearly filled last night. Can you make it so that the scratch files are
 deleted after we extract the information we need?"
 
 What happened: killed lanes left 59 Psi4 job folders in `%TEMP%\QuantaBench`, holding 479 GB of DF integrals.
 
-Done in the branch:
+Done:
 - owner records in scratch folders;
 - failed jobs keep only their inputs and logs;
 - `external.sweep_scratch` after lane kills, at pool close and at run start;
@@ -26,7 +26,7 @@ Follow-ups:
 - QM memory per molecule within one run (lanes with different memory, or a size-aware queue) instead of one value per run.
 - Why NOVA's native Windows Psi4 looked slower than the Mac's (both ran DiskDF at 4 GB; disk speed or Defender scanning `%TEMP%`?). Measure one molecule on both with enough memory.
 
-## UI-1: App shell with task workspaces · in-PR 2026-11-12 (branch `feat/app-shell`)
+## UI-1: App shell with task workspaces · done 2026-11-12 (PR #1)
 Done in the PR: the five workspaces (`gui.workspaces`), the Appearance dock, the playback bar (`gui.playback`),
 the status line, a first Library (run folders under the output folder, `gui.library_panel`), per-workspace
 layouts in QSettings with View > Reset layout, tests (`tests/test_gui_workspaces.py`) and screenshots
@@ -49,7 +49,27 @@ Depends on: none (everything else in the UI plugs into this, so it goes first).
 - Acceptance: all existing features reachable, existing tests pass, new tests for workspace switching
   and playback stepping, screenshots of each workspace committed in the PR.
 
-## UI-2: Project document model · ready
+## UI-2: Project document model · in-PR 2026-11-13 (branch `feat/project-documents`, stacked on DESC-3)
+Brandon (2026-11-13): "I'd like you to also move onto the other UI-2 as well".
+Done in the branch:
+- `quantabench/project.py`: the `.qbproj` folder: `project.json` (format, version, name, times, the build settings,
+  the table's state, workspace, selected molecule; keys of a newer version are kept), `molecules.jsonl` (light rows
+  and inputs), `runs/` and `results/`. Relative paths with "/" inside the project, atomic writes, `ProjectError`
+  for a newer version or a damaged file.
+- `gui/project_actions.py`: File > New project (Ctrl+N), Open project... (Ctrl+Alt+O), Open recent project, Save
+  project (Ctrl+S), Save project as... (Ctrl+Shift+S), Close project. It also handles:
+  - the `[*]` title mark and the unsaved-changes question (New, Open, Close, and Quit with a project open);
+  - pinned results written to `results/` on save;
+  - builds into the project's `runs/` (every build through a run folder);
+  - on open, statuses that changed in the job tables since the save, and the Analyze table's values read off the
+    GUI thread (`TablePanel.read_tables`);
+  - Resume (the newest run folder with unfinished molecules).
+- The playback bar's Conformers / Molecules box: it steps (and plays) through the list in its order and filter.
+- Tests: `tests/test_project.py` (the format, a moved project, Windows separators, versions; the window: save and
+  reopen with results and the table, pinned results, a half-finished project resumed, the question, the playback
+  Molecules mode). Screenshots: `docs/dev/screenshots/UI-2/`.
+Left for later: Save as copies the run folders (now they stay where they are and are referenced); the Library
+workspace listing projects; a project's own settings beyond the build settings (Display units, radii).
 Depends on: UI-1.
 - A project (`*.qbproj` folder: `project.json` + the existing per-run `jobs.sqlite` + result folders)
   holding many molecules, their inputs, results and the build settings used. New / Open / Save /
@@ -60,7 +80,7 @@ Depends on: UI-1.
 - Acceptance: round-trip save/open test with built results; resume of a half-finished project;
   Windows-safe paths (no absolute paths stored for files inside the project).
 
-## UI-3: Spreadsheet, plots and formula columns · in-PR 2026-11-12 (branch `feat/ui3-spreadsheet`)
+## UI-3: Spreadsheet, plots and formula columns · done 2026-11-12 (PR #2)
 Done in the branch (stacked on `feat/app-shell`, UI-1's PR #1): the Table dock (`gui.table_panel`: one row per
 molecule of the Molecules dock, row fields, posted fields, summary and descriptor values from results in memory or a
 run folder's CSVs and job table read off the GUI thread, column chooser with each column's formula name, numeric
@@ -1052,7 +1072,7 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   non-fluorinated liquids. TPSA and ESP 75/100/125 correlate at r 0.73/0.77/0.68; 29 of 74 have TPSA 0, 7/20/27
   have ESP area 0. Brandon then asked for the whole ESP distribution instead of three thresholds (2026-11-12:
   `qm_surf_esp_area_*`, `<id>_esp_profile.csv`).
-- **QM-ESP options** · in-PR 2026-11-12 (branch `afternoon/2026-11-12-qm-esp`): `--no-qm-polarizability`, `--qm-properties/--no-qm-properties`,
+- **QM-ESP options** · done 2026-11-12 (PR #3): `--no-qm-polarizability`, `--qm-properties/--no-qm-properties`,
   `--keep-cubes/--no-keep-cubes`, and the imaginary-mode steps in the Psi4 frequency path. Then the staged ESP pass over b03 (gas, `--qm
   wb97x-d/6-31g* --cubes --no-qm-polarizability --no-keep-cubes`; `scratch/batches/run_b03_esp.ps1` on NOVA) for the ESP PCA substudy,
   appended to a night's chain once this is merged.
@@ -1161,6 +1181,26 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   the screens, keep CHRIS as a check set, keep the 20 → 25 °C correction (docs/SURFACE_TENSION.md, "Which surface
   tension values to train on"). Next: Jasper's coefficients (the `chemicals` package) as a second, independent
   value per molecule; ThermoML.
+
+### DESC-3: Feature builder (dimensionless groups, joined targets, parity plot) · in-PR 2026-11-13 (branch `feat/feature-builder`)
+Brandon (2026-11-13): "Maybe certain combinations of those three terms (polarizability, dipole, and molecular
+volume) or ratios would be useful for predictions? Maybe we could do some unit dimensionalization?" and "integrating
+a feature building into QuantaBench would be a great idea".
+Done in the branch:
+- `chem/liquid.py`: the Lorentz-Lorenz function with Bosque's α and the refractive index it implies, the dipole
+  orientation ratio, packing fraction, sphericity, the Lifshitz Hamaker constant and σ, and kT/v_m^⅔, the unit of the
+  reduced surface tension. Written in every phase by the descriptors step.
+- The Analyze table: **Features** (the same groups as formula columns for older runs, ratios of α, μ, V and A, the
+  reduced target σ* of any column; `analysis/features.py`), **Join...** (columns of a CSV by id, kept in the
+  table's state), and the Plot dock's **1:1** parity view (MAE, RMSE, bias, R² about y = x).
+- The method guide entry `liquid-groups`, docs/SURFACE_TENSION.md "Dimensionless groups and the reduced target".
+- Tests: `tests/test_liquid.py`, `tests/test_gui_table.py::test_feature_builder_join_and_parity_persist`; screenshots in
+  `docs/dev/screenshots/DESC-3/` (`scratch/shot_desc3.py`, not committed).
+Follow-ups (ready):
+- A Model dock: ridge / elastic net / random forest with k-fold and leave-class-out CV, the reduced-target switch,
+  coefficients and the parity plot, on the table's columns (today: the scripts and Fit...).
+- Join on an imported field (CAS, InChIKey) as well as the id; a join by InChIKey would match across id schemes.
+- An Onsager static dielectric in place of Debye's for polar liquids (the zero-frequency Hamaker term).
 
 ### DESC-2: Density and polarizability estimates · done 2026-11-11 (branch `feat/density-polarizability`)
 Why: b02's quantum parachor failed because V_vdW is not the molar volume and the minimal-basis xTB polarizability

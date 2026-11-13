@@ -1,4 +1,5 @@
-"""Playback bar under the 2D/3D view (UI-1): steps through the selected molecule's conformers.
+"""Playback bar under the 2D/3D view (UI-1): steps through the selected molecule's conformers, or through the
+molecules of the list (UI-2: the Conformers / Molecules box at its left).
 
 First / previous / play-pause / next / last, a slider and a label ("Conformer 3 of 20, ΔE 1.2 kJ/mol"). The bar holds
 only an index and a count: the main window tells it how many items there are (``set_count``) and which one is shown
@@ -6,7 +7,8 @@ only an index and a count: the main window tells it how many items there are (``
 trajectory frames or molecules (UI-2) by giving it another count and label.
 
 Play advances at the chosen rate and wraps from the last item to the first; it stops when the count changes (another
-molecule) or when the window asks it to (``stop``).
+molecule) or when the window asks it to (``stop``). In the Molecules mode the window gives it the list's length and
+the selected row, and selects the row the bar moves to (``modeChanged`` tells it the mode changed).
 """
 
 from __future__ import annotations
@@ -19,11 +21,15 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QSlider, QStyle, Q
 #: playback rates (items per second) offered in the rate box
 RATES = (1, 2, 4, 8)
 DEFAULT_RATE = 2
+#: what the bar steps through: (kind, the mode box's text)
+MODES = (("Conformer", "Conformers"), ("Molecule", "Molecules"))
 
 
 class PlaybackBar(QWidget):
     #: the index the user (or play) moved to; not emitted for ``set_index(..., emit=False)``
     indexChanged = Signal(int)
+    #: the user chose what to step through: "Conformer" or "Molecule"
+    modeChanged = Signal(str)
 
     def __init__(self, parent=None, kind: str = "Conformer"):
         super().__init__(parent)
@@ -36,6 +42,15 @@ class PlaybackBar(QWidget):
         lay.setContentsMargins(6, 2, 6, 2)
         lay.setSpacing(2)
         st = self.style()
+        self.mode_box = QComboBox(self)
+        self.mode_box.setObjectName("playback_mode")
+        for k, text in MODES:
+            self.mode_box.addItem(text, k)
+        self.mode_box.setCurrentIndex(max(0, self.mode_box.findData(kind)))
+        self.mode_box.setToolTip("Step through the selected molecule's conformers, or through the molecules of the "
+                                 "list (in its order and filter)")
+        self.mode_box.currentIndexChanged.connect(self._on_mode)
+        lay.addWidget(self.mode_box)
 
         def button(icon, tip, slot, name):
             b = QToolButton(self)
@@ -143,6 +158,21 @@ class PlaybackBar(QWidget):
             self.stop()
             return
         self.set_index((self._index + 1) % self._count, emit=True)      # wraps to the first
+
+    def set_mode(self, kind: str) -> None:
+        """Step through "Conformer"s or "Molecule"s (emits ``modeChanged`` when it changes)."""
+        i = self.mode_box.findData(kind)
+        if i >= 0 and i != self.mode_box.currentIndex():
+            self.mode_box.setCurrentIndex(i)
+
+    def _on_mode(self, _i: int) -> None:
+        kind = self.mode_box.currentData() or "Conformer"
+        if kind == self.kind:
+            return
+        self.stop()
+        self.kind = kind
+        self.rate_box.setToolTip(f"{kind}s per second while playing")
+        self.modeChanged.emit(kind)
 
     def _on_slider(self, value: int) -> None:
         self.set_index(value, emit=True)

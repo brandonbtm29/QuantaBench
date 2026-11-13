@@ -39,7 +39,8 @@ Edit the data there, not this file (a test checks that the two agree).
 - **Property estimates:** [Girolami liquid density](#density-girolami), [Packing-coefficient liquid
   density](#density-packing), [Bosque-Sales additive polarizability](#polarizability-bosque), [Crippen
   molar-refractivity polarizability](#polarizability-crippen), [D4-model polarizability](#polarizability-d4),
-  [xTB response polarizability (GFN1, GFN2)](#polarizability-xtb), [Sugden parachor](#parachor-sugden)
+  [xTB response polarizability (GFN1, GFN2)](#polarizability-xtb), [Sugden parachor](#parachor-sugden),
+  [Dimensionless liquid-state groups](#liquid-groups)
 - **Concepts:** [Dispersion corrections (D3, D3(BJ), D4, -D)](#dispersion), [Single point vs
   optimization](#single-point), [Boltzmann weighting](#boltzmann), [HOMO and LUMO energies](#homo-lumo),
   [Basis-set superposition error and gCP](#gcp), [Ranking conformers (which level picks the
@@ -1805,13 +1806,50 @@ six-ring 6.1, an ester group 60.0), in cm³ mol⁻¹ (mN/m)^¼. With a liquid de
 - **Dispersion:** Not applicable.
 - **Solvation:** None: a pure-liquid property.
 - **See also:** [Packing-coefficient liquid density](#density-packing), [Girolami liquid
-  density](#density-girolami)
+  density](#density-girolami), [Dimensionless liquid-state groups](#liquid-groups)
 - **References:**
   - Sugden. A relation between surface tension, density, and chemical composition. J. Chem. Soc., Trans. 125,
     1177-1189 (1924). [doi:10.1039/CT9242501177](https://doi.org/10.1039/CT9242501177)
   - Quayle. The parachors of organic compounds. An interpretation and catalogue. Chem. Rev. 53, 439-589
     (1953). [doi:10.1021/cr60166a003](https://doi.org/10.1021/cr60166a003)
 - **Also found as:** `sugden`, `parachor`, `parachor_sugden`
+
+<a id="liquid-groups"></a>
+
+### Dimensionless liquid-state groups
+
+> Pure numbers from α, μ, V, A and V\_m, and a Lifshitz σ: `lorentz_lorenz_bosque`, `sigma_scale_kT_mN_m`, ...
+
+With v\_m the volume of one molecule in the liquid (the [packing](#density-packing) molar volume / N\_A): the
+Lorentz-Lorenz function (4π/3)α/v\_m = (n²−1)/(n²+2) with [Bosque's](#polarizability-bosque) α and the
+refractive index it implies; the dipole orientation ratio μ²/(3·4πε₀kT) per v\_m; the packing fraction
+V\_vdW/v\_m; the sphericity π^⅓(6V)^⅔/A; the Hamaker constant from Lifshitz theory in Israelachvili's
+approximation and σ = A\_H/(24πD₀²); and kT/v\_m^⅔, the unit of the reduced surface tension σ\* = σ·v\_m^⅔/kT
+(Eötvös' rule, σ·V\_m^⅔ ∝ T\_c − T; corresponding states). They are written in every phase; the Analyze
+table's Features menu makes the same groups as formula columns for older runs.
+
+- **Good for:** Features of a σ model that has to extrapolate (PFAS are less polarizable per volume and less
+  spherical than most training liquids), and the reduced target σ\* in place of σ.
+- **Watch out:** The refractive index is within about 0.02 of measured n\_D for alkanes, perfluoroalkanes and
+  aromatics (tests/test\_liquid.py). The Lifshitz σ ignores H-bonding and is off by several mN/m: a feature,
+  not a prediction. The dipole groups need a dipole (xTB properties or a QM stage); polarizabilities from
+  GFN2-xTB run too high for the Lorentz-Lorenz function, so it uses Bosque's.
+- **Cost:** None: arithmetic on other descriptors.
+- **Dispersion:** Not applicable.
+- **Solvation:** The dipole is the phase's (ALPB in water); the other groups are the same in every phase.
+- **See also:** [Sugden parachor](#parachor-sugden), [Packing-coefficient liquid density](#density-packing),
+  [Bosque-Sales additive polarizability](#polarizability-bosque)
+- **References:**
+  - Israelachvili. Intermolecular and Surface Forces, 3rd ed. (Hamaker constants from Lifshitz theory; surface
+    energies). Academic Press ch. 13 (2011).
+    [doi:10.1016/C2009-0-21560-1](https://doi.org/10.1016/C2009-0-21560-1)
+  - Guggenheim. The principle of corresponding states. J. Chem. Phys. 13, 253-261 (1945).
+    [doi:10.1063/1.1724033](https://doi.org/10.1063/1.1724033)
+  - Bosque, Sales. Polarizabilities of solvents from the chemical composition. J. Chem. Inf. Comput. Sci. 42,
+    1154-1163 (2002). [doi:10.1021/ci025528x](https://doi.org/10.1021/ci025528x)
+- **Also found as:** `dimensionless groups`, `lorentz-lorenz`, `lorentz_lorenz_bosque`,
+  `refractive_index_bosque`, `hamaker`, `lifshitz`, `reduced surface tension`, `sigma_scale_kT_mN_m`, `packing
+  fraction`, `sphericity`
 
 ## Concepts
 

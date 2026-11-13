@@ -11,8 +11,11 @@ light row live here, by column, so 14,000 molecules with a few hundred columns s
     read_run_tables  a run folder's summary.csv and descriptors.csv, and the job table for built molecules those
                      two files miss (an interrupted or running batch writes them only at its end)
     write_csv, write_xlsx, tsv   exports (UTF-8 with a byte-order mark, so Excel reads µ and Å) and the clipboard
-    TableState       the user's column choices, formula columns and plot settings as JSON: in the window settings
-                     until the project document (UI-2) exists, then in the project
+    JoinSpec, read_join, csv_columns
+                     columns joined from a CSV file by id (measured targets that are not fields of the input, e.g.
+                     ``pubchem targets`` output): which file, which column holds the ids, which columns to bring in
+    TableState       the user's column choices, formula columns, joined files and plot settings as JSON: in the
+                     window settings until the project document (UI-2) exists, then in the project
 
 A value in a summary row or a descriptors dict is a number (int or float), text, or missing (None, "", NaN). A
 column whose values are all numbers is numeric; one text value makes the column text (CSV cells are parsed as
@@ -421,6 +424,89 @@ def write_xlsx(path: str | Path, headers: Sequence[str], rows: Iterable[Sequence
     return path
 
 
+# ============================================================================================ joins
+def norm_id(ident) -> str:
+    """How joined ids are matched to the table's: stripped, case-folded ("  LiTFSI " matches "litfsi")."""
+    return str(ident).strip().casefold()
+
+
+def _dialect(sample: str):
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=",;\t")
+    except csv.Error:
+        return csv.excel
+
+
+def _open_csv(path: str | Path):
+    path = Path(path).expanduser()
+    f = open(path, newline="", encoding="utf-8-sig")      # noqa: SIM115 - closed by the caller's ``with``
+    sample = f.read(16384)
+    f.seek(0)
+    return f, _dialect(sample)
+
+
+def csv_columns(path: str | Path) -> list[str]:
+    """The header of a CSV file (comma, semicolon or tab separated; UTF-8 with or without a byte-order mark)."""
+    f, dialect = _open_csv(path)
+    with f:
+        header = next(csv.reader(f, dialect), [])
+    return [h.strip() for h in header if h is not None]
+
+
+@dataclass
+class JoinSpec:
+    """Columns joined from a CSV file: ``columns`` of ``path`` (empty: all but the id column), matched on
+    ``id_column`` against the molecules' ids (``norm_id``). ``label`` names the file in the table (its stem)."""
+
+    path: str
+    id_column: str
+    columns: list[str] = field(default_factory=list)
+    label: str = ""
+
+    def __post_init__(self):
+        self.label = self.label or Path(self.path).stem
+
+
+@dataclass
+class JoinRead:
+    block: Block                       # ids as norm_id, one array per joined column
+    rows: int                          # data rows read
+    duplicates: int                    # rows whose id came again (the last one wins)
+    no_id: int                         # rows without an id
+
+
+def read_join(spec: JoinSpec) -> JoinRead:
+    """The joined columns of ``spec`` (any thread): numbers where the cells read as numbers (``parse_cell``)."""
+    f, dialect = _open_csv(spec.path)
+    by_id: dict[str, dict] = {}
+    rows = dup = no_id = 0
+    with f:
+        reader = csv.DictReader(f, dialect=dialect)
+        fields = [h.strip() if h else h for h in (reader.fieldnames or [])]
+        reader.fieldnames = fields
+        if spec.id_column not in fields:
+            raise ValueError(f"{spec.path}: no column {spec.id_column!r} (columns: {', '.join(map(str, fields))})")
+        want = [c for c in (spec.columns or fields) if c and c != spec.id_column]
+        missing = [c for c in want if c not in fields]
+        if missing:
+            raise ValueError(f"{spec.path}: no column {', '.join(map(repr, missing))}")
+        for row in reader:
+            rows += 1
+            ident = norm_id(row.get(spec.id_column) or "")
+            if not ident:
+                no_id += 1
+                continue
+            if ident in by_id:
+                dup += 1
+            by_id[ident] = {c: row.get(c) for c in want}
+    ids = list(by_id)
+    block = Block.from_rows(ids, [by_id[i] for i in ids])
+    for c in want:                       # a column with no value at all is still a (numeric, empty) column
+        if c not in block.columns:
+            block.columns[c] = np.full(len(ids), np.nan)
+    return JoinRead(block, rows, dup, no_id)
+
+
 # ============================================================================================ state
 @dataclass
 class FormulaSpec:
@@ -436,11 +522,13 @@ class TableState:
     VERSION = 1
     columns: dict[str, bool] = field(default_factory=dict)       # column key -> shown (the user's choices only)
     formulas: list[FormulaSpec] = field(default_factory=list)
-    plot: dict = field(default_factory=dict)                     # x, y, color (column keys), fit (bool)
+    plot: dict = field(default_factory=dict)                     # x, y, color (column keys), fit, parity (bool)
+    joins: list[JoinSpec] = field(default_factory=list)
 
     def to_json(self) -> str:
         return json.dumps({"version": self.VERSION, "columns": self.columns,
-                           "formulas": [asdict(f) for f in self.formulas], "plot": self.plot}, sort_keys=True)
+                           "formulas": [asdict(f) for f in self.formulas], "plot": self.plot,
+                           "joins": [asdict(j) for j in self.joins]}, sort_keys=True)
 
     @classmethod
     def from_json(cls, text) -> TableState:
@@ -458,4 +546,10 @@ class TableState:
             if isinstance(f, dict) and isinstance(f.get("name"), str) and isinstance(f.get("expression"), str):
                 formulas.append(FormulaSpec(f["name"], f["expression"], str(f.get("note") or "")))
         plot = d.get("plot") if isinstance(d.get("plot"), dict) else {}
-        return cls(columns={str(k): bool(v) for k, v in cols.items()}, formulas=formulas, plot=dict(plot))
+        joins = []
+        for j in d.get("joins") or ():
+            if isinstance(j, dict) and isinstance(j.get("path"), str) and isinstance(j.get("id_column"), str):
+                cols_j = [str(c) for c in j.get("columns") or () if isinstance(c, str)]
+                joins.append(JoinSpec(j["path"], j["id_column"], cols_j, str(j.get("label") or "")))
+        return cls(columns={str(k): bool(v) for k, v in cols.items()}, formulas=formulas, plot=dict(plot),
+                   joins=joins)

@@ -2,6 +2,29 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Projects: save and reopen a molecule list with its results, UI-2 (2026-11-13)
+- **File > New / Open / Open recent / Save / Save as / Close project** (Ctrl+N, Ctrl+Alt+O, Ctrl+S, Ctrl+Shift+S). A project is a `<name>.qbproj` folder:
+  - `project.json`: the build settings of the Pipeline dock, the Analyze table's state (columns, formula columns, joined files, plot), the workspace and the selected molecule;
+  - `molecules.jsonl`: each molecule's light row and its input, structure files with their coordinates;
+  - `runs/`: the project's run folders;
+  - `results/`: results that existed only in memory, such as an imported output.
+- **Paths inside the project are relative** (with "/"), so a moved or synced project opens on another machine. Paths outside it are absolute.
+- **Builds in a project** write into its `runs/` folder, every build through a run folder (one molecule too), so the project can always be resumed.
+- **Opening** shows the list at once. Off the GUI thread it then reads the job tables (molecules finished by a command-line resume since the save show as built) and the Analyze table's values. Build > Resume run folder continues the project's unfinished molecules.
+- **Unsaved changes** mark the title (`[*]`). New, Open, Close project and Quit (with a project open) ask whether to save them. Without a project, Quit does not ask, as before.
+- **Playback bar:** a Conformers / Molecules box. In Molecules it steps and plays through the list, in its order and filter.
+
+### Feature builder: dimensionless liquid-state groups, joined targets and a parity plot, DESC-3 (2026-11-13)
+- **New descriptors in every phase** (`chem/liquid.py`), from Bosque's α, the dipole, the van der Waals volume and area, and the packing molar volume. With v_m = V_m/N_A, one molecule's volume in the liquid:
+  - `lorentz_lorenz_bosque` = (4π/3)α/v_m = (n²−1)/(n²+2), and `refractive_index_bosque`: within 0.02 of n_D for hexane, perfluorohexane and benzene;
+  - `dipole_orientation_ratio`, `packing_fraction_vdw`, `sphericity_vdw`;
+  - `hamaker_lifshitz_zJ` and `sigma_lifshitz_mN_m`, Israelachvili's Lifshitz approximation: a feature, off by several mN/m;
+  - `sigma_scale_kT_mN_m` = kT/v_m^⅔, the unit of the reduced surface tension σ* = σ·v_m^⅔/kT.
+  - A run without a dipole (MMFF, no xTB properties) gets all but the dipole groups.
+- **Analyze table, Features:** the same groups as formula columns for run folders made before them (`analysis/features.py`; a group the run has as a descriptor is greyed out), ratios of α, μ, V and A, and the reduced target σ* of any column.
+- **Analyze table, Join...:** columns of a CSV file joined by id (case and spaces ignored; comma, semicolon or tab separated). Use it for measured surface tensions or densities, or `pubchem targets` output. The dialog counts the matching molecules. The file, its id column and the columns are part of the table's state and are read again at the next start; a missing file is reported and its columns left out.
+- **Plot, 1:1:** the parity view. It draws y = x on one range for both axes and gives MAE, RMSE, bias (y − x) and R² about the line (`formula.parity_stats`).
+- **Methods guide:** a `liquid-groups` entry. docs/SURFACE_TENSION.md has a new section, "Dimensionless groups and the reduced target".
 ### QM cubes: the grid widens until the 0.002 au density surface closes (2026-11-13)
 - **The problem.** An ESP test on CH2I2 (ωB97X-D/def2-SVP: iodine needs def2-SVP and its ECP, since 6-31G* has no iodine basis) left the surface descriptors empty. At Psi4's 4 bohr grid margin the density on the cube's faces was 0.0021 au, so the 0.002 au surface did not close (`OpenSurfaceError`).
 - **The fix.** The Psi4 driver recomputes the cubes with a margin 2 bohr wider while the faces still carry 0.002 au, up to 10 bohr. A note in the QM warnings says when the margin was widened. `cubes.overage_bohr` records the margin used.

@@ -127,6 +127,10 @@ def _solvent_tooltip(sv: solvents.Solvent) -> str:
     return f"{sv.label}: " + "; ".join(parts) + ". dxtb, AIMNet2 and MMFF94s run in the gas phase."
 
 
+#: the playback bar's Molecules mode: a row that is not built says why
+_STATUS_WORD = {"pending": "not built", "failed": "failed", "cancelled": "cancelled"}
+
+
 def _built(res) -> bool:
     """A result the views can show: built, with its molecule and at least one conformer."""
     return res is not None and res.status == "ok" and res.mol is not None and bool(res.conformers)
@@ -184,6 +188,7 @@ class MainWindow(QMainWindow):
         self.splitter.setCollapsible(1, False)
         self.playback = PlaybackBar(self, kind="Conformer")
         self.playback.indexChanged.connect(self._on_playback_index)
+        self.playback.modeChanged.connect(self._on_playback_mode)
         center = QWidget()
         center.setObjectName("center")
         center_lay = QVBoxLayout(center)
@@ -219,6 +224,7 @@ class MainWindow(QMainWindow):
             machine_monitor,
             machines_panel,
             plot_panel,
+            project_actions,
             review_panel,
             sketcher_dock,
             spectra_panel,
@@ -227,8 +233,8 @@ class MainWindow(QMainWindow):
             update_action,
         )
 
-        for panel in (spectra_panel, surface_panel, table_panel, plot_panel, import_action, machines_panel,
-                      machine_monitor, update_action, clipboard, sketcher_dock, review_panel):
+        for panel in (spectra_panel, surface_panel, table_panel, plot_panel, project_actions, import_action,
+                      machines_panel, machine_monitor, update_action, clipboard, sketcher_dock, review_panel):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
@@ -271,6 +277,10 @@ class MainWindow(QMainWindow):
         lay.addLayout(find)
         self.mol_list = MoleculeListView(self.model)
         self.mol_list.currentIdChanged.connect(self._on_molecule_selected)
+        self.mol_list.currentIdChanged.connect(self._sync_molecule_playback)
+        shown = self.mol_list.model()                # the filtered, sorted rows: what the Molecules mode steps
+        for sig in (shown.rowsInserted, shown.rowsRemoved, shown.modelReset, shown.layoutChanged):
+            sig.connect(self._sync_molecule_playback)
         lay.addWidget(self.mol_list)
         self._search_timer = QTimer(self)          # filter once typing pauses, not per keystroke
         self._search_timer.setSingleShot(True)
@@ -927,9 +937,46 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ playback bar and status bar
     def _on_playback_index(self, i: int) -> None:
-        """The playback bar moved: select that conformer (the table's selection shows it in both views)."""
+        """The playback bar moved: select that conformer (the table's selection shows it in both views), or, in its
+        Molecules mode, that row of the list."""
+        if self.playback.kind == "Molecule":
+            if 0 <= i < self.mol_list.count() and self.mol_list.currentRow() != i:
+                self.mol_list.setCurrentRow(i)
+            return
         if 0 <= i < self.conf_table.rowCount() and self.conf_table.currentRow() != i:
             self.conf_table.setCurrentCell(i, 0)
+
+    def _on_playback_mode(self, kind: str) -> None:
+        if kind == "Molecule":
+            self._sync_molecule_playback()
+        else:
+            res = self._shown_res
+            n = len(res.conformers) if res is not None and res.status == "ok" else 0
+            self.playback.set_count(n, self._conformer_detail)
+            if 0 <= self.conf_table.currentRow() < n:
+                self.playback.set_index(self.conf_table.currentRow())
+
+    def _sync_molecule_playback(self, *_args) -> None:
+        """The Molecules mode: the list's length (as filtered) and the selected row."""
+        if self.playback.kind != "Molecule":
+            return
+        n = self.mol_list.count()
+        if n != self.playback.count():
+            playing = self.playback.is_playing()
+            self.playback.set_count(n, self._molecule_detail)
+            if playing and n > 1:
+                self.playback.toggle_play()
+        row = self.mol_list.currentRow()
+        if 0 <= row < n:
+            self.playback.set_index(row)
+        else:
+            self.playback.refresh_label()
+
+    def _molecule_detail(self, i: int) -> str:
+        row = self.mol_list.row_at(i)
+        if row is None:
+            return ""
+        return row.id + ("" if row.status == "ok" else f" ({_STATUS_WORD.get(row.status, row.status)})")
 
     def _conformer_detail(self, i: int) -> str:
         res = self._shown_res
@@ -1656,13 +1703,14 @@ class MainWindow(QMainWindow):
                     self.conf_table.setItem(r, col, item)
         self.conf_table.blockSignals(False)
         n = len(res.conformers) if res and res.status == "ok" else 0
-        self.playback.set_count(n, self._conformer_detail)
+        if self.playback.kind == "Conformer":
+            self.playback.set_count(n, self._conformer_detail)
 
     def _on_conformer_selected(self, row, _col, _prow, _pcol) -> None:
         res = self._shown_res
         if res and 0 <= row < len(res.conformers) and not self._surface_preview:
             self._show_conformer(res, row, reset_camera=False)
-        if 0 <= row < self.playback.count():
+        if self.playback.kind == "Conformer" and 0 <= row < self.playback.count():
             self.playback.set_index(row)
         self._update_molecule_status()
 
@@ -1690,6 +1738,11 @@ class MainWindow(QMainWindow):
         rows = [self.model.row(i) for i in ids]
         cfg = self.current_config()
         settings_mod.save(self.s)
+        project_runs = self.project.runs_dir() if getattr(self, "project", None) is not None else None
+        if project_runs is not None:           # a project's builds write into it (UI-2), each through a run folder
+            from dataclasses import replace as _replace
+
+            cfg = _replace(cfg, output_dir=str(project_runs))
         if all(r.input is not None for r in rows):
             todo = [r.input for r in rows]
         else:       # rows of an opened run folder: their inputs are read from its job table on the worker thread
@@ -1698,10 +1751,12 @@ class MainWindow(QMainWindow):
             todo = partial(molecule_list.gather_inputs,
                            [(r.id, r.run_dir, r.input, r.smiles, r.name, r.source) for r in rows])
         run_dir = None
-        if len(rows) > 1 and cfg.write_files:  # a batch goes through a job table: resumable, results stay on disk
+        if (len(rows) > 1 or project_runs is not None) and cfg.write_files:
+            # a batch goes through a job table: resumable, results stay on disk (in a project: every build)
             from ..chem.pipeline import new_run_dir
 
-            run_dir = new_run_dir(cfg.output_dir or self.s.output_path(), f"batch_{len(rows)}")
+            run_dir = new_run_dir(cfg.output_dir or self.s.output_path(),
+                                  f"batch_{len(rows)}" if len(rows) > 1 else f"build_{rows[0].id}")
         self._start_worker(todo, cfg, run_dir, ids, total=len(ids), done=0)
 
     def _start_worker(self, todo, cfg: BuildConfig, run_dir: Path | None, ids: list[str], total: int,
@@ -2097,6 +2152,11 @@ class MainWindow(QMainWindow):
         """Never blocks: with work still running, cancel it, say so, and close again once every worker thread
         has stopped. (Waiting here froze the UI, and a QThread destroyed while running aborts the process,
         which could leave jobs.sqlite mid-write.) Cancellation takes effect at the pipeline's next checkpoint."""
+        project = getattr(self, "project", None)
+        if project is not None and self.worker is None and not self._quit_pending and \
+                not project.maybe_save("quit", ask_untitled=False):
+            event.ignore()                  # Cancel in the unsaved-changes question (an open project only, UI-2)
+            return
         self._probe_cancel.set()
         if self.worker is not None and not self._quit_pending:
             if QMessageBox.question(self, "Quit", "A build is running. Cancel it and quit?") != \

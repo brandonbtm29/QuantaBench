@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import textwrap
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -62,6 +63,13 @@ def stages_of(run_dir, mol_id, attempt=None):
 FAKE_CREST = r'''
 import json, os, signal, sys, time
 from pathlib import Path
+def _log_call(record):
+    """One file per call: two fake CRESTs appending to one log at once lose a line on Windows."""
+    folder = Path(os.environ["FAKE_CREST_LOG"])
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / f"{time.time_ns():020d}_{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(record))
+    os.replace(tmp, tmp.with_suffix(".json"))
 args = sys.argv[1:]
 if "--version" in args:
     print("       Version 3.0.2, fake")
@@ -77,10 +85,14 @@ while time.process_time() - c0 < float(os.environ.get("FAKE_CREST_BURN", "0")):
     pass
 time.sleep(float(os.environ.get("FAKE_CREST_SLEEP", "0")))
 Path("crest_conformers.xyz").write_text("\n".join([f"  {n}", "  -11.30"] + lines[2:2 + n]) + "\n")
-with open(os.environ["FAKE_CREST_LOG"], "a") as f:
-    f.write(json.dumps({"T": int(args[args.index("-T") + 1]), "atoms": n, "t0": t0, "t1": time.time()}) + "\n")
+_log_call({"T": int(args[args.index("-T") + 1]), "atoms": n, "t0": t0, "t1": time.time()})
 print(" CREST terminated normally.")
 '''
+
+
+def _calls(log: Path) -> list[dict]:
+    """The fake CREST's calls in the order they finished (one JSON file each)."""
+    return [json.loads(p.read_text()) for p in sorted(log.glob("*.json"))] if log.is_dir() else []
 
 
 @pytest.fixture
@@ -100,10 +112,10 @@ def fake_crest(tmp_path, monkeypatch):
         exe = folder / "crest"
         exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
         exe.chmod(0o755)
-    log = tmp_path / "crest_calls.jsonl"
+    log = tmp_path / "crest_calls"
     monkeypatch.setenv("QUANTABENCH_CREST", str(exe))
     monkeypatch.setenv("FAKE_CREST_LOG", str(log))
-    yield lambda: [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
+    yield lambda: _calls(log)
     external.clear_cache()
 
 

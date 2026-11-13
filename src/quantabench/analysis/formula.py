@@ -466,3 +466,17 @@ def linear_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float, float, int] 
     slope, intercept = np.polyfit(x, y, 1)
     _mae, _rmse, r2 = stats(y, slope * x + intercept)
     return float(slope), float(intercept), r2, int(len(x))
+
+
+def parity_stats(x: np.ndarray, y: np.ndarray) -> dict | None:
+    """How far y is from x (the 1:1 line; y a prediction of x): MAE, RMSE, bias (mean of y − x), R² about the 1:1
+    line (1 − Σ(y−x)² / Σ(x − x̄)²) and n, over the finite pairs; None for fewer than two."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    m = np.isfinite(x) & np.isfinite(y)
+    x, y = x[m], y[m]
+    if len(x) < 2:
+        return None
+    d = y - x
+    ss = float(np.sum((x - x.mean()) ** 2))
+    return {"mae": float(np.mean(np.abs(d))), "rmse": float(np.sqrt(np.mean(d ** 2))), "bias": float(np.mean(d)),
+            "r2": 1.0 - float(np.sum(d ** 2)) / ss if ss > 0 else float("nan"), "n": int(len(x))}
