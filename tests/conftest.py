@@ -16,7 +16,8 @@ HAS_DISPLAY = os.name == "nt" or sys.platform == "darwin" or bool(os.environ.get
 #: ``settings_location.json`` points at. That fallback once let a test overwrite the shared settings.json
 #: (2026-11-07: output_dir set to a pytest folder, the per-machine engine paths dropped).
 _SESSION_DIRS = {"QUANTABENCH_SETTINGS_DIR": "settings", "QUANTABENCH_WINDOW_STATE": "window_state.ini",
-                 "QUANTABENCH_CACHE_DIR": "cache", "QUANTABENCH_WORKER_STATE": "worker_state"}
+                 "QUANTABENCH_CACHE_DIR": "cache", "QUANTABENCH_WORKER_STATE": "worker_state",
+                 "QUANTABENCH_SCRATCH_DIR": "scratch"}
 _SESSION_ROOT: list[str] = []
 
 
@@ -75,6 +76,9 @@ def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("QUANTABENCH_CACHE_DIR", str(tmp_path / "cache"))      # program version cache
     # this machine's worker state (its pause file, DIST-7): a grid's local share and the GUI read it
     monkeypatch.setenv("QUANTABENCH_WORKER_STATE", str(tmp_path / "worker_state"))
+    # the scratch root (chem.external.scratch_root): every run sweeps what ended processes left there, which must
+    # never be the real one (Psi4 integrals and kept logs of the user's own runs)
+    monkeypatch.setenv("QUANTABENCH_SCRATCH_DIR", str(tmp_path / "scratch_root"))
     yield tmp_path
 
 

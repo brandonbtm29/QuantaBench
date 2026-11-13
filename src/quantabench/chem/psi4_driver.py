@@ -646,6 +646,28 @@ def frequencies(psi4, t: dict, mol0, pcm: bool, warnings: list[str]) -> dict:
     return out
 
 
+# ----------------------------------------------------------------------------------- memory
+def df_tensor_gb(nbf: int, naux: int) -> float:
+    """GB of the density-fitting three-index integrals (Q|mn), mn packed: what DF-SCF holds in memory when they fit
+    (MemDFJK), else on disk (DiskDFJK: slower, and as large in scratch). b03's 302-27-2, 45 heavy atoms with
+    wB97X-D/6-31G*: 784 basis functions, 4901 auxiliary, 12.1 GB; its DiskDFJK file was 15 GB."""
+    return float(naux) * nbf * (nbf + 1) / 2.0 * 8.0 / 1e9
+
+
+def df_check(psi4, mol, basis: str, memory_gb: float) -> dict | None:
+    """The basis-set sizes of a DF-SCF and whether its integrals fit this job's memory (None if Psi4 cannot build
+    the basis sets here). The integrals need memory next to the rest of the SCF: more than 3/4 of the job's
+    memory counts as not fitting."""
+    try:
+        nbf = int(psi4.core.BasisSet.build(mol, "ORBITAL", basis, quiet=True).nbf())
+        naux = int(psi4.core.BasisSet.build(mol, "DF_BASIS_SCF", "", "JKFIT", basis, quiet=True).nbf())
+    except Exception:  # noqa: BLE001 - informational only
+        return None
+    gb = df_tensor_gb(nbf, naux)
+    return {"nbf": nbf, "naux": naux, "tensor_gb": round(gb, 2), "memory_gb": memory_gb,
+            "fits": gb <= 0.75 * memory_gb}
+
+
 # ----------------------------------------------------------------------------------- main
 def run(t: dict) -> dict:
     timings: dict[str, float] = {}
@@ -689,6 +711,15 @@ def run(t: dict) -> dict:
     if pcm and t["task"] == "optimize":
         warnings.append("optimizations in the gas phase (Psi4 has no analytic PCM gradients); energies and "
                         "properties are PCM single points at those geometries")
+    df = df_check(psi4, mol, t["basis"], t["memory_gb"])
+    if df is not None:
+        result["df"] = df
+        if not df["fits"]:
+            msg = (f"DF-SCF: {df['nbf']} basis functions, {df['naux']} auxiliary; the three-index integrals take "
+                   f"about {df['tensor_gb']:.1f} GB, more than this job's {t['memory_gb']:g} GB allows, so Psi4 keeps "
+                   "them on disk (slower, and that much scratch); give the QM stage more memory (--qm-memory)")
+            say(msg)
+            warnings.append(msg)
 
     best = None
     for i, c in enumerate(confs):
@@ -789,6 +820,11 @@ def main(argv: list[str]) -> int:
         write_json(result_path, {"ok": False, "error": msg, "traceback": traceback.format_exc()})
         print(f"QuantaBench psi4 driver: {msg}", file=sys.stderr)
         return 1
+    finally:
+        psi4 = sys.modules.get("psi4")      # its scratch files (psi.<pid>.*), also after a failure
+        if psi4 is not None:
+            with contextlib.suppress(Exception):
+                psi4.core.clean()
     write_json(result_path, result)
     return 0
 

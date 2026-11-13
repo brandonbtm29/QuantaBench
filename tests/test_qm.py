@@ -200,14 +200,18 @@ if MODE == "crash":
     print("Segmentation fault (core dumped)")
     sys.exit(139)
 if MODE == "fail":
+    Path(f"psi.{os.getpid()}.97").write_bytes(b"\0" * 1000)        # DF integrals: the kept folder drops them
+    Path("output.dat").write_text("fake psi4 output\n")
     Path("result.json").write_text(json.dumps({"ok": False, "error": "SCF did not converge in 200 iterations"}))
     sys.exit(1)
 n = len(task["conformers"])
 energies = [-75.95 - 0.01 * i for i in range(n)]          # the last conformer is the lowest
-Path("output.dat").write_text("fake psi4 output\n")
+Path("output.dat").write_text("fake psi4 output\n" + ("  ==> DiskDFJK: Density-Fitted J/K Matrices <==\n"
+                                                       if MODE == "diskdf" else "  ==> MemDFJK <==\n"))
 out = {"ok": True, "program": "psi4", "program_version": "1.9.1", "level": task["method"] + "/" + task["basis"],
        "reference": "rhf", "task": task["task"], "solvent": task.get("solvent") or "", "warnings": ["fake warning"],
-       "timings": {"total": 0.1}, "conformers": []}
+       "timings": {"total": 0.1}, "conformers": [],
+       "df": {"nbf": 784, "naux": 4901, "tensor_gb": 12.07, "memory_gb": task["memory_gb"], "fits": MODE != "diskdf"}}
 for i, (c, e) in enumerate(zip(task["conformers"], energies)):
     rec = {"id": c["id"], "energy_hartree": e, "converged": True, "error": "", "seconds": 0.01}
     if task["task"] == "optimize":
@@ -351,6 +355,58 @@ def test_driver_failure_is_reported(tmp_path, monkeypatch):
         qm.run_stage(res, cs, _cfg())
     assert "job files kept in" in str(err.value)
     assert res.qm is None
+    [kept] = (tmp_path / "scratch").glob("psi4_water_*")               # its logs stay, Psi4's integrals go
+    assert (kept / "output.dat").is_file() and (kept / "task.json").is_file() and not list(kept.glob("psi.*"))
+
+
+def test_qm_memory_setting_and_df_on_disk(tmp_path, monkeypatch):
+    """--qm-memory (BuildConfig.qm_memory_gb) sets each Psi4 job's memory over the setting; a DF-SCF that kept its
+    integrals on disk (too little memory: slower, and as large in scratch) is said in the QM warnings."""
+    from quantabench import cli
+    from quantabench.chem import jobs
+
+    res, cs = _result(n_conf=1)
+    assert qm.build_task(res, cs, _cfg())["memory_gb"] == 1.0                   # this module's settings
+    assert qm.build_task(res, cs, _cfg(qm_memory_gb=16.0))["memory_gb"] == 16.0
+    s = settings_mod.load()
+    s.engines.qm_memory_gb = 6.0
+    settings_mod.save(s)
+    assert qm.memory_gb(_cfg()) == 6.0 and qm.memory_gb(_cfg(qm_memory_gb=12.0)) == 12.0
+    c = cli.config_from_args(cli.build_parser().parse_args(["build", "CCO", "--qm", "hf/sto-3g", "--qm-memory", "20"]))
+    assert c.qm_memory_gb == 20.0 and "qm_memory_gb" not in jobs.SCIENCE_FIELDS      # a resource, not science
+    with pytest.raises(SystemExit, match="more than 0"):
+        cli.config_from_args(cli.build_parser().parse_args(["build", "CCO", "--qm-memory", "0"]))
+    assert qm.df_algorithm("  ==> DiskDFJK: Density-Fitted J/K Matrices <==") == "disk"
+    assert qm.df_algorithm("  ==> MemDFJK: Density-Fitted J/K Matrices <==") == "memory"
+    assert qm.df_algorithm("no JK here") == ""
+
+    _fake_python(tmp_path, monkeypatch, "diskdf")
+    qm.run_stage(res, cs, _cfg(qm_top=1))
+    assert res.qm["df"]["algorithm"] == "disk" and res.qm["memory_gb"] == 6.0 and res.qm["df"]["naux"] == 4901
+    assert any(w.startswith("DF-SCF kept its integrals on disk (6 GB per Psi4 job") for w in res.qm["warnings"])
+    _fake_python(tmp_path, monkeypatch, "ok")
+    qm.run_stage(res, cs, _cfg(qm_top=1, qm_memory_gb=16.0))
+    assert res.qm["df"]["algorithm"] == "memory" and res.qm["memory_gb"] == 16.0
+    assert not any(w.startswith("DF-SCF") for w in res.qm["warnings"])
+
+
+def test_driver_df_check():
+    """The driver says before the SCF when the DF integrals will not fit this job's memory (b03's 302-27-2:
+    784 basis functions, 4901 auxiliary, 12.1 GB; a 15 GB DiskDFJK file with 4 GB per job)."""
+    from types import SimpleNamespace
+
+    assert psi4_driver.df_tensor_gb(784, 4901) == pytest.approx(12.07, abs=0.01)
+    sizes = {"ORBITAL": 784, "DF_BASIS_SCF": 4901}
+
+    def build(mol, key, *a, **k):
+        assert k.get("quiet") is True
+        return SimpleNamespace(nbf=lambda: sizes[key])
+
+    fake = SimpleNamespace(core=SimpleNamespace(BasisSet=SimpleNamespace(build=build)))
+    small = psi4_driver.df_check(fake, None, "6-31g*", 4.0)
+    assert small == {"nbf": 784, "naux": 4901, "tensor_gb": 12.07, "memory_gb": 4.0, "fits": False}
+    assert psi4_driver.df_check(fake, None, "6-31g*", 20.0)["fits"]
+    assert psi4_driver.df_check(SimpleNamespace(), None, "6-31g*", 4.0) is None       # no basis sets: no check
 
 
 def test_driver_crash_without_result(tmp_path, monkeypatch):
@@ -467,6 +523,8 @@ def test_psi4_water_hf_properties_and_cubes(psi4_python):
     assert all(Path(q["files"][k]).stat().st_size > 1000 for k in ("density", "esp", "log"))
     assert res.descriptors["qm_homo_ev"] == p["homo_ev"]
     assert any("QM: conformer 2/2" in line for line in lines)
+    # the driver's DF check (psi4.core.BasisSet.build): def2-SVP water has 24 basis functions; in memory
+    assert q["df"]["nbf"] == 24 and q["df"]["naux"] > 24 and q["df"]["fits"] and q["df"]["algorithm"] == "memory"
 
 
 @pytest.mark.external

@@ -95,6 +95,9 @@ class BuildConfig:
     # keep the density/ESP cube files after the surface descriptors and the ESP profile are computed (the Surfaces
     # panel draws the QM surface from them; ~16 MB per molecule). False deletes them: files only, not science
     qm_keep_cubes: bool = True
+    # memory per Psi4 job, GB (0 = settings.engines.qm_memory_gb). Too little and DF-SCF keeps its integrals on
+    # disk: slower, and 10-20 GB of scratch for a large molecule. The lane plan fits lanes to it. A resource
+    qm_memory_gb: float = 0.0
     qm_program: str = "psi4"
     threads: int = 0                      # 0 = auto: the logical threads minus free_threads (quantabench.priority)
     # this machine's run priority ("normal" | "low" | "background") and the logical threads the automatic budgets
