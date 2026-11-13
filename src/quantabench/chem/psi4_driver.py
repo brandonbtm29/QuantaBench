@@ -489,23 +489,40 @@ def polarizability(psi4, t: dict, mol, wfn, pcm: bool, warnings: list[str]) -> d
     return res
 
 
+CUBE_ISO_AU = 0.002            # the density isosurface the surface descriptors use (chem.surfaces)
+CUBE_OVERAGE_STEP_BOHR = 2.0   # a cube whose faces still carry that density is recomputed this much wider ...
+CUBE_OVERAGE_MAX_BOHR = 10.0   # ... up to this margin around the atoms
+
+
 def cubes(psi4, t: dict, wfn, warnings: list[str]) -> dict:
+    """Density and ESP cubes of ``wfn``. The 0.002 au density surface must close inside the grid: when the
+    density on the cube's faces still reaches it (diffuse densities: iodine with def2-SVP reaches 0.0021 au at the
+    default 4 bohr margin), the cubes are recomputed with a margin 2 bohr wider, up to 10 bohr."""
     folder = Path("cubes")
     folder.mkdir(exist_ok=True)
     s, o = t["cube_spacing_bohr"], t["cube_overage_bohr"]
-    psi4.set_options({"cubeprop_tasks": ["density", "esp"], "cubic_grid_spacing": [s, s, s],
-                      "cubic_grid_overage": [o, o, o], "cubeprop_filepath": str(folder)})
-    psi4.cubeprop(wfn)
-    density, esp = folder / "Dt.cube", folder / "ESP.cube"
-    if not density.is_file() or not esp.is_file():
-        raise RuntimeError(f"cubeprop wrote no Dt.cube/ESP.cube (found {sorted(p.name for p in folder.iterdir())})")
-    for extra in ("Da.cube", "Db.cube", "Ds.cube"):
-        (folder / extra).unlink(missing_ok=True)
-    shape, data = read_cube_header_and_data(density)
-    edge = boundary_max(data)
-    if edge >= 0.002:
-        warnings.append(f"the 0.002 au density isosurface reaches the cube boundary (max density there {edge:.4f} au); "
-                        "increase cube_overage_bohr")
+    while True:
+        psi4.set_options({"cubeprop_tasks": ["density", "esp"], "cubic_grid_spacing": [s, s, s],
+                          "cubic_grid_overage": [o, o, o], "cubeprop_filepath": str(folder)})
+        psi4.cubeprop(wfn)
+        density, esp = folder / "Dt.cube", folder / "ESP.cube"
+        if not density.is_file() or not esp.is_file():
+            raise RuntimeError(f"cubeprop wrote no Dt.cube/ESP.cube (found {sorted(p.name for p in folder.iterdir())})")
+        for extra in ("Da.cube", "Db.cube", "Ds.cube"):
+            (folder / extra).unlink(missing_ok=True)
+        shape, data = read_cube_header_and_data(density)
+        edge = boundary_max(data)
+        if edge < CUBE_ISO_AU or o + CUBE_OVERAGE_STEP_BOHR > CUBE_OVERAGE_MAX_BOHR + 1e-9:
+            break
+        say(f"cubes: the {CUBE_ISO_AU} au density surface reaches the grid's faces at a {o:g} bohr margin (density "
+            f"there {edge:.4f} au); recomputing with {o + CUBE_OVERAGE_STEP_BOHR:g} bohr")
+        o += CUBE_OVERAGE_STEP_BOHR
+    if edge >= CUBE_ISO_AU:
+        warnings.append(f"the 0.002 au density isosurface reaches the cube boundary (max density there {edge:.4f} au) "
+                        f"even with a {o:g} bohr margin; increase cube_overage_bohr")
+    elif o > t["cube_overage_bohr"]:
+        warnings.append(f"cubes: the grid's margin was widened from {t['cube_overage_bohr']:g} to {o:g} bohr so that "
+                        "the 0.002 au density surface closes inside it")
     return {"density": str(density), "esp": str(esp), "shape": list(shape), "spacing_bohr": s, "overage_bohr": o,
             "boundary_density_max_au": edge, "n_points": int(np.prod(shape))}
 

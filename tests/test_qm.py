@@ -158,6 +158,56 @@ def test_driver_homo_lumo_and_cube_boundary(tmp_path):
     assert psi4_driver.boundary_max(back) == pytest.approx(0.001)
 
 
+def _cube_text(data: np.ndarray) -> str:
+    lines = ["cube", "comment", "    1    0.000000    0.000000    0.000000",
+             f"    {data.shape[0]}    0.200000    0.000000    0.000000",
+             f"    {data.shape[1]}    0.000000    0.200000    0.000000",
+             f"    {data.shape[2]}    0.000000    0.000000    0.200000", "   53    0.000000    0.000000    0.000000    0.000000"]
+    vals = data.ravel()
+    lines += [" ".join(f"{v:.5E}" for v in vals[i:i + 6]) for i in range(0, vals.size, 6)]
+    return "\n".join(lines) + "\n"
+
+
+class _CubePsi4:
+    """cubeprop of a diffuse density: on the grid's faces 0.0021 au at a 4 bohr margin, falling 10x per 2 bohr
+    (iodine with def2-SVP reached 0.0021 au at Psi4's default margin, 2026-11-13)."""
+
+    def __init__(self, decay: float = 10.0):
+        self.opts, self.calls, self.decay = {}, [], decay
+
+    def set_options(self, opts):
+        self.opts.update(opts)
+
+    def cubeprop(self, wfn):
+        o = self.opts["cubic_grid_overage"][0]
+        self.calls.append(o)
+        edge = 0.0021 / self.decay ** ((o - 4.0) / 2.0)
+        data = np.full((5, 5, 5), edge)
+        data[2, 2, 2] = 0.3
+        folder = Path(self.opts["cubeprop_filepath"])
+        for name in ("Dt.cube", "ESP.cube", "Da.cube"):
+            (folder / name).write_text(_cube_text(data))
+
+
+def test_cubes_widen_the_grid_until_the_density_surface_closes(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    t = {"cube_spacing_bohr": 0.2, "cube_overage_bohr": 4.0}
+    fake, warnings = _CubePsi4(), []
+    c = psi4_driver.cubes(fake, t, None, warnings)
+    assert fake.calls == [4.0, 6.0] and c["overage_bohr"] == 6.0 and c["boundary_density_max_au"] < 0.002
+    assert not (tmp_path / "cubes" / "Da.cube").exists()
+    assert any("widened from 4 to 6 bohr" in w for w in warnings) and not any("increase" in w for w in warnings)
+    # a density that never closes: up to 10 bohr, then the warning as before
+    fake, warnings = _CubePsi4(decay=1.0), []
+    c = psi4_driver.cubes(fake, t, None, warnings)
+    assert fake.calls == [4.0, 6.0, 8.0, 10.0] and c["overage_bohr"] == 10.0
+    assert any("even with a 10 bohr margin; increase cube_overage_bohr" in w for w in warnings)
+    # a compact one: one cubeprop, no note
+    fake, warnings = _CubePsi4(), []
+    c = psi4_driver.cubes(fake, {**t, "cube_overage_bohr": 6.0}, None, warnings)
+    assert fake.calls == [6.0] and warnings == []
+
+
 # ----------------------------------------------------------------------------- fake Psi4
 # HF/def2-SVP water from Psi4 1.9.1 (optimized): Hessian in Eh/bohr², dipole derivatives (3N x 3) in e,
 # and Psi4's own frequencies (cm-1) and IR intensities (km/mol) for comparison.
