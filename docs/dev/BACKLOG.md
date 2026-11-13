@@ -49,7 +49,27 @@ Depends on: none (everything else in the UI plugs into this, so it goes first).
 - Acceptance: all existing features reachable, existing tests pass, new tests for workspace switching
   and playback stepping, screenshots of each workspace committed in the PR.
 
-## UI-2: Project document model · ready
+## UI-2: Project document model · in-PR 2026-11-13 (branch `feat/project-documents`, stacked on DESC-3)
+Brandon (2026-11-13): "I'd like you to also move onto the other UI-2 as well".
+Done in the branch:
+- `quantabench/project.py`: the `.qbproj` folder: `project.json` (format, version, name, times, the build settings,
+  the table's state, workspace, selected molecule; keys of a newer version are kept), `molecules.jsonl` (light rows
+  and inputs), `runs/` and `results/`. Relative paths with "/" inside the project, atomic writes, `ProjectError`
+  for a newer version or a damaged file.
+- `gui/project_actions.py`: File > New project (Ctrl+N), Open project... (Ctrl+Alt+O), Open recent project, Save
+  project (Ctrl+S), Save project as... (Ctrl+Shift+S), Close project. It also handles:
+  - the `[*]` title mark and the unsaved-changes question (New, Open, Close, and Quit with a project open);
+  - pinned results written to `results/` on save;
+  - builds into the project's `runs/` (every build through a run folder);
+  - on open, statuses that changed in the job tables since the save, and the Analyze table's values read off the
+    GUI thread (`TablePanel.read_tables`);
+  - Resume (the newest run folder with unfinished molecules).
+- The playback bar's Conformers / Molecules box: it steps (and plays) through the list in its order and filter.
+- Tests: `tests/test_project.py` (the format, a moved project, Windows separators, versions; the window: save and
+  reopen with results and the table, pinned results, a half-finished project resumed, the question, the playback
+  Molecules mode). Screenshots: `docs/dev/screenshots/UI-2/`.
+Left for later: Save as copies the run folders (now they stay where they are and are referenced); the Library
+workspace listing projects; a project's own settings beyond the build settings (Display units, radii).
 Depends on: UI-1.
 - A project (`*.qbproj` folder: `project.json` + the existing per-run `jobs.sqlite` + result folders)
   holding many molecules, their inputs, results and the build settings used. New / Open / Save /

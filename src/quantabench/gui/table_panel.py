@@ -846,6 +846,9 @@ class SheetView(QTableView):
 class TablePanel(QWidget):
     """The Table dock's widget (module docstring)."""
 
+    #: the table's state was saved (its columns, formulas, joined files or the plot changed): a project has changes
+    stateSaved = Signal()
+
     def __init__(self, win, parent=None):
         super().__init__(parent)
         self.win = win
@@ -855,6 +858,7 @@ class TablePanel(QWidget):
         self.last_export: Path | None = None
         self._syncing = False
         self._reading: Path | None = None
+        self._read_token = 0                          # project reads (read_tables): only the newest one merges
         self._widths: dict[str, int] = {}
         self._kept: tuple[str, str, int, int] | None = None
 
@@ -985,6 +989,62 @@ class TablePanel(QWidget):
                 self._update_count()
 
         workers.start(workers.FunctionWorker(sheet.read_run_tables, folder), self.win, on_done=done, on_failed=failed)
+
+    def read_tables(self, run_dirs, rows=()) -> None:
+        """A project's values (UI-2), on a worker thread: the summary and descriptor tables of each run folder in
+        ``run_dirs`` and the results of ``rows`` that live in a folder of their own (a project's results/), merged
+        into the table when all are read. A newer call (another project) makes an older one's values be dropped."""
+        from . import workers
+
+        self._read_token += 1
+        token = self._read_token
+        folders = [str(d) for d in run_dirs]
+        singles = [(r.id, r.folder, r.input) for r in rows]
+        if not folders and not singles:
+            return
+        self._reading = Path(folders[0]) if folders else Path(singles[0][1])
+        self._update_count()
+
+        def read():
+            from ..chem import export
+
+            blocks = []
+            for d in folders:
+                try:
+                    blocks.append(sheet.read_run_tables(d))
+                except (OSError, ValueError) as exc:
+                    blocks.append(f"{d}: {exc}")
+            got_ids, got_rows = [], []
+            for ident, folder, inp in singles:
+                try:
+                    res = export.read_molecule(Path(folder), ident, inp)
+                except (OSError, ValueError, KeyError):
+                    continue
+                got_ids.append(ident)
+                got_rows.append(sheet.result_values(res))
+            if got_ids:
+                blocks.append(sheet.Block.from_rows(got_ids, got_rows, parse=False))
+            return blocks
+
+        def done(blocks) -> None:
+            if token != self._read_token:
+                return
+            self._reading = None
+            for b in blocks:
+                if isinstance(b, str):
+                    self.win.log(f"Table: could not read {b}")
+                else:
+                    self.store.merge(b)
+            self.model.refresh()
+            self._update_count()
+
+        def failed(msg) -> None:
+            if token == self._read_token:
+                self._reading = None
+                self.win.log(f"Table: could not read the project's values: {msg}")
+                self._update_count()
+
+        workers.start(workers.FunctionWorker(read), self.win, on_done=done, on_failed=failed)
 
     def reading(self) -> bool:
         return self._reading is not None
@@ -1296,6 +1356,7 @@ class TablePanel(QWidget):
 
     def save_state(self) -> None:
         store_state(self.state())
+        self.stateSaved.emit()
 
 
 def load_state() -> TableState:
