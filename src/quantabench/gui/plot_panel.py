@@ -4,6 +4,8 @@
   display unit); **Colour** by a third (viridis, missing values grey). The points are the rows the table shows, so
   the table's filter filters the plot too; rows without both values are left out.
 - **Fit line:** the least-squares line with its slope, intercept, R² and n (``formula.linear_fit``).
+- **1:1 (parity):** y against x as a prediction against its target: the y = x line, both axes on one range, and
+  MAE, RMSE, bias (mean y − x) and R² about the 1:1 line (``formula.parity_stats``; DESC-3).
 - **Click a point** to select that molecule (in the Molecules dock and the table); the selected molecule is ringed.
   Hovering a point shows its molecule and values.
 - The choices are part of the table's state (``TablePanel.plot_settings``), kept with it.
@@ -14,7 +16,16 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDockWidget, QGridLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDockWidget,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..analysis import formula as fm
 from .selection import ACCENT_HEX as ACCENT  # the selection's amber, as in the 2D and 3D views
@@ -50,6 +61,12 @@ class PlotPanel(QWidget):
         self.fit_box.setToolTip("Least-squares line y = a·x + b, with R² and n")
         self.fit_box.setChecked(True)
         self.fit_box.toggled.connect(self._on_choice)
+        self.parity_box = QCheckBox("1:1")
+        self.parity_box.setObjectName("plot_parity")
+        self.parity_box.setToolTip("Parity view: y as a prediction of x. The y = x line on one range for both axes, "
+                                   "with MAE, RMSE, bias (y − x) and R² about the line")
+        self.parity_box.toggled.connect(self._on_choice)
+        self.parity_info: dict | None = None
         self.stats = QLabel()
         self.stats.setObjectName("plot_stats")
         self.stats.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -69,6 +86,8 @@ class PlotPanel(QWidget):
         pi.addItem(self.scatter)
         self.line = pg.PlotDataItem()
         pi.addItem(self.line)
+        self.diagonal = pg.PlotDataItem()
+        pi.addItem(self.diagonal)
         self.marker = pg.ScatterPlotItem(size=16, pxMode=True, brush=None, pen=pg.mkPen(ACCENT, width=2.5))
         self.marker.setZValue(10)
         pi.addItem(self.marker)
@@ -80,7 +99,12 @@ class PlotPanel(QWidget):
         for r, c, label, box in ((0, 0, "X", self.x_box), (0, 2, "Y", self.y_box), (1, 0, "Colour", self.c_box)):
             grid.addWidget(QLabel(label), r, c)
             grid.addWidget(box, r, c + 1)
-        grid.addWidget(self.fit_box, 1, 2, 1, 2)
+        checks = QHBoxLayout()
+        checks.setContentsMargins(0, 0, 0, 0)
+        checks.addWidget(self.fit_box)
+        checks.addWidget(self.parity_box)
+        checks.addStretch(1)
+        grid.addLayout(checks, 1, 2, 1, 2)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
         lay = QVBoxLayout(self)
@@ -133,6 +157,7 @@ class PlotPanel(QWidget):
                 i = box.findData(want)
                 box.setCurrentIndex(i if i >= 0 else 0)
             self.fit_box.setChecked(bool(st.get("fit", True)))
+            self.parity_box.setChecked(bool(st.get("parity", False)))
         finally:
             self._filling = False
 
@@ -141,17 +166,21 @@ class PlotPanel(QWidget):
             return
         st = self._settings()
         st.update(x=self.x_box.currentData() or "", y=self.y_box.currentData() or "",
-                  color=self.c_box.currentData() or NONE, fit=self.fit_box.isChecked())
+                  color=self.c_box.currentData() or NONE, fit=self.fit_box.isChecked(),
+                  parity=self.parity_box.isChecked())
         self.table.save_state()
         self.redraw()
 
-    def set_axes(self, x: str, y: str, color: str = NONE, fit: bool | None = None) -> None:
+    def set_axes(self, x: str, y: str, color: str = NONE, fit: bool | None = None,
+                 parity: bool | None = None) -> None:
         """Choose the columns by key (tests and scripts); a column the table does not have yet is kept as the choice
         and used once it has it."""
         st = self._settings()
         st.update(x=x, y=y, color=color or NONE)
         if fit is not None:
             st["fit"] = bool(fit)
+        if parity is not None:
+            st["parity"] = bool(parity)
         self.table.save_state()
         self.fill_boxes()
         self.redraw()
@@ -171,6 +200,8 @@ class PlotPanel(QWidget):
         xk, yk, ck = self.x_box.currentData(), self.y_box.currentData(), self.c_box.currentData()
         pi = self.plot.getPlotItem()
         self.fit_info = None
+        self.parity_info = None
+        self.diagonal.setData([], [])
         if not xk or not yk or self.model.column(xk) is None or self.model.column(yk) is None:
             self.scatter.setData([])
             self.line.setData([], [])
@@ -226,6 +257,20 @@ class PlotPanel(QWidget):
                 self.line.setData([], [])
         else:
             self.line.setData([], [])
+        if self.parity_box.isChecked() and n:
+            par = fm.parity_stats(x, y)
+            self.parity_info = par
+            lo, hi = float(min(x.min(), y.min())), float(max(x.max(), y.max()))
+            pad = 0.04 * (hi - lo or abs(hi) or 1.0)
+            lo, hi = lo - pad, hi + pad
+            self.diagonal.setData([lo, hi], [lo, hi], pen=pg.mkPen(c["muted"], width=1.5, style=Qt.PenStyle.DashLine))
+            pi.setXRange(lo, hi, padding=0)
+            pi.setYRange(lo, hi, padding=0)
+            if par is not None:
+                text += (f"\n1:1    MAE = {par['mae']:.4g}    RMSE = {par['rmse']:.4g}    bias (y − x) = "
+                         f"{par['bias']:+.4g}    R² = {par['r2']:.4f}    n = {par['n']:,}")
+        elif not self.parity_box.isChecked():
+            pi.enableAutoRange()
         self.stats.setText(text)
         self._mark(self.win.mol_list.current_id())
 

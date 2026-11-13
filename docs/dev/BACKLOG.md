@@ -1162,6 +1162,26 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   tension values to train on"). Next: Jasper's coefficients (the `chemicals` package) as a second, independent
   value per molecule; ThermoML.
 
+### DESC-3: Feature builder (dimensionless groups, joined targets, parity plot) · in-PR 2026-11-13 (branch `feat/feature-builder`)
+Brandon (2026-11-13): "Maybe certain combinations of those three terms (polarizability, dipole, and molecular
+volume) or ratios would be useful for predictions? Maybe we could do some unit dimensionalization?" and "integrating
+a feature building into QuantaBench would be a great idea".
+Done in the branch:
+- `chem/liquid.py`: the Lorentz-Lorenz function with Bosque's α and the refractive index it implies, the dipole
+  orientation ratio, packing fraction, sphericity, the Lifshitz Hamaker constant and σ, and kT/v_m^⅔, the unit of the
+  reduced surface tension. Written in every phase by the descriptors step.
+- The Analyze table: **Features** (the same groups as formula columns for older runs, ratios of α, μ, V and A, the
+  reduced target σ* of any column; `analysis/features.py`), **Join...** (columns of a CSV by id, kept in the
+  table's state), and the Plot dock's **1:1** parity view (MAE, RMSE, bias, R² about y = x).
+- The method guide entry `liquid-groups`, docs/SURFACE_TENSION.md "Dimensionless groups and the reduced target".
+- Tests: `tests/test_liquid.py`, `tests/test_gui_table.py::test_feature_builder_join_and_parity_persist`; screenshots in
+  `docs/dev/screenshots/DESC-3/` (`scratch/shot_desc3.py`, not committed).
+Follow-ups (ready):
+- A Model dock: ridge / elastic net / random forest with k-fold and leave-class-out CV, the reduced-target switch,
+  coefficients and the parity plot, on the table's columns (today: the scripts and Fit...).
+- Join on an imported field (CAS, InChIKey) as well as the id; a join by InChIKey would match across id schemes.
+- An Onsager static dielectric in place of Debye's for polar liquids (the zero-frequency Hamaker term).
+
 ### DESC-2: Density and polarizability estimates · done 2026-11-11 (branch `feat/density-polarizability`)
 Why: b02's quantum parachor failed because V_vdW is not the molar volume and the minimal-basis xTB polarizability
 is half of DFT's. `chem/estimates.py` adds, for every molecule and phase: Girolami and packing-coefficient densities

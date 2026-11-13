@@ -31,7 +31,7 @@ from rdkit import Chem
 
 from .. import priority, resources
 from ..settings import Settings
-from . import batch_opt, engines, estimates, export, properties, telemetry
+from . import batch_opt, engines, estimates, export, liquid, properties, telemetry
 from . import conformers as confs
 from . import descriptors as desc
 from . import import_options as imp
@@ -761,6 +761,10 @@ def _estimates(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg
         return
     result.descriptors.update(values)
     result.notes.extend(notes)
+    try:      # the dimensionless liquid-state groups of these and the descriptors (chem.liquid, DESC-3)
+        result.descriptors.update(liquid.from_descriptors(result.descriptors, cfg.temperature_k))
+    except Exception as exc:  # noqa: BLE001 - extras: note and go on
+        result.notes.append(f"liquid-state groups skipped ({type(exc).__name__}: {exc})")
 
 
 def _gfn2_polarizability(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,

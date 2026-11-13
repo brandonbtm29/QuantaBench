@@ -758,3 +758,87 @@ def test_run_folder_values_are_read_off_the_gui_thread(tmp_path, built, monkeypa
         assert model.column("inchikey") is not None and not model.column("inchikey").numeric
     finally:
         _close(app, w)
+
+
+@needs_display
+def test_feature_builder_join_and_parity_persist(tmp_path, built):
+    """DESC-3: the Features menu (presets that the run already has as descriptors are disabled), a CSV joined by id,
+    the reduced target of the joined column, the 1:1 plot, and all of it again after a restart."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from quantabench.chem import liquid as lq
+
+    app = _app()
+    csv_path = tmp_path / "measured.csv"
+    # ids as typed by hand: another case and stray spaces still match; one id the table does not have
+    csv_path.write_text("ID,sigma_mN_m,rho\n ETHANOL ,21.97,0.785\nbutanol,24.2,0.806\nTFA,13.5,1.489\n"
+                        "acetone,23.0,0.784\n", encoding="utf-8")
+    w = _window(tmp_path)
+    try:
+        res = _fresh(built)
+        w.add_inputs([r.input for r in res], built=res)
+        panel, model = w.table_panel, w.table_panel.model
+        assert _wait(app, lambda: model.rowCount() == len(res), 5)
+        panel._fill_features_menu()
+        acts = {a.text().rsplit("[", 1)[-1].rstrip("]"): a for a in panel.features_menu.actions() if "[" in a.text()}
+        assert not acts["LL_bosque"].isEnabled() and "lorentz_lorenz_bosque" in acts["LL_bosque"].toolTip()
+        assert not acts["ORI"].isEnabled() and "dipole" in acts["ORI"].toolTip()         # MMFF: no dipole
+        assert acts["alpha_per_V"].isEnabled()
+        cols = panel.add_features(["alpha_per_V", "A_per_V23"])
+        assert [c.alias for c in cols] == ["alpha_per_V", "A_per_V23"]
+        want = model.values("polarizability_bosque_A3") / model.values("vdw_volume_A3_best")
+        np.testing.assert_allclose(model.values("fx:alpha_per_V"), want)
+        shown = []
+        QMessageBox.information = staticmethod(lambda *a, **k: shown.append(a[2]))
+        try:
+            assert panel.add_features(["ORI"]) == [] and "needs a dipole" in shown[-1]
+        finally:
+            del QMessageBox.information
+        # Join...: the dialog counts the matches; OK joins the chosen columns
+        dlg = panel.join_dialog(str(csv_path), modal=False)
+        assert dlg.id_box.currentData() == "ID" and "3 of the table's 5 molecules match" in dlg.status.text()
+        dlg.accept()
+        assert dlg.joined == ["sigma_mN_m", "rho"]
+        key = "join:measured::sigma_mN_m"
+        assert model.column(key).group == "Joined from files" and model.column(key).alias == "sigma_mN_m"
+        sig = model.values(key)
+        assert np.isfinite(sig).sum() == 3 and sig[[r.input.id for r in res].index("TFA")] == pytest.approx(13.5)
+        star = panel.reduced_target_dialog("sigma_mN_m")
+        assert [c.alias for c in star] == ["sigma_mN_m_star"]
+        np.testing.assert_allclose(model.values("fx:sigma_mN_m_star"), sig / model.values("sigma_scale_kT_mN_m"))
+        # the parity view: the joined σ against a formula "prediction" (σ·1.1)
+        model.add_formula("pred", "sigma_mN_m*1.1")
+        w.plot_panel.set_axes(key, "fx:pred", parity=True)
+        assert _wait(app, lambda: "1:1" in w.plot_panel.stats.text(), 5), w.plot_panel.stats.text()
+        par = w.plot_panel.parity_info
+        assert par["n"] == 3 and par["bias"] == pytest.approx(np.nanmean(sig) * 0.1)
+        assert w.plot_panel.parity_box.isChecked()
+    finally:
+        _close(app, w)
+    w = _window(tmp_path)
+    try:
+        res = _fresh(built)
+        w.add_inputs([r.input for r in res], built=res)
+        model = w.table_panel.model
+        assert _wait(app, lambda: model.rowCount() == len(res), 5)
+        assert [j.label for j in model.joins()] == ["measured"] and model.join_matches("measured") == 3
+        assert [f.name for f in model.formulas()] == ["alpha_per_V", "A_per_V23", "sigma_mN_m_star", "pred"]
+        assert np.isfinite(model.values("fx:sigma_mN_m_star")).sum() == 3
+        assert w.plot_panel.parity_box.isChecked() and w.plot_panel.x_box.currentData() == key
+        assert lq.COLUMNS[0] in [c.key for c in model.columns()]
+    finally:
+        _close(app, w)
+    # the file is gone at the next start: the join stays in the state (and says why), its columns do not
+    csv_path.unlink()
+    w = _window(tmp_path)
+    try:
+        res = _fresh(built)
+        w.add_inputs([r.input for r in res], built=res)
+        model = w.table_panel.model
+        assert _wait(app, lambda: model.rowCount() == len(res), 5)
+        assert [j.label for j in model.joins()] == ["measured"] and "FileNotFoundError" in model.join_errors["measured"]
+        assert model.column(key) is None and "unknown name" in model.column("fx:sigma_mN_m_star").error
+        w.table_panel.remove_join("measured")
+        assert model.joins() == [] and model.join_errors == {}
+    finally:
+        _close(app, w)
