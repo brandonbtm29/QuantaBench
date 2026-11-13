@@ -2,6 +2,11 @@
 
 ## 0.3.0.dev (unreleased)
 
+### QM cubes: the grid widens until the 0.002 au density surface closes (2026-11-13)
+- **The problem.** An ESP test on CH2I2 (ωB97X-D/def2-SVP: iodine needs def2-SVP and its ECP, since 6-31G* has no iodine basis) left the surface descriptors empty. At Psi4's 4 bohr grid margin the density on the cube's faces was 0.0021 au, so the 0.002 au surface did not close (`OpenSurfaceError`).
+- **The fix.** The Psi4 driver recomputes the cubes with a margin 2 bohr wider while the faces still carry 0.002 au, up to 10 bohr. A note in the QM warnings says when the margin was widened. `cubes.overage_bohr` records the margin used.
+- **Unchanged:** compact densities (every molecule of the b02 and b03 ESP passes so far closed at 4 bohr) cost one cubeprop as before.
+
 ### `conformers compare` reads every machine's share of a grid run (2026-11-13)
 - **The bug.** Given a grid run's phase folder (or its grid folder), `conformers compare` read only this machine's run folder. The other machines' molecules were silently left out.
   - Those shares live in the grid folder's `parts/<machine>/<run folder>` when the grid build downloaded them, or in the output folder when SyncThing brought them.
