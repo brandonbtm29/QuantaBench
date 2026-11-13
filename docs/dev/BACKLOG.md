@@ -8,13 +8,13 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
-## SCRATCH-1: Scratch cleanup and Psi4 memory · in-PR 2026-11-13 (branch `fix/scratch-cleanup`)
+## SCRATCH-1: Scratch cleanup and Psi4 memory · done 2026-11-13 (PR #5)
 Brandon (2026-11-13): "The hard drive was nearly filled last night. Can you make it so that the scratch files are
 deleted after we extract the information we need?"
 
 What happened: killed lanes left 59 Psi4 job folders in `%TEMP%\QuantaBench`, holding 479 GB of DF integrals.
 
-Done in the branch:
+Done:
 - owner records in scratch folders;
 - failed jobs keep only their inputs and logs;
 - `external.sweep_scratch` after lane kills, at pool close and at run start;
@@ -26,7 +26,7 @@ Follow-ups:
 - QM memory per molecule within one run (lanes with different memory, or a size-aware queue) instead of one value per run.
 - Why NOVA's native Windows Psi4 looked slower than the Mac's (both ran DiskDF at 4 GB; disk speed or Defender scanning `%TEMP%`?). Measure one molecule on both with enough memory.
 
-## UI-1: App shell with task workspaces · in-PR 2026-11-12 (branch `feat/app-shell`)
+## UI-1: App shell with task workspaces · done 2026-11-12 (PR #1)
 Done in the PR: the five workspaces (`gui.workspaces`), the Appearance dock, the playback bar (`gui.playback`),
 the status line, a first Library (run folders under the output folder, `gui.library_panel`), per-workspace
 layouts in QSettings with View > Reset layout, tests (`tests/test_gui_workspaces.py`) and screenshots
@@ -60,7 +60,7 @@ Depends on: UI-1.
 - Acceptance: round-trip save/open test with built results; resume of a half-finished project;
   Windows-safe paths (no absolute paths stored for files inside the project).
 
-## UI-3: Spreadsheet, plots and formula columns · in-PR 2026-11-12 (branch `feat/ui3-spreadsheet`)
+## UI-3: Spreadsheet, plots and formula columns · done 2026-11-12 (PR #2)
 Done in the branch (stacked on `feat/app-shell`, UI-1's PR #1): the Table dock (`gui.table_panel`: one row per
 molecule of the Molecules dock, row fields, posted fields, summary and descriptor values from results in memory or a
 run folder's CSVs and job table read off the GUI thread, column chooser with each column's formula name, numeric
@@ -1052,7 +1052,7 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   non-fluorinated liquids. TPSA and ESP 75/100/125 correlate at r 0.73/0.77/0.68; 29 of 74 have TPSA 0, 7/20/27
   have ESP area 0. Brandon then asked for the whole ESP distribution instead of three thresholds (2026-11-12:
   `qm_surf_esp_area_*`, `<id>_esp_profile.csv`).
-- **QM-ESP options** · in-PR 2026-11-12 (branch `afternoon/2026-11-12-qm-esp`): `--no-qm-polarizability`, `--qm-properties/--no-qm-properties`,
+- **QM-ESP options** · done 2026-11-12 (PR #3): `--no-qm-polarizability`, `--qm-properties/--no-qm-properties`,
   `--keep-cubes/--no-keep-cubes`, and the imaginary-mode steps in the Psi4 frequency path. Then the staged ESP pass over b03 (gas, `--qm
   wb97x-d/6-31g* --cubes --no-qm-polarizability --no-keep-cubes`; `scratch/batches/run_b03_esp.ps1` on NOVA) for the ESP PCA substudy,
   appended to a night's chain once this is merged.
