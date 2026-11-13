@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import csv
 import json
 from pathlib import Path
@@ -256,8 +255,7 @@ def write_qm(qm: dict, out_dir: Path, stem: str, spectrum: bool = False) -> list
 
             if external.scratch_root().resolve() in src.resolve().parents:   # QM scratch: move, don't pile up
                 shutil.move(str(src), dst)
-                with contextlib.suppress(OSError):
-                    src.parent.rmdir()          # the emptied qm_<id>_* folder
+                external.remove_if_empty(src.parent)      # the emptied qm_<id>_* folder
             else:
                 shutil.copy2(src, dst)
         files[label] = str(dst)

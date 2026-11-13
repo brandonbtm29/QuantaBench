@@ -696,6 +696,44 @@ def test_lane_past_the_time_limit_is_killed_and_restarted(tmp_path, monkeypatch)
     assert jobs.open_run(out).counts["ok"] == 3 and lane_processes() == []
 
 
+def test_qm_memory_sizes_the_lanes_and_they_share_the_threads(monkeypatch):
+    """--qm-memory: as many QM lanes as the memory holds, sharing the thread budget (Psi4 scales with threads; NOVA,
+    32 GB: 5 x 2 threads with 4 GB per job left 9 of 19 threads idle on 2026-11-13)."""
+    nova32 = report(ram=31.2)
+    monkeypatch.setattr(resources, "logical_cores", lambda: 24)
+    base = {"method": "tblite-gfn2", "threads": 19, "qm_method": "wb97x-d/6-31g*"}
+    four, _ = L.plan_auto(pipeline.BuildConfig(**base), nova32)
+    six, reason = L.plan_auto(pipeline.BuildConfig(**base, qm_memory_gb=6.0), nova32)
+    big, why = L.plan_auto(pipeline.BuildConfig(**base, qm_memory_gb=16.0), nova32)
+    assert len(four) == 5 and all(x.threads == 3 for x in four)               # 19 // 5
+    assert six == [Lane(f"cpu{i}", "cpu", 6) for i in (1, 2, 3)] and "6 GB per QM job): 6 threads each" in reason
+    assert big == [Lane("main", "auto", 19)] and "one lane only" in why
+    # without a QM stage the memory setting changes nothing
+    assert L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=19, qm_memory_gb=16.0), nova32)[0] == \
+        L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=19), nova32)[0]
+
+
+def test_a_killed_lane_leaves_no_scratch_behind(tmp_path, monkeypatch):
+    """A lane killed at the time limit cannot remove its Psi4 job folder (2026-11-13: 59 of them, 479 GB of DF
+    integrals): the parent sweeps the killed lane's scratch at once, keeping the logs; the lanes that end with the
+    run are swept when the pool closes."""
+    from quantabench.chem import external
+
+    monkeypatch.setenv(L.TEST_DELAY_ENV, "cpu1=60,cpu2=60")
+    monkeypatch.setenv(L.TEST_SCRATCH_ENV, "1")
+    c = cfg(tmp_path, molecule_timeout_s=2.0)
+    logs = []
+    results, _ = jobs.run_resumable(inputs(MOLS[:2]), c, tmp_path / "run", log=logs.append, lanes=L.parse_lanes("2", c))
+    assert [r.status for r in results] == ["failed"] * 2
+    folders = sorted(external.scratch_root().glob("psi4_*"))
+    assert len(folders) == 2
+    for d in folders:
+        assert not list(d.glob("psi.*")) and (d / "output.dat").is_file()
+    swept = [m for m in logs if m.startswith("Scratch of lane cpu")]
+    assert len(swept) == 2 and all("0.0 GB freed in 1 left-behind scratch folder(s)" in m for m in swept), swept
+    assert lane_processes() == []
+
+
 needs_display = pytest.mark.skipif(not HAS_DISPLAY,
                                    reason="needs a display (xvfb-run)")
 

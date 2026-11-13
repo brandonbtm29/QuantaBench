@@ -2,6 +2,35 @@
 
 ## 0.3.0.dev (unreleased)
 
+### `conformers compare` reads every machine's share of a grid run (2026-11-13)
+- **The bug.** Given a grid run's phase folder (or its grid folder), `conformers compare` read only this machine's run folder. The other machines' molecules were silently left out.
+  - Those shares live in the grid folder's `parts/<machine>/<run folder>` when the grid build downloaded them, or in the output folder when SyncThing brought them.
+  - In the 2026-11-13 conformer checks, 4 of 10 pilot molecules had run on the MacBook.
+- **The fix.** `read_sources` follows `grid.json`'s shares to wherever this machine has them: the downloaded archive first, else the synced copy beside the grid folder or up to two levels above it. Each run folder is read once.
+  - A share found nowhere is logged with its molecule count.
+  - A share name from `grid.json` (a synced file) must be a plain folder name.
+  - The log now gives each run folder's molecule count.
+
+### Scratch never piles up; Psi4 memory per run, SCRATCH-1 (2026-11-13)
+- **What happened.** In b03's ESP pass, lanes killed at the 30-minute per-molecule limit could not delete their Psi4 job folders. By morning NOVA's `%TEMP%\QuantaBench` held 59 of them with 479 GB of DF integrals (`psi.<pid>.97`, 13-21 GB each).
+- **A failed job's folder** keeps its inputs and logs for inspection. Psi4's scratch files and anything over 8 MB are deleted, and the error says how much was freed.
+- **Owner records.** Every scratch folder now holds an owner record (`.qb_owner.json`: pid, start time, host). `external.sweep_scratch` cleans the folders of processes that have ended:
+  - their bulky files go at once;
+  - the folder itself, with its logs, goes after 3 days;
+  - a running job's folder, or another host's, is never touched;
+  - a folder without an owner record (older versions) counts after 12 hours without a change.
+- **When the sweep runs:**
+  - the lane supervisor sweeps a lane it killed (time limit) or found dead, at once, and every lane's when the pool closes;
+  - every run sweeps when it starts.
+  - A log line says what was freed: `Scratch of lane cpu3 (302-27-2): 15.1 GB freed in 1 left-behind scratch folder(s) ...`.
+- **`quantabench-cli scratch`** shows the scratch folder (running, left behind, without an owner record) and `--clean [--dry-run] [--older-than DAYS]` cleans it. Settings > Engines > Keep job folders also turns the sweep off. The Psi4 driver calls `psi4.core.clean()` after a failure as well.
+- **`--qm-memory GB`** (`BuildConfig.qm_memory_gb`, a resource, not a science field) sets each Psi4 job's memory for a run, over Settings > Engines > QM memory.
+  - The auto lane plan fits the QM lanes to the RAM. Lanes capped by memory now share the thread budget: NOVA with 4 GB per job ran 5 lanes × 2 threads of 19, and now runs 5 × 3.
+  - Too little memory makes DF-SCF keep its integrals on disk (DiskDFJK), many times slower: NOVA timed out on 55 of 65 large molecules.
+  - The driver now says so before the SCF, with the size: naux · nbf(nbf+1)/2 · 8 bytes, 12.1 GB for 784/4,901 basis functions.
+  - `qm["df"]` records `nbf`, `naux`, `tensor_gb` and `algorithm`, and a warning notes a disk-based run.
+- **Tests:** `QUANTABENCH_SCRATCH_DIR` points the scratch root elsewhere when the settings name none. The test suite sets it, so a test's run never sweeps the real scratch folder.
+
 ### QM stage: switches for an ESP study, and imaginary modes at the QM level (2026-11-12)
 - **`--no-qm-polarizability`** (BuildConfig `qm_polarizability`, a science field; the QM page's new Polarizability
   box): skips the static polarizability of the best QM conformer. With DFT the CPSCF (or finite-field) SCFs are the

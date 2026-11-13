@@ -260,6 +260,10 @@ def _config(args, base=None, **extra):
         overrides["qm_properties"] = args.qm_properties
     if getattr(args, "qm_polarizability", None) is not None:
         overrides["qm_polarizability"] = args.qm_polarizability
+    if getattr(args, "qm_memory", None) is not None:
+        if args.qm_memory <= 0:
+            raise SystemExit("--qm-memory must be more than 0 GB")
+        overrides["qm_memory_gb"] = float(args.qm_memory)
     if getattr(args, "keep_cubes", None) is not None:
         overrides["qm_keep_cubes"] = args.keep_cubes
     # --protonate/--no-protonate and --freq/--no-freq: None = keep settings.json (the GUI saves its
@@ -938,6 +942,10 @@ def add_build_science_args(q: argparse.ArgumentParser) -> None:
     q.add_argument("--qm-properties", action=argparse.BooleanOptionalAction, default=None,
                    help="QM properties of the best conformer: dipole, quadrupole, charges, orbital energies and the "
                         "polarizability (default on)")
+    q.add_argument("--qm-memory", type=float, metavar="GB",
+                   help="memory per Psi4 job, GB (default from settings, 4). DF-SCF keeps its integrals in memory "
+                        "only when they fit (about 12 GB for 60 heavy atoms with 6-31G*): otherwise they go to disk, "
+                        "slower and as large in scratch. Fewer QM lanes run, each with more threads")
     q.add_argument("--qm-polarizability", action=argparse.BooleanOptionalAction, default=None,
                    help="the QM static polarizability (CPSCF or finite field), the slowest part of the properties; "
                         "--no-qm-polarizability skips it (default on)")
@@ -1231,6 +1239,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_conformers import register as register_conformers
 
     register_conformers(sub)    # conformers compare (quantabench.chem.conformer_compare)
+    from .cli_scratch import register as register_scratch
+
+    register_scratch(sub)       # scratch: show or clean the scratch folder (quantabench.chem.external)
     from .cli_sketcher import register as register_sketcher
 
     register_sketcher(sub)      # sketcher: the Sketch dock's editor files (quantabench.sketcher_assets)

@@ -296,7 +296,8 @@ Code: `chem/conformer_compare.py` (module docstring), `cli_conformers.py`; tests
 
 ## Conformer sets and levels
 
-- **Inputs** (either side): QuantaBench run folders (any machine's share; a folder of run folders one level down),
+- **Inputs** (either side): QuantaBench run folders (any machine's share; a folder of run folders one level down;
+  a grid run's phase or grid folder, with every machine's share that is here: `parts/<machine>/` or the synced copy),
   `.spartan` documents, or a Spartan import's long table + SDF. Sets are joined by constitution
   (`io_spartan.constitution_key`: elements, connectivity, total charge), so bond orders, where an ion's charge is
   drawn, stereo and atom order do not matter. Sets of one constitution on one side are merged, and the same

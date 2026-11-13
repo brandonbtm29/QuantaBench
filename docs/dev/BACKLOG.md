@@ -8,6 +8,24 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
+## SCRATCH-1: Scratch cleanup and Psi4 memory · done 2026-11-13 (PR #5)
+Brandon (2026-11-13): "The hard drive was nearly filled last night. Can you make it so that the scratch files are
+deleted after we extract the information we need?"
+
+What happened: killed lanes left 59 Psi4 job folders in `%TEMP%\QuantaBench`, holding 479 GB of DF integrals.
+
+Done:
+- owner records in scratch folders;
+- failed jobs keep only their inputs and logs;
+- `external.sweep_scratch` after lane kills, at pool close and at run start;
+- `quantabench-cli scratch [--clean]`;
+- `--qm-memory`, with QM lanes sized by memory and sharing the thread budget;
+- the DF-on-disk notice from the driver and in `qm["df"]`.
+
+Follow-ups:
+- QM memory per molecule within one run (lanes with different memory, or a size-aware queue) instead of one value per run.
+- Why NOVA's native Windows Psi4 looked slower than the Mac's (both ran DiskDF at 4 GB; disk speed or Defender scanning `%TEMP%`?). Measure one molecule on both with enough memory.
+
 ## UI-1: App shell with task workspaces · done 2026-11-12 (PR #1)
 Done in the PR: the five workspaces (`gui.workspaces`), the Appearance dock, the playback bar (`gui.playback`),
 the status line, a first Library (run folders under the output folder, `gui.library_panel`), per-workspace

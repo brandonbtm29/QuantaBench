@@ -168,6 +168,9 @@ TEST_CRASH_EXIT = 86
 #: Test hook: "cpu2=1.5,gpu0=0" makes the named lanes wait that many seconds after each molecule (a slow
 #: lane next to a fast one, for the speed-aware tests). Only tests set it.
 TEST_DELAY_ENV = "QUANTABENCH_TEST_LANE_DELAY"
+#: Test hook: a lane makes a scratch folder holding a 2 MB ``psi.<pid>.97`` and a log when it takes a molecule, as
+#: a Psi4 job does (a killed lane leaves it behind). Only tests set it.
+TEST_SCRATCH_ENV = "QUANTABENCH_TEST_LANE_SCRATCH"
 #: Elements method "auto" is resolved for when a lane plan is made (H C N O F S: PFAS and most organics)
 TYPICAL_ELEMENTS = (1, 6, 7, 8, 9, 16)
 #: Working set of one lane process in GB, by workload, for the memory cap of the auto plan
@@ -311,11 +314,12 @@ def workload(cfg) -> tuple[str, str, bool]:
     return method, kind, bool(info.gpu_capable and method != "mmff")
 
 
-def _qm_memory_gb() -> float:
-    from .. import settings as settings_mod
+def _qm_memory_gb(cfg=None) -> float:
+    """Memory of one Psi4 job (``chem.qm.memory_gb``: ``--qm-memory``, else the setting)."""
+    from ..chem import qm
 
     try:
-        return float(settings_mod.load().engines.qm_memory_gb)
+        return qm.memory_gb(cfg)
     except Exception:
         return 4.0
 
@@ -415,7 +419,7 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
         if verdict is False:
             why_gpu, bench_why, device = bench_why, "", "cpu"
     cap = max_lanes()
-    per_lane_gb = LANE_MEMORY_GB[kind] + (_qm_memory_gb() if cfg.qm_method else 0.0)
+    per_lane_gb = LANE_MEMORY_GB[kind] + (_qm_memory_gb(cfg) if cfg.qm_method else 0.0)
     by_memory = max(1, int(float(hw.ram_gb or 0) * 0.75 / per_lane_gb)) if hw.ram_gb else total
 
     lanes: list[Lane] = []
@@ -457,6 +461,9 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
         n = max(0, min(wanted, by_memory - len(lanes)))
         if n < wanted:
             reason += f", capped by memory ({hw.ram_gb:.0f} GB)"
+            if cfg.qm_method and n > 1:     # Psi4 scales with threads: the lanes that fit share the budget
+                per = max(per, budget // n)
+                reason += f" ({_qm_memory_gb(cfg):g} GB per QM job): {per} threads each"
         if cap is not None and n + len(lanes) > cap:
             n = cap - len(lanes)
             reason += f", capped at {cap} lanes (Windows)"
@@ -669,6 +676,15 @@ def _test_delay(name: str) -> float:
     return 0.0
 
 
+def _test_scratch(mol_id: str) -> None:
+    """The scratch a Psi4 job leaves while it runs (test hook ``TEST_SCRATCH_ENV``)."""
+    from ..chem import external
+
+    d = external.make_scratch_dir(f"psi4_{mol_id}")
+    (d / f"psi.{os.getpid()}.97").write_bytes(b"\0" * 2_000_000)
+    (d / "output.dat").write_text("==> DiskDFJK: Density-Fitted J/K Matrices <==\n", encoding="utf-8")
+
+
 def _test_crashes() -> dict[str, float]:
     """Molecule id -> seconds before the crash, from the test hook ``TEST_CRASH_ENV``."""
     out = {}
@@ -748,6 +764,8 @@ def _lane_loop(lane: Lane, cfg_dict: dict, run_dir: str, conn, stop_event, memor
             if mol_id in crash_ids:
                 time.sleep(crash_ids[mol_id])
                 os._exit(TEST_CRASH_EXIT)
+            if os.environ.get(TEST_SCRATCH_ENV):
+                _test_scratch(mol_id)
             res = pipeline.run_molecule(inp, cfg_mol, device, threads, stop_event.is_set,
                                         log=lambda m: send("log", m),
                                         stage=lambda s, k=k, mol_id=mol_id: send("stage", k, mol_id, s))
@@ -863,6 +881,7 @@ class LanePool:
         # external programs each lane started (xtb, CREST, Psi4 run in their own process groups and would
         # outlive a lane that dies or is killed): kill_programs() ends them
         self.programs_dir = Path(tempfile.mkdtemp(prefix="qb_lane_programs_"))
+        self.lane_pids: set[int] = set()        # every lane process started: close() sweeps their scratch
 
     # -- processes
     def start(self, w: _LaneProcess) -> None:
@@ -874,6 +893,7 @@ class LanePool:
             proc.start()
         child_conn.close()
         w.proc, w.conn, w.ready, w.busy, w.pid = proc, parent_conn, False, None, proc.pid
+        self.lane_pids.add(proc.pid)
         w.started_at = time.monotonic()
 
     def start_all(self) -> None:
@@ -944,6 +964,10 @@ class LanePool:
             if n:
                 self.log(f"[{w.lane.name}] stopped {n} external program(s) the lane left running")
         shutil.rmtree(self.programs_dir, ignore_errors=True)
+        if self.lane_pids:                  # what lanes killed at the end (a deadline, a cancel) left in scratch
+            from ..chem import external
+
+            external.sweep_scratch_quietly(owners=set(self.lane_pids), log=self.log, what="of the lanes")
 
     @staticmethod
     def _close_conn(w: _LaneProcess) -> None:
@@ -1162,9 +1186,17 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         on_result(res)
         progress(done_before + n_done, total, res.status, mol_id)
 
+    def scratch_of(pid: int | None, what: str) -> None:
+        """Scratch a killed or dead lane left (Psi4's DF integrals can be 10-20 GB per molecule)."""
+        if pid:
+            from ..chem import external
+
+            external.sweep_scratch_quietly(owners={pid}, log=log, what=what)
+
     def lane_died(w: _LaneProcess) -> None:
         pool._close_conn(w)
         code = None
+        pid = w.proc.pid if w.proc is not None else None
         if w.proc is not None:
             w.proc.join(2)                         # the pipe can report EOF a moment before the exit
             if w.proc.exitcode is None:
@@ -1177,6 +1209,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         left = pool.kill_programs(w)        # xtb/CREST/Psi4 runs in its own session and outlives the lane
         if left:
             log(f"[{w.lane.name}] stopped {left} external program(s) the lane left running")
+        scratch_of(pid, f"of lane {w.lane.name}")
         threads_back(w)                     # its programs are gone: the threads it held are free again
         if w.busy is not None:
             k, mol_id, inp = w.busy
@@ -1220,12 +1253,14 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
         err = pipeline_mod.time_limit_error(limit, w.stage)
         elapsed = time.monotonic() - w.busy_since
         pool._close_conn(w)
+        pid = w.proc.pid if w.proc is not None else None
         if w.proc is not None:
             _kill_tree(w.proc)
             with contextlib.suppress(ValueError):
                 w.proc.close()
         w.proc = None
         left = pool.kill_programs(w)
+        scratch_of(pid, f"of lane {w.lane.name} ({mol_id})")
         threads_back(w)
         log(f"[{w.lane.name}] {mol_id}: {err} after {elapsed:.0f} s; lane killed"
             + (f" with {left} external program(s)" if left else "")

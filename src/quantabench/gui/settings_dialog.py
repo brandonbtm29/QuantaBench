@@ -570,7 +570,10 @@ class SettingsDialog(QDialog):
         self.scratch = QLineEdit(e.scratch_dir)
         self.scratch.setPlaceholderText("system temp folder / QuantaBench")
         rf.addRow("Scratch folder", self.scratch)
-        self.keep_scratch = QCheckBox("Keep job folders of successful runs (for debugging)")
+        self.keep_scratch = QCheckBox("Keep job folders (for debugging: also turns the scratch clean-up off)")
+        self.keep_scratch.setToolTip("Normally a job's folder is deleted when it succeeds, a failed job keeps only its "
+                                     "inputs and logs, and every run cleans what killed or crashed runs left "
+                                     "(quantabench-cli scratch)")
         self.keep_scratch.setChecked(e.keep_scratch)
         rf.addRow(self.keep_scratch)
         self.stacksize = QLineEdit(e.omp_stacksize)

@@ -62,7 +62,6 @@ import contextlib
 import json
 import re
 import shutil
-import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -163,10 +162,33 @@ def build_task(result, cs, cfg, threads: int = 1, warnings: list[str] | None = N
         # imaginary modes of the QM Hessian: step along the lowest and re-optimize (as vibrations.analyze does)
         "imag_retries": max(0, int(getattr(cfg, "freq_imag_retries", 0) or 0)), "imag_step_A": 0.15,
         "imag_tol_cm1": 20.0,
-        "threads": max(1, int(threads)), "memory_gb": float(getattr(es, "qm_memory_gb", 4.0) or 4.0),
+        "threads": max(1, int(threads)), "memory_gb": memory_gb(cfg, es),
         "solvent_pcm": pcm, "solvent": solvent if pcm else "", "temperature_k": float(cfg.temperature_k),
         "output": PSI4_OUTPUT,
     }
+
+
+def memory_gb(cfg, es=None) -> float:
+    """Memory of one Psi4 job, GB: ``cfg.qm_memory_gb`` (``--qm-memory``) if set, else
+    ``settings.engines.qm_memory_gb`` (default 4)."""
+    v = float(getattr(cfg, "qm_memory_gb", 0.0) or 0.0)
+    if v > 0:
+        return v
+    if es is None:
+        from . import external
+
+        es = external._engine_settings()
+    return float(getattr(es, "qm_memory_gb", 4.0) or 4.0)
+
+
+def df_algorithm(output_text: str) -> str:
+    """"disk" or "memory": which density-fitted J/K Psi4 used (its output's ``==> DiskDFJK`` / ``==> MemDFJK``
+    header), "" when the output has neither."""
+    if "==> DiskDFJK" in output_text:
+        return "disk"
+    if "==> MemDFJK" in output_text:
+        return "memory"
+    return ""
 
 
 # ----------------------------------------------------------------------------------- running
@@ -247,7 +269,7 @@ def _keep_dir(stem: str) -> Path:
     from . import external
 
     safe = external.ascii_name(stem, 40)      # ASCII only: Psi4 on Windows opens files through ANSI paths
-    return Path(tempfile.mkdtemp(prefix=f"qm_{safe}_", dir=external.scratch_root()))
+    return external.make_scratch_dir(f"qm_{safe}")
 
 
 def _keep_file(src: Path, dst: Path, warnings: list[str]) -> str | None:
@@ -428,6 +450,12 @@ def run_stage(result, cs, cfg, *, threads: int = 1, should_stop: Callable[[], bo
     with external.work_dir(f"psi4_{result.input.id}") as wd:
         out = run_driver(task, wd, python, threads=task["threads"], timeout=timeout, should_stop=should_stop, log=log)
         warnings += out.get("warnings", [])
+        df = dict(out.get("df") or {})
+        with contextlib.suppress(OSError):
+            df["algorithm"] = df_algorithm((wd / PSI4_OUTPUT).read_text(encoding="utf-8", errors="replace"))
+        if df.get("algorithm") == "disk" and not any(w.startswith("DF-SCF") for w in warnings):
+            warnings.append(f"DF-SCF kept its integrals on disk ({task['memory_gb']:g} GB per Psi4 job was not "
+                            "enough): slower; give the QM stage more memory (--qm-memory)")
         files: dict[str, str] = {}
         try:
             keep = _keep_dir(result.input.id)
@@ -474,7 +502,7 @@ def run_stage(result, cs, cfg, *, threads: int = 1, should_stop: Callable[[], bo
                 "reference": out.get("reference", ""), "conformers": confs, "best_conf_id": out.get("best_id"),
                 "energy_ev": None if e_ref is None else e_ref * HARTREE_EV, "properties": _properties(out),
                 "files": files, "surface": None, "vibrations": None, "cubes": None, "warnings": warnings,
-                "timings": {**(out.get("timings") or {})}}
+                "timings": {**(out.get("timings") or {})}, "memory_gb": task["memory_gb"], "df": df or None}
     if cubes:
         qm["cubes"] = {k: v for k, v in cubes.items() if k not in ("density", "esp")}
 
