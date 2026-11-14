@@ -67,6 +67,10 @@ Open / Open recent / Save / Save as / Close project, the title's unsaved mark an
 (DESC-3) adds the table's Features menu, Join... and the Plot's 1:1 view. The playback bar steps through molecules too.
 Model... (QSAR-4) fits cross-validated property models on the table's columns and joins their predictions back.
 
+**Less crowded (UI-8, 2026-11-14):** the Pipeline dock's stages are collapsible sections with one-line summaries,
+the method notes sit behind ⓘ pop-outs, a molecule's details and notes fold, the Table toolbar has four menus, and any
+panel pops out into a window of its own (View > Pop out panel; Dock all panels brings them back).
+
 **Shared chrome:**
 - A playback bar for conformers, molecules and trajectory frames.
 - A status bar with counts, point group, CPU threads, GPU and VRAM.

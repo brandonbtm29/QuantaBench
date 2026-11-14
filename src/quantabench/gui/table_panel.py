@@ -8,19 +8,23 @@ One row per molecule of the Molecules dock, the same rows in the same order (unt
   import, a result read from its folder: ``MainWindow.moleculeResult``) and, for a folder opened with File > Open
   run folder, from its summary.csv and descriptors.csv (and its job table for molecules those miss), read on a
   worker thread.
-- **Columns... (the chooser)** shows or hides each column and lists the name a formula uses for it (its alias).
-  **New column...** adds a formula column, **Fit...** fits a formula's parameters to a target column
+- **The toolbar** (UI-8) has four drop-down buttons: **Columns** (Show or hide columns..., New formula column...,
+  Join columns from a CSV file...), **Features**, **Models** (Fit a formula..., Model a property...) and **Export**.
+- **Show or hide columns (the chooser)** lists the name a formula uses for each column (its alias). **New formula
+  column...** adds a formula column, **Fit a formula...** fits a formula's parameters to a target column
   (``gui.table_dialogs``). Right-click a header for Hide, Edit formula, Remove.
 - **Features** (the feature builder, DESC-3) adds ready-made formula columns (``analysis.features``): the
   dimensionless liquid-state groups of ``chem.liquid`` (Lorentz-Lorenz, refractive index, dipole orientation ratio,
   packing fraction, sphericity, the Lifshitz Hamaker constant and surface tension, the kT/v_m^⅔ unit), ratios of α,
   μ, V and A, and the reduced target σ* of any column. A group the run already has as a descriptor is not added
   again; one that needs another is added after it.
-- **Join...** brings in columns of a CSV file by id (measured surface tensions or densities, ``pubchem targets``
-  output): the file, its id column and the columns are part of the table's state, read again at the next start.
-- **Model...** (QSAR-4, ``gui.model_dialog``) fits a property model of a column on other columns (ridge regression,
-  or elastic net, random forest, gradient boosting with scikit-learn), cross-validated by k-fold, leave-one-group-out
-  and a holdout column, and joins its predictions (``<name>_pred``, ``<name>_oof``) back as a file in models/.
+- **Join columns from a CSV file** brings in columns by id (measured surface tensions or densities, ``pubchem
+  targets`` output): the file, its id column and the columns are part of the table's state, read again at the next
+  start.
+- **Model a property** (QSAR-4, ``gui.model_dialog``) fits a property model of a column on other columns (ridge
+  regression, or elastic net, random forest, gradient boosting with scikit-learn), cross-validated by k-fold,
+  leave-one-group-out and a holdout column, and joins its predictions (``<name>_pred``, ``<name>_oof``) back as a
+  file in models/.
 - **Sort** by any column (numbers as numbers, missing values last), **filter** by ID, name, SMILES, formula or
   method. **Selecting a row selects the molecule** in the Molecules dock, and the other way round.
 - **Ctrl+C** copies the selected cells as tab-separated text (Excel, LibreOffice, Origin), **Ctrl+Shift+C** with the
@@ -59,7 +63,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
-    QPushButton,
     QTableView,
     QToolButton,
     QVBoxLayout,
@@ -877,16 +880,47 @@ class TablePanel(QWidget):
         self.filter.returnPressed.connect(lambda: self.model.set_filter(self.filter.text()))
         self.count = QLabel()
         self.count.setStyleSheet("color: gray;")
-        self.columns_btn = QPushButton("Columns...")
-        self.columns_btn.setToolTip("Show or hide columns; lists the name each column has in formulas")
-        self.columns_btn.clicked.connect(lambda: self.choose_columns())
-        self.formula_btn = QPushButton("New column...")
-        self.formula_btn.setToolTip("A formula column: arithmetic on other columns (+ - * / **, log, exp, sqrt, ...)")
-        self.formula_btn.clicked.connect(lambda: self.edit_formula())
-        self.fit_btn = QPushButton("Fit...")
-        self.fit_btn.setToolTip("Fit the parameters of a formula to a column (least squares), e.g. the quantum "
-                                "parachor ((a*alpha + b*mu**2 + c)/Vm)**4")
-        self.fit_btn.clicked.connect(lambda: self.open_fit())
+        # UI-8: three drop-down buttons (Columns, Features, Models) and Export instead of seven buttons
+        def act(text, tip, slot, name):
+            a = QAction(text, self)
+            a.setToolTip(tip)
+            a.setObjectName(name)
+            a.triggered.connect(lambda _c=False: slot())
+            return a
+
+        def menu_button(text, name, tip, actions):
+            b = QToolButton()
+            b.setText(text)
+            b.setObjectName(name)
+            b.setToolTip(tip)
+            b.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            m = QMenu(b)
+            m.setToolTipsVisible(True)
+            for a in actions:
+                if a is None:
+                    m.addSeparator()
+                else:
+                    m.addAction(a)
+            b.setMenu(m)
+            return b
+
+        self.a_columns = act("Show or hide columns...", "Show or hide columns; lists the name each column has in "
+                             "formulas", lambda: self.choose_columns(), "table_columns")
+        self.a_formula = act("New formula column...", "A formula column: arithmetic on other columns (+ - * / **, "
+                             "log, exp, sqrt, ...)", lambda: self.edit_formula(), "table_formula")
+        self.a_join = act("Join columns from a CSV file...", "Bring in columns of a CSV file by id: measured surface "
+                          "tensions, densities, `pubchem targets` output", lambda: self.join_dialog(), "table_join")
+        self.a_fit = act("Fit a formula...", "Fit the parameters of a formula to a column (least squares), e.g. the "
+                         "quantum parachor ((a*alpha + b*mu**2 + c)/Vm)**4", lambda: self.open_fit(), "table_fit")
+        self.a_model = act("Model a property...", "Fit a property model (ridge, elastic net, random forest, gradient "
+                           "boosting) of a column on other columns, cross-validated; its predictions join the table",
+                           lambda: self.model_dialog(), "table_model")
+        self.columns_btn = menu_button("Columns", "table_columns_menu", "Show or hide columns, formula columns, "
+                                       "columns joined from a CSV file", [self.a_columns, self.a_formula, None,
+                                                                         self.a_join])
+        self.models_btn = menu_button("Models", "table_models_menu", "Fit a formula's parameters, or a cross-validated "
+                                      "property model", [self.a_fit, self.a_model])
+        self._model_dlg = None
         self.features_btn = QToolButton()
         self.features_btn.setObjectName("table_features")
         self.features_btn.setText("Features")
@@ -898,17 +932,6 @@ class TablePanel(QWidget):
         self.features_menu.setToolTipsVisible(True)
         self.features_menu.aboutToShow.connect(self._fill_features_menu)
         self.features_btn.setMenu(self.features_menu)
-        self.join_btn = QPushButton("Join...")
-        self.join_btn.setObjectName("table_join")
-        self.join_btn.setToolTip("Bring in columns of a CSV file by id: measured surface tensions, densities, "
-                                 "`pubchem targets` output")
-        self.join_btn.clicked.connect(lambda: self.join_dialog())
-        self.model_btn = QPushButton("Model...")
-        self.model_btn.setObjectName("table_model")
-        self.model_btn.setToolTip("Fit a property model (ridge, elastic net, random forest, gradient boosting) of a "
-                                  "column on other columns, cross-validated; its predictions join the table")
-        self.model_btn.clicked.connect(lambda: self.model_dialog())
-        self._model_dlg = None
         self.export_btn = QToolButton()
         self.export_btn.setText("Export")
         self.export_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -932,8 +955,7 @@ class TablePanel(QWidget):
         top.setContentsMargins(4, 2, 4, 2)
         top.addWidget(self.filter, 1)
         top.addWidget(self.count)
-        for b in (self.columns_btn, self.formula_btn, self.fit_btn, self.features_btn, self.join_btn,
-                  self.model_btn, self.export_btn):
+        for b in (self.columns_btn, self.features_btn, self.models_btn, self.export_btn):
             top.addWidget(b)
 
         self.view = SheetView(self.model)
@@ -1192,8 +1214,8 @@ class TablePanel(QWidget):
                 m.addAction("Edit formula...", lambda: self.edit_formula(col.alias))
                 m.addAction("Remove formula column", lambda: self.remove_formula(col.alias))
             m.addSeparator()
-        m.addAction("Columns...", lambda: self.choose_columns())
-        m.addAction("New column...", lambda: self.edit_formula())
+        m.addAction("Show or hide columns...", lambda: self.choose_columns())
+        m.addAction("New formula column...", lambda: self.edit_formula())
         m.exec(hh.mapToGlobal(pos))
 
     def choose_columns(self, modal: bool = True):

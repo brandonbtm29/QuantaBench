@@ -8,6 +8,24 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
+## UI-8: Collapsible sections and pop-out panels · in-PR 2026-11-14 (branch `feat/ui-declutter`)
+Brandon (2026-11-14): "At the moment it's kind of crowded. I think more collapsible menus / pop outs would be helpful";
+he chose all four parts: the Pipeline dock, the molecule details, the Table toolbar, pop-out panels.
+Done in the branch:
+- `gui/collapsible.py` (`Section`, `Accordion`, `InfoLabel`, `InfoButton`, `with_info`, `Notes`) and
+  `gui/popout.py` (View > Pop out panel, Dock all panels; `pop_out`, `dock_all`).
+- The Pipeline dock's stage list and page stack became an accordion of stage sections. Each has a one-line summary
+  (`MainWindow.stage_summary`), a status, and an ⓘ for the stage's description; the method guide's labels sit behind
+  an ⓘ next to their field (⚠ when they say something is missing). `stage_items` maps a stage to its `Section`.
+- The Molecules dock's Details section and folded notes; the Table toolbar's Columns / Features / Models / Export
+  menus; the Plot's ⧉ pop-out button.
+- Tests: `tests/test_gui_declutter.py`. Screenshots: `docs/dev/screenshots/UI-8/`.
+Follow-ups (ready):
+- The Surfaces, Spectra and Settings panels: the same sections and ⓘ (the Surfaces panel's colour legend text, the
+  Settings dialog's long explanations).
+- A per-dock ⧉ in each dock's title bar (Qt's own float button is there but easy to miss).
+- The Results dock: fold to its header row when the conformer table has one row.
+
 ## SCRATCH-1: Scratch cleanup and Psi4 memory · done 2026-11-13 (PR #5)
 Brandon (2026-11-13): "The hard drive was nearly filled last night. Can you make it so that the scratch files are
 deleted after we extract the information we need?"

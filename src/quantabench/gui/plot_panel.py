@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -104,6 +105,14 @@ class PlotPanel(QWidget):
         checks.addWidget(self.fit_box)
         checks.addWidget(self.parity_box)
         checks.addStretch(1)
+        self.popout_btn = QToolButton()          # UI-8: the plot in a window of its own (gui.popout)
+        self.popout_btn.setObjectName("plot_popout")
+        self.popout_btn.setText("⧉")
+        self.popout_btn.setAutoRaise(True)
+        self.popout_btn.setCheckable(True)
+        self.popout_btn.setToolTip("Pop the plot out into a window of its own (click again to dock it)")
+        self.popout_btn.toggled.connect(self._pop_out)
+        checks.addWidget(self.popout_btn)
         grid.addLayout(checks, 1, 2, 1, 2)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
@@ -126,6 +135,18 @@ class PlotPanel(QWidget):
         self._apply_theme()
         self.fill_boxes()
         self.redraw()
+
+    def _pop_out(self, on: bool) -> None:
+        dock = getattr(self.win, "plot_dock", None)
+        if dock is not None and dock.isFloating() != on:
+            from .popout import pop_out
+
+            pop_out(dock, on)
+
+    def _sync_popout(self, floating: bool) -> None:
+        self.popout_btn.blockSignals(True)
+        self.popout_btn.setChecked(floating)
+        self.popout_btn.blockSignals(False)
 
     # ------------------------------------------------------------------ choices
     def _settings(self) -> dict:
@@ -336,3 +357,4 @@ def install(win) -> None:
     add_view_toggle(win, dock, "Plot", "Scatter plot of two table columns, colour by a third, fit line")
     win.plot_dock = dock
     win.plot_panel = panel
+    dock.topLevelChanged.connect(panel._sync_popout)

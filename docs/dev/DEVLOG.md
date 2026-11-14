@@ -143,3 +143,9 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - Ridge needs no scikit-learn: with the SVD of the standardized features, the leave-one-out residual of every α on the grid is closed form (residual / (1 − leverage), the intercept's 1/n included). It picks the same α as scikit-learn's RidgeCV to 1e-15 on a test set. scikit-learn stays optional (CI runs without it; those tests skip).
 - Predictions come back as a joined CSV rather than formula columns: a random forest has no formula, and a file in the project's `models/` keeps the out-of-fold predictions that the 1:1 plot needs, stored relative to the project like any join.
 - The evening's machines: the MacBook took the large (> 35 heavy atoms) and iodine parts of b03's ESP pass, one molecule at a time; NOVA kept the small ones.
+
+## 2026-11-14: UI-8 collapsible sections and pop-outs (branch `feat/ui-declutter`)
+- The Pipeline dock's long part was the help text, not the fields: each choice had a two- to five-line note from the method guide under it. The notes now sit behind an ⓘ next to the field. The field's row stays one line, and a note that warns (an engine not installed) shows as ⚠, so it is not lost by being hidden.
+- The stage list and the page stack were two widgets for one thing. An accordion of sections keeps the stage names, statuses and a summary of each stage's settings on screen at once, with one stage's form open.
+- Docks could always float (Qt's title-bar button), but nobody finds that button. View > Pop out panel lists them, and the Plot has its own ⧉. Floating docks are part of `saveState`, so each workspace keeps its own pop-outs.
+

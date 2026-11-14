@@ -45,13 +45,10 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QSplitter,
-    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
     QToolBar,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -224,6 +221,7 @@ class MainWindow(QMainWindow):
             machine_monitor,
             machines_panel,
             plot_panel,
+            popout,
             project_actions,
             review_panel,
             sketcher_dock,
@@ -234,7 +232,7 @@ class MainWindow(QMainWindow):
         )
 
         for panel in (spectra_panel, surface_panel, table_panel, plot_panel, project_actions, import_action,
-                      machines_panel, machine_monitor, update_action, clipboard, sketcher_dock, review_panel):
+                      machines_panel, machine_monitor, update_action, clipboard, sketcher_dock, review_panel, popout):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
@@ -306,10 +304,20 @@ class MainWindow(QMainWindow):
             b.clicked.connect(fn)
             btns.addWidget(b)
         lay.addLayout(btns)
+        from .collapsible import Notes, Section
+
+        details = QWidget()
+        dl = QVBoxLayout(details)
+        dl.setContentsMargins(4, 0, 0, 0)
+        dl.setSpacing(2)
         self.mol_info = QLabel()
         self.mol_info.setWordWrap(True)
         self.mol_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        lay.addWidget(self.mol_info)
+        self.mol_notes = Notes()               # engine and fallback notes, folded to one line (UI-8)
+        dl.addWidget(self.mol_info)
+        dl.addWidget(self.mol_notes)
+        self.mol_details = Section("Details", details, key="details", open_=True, settings_key="molecules/details")
+        lay.addWidget(self.mol_details)
         dock = QDockWidget("Molecules", self)
         dock.setObjectName("molecules")
         dock.setWidget(w)
@@ -329,6 +337,8 @@ class MainWindow(QMainWindow):
 
     def _update_counts(self) -> None:
         n = self.model.rowCount()
+        if hasattr(self, "stage_items"):
+            self._update_stage_summary("input")
         if hasattr(self, "mol_status"):
             self._update_molecule_status()
         if not n:
@@ -343,38 +353,35 @@ class MainWindow(QMainWindow):
         self.count_label.setText(text)
 
     def _build_pipeline_dock(self) -> None:
+        """The Pipeline dock (UI-8): one collapsible section per stage (an accordion: opening one closes the others),
+        each header with the stage's one-line summary of its settings and its status for the current molecule; the
+        stage's description and the method guide's notes are behind ⓘ pop-outs."""
+        from .collapsible import Accordion, Section
+
         w = QWidget()
         lay = QVBoxLayout(w)
-        self.stage_tree = QTreeWidget()
-        self.stage_tree.setHeaderLabels(["Pipeline stage", "Status"])
-        self.stage_tree.setRootIsDecorated(False)
-        self.stage_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.stage_items = {}
+        self.stage_accordion = Accordion(exclusive=True, settings_key="pipeline/open_stage")
+        self.stage_accordion.setObjectName("pipeline_stages")
+        self.stage_items = {}                  # key -> Section (its status shows the stage's time for a molecule)
         for key, label, tip in STAGES:
-            it = QTreeWidgetItem([label.replace("&&", "&"), ""])
-            it.setToolTip(0, tip)
-            it.setData(0, Qt.ItemDataRole.UserRole, key)
-            self.stage_tree.addTopLevelItem(it)
-            self.stage_items[key] = it
-        self.stage_tree.setMaximumHeight(215)
-        self.stage_tree.setMinimumHeight(190)
-        lay.addWidget(self.stage_tree)
-        self.stage_stack = QStackedWidget()
-        self.stage_pages = {}
-        for key, _label, tip in STAGES:
             page = self._stage_page(key, tip)
             for combo in page.findChildren(QComboBox):   # long item texts must not widen the dock
                 combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
                 combo.setMinimumContentsLength(14)
-            self.stage_pages[key] = self.stage_stack.addWidget(page)
+            sec = Section(label.replace("&&", "&"), page, key=key, info=self._stage_info(key, tip))
+            self.stage_accordion.add(sec)
+            self.stage_items[key] = sec
+            for sig in self._change_signals(page):
+                sig.connect(lambda *_a, k=key: self._update_stage_summary(k))
         scroll = QScrollArea()             # the Properties page can list dozens of descriptors
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(self.stage_stack)
+        scroll.setWidget(self.stage_accordion)
         lay.addWidget(scroll, 1)
-        self.stage_tree.currentItemChanged.connect(self._on_stage_selected)
-        self.stage_tree.setCurrentItem(self.stage_items["refine"])
+        self.stage_accordion.restore("refine")
+        for key in self.stage_items:
+            self._update_stage_summary(key)
         run_row = QHBoxLayout()
         self.run_btn = QPushButton("Run all")
         self.run_btn.clicked.connect(lambda: self.request_run(selected_only=False))
@@ -393,12 +400,11 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
     def _stage_page(self, key: str, tip: str) -> QWidget:
+        from .collapsible import with_info
+
         page = QWidget()
         form = QFormLayout(page)
-        head = QLabel(tip)
-        head.setWordWrap(True)
-        head.setStyleSheet("color: gray;")
-        form.addRow(head)
+        form.setContentsMargins(18, 2, 4, 6)
         if key == "input":
             self.input_detail = QLabel("Select a molecule.")
             self.input_detail.setWordWrap(True)
@@ -460,10 +466,8 @@ class MainWindow(QMainWindow):
             self.crest_info = self._guide_label()
             self.w_confsearch.currentIndexChanged.connect(self._update_crest_widgets)
             self.w_crest_method.currentIndexChanged.connect(self._update_conformer_info)
-            form.addRow("Search", self.w_confsearch)
-            form.addRow(self.search_info)
-            form.addRow("CREST level", self.w_crest_method)
-            form.addRow(self.crest_info)
+            form.addRow("Search", with_info(self.w_confsearch, self.search_info))
+            form.addRow("CREST level", with_info(self.w_crest_method, self.crest_info))
             form.addRow(self.w_crest_quick)
             form.addRow(self.w_crest_fallback)
             self.w_maxconf = QSpinBox()
@@ -519,15 +523,12 @@ class MainWindow(QMainWindow):
             self.w_method.currentIndexChanged.connect(self._update_engine_info)
             self.w_solvent.currentIndexChanged.connect(self._update_engine_info)
             self.w_optimizer.currentIndexChanged.connect(self._update_engine_info)
-            form.addRow("Method", self.w_method)
-            form.addRow(self.engine_info)
-            form.addRow("Solvent", self.w_solvent)
-            form.addRow(self.solvent_info)
+            form.addRow("Method", with_info(self.w_method, self.engine_info))
+            form.addRow("Solvent", with_info(self.w_solvent, self.solvent_info))
             form.addRow("Refine lowest", self.w_refine_top)
             form.addRow("Force convergence", self.w_fmax)
             form.addRow("Max steps", self.w_steps)
-            form.addRow("Optimizer", self.w_optimizer)
-            form.addRow(self.optimizer_info)
+            form.addRow("Optimizer", with_info(self.w_optimizer, self.optimizer_info))
             form.addRow("Conformer batching", self.w_batched)
         elif key == "rank":
             from ..chem import rank
@@ -547,8 +548,7 @@ class MainWindow(QMainWindow):
             self.w_rank_method.currentIndexChanged.connect(self._update_rank_info)
             if hasattr(self, "w_solvent"):          # 'auto' picks by phase
                 self.w_solvent.currentIndexChanged.connect(self._update_rank_info)
-            form.addRow("Rank level", self.w_rank_method)
-            form.addRow(self.rank_info)
+            form.addRow("Rank level", with_info(self.w_rank_method, self.rank_info))
             form.addRow("Rank window", self.w_rank_window)
         elif key == "properties":
             self.w_xtbprops = QCheckBox("GFN1-xTB charges, dipole, polarizability (best conformer)")
@@ -626,10 +626,8 @@ class MainWindow(QMainWindow):
             if hasattr(self, "w_rank_method"):      # rank level 'qm' needs the QM stage
                 self.w_qm_on.toggled.connect(self._update_rank_info)
             form.addRow(self.w_qm_on)
-            form.addRow("Functional", self.w_qm_func)
-            form.addRow(self.qm_func_info)
-            form.addRow("Basis set", self.w_qm_basis)
-            form.addRow(self.qm_basis_info)
+            form.addRow("Functional", with_info(self.w_qm_func, self.qm_func_info))
+            form.addRow("Basis set", with_info(self.w_qm_basis, self.qm_basis_info))
             form.addRow("Task", self.w_qm_task)
             form.addRow("Conformers", self.w_qm_top)
             form.addRow(self.w_qm_props)
@@ -640,12 +638,10 @@ class MainWindow(QMainWindow):
         elif key == "export":
             self.w_formats = {}
             for fmt, desc in export.FORMATS.items():
-                cb = QCheckBox(fmt)
+                cb = QCheckBox(f"{fmt}  ({desc})" if len(desc) <= 38 else fmt)
                 cb.setToolTip(desc)
-                lbl = QLabel(desc)
-                lbl.setWordWrap(True)
                 self.w_formats[fmt] = cb
-                form.addRow(cb, lbl)
+                form.addRow(cb)
             self.out_label = QLabel()
             self.out_label.setWordWrap(True)
             form.addRow(self.out_label)
@@ -1130,7 +1126,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ methods guide (chem.method_guide)
     def _guide_label(self) -> QLabel:
         """An info label for a pipeline choice: the guide's one-line summary and a "More…" link to the entry."""
-        label = QLabel()
+        from .collapsible import InfoLabel
+
+        label = InfoLabel()
         label.setWordWrap(True)
         label.setTextFormat(Qt.TextFormat.RichText)
         label.setOpenExternalLinks(False)
@@ -1498,6 +1496,7 @@ class MainWindow(QMainWindow):
         self._shown_key = None
         self._shown_res = None
         self.mol_info.setText("")
+        self._clear_notes()
         self.props_view.setText("")
         self.setWindowTitle(f"QuantaBench {__version__}")
 
@@ -1555,6 +1554,7 @@ class MainWindow(QMainWindow):
             self._request_load(row.id)       # shown when read (a few ms); the views keep the last one meanwhile
             self.input_detail.setText(f"<b>{row.id}</b> {row.name}<br>SMILES: {row.smiles}")
             self.mol_info.setText(f"<b>{row.id}</b>: reading the results...")
+            self._clear_notes()
             self._fill_conformers(None)
             self._shown_res = None
             return
@@ -1570,6 +1570,7 @@ class MainWindow(QMainWindow):
             self._show_info(res)
         else:
             self.mol_info.setText(res.error if res and res.error else "Not built yet. Press Run.")
+            self._clear_notes()
             self.props_view.setText("")
         if self._surface_preview:
             self.resultChanged.emit(res if built else None)
@@ -1646,8 +1647,10 @@ class MainWindow(QMainWindow):
                         f"G − E {u.with_unit(thermo['g_corr_kcal'], units.KCAL, 'relative', 2)} "
                         f"at {thermo['temperature_k']:.0f} K"
                         + (f"; <b>{vib['n_imaginary']} imaginary</b>" if vib["n_imaginary"] else ""))
-        bits += [f"<i>{n}</i>" for n in res.notes]
         self.mol_info.setText("<br>".join(bits))
+        self.mol_notes.set_notes(res.notes)
+        self.mol_details.set_summary(f"{res.input.id} · {d.get('formula', '')}"
+                                     + (f" · {len(res.conformers)} conformer(s)" if res.conformers else ""))
         lines = []
         if thermo:
             def corr(key):            # H − E, G − E: a relative energy, with its unit when it differs from H's
@@ -1681,7 +1684,7 @@ class MainWindow(QMainWindow):
                     text = f"{STATUS_ICON['ok']} {len(res.files)} files"
                 elif res.status == "failed":
                     text = STATUS_ICON["failed"]
-            it.setText(1, text)
+            it.set_status(text)
 
     def _fill_conformers(self, res: MoleculeResult | None) -> None:
         self.conf_table.blockSignals(True)
@@ -1714,9 +1717,73 @@ class MainWindow(QMainWindow):
             self.playback.set_index(row)
         self._update_molecule_status()
 
-    def _on_stage_selected(self, cur, _prev) -> None:
-        if cur is not None:
-            self.stage_stack.setCurrentIndex(self.stage_pages[cur.data(0, Qt.ItemDataRole.UserRole)])
+    def _clear_notes(self) -> None:
+        if hasattr(self, "mol_notes"):
+            self.mol_notes.set_notes([])
+            self.mol_details.set_summary("")
+
+    # ------------------------------------------------------------------ stage sections (UI-8)
+    @staticmethod
+    def _change_signals(page: QWidget) -> list:
+        """The signals of a stage page's fields that change its summary."""
+        out = []
+        for wdg in page.findChildren(QWidget):
+            for name in ("currentIndexChanged", "valueChanged", "toggled", "textChanged"):
+                if isinstance(wdg, (QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QLineEdit)) and hasattr(wdg, name):
+                    out.append(getattr(wdg, name))
+                    break
+        return out
+
+    def _stage_info(self, key: str, tip: str) -> str:
+        if key == "export":
+            return tip + ":<br>" + "<br>".join(f"<b>{fmt}</b>: {desc}" for fmt, desc in export.FORMATS.items())
+        return tip
+
+    def stage_summary(self, key: str) -> str:
+        """The one line a stage's header shows: the settings that matter most."""
+        def combo(name):
+            wdg = getattr(self, name, None)
+            return wdg.currentText() if isinstance(wdg, QComboBox) else ""
+
+        def on(name):
+            wdg = getattr(self, name, None)
+            return bool(wdg is not None and wdg.isChecked())
+
+        def val(name, fmt="{:g}"):
+            wdg = getattr(self, name, None)
+            return fmt.format(wdg.value()) if wdg is not None else ""
+
+        if key == "input":
+            n = self.model.rowCount() if hasattr(self, "model") else 0
+            return f"{n:,} molecule(s)"
+        if key == "prepare":
+            parts = [f"pH {val('w_ph')}, {combo('w_prot_method')}" if on("w_protonate") else "as drawn"]
+            if on("w_desalt"):
+                parts.append("largest fragment")
+            return " · ".join(parts)
+        if key == "conformers":
+            search = "CREST " + combo("w_crest_method") if combo("w_confsearch").startswith("CREST") else "RDKit ETKDG"
+            return f"{search} · up to {val('w_maxconf')}"
+        if key == "refine":
+            return f"{combo('w_method').split(' (')[0]} · {combo('w_solvent')} · lowest {val('w_refine_top')}"
+        if key == "rank":
+            return combo("w_rank_method").split(" (")[0]
+        if key == "properties":
+            parts = [x for x, ok in (("xTB properties", on("w_xtbprops")), ("frequencies", on("w_freq"))) if ok]
+            return " · ".join(parts) or "descriptors"
+        if key == "qm":
+            if not on("w_qm_on"):
+                return "off"
+            return f"{combo('w_qm_func')}/{combo('w_qm_basis')} · {combo('w_qm_task')}"
+        if key == "export":
+            fmts = [f for f, cb in getattr(self, "w_formats", {}).items() if cb.isChecked()]
+            return ", ".join(fmts) if fmts else "no files"
+        return ""
+
+    def _update_stage_summary(self, key: str) -> None:
+        sec = self.stage_items.get(key) if hasattr(self, "stage_items") else None
+        if sec is not None:
+            sec.set_summary(self.stage_summary(key))
 
     # ================================================================== running
     def request_run(self, selected_only: bool = False) -> None:
