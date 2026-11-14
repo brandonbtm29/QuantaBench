@@ -81,8 +81,8 @@ LEGACY_DEFAULTS = {"rank_method": "refine", "freq_imag_retries": 0}   # 2026-11-
 #: Run options: not science (they change no number, so a resume may change them without --force) but chosen for the
 #: run, not for the machine. A resume keeps the values the run was started with unless they are given again
 #: (``stored_run_options``); this machine's settings fill in only what the run predates. Before RESUME-1 a resume took
-#: them from the settings: b03's ESP pass, started with --qm-memory 6 and --no-keep-cubes, resumed at 4 GB (5 lanes
-#: instead of 3, 53 molecules over the time limit) and kept 14 GB of cube files.
+#: them from the settings: b03's ESP pass, started with --qm-memory 6 and --no-keep-cubes, resumed at 4 GB (5 lanes of
+#: 2 threads instead of 3 of 4) and kept 14.5 GB of cube files.
 RUN_OPTION_FIELDS = ("qm_memory_gb", "qm_keep_cubes", "molecule_timeout_s")
 #: fields that only matter with another field's value: rank_window_kj only when a rank step runs
 _ONLY_WITH = {"rank_window_kj": ("rank_method", "refine")}

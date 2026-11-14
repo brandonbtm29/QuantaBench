@@ -11,7 +11,8 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 ## RESUME-1: A resume keeps the run's memory, cube and time-limit options · in-PR 2026-11-14 (branch `fix/resume-run-options`)
 Found in the b03 ESP pass (2026-11-13/14). The controller resumed the small part with a bare `build --resume`. That ran
 at the settings' 4 GB per Psi4 job (the run was started with `--qm-memory 6`), so the lane plan gave 5 × 2 instead
-of 3 × 4, 53 molecules passed the 1,800 s limit, and 14 GB of cubes were kept (`--no-keep-cubes` was lost).
+of 3 × 4, and 14.5 GB of cubes were kept (`--no-keep-cubes` was lost). Of the 54 failures, 29 came before the resume
+(the largest molecules run first) and 24 + 1 after it: the 1,800 s limit, more than the resume, caused them.
 Done in the branch:
 - `jobs.RUN_OPTION_FIELDS` (`qm_memory_gb`, `qm_keep_cubes`, `molecule_timeout_s`), `stored_run_options`,
   `run_options_note`.

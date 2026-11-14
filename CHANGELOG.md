@@ -4,7 +4,7 @@
 
 ### `build --resume` keeps the run's memory, cube and time-limit options, RESUME-1 (2026-11-14)
 - **The bug.** A resume restored the run's science settings and output formats only. `--qm-memory`, `--no-keep-cubes` and `--molecule-timeout` came from the settings instead.
-- **Its cost last night.** b03's ESP pass was started with `--qm-memory 6 --no-keep-cubes`. Resumed by its controller, it ran 753 molecules at the settings' 4 GB per Psi4 job, which made the automatic lane plan give 5 lanes × 2 threads instead of 3 × 4. 53 molecules passed the 1,800 s limit, and the cube files were kept (14 GB).
+- **Its cost last night.** b03's ESP pass was started with `--qm-memory 6 --no-keep-cubes`. Resumed by its controller, it ran 753 molecules at the settings' 4 GB per Psi4 job, which made the automatic lane plan give 5 lanes × 2 threads instead of 3 × 4, and it kept the cube files (14.5 GB). Most of that night's 54 failures were time-outs that happened anyway: 29 in the first segment, before the resume.
 - **The fix.** These three options are now stored with the run and kept on a resume, from the command line, Build > Resume run folder, and a new phase of a paired run. A line says which ones were kept; an option given again still wins. They are not science settings, so changing one never needs `--force`. A run folder from before this takes the settings' values, as before.
 
 ### Projects: save and reopen a molecule list with its results, UI-2 (2026-11-13)

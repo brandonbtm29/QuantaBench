@@ -143,5 +143,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
   - NOVA's resumed segment ran at 2 threads and 4 GB per Psi4 job. The first segment had run at 4 threads and 6 GB.
   - Its log shows why: `build --resume` restored only the science fields. `qm_memory_gb`, `qm_keep_cubes` and `molecule_timeout_s` are not science (they change no number), so they came from the settings.
   - Treating them as science would make a changed value refuse the resume. Instead they are run options: kept unless given again, and never a mismatch.
-- The 54 failures run again on the MacBook with the large part's settings (`Runs\2026-11-14_b03-esp-retry-mac`).
+- The 54 failures (53 time-outs at 1,800 s, 1 SCF failure) split 29 in the first segment and 24 + 1 in the resumed one.
+  - The first segment ran the largest molecules first, at 6 GB, so the limit caused the failures more than the resume did.
+  - They run again on the MacBook with the large part's settings (`Runs\2026-11-14_b03-esp-retry-mac`).
 
