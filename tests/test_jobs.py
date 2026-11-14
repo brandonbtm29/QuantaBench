@@ -1,4 +1,5 @@
 import csv
+import dataclasses
 import json
 import sqlite3
 
@@ -420,3 +421,21 @@ def test_time_limit_in_one_process_fails_the_molecule_and_retry_redoes_it(tmp_pa
     assert jobs.run_resumable(None, cfg(tmp_path, molecule_timeout_s=1e-4), run_dir)[0] == []
     redone, _ = jobs.run_resumable(None, cfg(tmp_path), run_dir, retry_failed=True)
     assert [r.status for r in redone] == ["ok", "ok"] and jobs.open_run(run_dir).counts["ok"] == 2
+
+
+def test_stored_config_keeps_the_run_options_and_old_runs_take_the_settings():
+    """RESUME-1: ``stored_config`` (Build > Resume run folder, a new phase of a paired run) keeps the run's memory,
+    cube and time-limit options; a run folder from before them takes this machine's values."""
+    here = pipeline.BuildConfig(qm_memory_gb=4.0, qm_keep_cubes=True, molecule_timeout_s=1800.0, threads=7)
+    stored = {**dataclasses.asdict(pipeline.BuildConfig(method="mmff")), "qm_memory_gb": 6.0, "qm_keep_cubes": False,
+              "molecule_timeout_s": 900.0, "threads": 3}
+    cfg = jobs.stored_config(stored, here)
+    assert (cfg.qm_memory_gb, cfg.qm_keep_cubes, cfg.molecule_timeout_s) == (6.0, False, 900.0)
+    assert cfg.threads == 7 and cfg.method == "mmff"                 # the machine's threads, the run's science
+    assert jobs.run_options_note(stored, here) == ("Run options kept from the run: --qm-memory 6, --no-keep-cubes, "
+                                                   "--molecule-timeout 900 (give them again to change them)")
+    old = {k: v for k, v in stored.items() if k not in jobs.RUN_OPTION_FIELDS}
+    cfg = jobs.stored_config(old, here)
+    assert (cfg.qm_memory_gb, cfg.qm_keep_cubes, cfg.molecule_timeout_s) == (4.0, True, 1800.0)
+    assert jobs.run_options_note(old, here) == ""
+    assert not set(jobs.RUN_OPTION_FIELDS) & set(jobs.SCIENCE_FIELDS)    # never a reason to refuse a resume

@@ -8,6 +8,22 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
+## RESUME-1: A resume keeps the run's memory, cube and time-limit options · in-PR 2026-11-14 (branch `fix/resume-run-options`)
+Found in the b03 ESP pass (2026-11-13/14). The controller resumed the small part with a bare `build --resume`. That ran
+at the settings' 4 GB per Psi4 job (the run was started with `--qm-memory 6`), so the lane plan gave 5 × 2 instead
+of 3 × 4, and 14.5 GB of cubes were kept (`--no-keep-cubes` was lost). Of the 54 failures, 29 came before the resume
+(the largest molecules run first) and 24 + 1 after it: the 1,800 s limit, more than the resume, caused them.
+Done in the branch:
+- `jobs.RUN_OPTION_FIELDS` (`qm_memory_gb`, `qm_keep_cubes`, `molecule_timeout_s`), `stored_run_options`,
+  `run_options_note`.
+- The CLI resume, `stored_config` (Build > Resume run folder, a new phase) and the note line.
+- Tests: `tests/test_cli.py::test_resume_keeps_the_runs_options`,
+  `tests/test_jobs.py::test_stored_config_keeps_the_run_options_and_old_runs_take_the_settings`.
+Follow-ups (ready):
+- Store the `--lanes` spec with the run too (today a resume without `--lanes` uses this machine's lane setting; with
+  the run's `--qm-memory` back, `auto` gives the same plan again).
+- `--priority` and `--free-threads` stay per machine on purpose.
+
 ## SCRATCH-1: Scratch cleanup and Psi4 memory · done 2026-11-13 (PR #5)
 Brandon (2026-11-13): "The hard drive was nearly filled last night. Can you make it so that the scratch files are
 deleted after we extract the information we need?"
