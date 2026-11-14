@@ -102,7 +102,8 @@ quantabench-cli md parse pfoa_smd       # after the run: detachment work and pea
 
 `build` uses the resumable job table whenever it builds more than one molecule or gets `--run-dir`,
 `--resume` or `--chunk`; a single molecule runs directly. `--batched auto|on|off` controls batched
-conformer refinement (auto: only on a GPU).
+conformer refinement (auto: only on a GPU). `--resume` continues with the run's science settings and its
+`--qm-memory`, `--keep-cubes`/`--no-keep-cubes` and `--molecule-timeout`; give an option again to change it.
 
 ## Adding molecules
 

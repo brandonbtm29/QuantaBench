@@ -137,3 +137,11 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - Opening restores only the light rows, as File > Open run folder does. Statuses come from the saved rows at once; the job tables are read after, off the GUI thread, because a command-line resume may have moved them on since the save.
 - The table model is lazy (it refreshes only while the Table or Plot is in view): a test that adds a formula column must show Analyze first.
 - Quit asks about unsaved changes only with a project open. Asking for every untitled list would have changed every existing test, and the habit of closing a session whose results are in run folders.
+
+## 2026-11-14: RESUME-1, a resume keeps the run's options (branch `fix/resume-run-options`)
+- b03's ESP pass is done on both machines. NOVA: small part, 795 ok and 54 failed. MacBook: large 56/56 and iodine 25/25 (def2-SVP).
+  - NOVA's resumed segment ran at 2 threads and 4 GB per Psi4 job. The first segment had run at 4 threads and 6 GB.
+  - Its log shows why: `build --resume` restored only the science fields. `qm_memory_gb`, `qm_keep_cubes` and `molecule_timeout_s` are not science (they change no number), so they came from the settings.
+  - Treating them as science would make a changed value refuse the resume. Instead they are run options: kept unless given again, and never a mismatch.
+- The 54 failures run again on the MacBook with the large part's settings (`Runs\2026-11-14_b03-esp-retry-mac`).
+

@@ -78,6 +78,12 @@ SCIENCE_FIELDS = (
 #: config without the field ran with this value (RANK-2: every run before the rank step ranked at the refinement
 #: level). ``stored_science`` and ``config_differences`` use it, so an old run folder resumes as it was started.
 LEGACY_DEFAULTS = {"rank_method": "refine", "freq_imag_retries": 0}   # 2026-11-12: imaginary modes removed
+#: Run options: not science (they change no number, so a resume may change them without --force) but chosen for the
+#: run, not for the machine. A resume keeps the values the run was started with unless they are given again
+#: (``stored_run_options``); this machine's settings fill in only what the run predates. Before RESUME-1 a resume took
+#: them from the settings: b03's ESP pass, started with --qm-memory 6 and --no-keep-cubes, resumed at 4 GB (5 lanes
+#: instead of 3, 53 molecules over the time limit) and kept 14 GB of cube files.
+RUN_OPTION_FIELDS = ("qm_memory_gb", "qm_keep_cubes", "molecule_timeout_s")
 #: fields that only matter with another field's value: rank_window_kj only when a rank step runs
 _ONLY_WITH = {"rank_window_kj": ("rank_method", "refine")}
 
@@ -761,6 +767,23 @@ def stored_science(stored: dict) -> dict:
     return out
 
 
+def stored_run_options(stored: dict) -> dict:
+    """The run options (``RUN_OPTION_FIELDS``) a run folder's stored config was started with; those it predates are
+    left out (the settings decide them, as before)."""
+    return {k: stored[k] for k in RUN_OPTION_FIELDS if k in stored}
+
+
+def run_options_note(stored: dict, here: BuildConfig, cfg: BuildConfig | None = None) -> str:
+    """One line for a resume: the run options kept from the run where they differ from this machine's settings
+    (``here``); with ``cfg``, the settings in force, only those not given again."""
+    flags = {"qm_memory_gb": lambda v: f"--qm-memory {v:g}",
+             "qm_keep_cubes": lambda v: "--keep-cubes" if v else "--no-keep-cubes",
+             "molecule_timeout_s": lambda v: f"--molecule-timeout {v:g}"}
+    kept = [flags[k](v) for k, v in stored_run_options(stored).items()
+            if getattr(here, k) != v and (cfg is None or getattr(cfg, k) == v)]
+    return ("Run options kept from the run: " + ", ".join(kept) + " (give them again to change them)") if kept else ""
+
+
 def config_differences(stored: dict, cfg: BuildConfig) -> dict[str, tuple]:
     """Science fields whose stored value differs from ``cfg`` (missing fields compare to ``LEGACY_DEFAULTS``, else
     the default). A field that only matters with another one's value (``_ONLY_WITH``: the rank window without a
@@ -1377,12 +1400,13 @@ def load_result(run_dir: str | Path, mol_id: str) -> MoleculeResult:
 
 
 def stored_config(config: dict, base: BuildConfig | None = None) -> BuildConfig:
-    """The settings to resume a run folder with: its stored science settings (``SCIENCE_FIELDS``) and output
-    formats on top of ``base`` (this machine's threads, GPU and output folder; default ``BuildConfig()``)."""
+    """The settings to resume a run folder with: its stored science settings (``SCIENCE_FIELDS``), run options
+    (``RUN_OPTION_FIELDS``) and output formats on top of ``base`` (this machine's threads, GPU and output folder;
+    default ``BuildConfig()``)."""
     from dataclasses import replace
 
     base = base or BuildConfig()
-    cfg = replace(base, **stored_science(config))
+    cfg = replace(base, **stored_science(config), **stored_run_options(config))
     if config.get("formats"):
         cfg = replace(cfg, formats=tuple(config["formats"]))
     return cfg

@@ -156,3 +156,25 @@ def test_settings_engine_path_is_per_machine(capsys, monkeypatch):
     with pytest.raises(SystemExit):
         cli.main(["settings", "--help"])
     assert "--machine [NAME]" in " ".join(capsys.readouterr().out.split())
+
+
+def test_resume_keeps_the_runs_options(tmp_path, capsys):
+    """RESUME-1: --qm-memory, --no-keep-cubes and --molecule-timeout belong to the run: a resume keeps them (b03's
+    ESP pass resumed at the settings' 4 GB and kept its cubes), and an option given again still wins."""
+    from quantabench.chem import jobs
+
+    run_dir = tmp_path / "run"
+    assert cli.main(["build", "CCO eth", "OCC(F)(F)F tfe", "--method", "mmff", "--max-confs", "2", "--run-dir",
+                     str(run_dir), "--qm-memory", "3", "--no-keep-cubes", "--molecule-timeout", "77"]) == 0
+    capsys.readouterr()
+    assert cli.main(["build", "--resume", str(run_dir)]) == 0
+    out = capsys.readouterr().out
+    assert "Run options kept from the run: --qm-memory 3, --no-keep-cubes, --molecule-timeout 77" in out
+    cfg = jobs.open_run(run_dir).config
+    assert cfg["qm_memory_gb"] == 3 and cfg["qm_keep_cubes"] is False and cfg["molecule_timeout_s"] == 77
+    # given again, an option wins and is no longer listed as kept
+    assert cli.main(["build", "--resume", str(run_dir), "--keep-cubes", "--qm-memory", "5"]) == 0
+    line = next(x for x in capsys.readouterr().out.splitlines() if x.startswith("Run options kept"))
+    assert line == "Run options kept from the run: --molecule-timeout 77 (give them again to change them)"
+    cfg = jobs.open_run(run_dir).config
+    assert cfg["qm_keep_cubes"] is True and cfg["qm_memory_gb"] == 5 and cfg["molecule_timeout_s"] == 77
