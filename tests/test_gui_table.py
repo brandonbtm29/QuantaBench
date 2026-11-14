@@ -842,3 +842,68 @@ def test_feature_builder_join_and_parity_persist(tmp_path, built):
         assert model.joins() == [] and model.join_errors == {}
     finally:
         _close(app, w)
+
+
+def test_model_dialog_fits_joins_and_plots(tmp_path, built):
+    """QSAR-4: the Model... dialog guesses the target (a joined σ) and the reduced target, ticks the liquid groups,
+    fits a ridge model, writes models/<name>.csv and .json and joins the predictions, plots them 1:1; with a project
+    open the files go into the project's models/ folder, stored relative to it."""
+    import json
+
+    from quantabench import project as proj
+    from quantabench.analysis import models as mdl
+
+    app = _app()
+    csv_path = tmp_path / "measured.csv"
+    # surface tensions at 25 °C (mN/m), rounded
+    csv_path.write_text("ID,sigma_mN_m,family\nethanol,21.97,alcohol\nbutanol,24.2,alcohol\noctanoic,28.8,acid\n"
+                        "TFA,13.5,PFAS\nPFBA,16.1,PFAS\n", encoding="utf-8")
+    w = _window(tmp_path)
+    try:
+        res = _fresh(built)
+        w.add_inputs([r.input for r in res], built=res)
+        panel, model = w.table_panel, w.table_panel.model
+        assert _wait(app, lambda: model.rowCount() == len(res), 5)
+        assert panel.join_csv(csv_path, "ID") == 5
+        dlg = panel.model_dialog(show=False)
+        assert panel.model_dialog(show=False) is dlg                     # one dialog per window
+        assert dlg.target.currentData() == "join:measured::sigma_mN_m"
+        assert dlg.reduced.isEnabled() and dlg.reduced.isChecked() and dlg.scale_alias() == "sigma_scale_kT_mN_m"
+        got = dlg.tick_preset("Liquid groups")
+        assert got == ["lorentz_lorenz_bosque", "packing_fraction_vdw", "sphericity_vdw"]   # MMFF: no dipole
+        assert dlg.chosen_features() == [c.alias for c in model.numeric_columns() if c.alias in got]
+        sk = dlg.kind.model().item(dlg.kind.findData(mdl.RANDOM_FOREST))
+        assert sk.isEnabled() == mdl.sklearn_available()
+        dlg.name.setText("1bad")
+        dlg.run(background=False)
+        assert dlg.result is None and "not a usable name" in dlg.status.text()
+        dlg.name.setText("model1")
+        dlg.run(background=False)
+        r = dlg.result
+        assert r is not None and r.n_train == 5 and r.spec.reduced and r.spec.target == "sigma_mN_m"
+        assert "5-fold CV" in dlg.status.text() and "lorentz_lorenz_bosque" in dlg.report.toPlainText()
+        csv_out, json_out = dlg.add_to_table()
+        assert csv_out == tmp_path / "runs" / "models" / "model1.csv" and json_out.is_file()
+        oof = model.column("join:model1::model1_oof")
+        assert oof is not None and oof.alias == "model1_oof" and model.column("join:model1::model1_pred")
+        np.testing.assert_allclose(model.values(oof.key), r.oof, rtol=1e-6)
+        assert dlg.name.text() == "model2" and not dlg.add_btn.isEnabled()
+        assert dlg.plot()
+        assert _wait(app, lambda: "1:1" in w.plot_panel.stats.text(), 5), w.plot_panel.stats.text()
+        assert w.plot_panel.x_box.currentData() == "join:measured::sigma_mN_m" and w.plot_panel.parity_box.isChecked()
+        # a change of choices drops the result; a fit on the worker thread
+        dlg.set_features(["lorentz_lorenz_bosque"])
+        assert dlg.result is None
+        dlg.run()
+        assert _wait(app, lambda: dlg.result is not None, 30) and dlg.result.spec.features == ["lorentz_lorenz_bosque"]
+        # with a project open: <project>/models, the join stored relative to the project
+        assert w.project.save_as(path=tmp_path / "pfas")
+        root = proj.project_path(tmp_path / "pfas")
+        assert dlg.folder() == root / "models"
+        csv2, _json2 = dlg.add_to_table()
+        assert csv2 == root / "models" / "model2.csv"
+        assert w.project.is_dirty() and w.project.save()
+        table = json.loads(json.loads((root / proj.PROJECT_FILE).read_text(encoding="utf-8"))["table"])
+        assert {j["label"]: j["path"] for j in table["joins"]}["model2"] == "models/model2.csv"
+    finally:
+        _close(app, w)

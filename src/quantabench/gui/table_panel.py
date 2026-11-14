@@ -18,6 +18,9 @@ One row per molecule of the Molecules dock, the same rows in the same order (unt
   again; one that needs another is added after it.
 - **Join...** brings in columns of a CSV file by id (measured surface tensions or densities, ``pubchem targets``
   output): the file, its id column and the columns are part of the table's state, read again at the next start.
+- **Model...** (QSAR-4, ``gui.model_dialog``) fits a property model of a column on other columns (ridge regression,
+  or elastic net, random forest, gradient boosting with scikit-learn), cross-validated by k-fold, leave-one-group-out
+  and a holdout column, and joins its predictions (``<name>_pred``, ``<name>_oof``) back as a file in models/.
 - **Sort** by any column (numbers as numbers, missing values last), **filter** by ID, name, SMILES, formula or
   method. **Selecting a row selects the molecule** in the Molecules dock, and the other way round.
 - **Ctrl+C** copies the selected cells as tab-separated text (Excel, LibreOffice, Origin), **Ctrl+Shift+C** with the
@@ -900,6 +903,12 @@ class TablePanel(QWidget):
         self.join_btn.setToolTip("Bring in columns of a CSV file by id: measured surface tensions, densities, "
                                  "`pubchem targets` output")
         self.join_btn.clicked.connect(lambda: self.join_dialog())
+        self.model_btn = QPushButton("Model...")
+        self.model_btn.setObjectName("table_model")
+        self.model_btn.setToolTip("Fit a property model (ridge, elastic net, random forest, gradient boosting) of a "
+                                  "column on other columns, cross-validated; its predictions join the table")
+        self.model_btn.clicked.connect(lambda: self.model_dialog())
+        self._model_dlg = None
         self.export_btn = QToolButton()
         self.export_btn.setText("Export")
         self.export_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -924,7 +933,7 @@ class TablePanel(QWidget):
         top.addWidget(self.filter, 1)
         top.addWidget(self.count)
         for b in (self.columns_btn, self.formula_btn, self.fit_btn, self.features_btn, self.join_btn,
-                  self.export_btn):
+                  self.model_btn, self.export_btn):
             top.addWidget(b)
 
         self.view = SheetView(self.model)
@@ -1270,6 +1279,21 @@ class TablePanel(QWidget):
             return []
         self.win.statusBar().showMessage("Added " + ", ".join(c.alias for c in cols), 8000)
         return cols
+
+    # ------------------------------------------------------------------ property models (analysis.models)
+    def model_dialog(self, show: bool = True):
+        """The Model... dialog (non-modal, one per window: opening it again lists the columns afresh)."""
+        from .model_dialog import ModelDialog
+
+        if self._model_dlg is None:
+            self._model_dlg = ModelDialog(self)
+        else:
+            self._model_dlg.fill()
+        if show:
+            self._model_dlg.show()
+            self._model_dlg.raise_()
+            self._model_dlg.activateWindow()
+        return self._model_dlg
 
     # ------------------------------------------------------------------ joined files
     def join_dialog(self, path: str | None = None, modal: bool = True):
