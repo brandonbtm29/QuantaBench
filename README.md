@@ -169,7 +169,9 @@ and **Fit...** fits a formula's parameters to a column, e.g. `((a*alpha + b*mu**
 parachor, with n, MAE, RMSE and R². **Features** adds ready-made columns: dimensionless liquid-state groups (the
 Lorentz-Lorenz function and refractive index, packing fraction, sphericity, a Lifshitz σ, the reduced surface
 tension's unit kT/v_m^⅔), ratios of α, μ, V and A, and the reduced target σ* of any column. **Join...** brings in
-columns of a CSV by id (measured surface tensions or densities). The **Plot** next to it scatters any two columns,
+columns of a CSV by id (measured surface tensions or densities). **Model...** fits a cross-validated property model
+(ridge regression; elastic net, random forest or gradient boosting with scikit-learn) of a column on others, optionally
+of σ* with the predictions multiplied back, and joins its predictions to the table. The **Plot** next to it scatters any two columns,
 coloured by a third, with a fit line or a 1:1 parity view (MAE, RMSE, bias, R²); clicking a point selects the
 molecule.
 

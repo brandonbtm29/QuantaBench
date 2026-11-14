@@ -137,3 +137,9 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - Opening restores only the light rows, as File > Open run folder does. Statuses come from the saved rows at once; the job tables are read after, off the GUI thread, because a command-line resume may have moved them on since the save.
 - The table model is lazy (it refreshes only while the Table or Plot is in view): a test that adds a formula column must show Analyze first.
 - Quit asks about unsaved changes only with a project open. Asking for every untitled list would have changed every existing test, and the habit of closing a session whose results are in run folders.
+
+## 2026-11-13: QSAR-4 Model... in the Analyze table (branch `feat/model-builder`)
+- The σ study of the afternoon ran as a script; the dialog makes its best setup (the liquid groups and σ*, k-fold and leave-class-out) a few clicks on any table. Its numbers stay in `Runs\qsar-2026-11-13\`, not here.
+- Ridge needs no scikit-learn: with the SVD of the standardized features, the leave-one-out residual of every α on the grid is closed form (residual / (1 − leverage), the intercept's 1/n included). It picks the same α as scikit-learn's RidgeCV to 1e-15 on a test set. scikit-learn stays optional (CI runs without it; those tests skip).
+- Predictions come back as a joined CSV rather than formula columns: a random forest has no formula, and a file in the project's `models/` keeps the out-of-fold predictions that the 1:1 plot needs, stored relative to the project like any join.
+- The evening's machines: the MacBook took the large (> 35 heavy atoms) and iodine parts of b03's ESP pass, one molecule at a time; NOVA kept the small ones.
