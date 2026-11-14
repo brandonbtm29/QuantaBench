@@ -314,14 +314,17 @@ def _build(args) -> int:
     if not items and not args.resume:
         print("Nothing to build: give SMILES, names, --file, or --resume RUN_DIR.", file=sys.stderr)
         return 2
-    base = None
+    base = here = None
     if args.resume:  # continue with the science settings the run was started with; options given now still win
         stored = jobs.open_run(args.resume).config
         known = jobs.stored_science(stored)     # a run from before the rank step resumes with rank_method "refine"
-        base = replace(BuildConfig.from_settings(settings_mod.load()), **known)
+        here = BuildConfig.from_settings(settings_mod.load())
+        base = replace(here, **known, **jobs.stored_run_options(stored))   # RESUME-1: the run's memory, cubes, limit
         if "formats" in stored:
             base = replace(base, formats=tuple(stored["formats"]))
     cfg = _config(args, base)
+    if args.resume and (note := jobs.run_options_note(stored, here, cfg)):
+        print(note)
     if args.chunk_weights:  # weighted split (dist.plan): chunk becomes (i, n, weights), stored with the run
         from .dist import plan, profile
 
