@@ -9,6 +9,11 @@
 - **The Analyze table's toolbar** has four menus instead of seven buttons: **Columns** (Show or hide columns..., New formula column..., Join columns from a CSV file...), **Features**, **Models** (Fit a formula..., Model a property...) and **Export**.
 - **Pop-out panels:** **View > Pop out panel** lists the panels in view; checking one puts it in a window of its own (at least 640 × 520). **View > Dock all panels** (Ctrl+Shift+D) brings every one back. The Plot has a ⧉ button for it. A popped-out panel is part of its workspace's saved arrangement.
 
+### `build --resume` keeps the run's memory, cube and time-limit options, RESUME-1 (2026-11-14)
+- **The bug.** A resume restored the run's science settings and output formats only. `--qm-memory`, `--no-keep-cubes` and `--molecule-timeout` came from the settings instead.
+- **Its cost last night.** b03's ESP pass was started with `--qm-memory 6 --no-keep-cubes`. Resumed by its controller, it ran 753 molecules at the settings' 4 GB per Psi4 job, which made the automatic lane plan give 5 lanes × 2 threads instead of 3 × 4, and it kept the cube files (14.5 GB). Most of that night's 54 failures were time-outs that happened anyway: 29 in the first segment, before the resume.
+- **The fix.** These three options are now stored with the run and kept on a resume, from the command line, Build > Resume run folder, and a new phase of a paired run. A line says which ones were kept; an option given again still wins. They are not science settings, so changing one never needs `--force`. A run folder from before this takes the settings' values, as before.
+
 ### Property models in the Analyze table: Model..., QSAR-4 (2026-11-13)
 - **Model...** in the Table dock fits a model of one column (a measured σ joined from a CSV, an imported field) on other columns, and joins its predictions back into the table:
   - models: ridge regression (NumPy only; its penalty chosen by efficient leave-one-out), and with scikit-learn (the new `qsar` extra, also in `all`) elastic net, random forest and histogram gradient boosting;

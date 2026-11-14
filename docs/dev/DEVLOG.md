@@ -144,8 +144,16 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - Predictions come back as a joined CSV rather than formula columns: a random forest has no formula, and a file in the project's `models/` keeps the out-of-fold predictions that the 1:1 plot needs, stored relative to the project like any join.
 - The evening's machines: the MacBook took the large (> 35 heavy atoms) and iodine parts of b03's ESP pass, one molecule at a time; NOVA kept the small ones.
 
+## 2026-11-14: RESUME-1, a resume keeps the run's options (branch `fix/resume-run-options`)
+- b03's ESP pass is done on both machines. NOVA: small part, 795 ok and 54 failed. MacBook: large 56/56 and iodine 25/25 (def2-SVP).
+  - NOVA's resumed segment ran at 2 threads and 4 GB per Psi4 job. The first segment had run at 4 threads and 6 GB.
+  - Its log shows why: `build --resume` restored only the science fields. `qm_memory_gb`, `qm_keep_cubes` and `molecule_timeout_s` are not science (they change no number), so they came from the settings.
+  - Treating them as science would make a changed value refuse the resume. Instead they are run options: kept unless given again, and never a mismatch.
+- The 54 failures (53 time-outs at 1,800 s, 1 SCF failure) split 29 in the first segment and 24 + 1 in the resumed one.
+  - The first segment ran the largest molecules first, at 6 GB, so the limit caused the failures more than the resume did.
+  - They run again on the MacBook with the large part's settings (`Runs\2026-11-14_b03-esp-retry-mac`).
+
 ## 2026-11-14: UI-8 collapsible sections and pop-outs (branch `feat/ui-declutter`)
 - The Pipeline dock's long part was the help text, not the fields: each choice had a two- to five-line note from the method guide under it. The notes now sit behind an ⓘ next to the field. The field's row stays one line, and a note that warns (an engine not installed) shows as ⚠, so it is not lost by being hidden.
 - The stage list and the page stack were two widgets for one thing. An accordion of sections keeps the stage names, statuses and a summary of each stage's settings on screen at once, with one stage's form open.
 - Docks could always float (Qt's title-bar button), but nobody finds that button. View > Pop out panel lists them, and the Plot has its own ⧉. Floating docks are part of `saveState`, so each workspace keeps its own pop-outs.
-
