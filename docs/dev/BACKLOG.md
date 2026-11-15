@@ -8,6 +8,16 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
+## FIX-2: Flaky CI tests · in-PR 2026-11-15 (branch `fix/flaky-ci-tests`)
+- macOS (PR #11's first run): `tests/test_telemetry.py::test_the_load_sampler_records_sensors_or_skips_them`,
+  KeyError `cpu_temp_c`. `LoadSampler.run` checked `_halt` before the sensor read and appended the sample anyway;
+  it now drops a sample that `stop()` cut short. Test: `test_a_sample_cut_short_by_stop_is_dropped` (fails on main).
+- Linux (PR #7's first run, 2026-11-13): a hang after 64 % (tests 1081-1152 in the collection order), killed at
+  the 30 min job limit; the rerun passed. Not reproduced in the cloud (test_project.py 8 of 8). The Linux job now
+  uses `--timeout-method=thread` and the suite `faulthandler_timeout = 240`, so the next hang names its test and
+  shows every thread's stack.
+Follow-up: when it shows up, fix the hanging test itself (a modal dialog at window close is the first suspect).
+
 ## RESUME-1: A resume keeps the run's memory, cube and time-limit options · in-PR 2026-11-14 (branch `fix/resume-run-options`)
 Found in the b03 ESP pass (2026-11-13/14). The controller resumed the small part with a bare `build --resume`. That ran
 at the settings' 4 GB per Psi4 job (the run was started with `--qm-memory 6`), so the lane plan gave 5 × 2 instead

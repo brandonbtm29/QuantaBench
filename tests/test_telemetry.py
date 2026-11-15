@@ -563,6 +563,31 @@ def test_the_load_sampler_records_sensors_or_skips_them(monkeypatch):
     assert telemetry._sensors_on() is False
 
 
+def test_a_sample_cut_short_by_stop_is_dropped(monkeypatch):
+    """CI (macOS, 2026-11-14): stop() arriving while a sample was being taken left a last sample without its sensor
+    columns (a KeyError in the test above). Such a sample is dropped now."""
+    import psutil
+
+    from quantabench import sensors
+
+    fake = sensors.Sample(cpu_clock_mhz=5000.0, cpu_temp_c=60.0, source="fake")
+    monkeypatch.setattr(sensors, "read", lambda *a, **k: fake)
+    s = telemetry.LoadSampler(interval=0.02, first=0.01, sensors=True)
+    real, calls = psutil.virtual_memory, []
+
+    def memory():
+        calls.append(1)
+        if len(calls) == 3:
+            s._halt.set()                   # stop() while the third sample is being taken
+        return real()
+
+    monkeypatch.setattr(psutil, "virtual_memory", memory)
+    s.start()
+    s.join(2.0)
+    got = s.take()
+    assert len(got) == 2 and all(x["cpu_temp_c"] == 60.0 for x in got)
+
+
 def sensor_run(run_dir, machine, samples, run_id=None):
     """A job table with one run of one CREST molecule and load samples [(cpu %, clock MHz, CPU °C, GPU °C)]."""
     run_dir.mkdir(parents=True)

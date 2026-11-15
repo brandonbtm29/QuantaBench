@@ -2,6 +2,12 @@
 
 ## 0.3.0.dev (unreleased)
 
+### CI: the two flaky tests (2026-11-15)
+- **macOS: `test_the_load_sampler_records_sensors_or_skips_them`.** It failed with KeyError `cpu_temp_c`. The load sampler kept a last sample without its sensor reading when `stop()` arrived while that sample was being taken. Such a sample is now dropped, so a sensors-on run's samples always carry the sensor columns. A new test reproduces the race deterministically.
+- **Linux: a test that hung for 30 minutes** (2026-11-13, somewhere in tests 1081-1152).
+  - pytest-timeout's signal method never fires while a test waits inside Qt's event loop, so the Linux job now uses `--timeout-method=thread`. A stuck test is killed after 300 s with every thread's stack in the log.
+  - `faulthandler_timeout = 240` dumps the stacks of any test still running after 240 s on every OS.
+
 ### `build --resume` keeps the run's memory, cube and time-limit options, RESUME-1 (2026-11-14)
 - **The bug.** A resume restored the run's science settings and output formats only. `--qm-memory`, `--no-keep-cubes` and `--molecule-timeout` came from the settings instead.
 - **Its cost last night.** b03's ESP pass was started with `--qm-memory 6 --no-keep-cubes`. Resumed by its controller, it ran 753 molecules at the settings' 4 GB per Psi4 job, which made the automatic lane plan give 5 lanes × 2 threads instead of 3 × 4, and it kept the cube files (14.5 GB). Most of that night's 54 failures were time-outs that happened anyway: 29 in the first segment, before the resume.

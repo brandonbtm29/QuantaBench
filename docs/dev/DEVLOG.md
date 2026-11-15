@@ -152,3 +152,8 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - The 54 failures (53 time-outs at 1,800 s, 1 SCF failure) split 29 in the first segment and 24 + 1 in the resumed one.
   - The first segment ran the largest molecules first, at 6 GB, so the limit caused the failures more than the resume did.
   - They run again on the MacBook with the large part's settings (`Runs\2026-11-14_b03-esp-retry-mac`).
+
+## 2026-11-15: FIX-2 flaky CI tests (branch `fix/flaky-ci-tests`)
+- The sampler's sensor check was `if self.sensors and not self._halt.is_set()`. A stop between the wait and that line kept a sample with the load columns but no sensor columns. On a slow macOS runner the 0.35 s test saw it. Dropping the cut sample keeps every sample's columns consistent.
+- The Linux hang could not be reproduced. pytest-timeout's default signal method needs the interpreter to run a signal handler, which never happens while Qt's C++ event loop blocks (a modal dialog, a nested `exec`). The thread method dumps the stacks and exits, so the next occurrence costs 5 minutes and names the test.
+
