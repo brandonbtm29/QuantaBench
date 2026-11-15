@@ -2,6 +2,13 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Collapsible sections and pop-out panels, UI-8 (2026-11-14)
+- **The Pipeline dock is an accordion.** Each stage (Input ... Export) is a collapsible section. Its header shows the stage, a one-line summary of its settings while it is closed (`tblite GFN2 · Gas phase · lowest 20`, `QM (DFT): off`) and the stage's time for the selected molecule. Opening one closes the others, and the open one is remembered.
+- **The help text is behind ⓘ.** Each stage's description and the method guide's notes next to Method, Solvent, Optimizer, Search, CREST level, Rank level, Functional and Basis set now open in a pop-out from an ⓘ button; links to the Methods guide still work. The ⓘ turns into an orange ⚠ while its note says something is not available or not installed.
+- **Molecules dock:** the selected molecule's **Details** fold away (a one-line summary stays), and its engine and fallback notes fold to one line, "⚠ 2 notes", that opens to show them.
+- **The Analyze table's toolbar** has four menus instead of seven buttons: **Columns** (Show or hide columns..., New formula column..., Join columns from a CSV file...), **Features**, **Models** (Fit a formula..., Model a property...) and **Export**.
+- **Pop-out panels:** **View > Pop out panel** lists the panels in view; checking one puts it in a window of its own (at least 640 × 520). **View > Dock all panels** (Ctrl+Shift+D) brings every one back. The Plot has a ⧉ button for it. A popped-out panel is part of its workspace's saved arrangement.
+
 ### `build --resume` keeps the run's memory, cube and time-limit options, RESUME-1 (2026-11-14)
 - **The bug.** A resume restored the run's science settings and output formats only. `--qm-memory`, `--no-keep-cubes` and `--molecule-timeout` came from the settings instead.
 - **Its cost last night.** b03's ESP pass was started with `--qm-memory 6 --no-keep-cubes`. Resumed by its controller, it ran 753 molecules at the settings' 4 GB per Psi4 job, which made the automatic lane plan give 5 lanes × 2 threads instead of 3 × 4, and it kept the cube files (14.5 GB). Most of that night's 54 failures were time-outs that happened anyway: 29 in the first segment, before the resume.

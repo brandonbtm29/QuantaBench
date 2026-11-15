@@ -164,17 +164,22 @@ about them.
 
 Analyze's **Table** has one row per molecule with its descriptors and summary values (from the run folder's
 descriptors.csv and summary.csv, or the molecules built in this session): choose columns, sort, filter, Ctrl+C into
-Excel, export CSV or XLSX. **New column...** adds a formula column (`polarizability_bosque_A3 /
+Excel, export CSV or XLSX. Its toolbar has four menus: Columns, Features, Models and Export. **Columns > New formula column...** adds a formula column (`polarizability_bosque_A3 /
 molar_volume_packing_cm3`; `+ - * / **`, `log`, `exp`, `sqrt`, ...; columns by the names the column chooser lists),
-and **Fit...** fits a formula's parameters to a column, e.g. `((a*alpha + b*mu**2 + c)/Vm)**4` for the quantum
+and **Models > Fit a formula...** fits a formula's parameters to a column, e.g. `((a*alpha + b*mu**2 + c)/Vm)**4` for the quantum
 parachor, with n, MAE, RMSE and R². **Features** adds ready-made columns: dimensionless liquid-state groups (the
 Lorentz-Lorenz function and refractive index, packing fraction, sphericity, a Lifshitz σ, the reduced surface
-tension's unit kT/v_m^⅔), ratios of α, μ, V and A, and the reduced target σ* of any column. **Join...** brings in
-columns of a CSV by id (measured surface tensions or densities). **Model...** fits a cross-validated property model
+tension's unit kT/v_m^⅔), ratios of α, μ, V and A, and the reduced target σ* of any column. **Columns > Join columns from a CSV file...** brings in
+columns of a CSV by id (measured surface tensions or densities). **Models > Model a property...** fits a cross-validated property model
 (ridge regression; elastic net, random forest or gradient boosting with scikit-learn) of a column on others, optionally
 of σ* with the predictions multiplied back, and joins its predictions to the table. The **Plot** next to it scatters any two columns,
 coloured by a third, with a fit line or a 1:1 parity view (MAE, RMSE, bias, R²); clicking a point selects the
 molecule.
+
+The docks stay short: the **Pipeline** dock shows one collapsible section per stage, its settings summed up in one line when
+it is closed, and the method guide's notes behind ⓘ buttons (an orange ⚠ when something is not installed). A molecule's
+engine notes fold to one line under its **Details**. **View > Pop out panel** puts any panel in a window of its own (the
+Plot has a ⧉ button for it), and **View > Dock all panels** (Ctrl+Shift+D) brings them back.
 
 ## Viewer
 

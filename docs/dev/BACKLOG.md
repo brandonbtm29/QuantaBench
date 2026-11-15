@@ -8,7 +8,25 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
-## RESUME-1: A resume keeps the run's memory, cube and time-limit options · in-PR 2026-11-14 (branch `fix/resume-run-options`)
+## UI-8: Collapsible sections and pop-out panels · in-PR 2026-11-14 (branch `feat/ui-declutter`)
+Brandon (2026-11-14): "At the moment it's kind of crowded. I think more collapsible menus / pop outs would be helpful";
+he chose all four parts: the Pipeline dock, the molecule details, the Table toolbar, pop-out panels.
+Done in the branch:
+- `gui/collapsible.py` (`Section`, `Accordion`, `InfoLabel`, `InfoButton`, `with_info`, `Notes`) and
+  `gui/popout.py` (View > Pop out panel, Dock all panels; `pop_out`, `dock_all`).
+- The Pipeline dock's stage list and page stack became an accordion of stage sections. Each has a one-line summary
+  (`MainWindow.stage_summary`), a status, and an ⓘ for the stage's description; the method guide's labels sit behind
+  an ⓘ next to their field (⚠ when they say something is missing). `stage_items` maps a stage to its `Section`.
+- The Molecules dock's Details section and folded notes; the Table toolbar's Columns / Features / Models / Export
+  menus; the Plot's ⧉ pop-out button.
+- Tests: `tests/test_gui_declutter.py`. Screenshots: `docs/dev/screenshots/UI-8/`.
+Follow-ups (ready):
+- The Surfaces, Spectra and Settings panels: the same sections and ⓘ (the Surfaces panel's colour legend text, the
+  Settings dialog's long explanations).
+- A per-dock ⧉ in each dock's title bar (Qt's own float button is there but easy to miss).
+- The Results dock: fold to its header row when the conformer table has one row.
+
+## RESUME-1: A resume keeps the run's memory, cube and time-limit options · done 2026-11-14 (PR #11)
 Found in the b03 ESP pass (2026-11-13/14). The controller resumed the small part with a bare `build --resume`. That ran
 at the settings' 4 GB per Psi4 job (the run was started with `--qm-memory 6`), so the lane plan gave 5 × 2 instead
 of 3 × 4, and 14.5 GB of cubes were kept (`--no-keep-cubes` was lost). Of the 54 failures, 29 came before the resume
@@ -1198,7 +1216,7 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   tension values to train on"). Next: Jasper's coefficients (the `chemicals` package) as a second, independent
   value per molecule; ThermoML.
 
-### QSAR-4: Property models in the Analyze table (Model...) · in-PR 2026-11-13 (branch `feat/model-builder`)
+### QSAR-4: Property models in the Analyze table (Model...) · done 2026-11-14 (PR #10)
 Brandon (2026-11-13 evening): "Could you continue further work on the UI?" The DESC-3 follow-up: the σ model of the
 QSAR-3 scripts (dimensionless groups, the reduced target σ*, k-fold and leave-class-out CV) inside the table.
 Done in the branch:
