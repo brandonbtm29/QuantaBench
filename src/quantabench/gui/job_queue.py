@@ -187,7 +187,10 @@ class JobQueue(QObject):
         if job is not None:
             if run_dir:
                 job.run_dir = Path(run_dir)
-            status = "failed" if not ok else ("cancelled" if job.status == "cancelling" else "done")
+            # cancelled only if something was left undone: molecules already in flight (lanes) may all finish
+            finished_all = job.total and job.done_before + job.ok + job.failed >= job.total
+            status = "failed" if not ok else ("cancelled" if job.status == "cancelling" and not finished_all
+                                             else "done")
             self._end(job, status, error)
         QTimer.singleShot(0, self.start_next)
 

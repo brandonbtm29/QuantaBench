@@ -196,8 +196,10 @@ def test_cancelling_the_running_job_starts_the_next(tmp_path, monkeypatch):
         assert _wait(app, lambda: nxt.status in ("done", "failed", "cancelled"), 120)
         assert big.status in ("cancelled", "done") and nxt.status == "done"
         assert big.finished <= nxt.started
-        if big.status == "cancelled":
-            assert big.done < len(ids) - 1
+        if big.status == "cancelled":                                # some molecules left undone (in one lane;
+            assert big.ok + big.failed < len(ids) - 1                # with lanes the ones in flight still finish)
+        else:
+            assert big.ok + big.failed == len(ids) - 1
     finally:
         _close(app, w)
 

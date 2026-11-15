@@ -170,3 +170,4 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Recipes use the "gfn2" alias**, the first installed of dxtb, tblite and the xtb program, so one recipe works on NOVA (tblite) and on the MacBook alike. A user recipe stores every recipe field, not the difference from the defaults, so a later change of a default does not change a saved recipe.
 - **The workspace state version is now 3:** a new dock is not in an older saved state, and `restoreState` leaves it wherever it was. The saved arrangements are reset once.
 
+- **A cancelled job is "cancelled" only if a molecule was left undone.** macOS CI runs a batch in several lanes, and the molecules in flight finish after a cancel. There, all 7 of the test's molecules finished, so the job ends "done".
