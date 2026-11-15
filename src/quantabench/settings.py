@@ -207,6 +207,9 @@ class Settings:
     import_: ImportSettings = field(default_factory=ImportSettings)     # "import" is a Python keyword
     sensors: SensorSettings = field(default_factory=SensorSettings)
     recent_files: list[str] = field(default_factory=list)
+    # the job dialog's own recipes (UI-5, chem.recipes): {"name", "description", "task", "changes": {BuildConfig field:
+    # value}}; entries that are not recipes are skipped when read
+    recipes: list[dict] = field(default_factory=list)
 
     # ---------------------------------------------------------------- paths
     def output_path(self) -> Path:
