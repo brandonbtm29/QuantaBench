@@ -50,7 +50,9 @@ jobs:
         run: ruff check .
       - name: Test (Linux, virtual display)
         if: runner.os == 'Linux'
-        run: xvfb-run -a pytest -q --timeout=300
+        # thread method: a test stuck inside Qt's event loop (where the signal method never fires: the hang of
+        # 2026-11-13) is killed after 300 s with every thread's stack, instead of running into the 30 min job limit
+        run: xvfb-run -a pytest -q --timeout=300 --timeout-method=thread
       - name: Test (Windows)
         if: runner.os == 'Windows'
         run: pytest -q --timeout=300

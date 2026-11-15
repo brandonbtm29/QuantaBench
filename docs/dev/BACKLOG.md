@@ -8,7 +8,17 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
-## UI-8: Collapsible sections and pop-out panels · in-PR 2026-11-14 (branch `feat/ui-declutter`)
+## FIX-2: Flaky CI tests · in-PR 2026-11-15 (PR #13, branch `fix/flaky-ci-tests`)
+- macOS (PR #11's first run): `tests/test_telemetry.py::test_the_load_sampler_records_sensors_or_skips_them`,
+  KeyError `cpu_temp_c`. `LoadSampler.run` checked `_halt` before the sensor read and appended the sample anyway;
+  it now drops a sample that `stop()` cut short. Test: `test_a_sample_cut_short_by_stop_is_dropped` (fails on main).
+- Linux (PR #7's first run, 2026-11-13): a hang after 64 % (tests 1081-1152 in the collection order), killed at
+  the 30 min job limit; the rerun passed. Not reproduced in the cloud (test_project.py 8 of 8). The Linux job now
+  uses `--timeout-method=thread` and the suite `faulthandler_timeout = 240`, so the next hang names its test and
+  shows every thread's stack.
+Follow-up: when it shows up, fix the hanging test itself (a modal dialog at window close is the first suspect).
+
+## UI-8: Collapsible sections and pop-out panels · done 2026-11-15 (PR #12)
 Brandon (2026-11-14): "At the moment it's kind of crowded. I think more collapsible menus / pop outs would be helpful";
 he chose all four parts: the Pipeline dock, the molecule details, the Table toolbar, pop-out panels.
 Done in the branch:

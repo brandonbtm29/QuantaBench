@@ -2,6 +2,12 @@
 
 ## 0.3.0.dev (unreleased)
 
+### CI: the two flaky tests (2026-11-15)
+- **macOS: `test_the_load_sampler_records_sensors_or_skips_them`.** It failed with KeyError `cpu_temp_c`. The load sampler kept a last sample without its sensor reading when `stop()` arrived while that sample was being taken. Such a sample is now dropped, so a sensors-on run's samples always carry the sensor columns. A new test reproduces the race deterministically.
+- **Linux: a test that hung for 30 minutes** (2026-11-13, somewhere in tests 1081-1152).
+  - pytest-timeout's signal method never fires while a test waits inside Qt's event loop, so the Linux job now uses `--timeout-method=thread`. A stuck test is killed after 300 s with every thread's stack in the log.
+  - `faulthandler_timeout = 240` dumps the stacks of any test still running after 240 s on every OS.
+
 ### Collapsible sections and pop-out panels, UI-8 (2026-11-14)
 - **The Pipeline dock is an accordion.** Each stage (Input ... Export) is a collapsible section. Its header shows the stage, a one-line summary of its settings while it is closed (`tblite GFN2 · Gas phase · lowest 20`, `QM (DFT): off`) and the stage's time for the selected molecule. Opening one closes the others, and the open one is remembered.
 - **The help text is behind ⓘ.** Each stage's description and the method guide's notes next to Method, Solvent, Optimizer, Search, CREST level, Rank level, Functional and Basis set now open in a pop-out from an ⓘ button; links to the Methods guide still work. The ⓘ turns into an orange ⚠ while its note says something is not available or not installed.

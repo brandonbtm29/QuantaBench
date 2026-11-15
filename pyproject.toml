@@ -99,6 +99,8 @@ packages = ["src/quantabench"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 filterwarnings = ["ignore::DeprecationWarning"]
+# a test still running after 240 s dumps every thread's stack (pytest's faulthandler), so a hang shows where it is
+faulthandler_timeout = 240
 markers = [
     "external: needs an external program (xtb, CREST, MOPAC, Psi4); skipped when it is not installed",
 ]

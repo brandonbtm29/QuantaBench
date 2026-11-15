@@ -157,3 +157,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - The Pipeline dock's long part was the help text, not the fields: each choice had a two- to five-line note from the method guide under it. The notes now sit behind an ⓘ next to the field. The field's row stays one line, and a note that warns (an engine not installed) shows as ⚠, so it is not lost by being hidden.
 - The stage list and the page stack were two widgets for one thing. An accordion of sections keeps the stage names, statuses and a summary of each stage's settings on screen at once, with one stage's form open.
 - Docks could always float (Qt's title-bar button), but nobody finds that button. View > Pop out panel lists them, and the Plot has its own ⧉. Floating docks are part of `saveState`, so each workspace keeps its own pop-outs.
+
+## 2026-11-15: FIX-2 flaky CI tests (branch `fix/flaky-ci-tests`)
+- The sampler's sensor check was `if self.sensors and not self._halt.is_set()`. A stop between the wait and that line kept a sample with the load columns but no sensor columns. On a slow macOS runner the 0.35 s test saw it. Dropping the cut sample keeps every sample's columns consistent.
+- The Linux hang could not be reproduced. pytest-timeout's default signal method needs the interpreter to run a signal handler, which never happens while Qt's C++ event loop blocks (a modal dialog, a nested `exec`). The thread method dumps the stacks and exits, so the next occurrence costs 5 minutes and names the test.

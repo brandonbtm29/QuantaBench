@@ -486,7 +486,11 @@ class LoadSampler(threading.Thread):
                 if hasattr(os, "getloadavg"):
                     with contextlib.suppress(OSError):
                         sample["load1"], sample["load5"], sample["load15"] = os.getloadavg()
-                if self.sensors and not self._halt.is_set():
+                if self.sensors:
+                    if self._halt.is_set():
+                        # stop() came while this sample was being taken: drop it rather than keep a sample without
+                        # its sensor reading (every sample of a sensors-on run has the sensor columns, or none)
+                        break
                     sample.update(sensor_fields())
                 with self._lock:
                     self._samples.append(sample)
