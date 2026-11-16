@@ -2,6 +2,10 @@
 
 ## 0.3.0.dev (unreleased)
 
+### `grid build --molecule-timeout` (2026-11-16)
+- `grid build` takes `--molecule-timeout S`, like `build`, and every machine's share runs with it.
+- Before this, the option was `build`'s only. A grid run took the client's settings value (1,800 s by default) on every machine, which is too short for CREST on the largest flexible molecules.
+
 ### A resume keeps the run's `--lanes` on the machine that chose it, RESUME-2 (2026-11-16)
 - The run stores the lane spec in force: the spec, whether it was chosen with `--lanes` or came from the machine's setting, and the machine.
 - `build --resume` without `--lanes`, and Build > Resume run folder, use a chosen spec again when they run on the machine that chose it ("Lanes kept from the run: --lanes auto"). Another machine uses its own setting and says so; the run keeps its choice for a later resume there.
