@@ -97,7 +97,7 @@ def test_the_dialog_makes_the_jobs_configuration(tmp_path):
         # Careful needs CREST and Psi4: said in the dialog; without Psi4 the DFT box cannot be set
         d.w_recipe.setCurrentIndex(d.w_recipe.findData("careful"))
         assert "Needs crest, psi4" in d.recipe_info.text() and not d.w_qm_on.isEnabled()
-        assert d.spec().config().conformer_search == "crest"
+        assert d.spec().config().conformer_search == "auto" and d.spec().config().crest_with_rdkit
         # engines that are not installed are listed, disabled; family headers are not choices
         model = d.w_method.model()
         heads = [d.w_method.itemText(i) for i in range(d.w_method.count()) if d.w_method.itemData(i) is None]
@@ -243,5 +243,42 @@ def test_the_review_page_and_a_preset_set_the_dialogs_fields(tmp_path):
         job = d.submit()
         assert job is not None and job.status in ("running", "queued") and not d.isVisible()
         assert _wait(app, lambda: job.status in ("done", "failed"), 120)
+    finally:
+        _close(app, w)
+
+
+def test_conformer_search_auto_in_the_pipeline_dock_and_the_dialog(tmp_path):
+    """CONF-AUTO in the GUI: the Pipeline dock's Conformer search page and the job dialog offer "auto" with its
+    threshold and the merge box; the review's Apply sets them."""
+    from quantabench.gui.review_panel import apply_changes
+
+    app = _app()
+    w = _window(tmp_path)
+    try:
+        w.w_confsearch.setCurrentIndex(w.w_confsearch.findData("auto"))
+        assert w.w_crest_min_rotors.isEnabled() and w.w_crest_with_rdkit.isEnabled() and w.w_crest_method.isEnabled()
+        w.w_crest_min_rotors.setValue(7)
+        w.w_crest_with_rdkit.setChecked(True)
+        cfg = w.current_config()
+        assert (cfg.conformer_search, cfg.crest_min_rotors, cfg.crest_with_rdkit) == ("auto", 7, True)
+        assert w.s.build.crest_min_rotors == 7 and w.s.build.crest_with_rdkit
+        assert w.stage_summary("conformers").startswith("Auto: CREST") and "from 7 rotors" in w.stage_summary("conformers")
+        w.w_confsearch.setCurrentIndex(w.w_confsearch.findData("crest"))
+        assert not w.w_crest_min_rotors.isEnabled() and w.w_crest_with_rdkit.isEnabled()
+        w.w_confsearch.setCurrentIndex(w.w_confsearch.findData("rdkit"))
+        assert not w.w_crest_with_rdkit.isEnabled()
+        assert apply_changes(w, {"conformer_search": "auto", "crest_min_rotors": 10, "crest_with_rdkit": False}) == []
+        cfg = w.current_config()
+        assert (cfg.conformer_search, cfg.crest_min_rotors, cfg.crest_with_rdkit) == ("auto", 10, False)
+        d = _dialog(w)
+        assert d.config().conformer_search == "auto" and d.w_crest_min_rotors.value() == 10   # from the dock
+        d.w_crest_with_rdkit.setChecked(True)
+        d.w_crest_min_rotors.setValue(12)
+        spec = d.spec().config()
+        assert (spec.conformer_search, spec.crest_min_rotors, spec.crest_with_rdkit) == ("auto", 12, True)
+        assert "CREST from 12 rotatable bonds" in d.spec().summary()
+        d.w_search.setCurrentIndex(d.w_search.findData("rdkit"))
+        assert not d.w_crest_min_rotors.isEnabled() and not d.w_crest_with_rdkit.isEnabled()
+        d.close()
     finally:
         _close(app, w)

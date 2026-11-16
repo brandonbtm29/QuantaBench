@@ -2,6 +2,20 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Conformer search "auto": CREST for flexible neutral molecules, CONF-AUTO (2026-11-16)
+- **`--conformers auto`** (GUI: Search > Auto, in the Pipeline dock and the job dialog) decides per molecule:
+  - CREST for a neutral molecule with at least `--crest-min-rotors` rotatable bonds (default 9; RDKit's strict count);
+  - RDKit ETKDGv3 + MMFF94s for ions, zwitterions and smaller molecules.
+  - The log says which, and why ("conformer search auto: CREST (neutral, 12 rotatable bonds >= 9)"). summary.csv's `conformer_search` records the search each molecule got.
+- **Why:** the conformer checks of Nov 13-15.
+  - RDKit's search converged up to 8 rotatable bonds but not from 9.
+  - For flexible neutral molecules CREST (GFN-FF, quick) found the lower conformer for most: 10 of 23 best known in gas (RDKit 3), 16 of 21 in ALPB water (RDKit 6).
+  - For ions it was worse (two anions 108 and 281 kJ/mol above the best known in gas).
+- **`--crest-with-rdkit`** (GUI: "Add RDKit's conformers to CREST's pool"): where CREST runs, RDKit's search runs too, and the lowest `--refine-top` of each pool are refined. The two energy scales (CREST's, MMFF94s's) are never compared; the refinement ranks them. In water RDKit still held a conformer more than 5 kJ/mol lower for 5 of 21 molecules. Not with `--method mmff`, which ranks by the pool's own energies. summary.csv says `crest+rdkit`.
+- **The Careful recipe and the review's Careful preset** use "auto" with the merged pool instead of CREST for every molecule.
+- **The review flags flexible neutral molecules** under the RDKit search ("search.flexible-neutrals"), with Apply for "auto". Its cost estimate charges CREST only to the molecules that get it.
+- Lane planning, dynamic CREST threads, the cost model and the engines a run records treat "auto" like "crest". A merged pool's conformer-stage time is left out of the CREST cost-model fit.
+
 ### Job dialog, recipes and the Jobs dock, UI-5 (2026-11-15)
 - **Build > New job... (Ctrl+J)**, also a New job... button next to the Pipeline dock's Run buttons, submits the selected molecules (or all) as one job. It starts from the Pipeline dock's settings, and the job keeps its own: the dock is not changed. The dialog has four pages:
   - **Job:** the name, the molecules, a **recipe** and the **task**.

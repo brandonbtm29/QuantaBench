@@ -1190,3 +1190,53 @@ gases: docs/SURFACE_TENSION.md, "Which surface tension values to train on".
 **Limits.** One density source (PubChem/HSDB), with its record errors; few fluorinated liquids and almost no FTOHs or
 fluorinated ethers; the DFT reference is one functional and a double-zeta basis (def2-SVPD gives polarizabilities a
 few percent below the basis-set limit); the σ models are tested on non-fluorinated liquids only (b02).
+
+## Conformer checks and the CREST test (2026-11-13 to 15, `Runs/conformer-checks-2026-11-13`)
+
+**The checks.** 110 molecules of the list (a pilot and a sample of 100) were compared at a common level (GFN2-xTB,
+relaxed; gas). Two comparisons:
+- the tranches' search (ETKDG 50, GFN2 refinement of the lowest 20) against ETKDG 200 and against Spartan's MMFF
+  conformer searches;
+- the tranches' conformer against the best known: the lowest of every pool.
+
+| rotatable bonds (strict) | share of the list | the tranche's conformer is the best known | gap to the best known |
+|---|---|---|---|
+| 0-8 | 86 % | 55 of 68 | mean ≤ 3.7 kJ/mol |
+| 9 or more | 14 % (about 1,800 molecules) | 8 of 37 | median 15 kJ/mol; the dipole off by a median 2.6 D |
+
+- Spartan's search held the better conformer for 25 of the 37 flexible ones. ETKDG 50 and 200 agreed for 2 of 41,
+  so more embeddings do not converge either.
+- The largest gaps (43-66 kJ/mol) were gas-phase end-to-end hydrogen-bonded folds of diacids and hydroxy acids.
+
+**The CREST test.** The flexible molecules were rebuilt with CREST in place of ETKDG 50:
+- CREST: iMTD-GC, GFN-FF, `--quick`, 7 threads, on the MacBook;
+- then the tranche protocol: GFN2 refinement of the lowest 20, the rank step;
+- gas: the 42 molecules with ≥ 9 rotatable bonds, judged against the best of four pools (ETKDG 50 and 200,
+  Spartan, CREST);
+- water (ALPB): the 23 neutral ones CREST built in gas, against the tranches' own water conformers (ETKDG 50, the
+  only other pool there).
+
+| set | molecules | CREST's conformer is the lowest known (< 1 kJ/mol) | the tranche's is | median gap CREST / tranche | mean gap CREST / tranche |
+|---|---|---|---|---|---|
+| gas, neutral | 23 | **10** | 3 | **2.4** / 11.6 kJ/mol | **6.3** / 16.2 |
+| gas, ions | 7 | 3 | 2 | 17.6 / 11.3 | 66.9 / 24.4 |
+| water, neutral | 21 | **16** | 6 | **0.0** / 7.4 | **3.6** / 9.4 |
+
+- **Neutral molecules:** CREST closes most of the gap in both phases.
+  - Gas: lower than every earlier search, Spartan's included, for 6 of 23.
+  - Water: more than 5 kJ/mol below the tranche's for 13 of 21.
+- **The RDKit pool still wins some:**
+  - gas: Spartan's search more than 5 kJ/mol lower for 7 of 23;
+  - water: the tranche's more than 5 kJ/mol lower for 5 of 21, by up to 30 kJ/mol.
+  - A quick GFN-FF search is not exhaustive. Hence `--crest-with-rdkit`.
+- **Ions: worse.** Two anions ended 108 and 281 kJ/mol above the best known in gas: GFN-FF and charged chains.
+- **Not built in gas: 8 of 42.**
+  - 6 hit the 1,800 s limit: 20-26 rotatable bonds, up to 60 heavy atoms. Use a 5,400 s limit.
+  - 2 had CREST crash.
+- **Cost on 7 MacBook threads:**
+  - gas: about 11 min per molecule (time-outs included);
+  - water: a median 4 min, at most 16 min (the 23 that finished in gas).
+- **Decision (Brandon, 2026-11-16): CONF-AUTO.**
+  - `--conformers auto` uses CREST for neutral molecules with 9 or more rotatable bonds and RDKit for the rest.
+  - `--crest-with-rdkit` merges the two pools.
+  - The review's "search.flexible-neutrals" finding cites this section.

@@ -8,6 +8,46 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
+## CONF-AUTO: CREST for flexible neutral molecules · in-PR 2026-11-16 (branch `feat/crest-auto`)
+Brandon (2026-11-16), after the CREST gas and water tests: "Let's do it all". That means CREST (GFN-FF, quick) for
+neutral molecules with 9 or more rotatable bonds, not for ions, optionally with the RDKit pool merged in. The evidence
+is in docs/VALIDATION.md, "Conformer checks and the CREST test".
+Done in the branch:
+- `chem/search_rule.py`:
+  - `decide` / `crest_for` / `may_use_crest`;
+  - the charge class (zwitterions are not neutral; a nitro +/- pair is) and the strict rotatable-bond count, the
+    same as the advisor's and the conformer checks';
+  - `merge_pools` and `ConformerSet.refine_count` / `refine_ids`.
+- `BuildConfig.conformer_search = "auto"`, `crest_min_rotors` (9), `crest_with_rdkit` (False):
+  - in `jobs.SCIENCE_FIELDS`, idle where they cannot act (`_ONLY_WITH` takes several values now);
+  - in the settings' BuildDefaults, the recipes' fields and the worker's choices.
+- Pipeline:
+  - the decision per molecule on the prepared structure, with a log line;
+  - `conformer_search` in summary.csv is "crest", "rdkit" or "crest+rdkit";
+  - the merged pool is not used with the refinement "mmff" (a note).
+- CLI: `--conformers auto`, `--crest-min-rotors N`, `--crest-with-rdkit/--no-crest-with-rdkit`.
+- GUI: Search > Auto, "CREST from N rotatable bonds" and "Add RDKit's conformers to CREST's pool" in the Pipeline dock
+  and the job dialog; the review's Apply sets them.
+- Advisor:
+  - the per-molecule CREST cost (and the RDKit pool's with the merge);
+  - a "search.flexible-neutrals" warning under the RDKit search;
+  - the crest-ions finding only under the RDKit search;
+  - the steps text;
+  - the Careful preset and the Careful recipe use "auto" with the merge.
+- Run-level checks use `may_use_crest`: lanes, dynamic threads, the cost model, telemetry and the time-limit note.
+  A merged pool's conformer stage is left out of the CREST cost-model fit (`timings._is_crest`).
+- Tests: `tests/test_search_rule.py`, `tests/test_crest.py` (auto with a fake CREST, the merged pool),
+  `tests/test_gui_jobs.py::test_conformer_search_auto_in_the_pipeline_dock_and_the_dialog`; `test_advisor.py` and
+  `test_recipes.py` updated for Careful.
+Follow-ups (ready):
+- Dynamic CREST threads per molecule: with "auto", idle lanes' threads may be lent to a molecule that turns out to get
+  RDKit (harmless at the end of a batch, where lending happens; a prediction from the input would avoid it).
+- The cost model and lane planning of a mixed "auto" batch: plan for the CREST share instead of all-CREST.
+- Ions: a test of CREST in ALPB water for flexible anions (the gas test covered 7 ions; the DFT test suggested
+  folded and extended pools in water). Until then "auto" keeps them on RDKit.
+- The full run: rebuild the list's ~1,674 flexible neutral molecules with `--conformers auto --crest-with-rdkit` per
+  phase (needs-Brandon: about 110-300 h per phase on half the MacBook; NOVA needs CREST in WSL).
+
 ## FIX-2: Flaky CI tests · done 2026-11-15 (PR #13)
 - macOS (PR #11's first run): `tests/test_telemetry.py::test_the_load_sampler_records_sensors_or_skips_them`,
   KeyError `cpu_temp_c`. `LoadSampler.run` checked `_halt` before the sensor read and appended the sample anyway;

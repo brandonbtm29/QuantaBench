@@ -74,7 +74,12 @@ class BuildConfig:
     freq_imag_retries: int = 3
     seed: int = 42
     solvent: str = ""                     # implicit solvent (chem.solvents name), "" = gas phase
-    conformer_search: str = "rdkit"       # "rdkit" (ETKDGv3 + MMFF94s) | "crest" (CREST iMTD-GC, external)
+    # "rdkit" (ETKDGv3 + MMFF94s) | "crest" (CREST iMTD-GC, external) | "auto" (per molecule: CREST for a neutral
+    # molecule with at least crest_min_rotors rotatable bonds, RDKit for the rest; chem.search_rule)
+    conformer_search: str = "rdkit"
+    crest_min_rotors: int = 9             # "auto": the rotatable bonds from which a neutral molecule gets CREST
+    # where CREST runs, also run the RDKit search and refine from both pools (search_rule.merge_pools)
+    crest_with_rdkit: bool = False
     crest_method: str = "gfn2"            # "gfn2" | "gfnff" | "gfn2//gfnff" | "gfn1"
     crest_quick: bool = True              # CREST --quick (fewer metadynamics runs): minutes instead of hours
     # CREST missing or failed: "rdkit" = RDKit ETKDGv3 + MMFF94s, flagged (note, conformer_fallback, counts at the
@@ -134,7 +139,8 @@ class BuildConfig:
                   gpu_memory_fraction=r.gpu_memory_fraction, linalg=r.linalg, dxtb_gpu=r.dxtb_gpu,
                   memory_budget_gb=r.memory_budget_gb, molecule_timeout_s=r.molecule_timeout_s,
                   output_dir=str(s.output_path()),
-                  conformer_search=b.conformer_search, solvent=b.solvent, qm_method=b.qm_method,
+                  conformer_search=b.conformer_search, crest_min_rotors=b.crest_min_rotors,
+                  crest_with_rdkit=b.crest_with_rdkit, solvent=b.solvent, qm_method=b.qm_method,
                   radii_set=s.surfaces.radii_set, radii_overrides=dict(s.surfaces.radii_overrides),
                   sasa_probe_A=s.surfaces.sasa_probe_A)
         return replace(cfg, **overrides)
@@ -184,7 +190,7 @@ class MoleculeResult:
     files: list[str] = field(default_factory=list)
     vibrations: dict | None = None     # VibrationalResult.to_dict(include_modes=True) when cfg.frequencies
     solvent: str = ""                  # implicit solvent actually used by the refinement ("" = gas phase)
-    conformer_search: str = ""         # "rdkit" | "crest" (what actually produced the conformers)
+    conformer_search: str = ""         # "rdkit" | "crest" | "crest+rdkit" (what actually produced the conformers)
     conformer_fallback: str = ""       # why they are not from the search asked for ("CREST failed: ..."), "" = they are
     qm: dict | None = None            # chem.qm stage results (see qm.QM_RESULT_KEYS)
     input_charge: int | None = None    # total formal charge of the record as drawn (all fragments)
@@ -420,7 +426,7 @@ def _engine_dipole(atoms, calc, origin: str | None, charge: int, masses: np.ndar
 def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConfig, device: str,
             should_stop: Callable[[], bool], log: Callable[[str], None]) -> list[ConformerResult]:
     mol = conf_set.mol
-    ids = conf_set.conf_ids[: max(1, cfg.refine_top)]
+    ids = conf_set.refine_ids(cfg.refine_top)
     ff = conf_set.energies_kcal[: len(ids)]
     if result.method == "mmff":
         return [ConformerResult(rank=0, conf_id=cid, energy_ev=e / KCAL_PER_EV, ff_energy_kcal=e)
@@ -625,14 +631,22 @@ def fallback_summary(n: int, total: int) -> str:
 
 def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConfig, threads: int,
                       should_stop: Callable[[], bool], log: Callable[[str], None],
-                      seeds: list | tuple = ()) -> confs.ConformerSet:
-    """RDKit ETKDGv3 + MMFF94s, or CREST. If CREST is missing or fails, ``cfg.crest_fallback`` decides: "rdkit" goes
-    on with RDKit's conformers and flags the molecule (a note, ``conformer_fallback``, a warning in the log, a count
-    at the end of the batch), "fail" fails the molecule (``ConformerSearchError``). ``seeds``: coordinates from the
-    input file (import option *keep coordinates*), the first conformers of RDKit's set; CREST makes its own start."""
-    if cfg.conformer_search == "crest" and seeds:
+                      seeds: list | tuple = (), use_crest: bool | None = None) -> confs.ConformerSet:
+    """RDKit ETKDGv3 + MMFF94s, or CREST (``use_crest``; default ``search_rule.crest_for``: "crest", or "auto" for a
+    flexible neutral molecule). If CREST is missing or fails, ``cfg.crest_fallback`` decides: "rdkit" goes on with
+    RDKit's conformers and flags the molecule (a note, ``conformer_fallback``, a warning in the log, a count at the end
+    of the batch), "fail" fails the molecule (``ConformerSearchError``). With ``cfg.crest_with_rdkit`` a CREST molecule
+    also gets RDKit's search and the refinement starts from both pools (``search_rule.merge_pools``). ``seeds``:
+    coordinates from the input file (import option *keep coordinates*), the first conformers of RDKit's set; CREST
+    makes its own start."""
+    from . import search_rule
+
+    search_rule.check(cfg.conformer_search)
+    if use_crest is None:
+        use_crest = search_rule.crest_for(cfg, prepared, result.charge)
+    if use_crest and seeds and not search_rule.merged(cfg, result.method):
         result.notes.append("CREST makes its own start geometry: the file's coordinates were not used")
-    if cfg.conformer_search == "crest":
+    if use_crest:
         from . import crest
 
         if cfg.crest_fallback not in CREST_FALLBACKS:
@@ -643,7 +657,6 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
             cs = crest.generate(prepared, cfg, threads=crest_threads, solvent=result.solvent, charge=result.charge,
                                 multiplicity=result.multiplicity, should_stop=should_stop, log=log)
             result.conformer_search = "crest"
-            return cs
         except Cancelled:
             raise
         except Exception as exc:
@@ -655,8 +668,20 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
             result.notes.append(f"CREST conformer search failed ({reason}); used RDKit ETKDGv3 + MMFF94s instead "
                                 "(summary.csv: conformer_fallback; --crest-fallback fail stops the molecule instead)")
             log(f"  WARNING: {result.notes[-1]}")
-    elif cfg.conformer_search not in ("rdkit", ""):
-        raise ValueError(f"conformer_search must be 'rdkit' or 'crest', not {cfg.conformer_search!r}")
+        else:
+            if not search_rule.merged(cfg, result.method):
+                if cfg.crest_with_rdkit:
+                    result.notes.append("CREST's pool only: the refinement 'mmff' ranks the pool by its own energies, "
+                                        "and CREST's and MMFF94s's are not on one scale")
+                return cs
+            if should_stop():
+                raise Cancelled()
+            rd = confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,
+                                cfg.seed, threads, seeds=seeds)
+            both = search_rule.merge_pools(cs, rd, cfg.refine_top, cfg.rmsd_threshold)
+            result.conformer_search = search_rule.MERGED
+            log(f"  {both.notes[-1]}")
+            return both
     result.conformer_search = "rdkit"
     # Keep a wider force-field window: the refined ranking can differ from MMFF's.
     return confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,
@@ -986,7 +1011,11 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
 
         stage("conformers")
         t = time.perf_counter()
-        crest_run = cfg.conformer_search == "crest"
+        from . import search_rule
+
+        crest_run, why_search = search_rule.decide(cfg, prepared, result.charge)
+        if why_search:
+            log(f"  {why_search}")
         clock.start("conformers", threads=int(cfg.crest_threads or 0) or threads if crest_run else threads)
         conformer_solvent = result.solvent        # what CREST was given (RDKit's MMFF94s has no solvent)
         seeds: list = []
@@ -995,7 +1024,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
             result.notes.append(f"the file's coordinates are the first {len(seeds)} conformer(s) (MMFF94s-optimized "
                                 "like the others)" if seeds else f"the file's coordinates were not used ({why})")
             log(f"  {result.notes[-1]}")
-        cs = _conformer_search(prepared, result, cfg, threads, should_stop, log, seeds=seeds)
+        cs = _conformer_search(prepared, result, cfg, threads, should_stop, log, seeds=seeds, use_crest=crest_run)
         result.forcefield, result.n_embedded = cs.forcefield, cs.n_embedded
         result.timings["conformers"] = time.perf_counter() - t
         clock.stop(n_out=len(cs.conf_ids), engine=_conformer_engine(result, cfg, conformer_solvent))
@@ -1010,7 +1039,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
 
         stage("refine")
         t = time.perf_counter()
-        clock.start("refine", engine=method, n_in=min(len(cs.conf_ids), max(1, cfg.refine_top)))
+        clock.start("refine", engine=method, n_in=len(cs.refine_ids(cfg.refine_top)))
         candidates = [method]
         if cfg.method == "auto":  # if the first choice cannot start (e.g. model download offline), try the next
             order = engines.auto_candidates(numbers, solvent)
@@ -1030,7 +1059,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
                         log(f"  {why}")
             refine = batch_opt.refine_batched if use_batched(cfg, candidate, result.device) else _refine
             if refine is not _refine:
-                log(f"  batched refinement of {min(len(cs.conf_ids), max(1, cfg.refine_top))} conformers "
+                log(f"  batched refinement of {len(cs.refine_ids(cfg.refine_top))} conformers "
                     f"on {result.device}")
             try:
                 refined = refine(result, cs, cfg, result.device, should_stop, log)
@@ -1049,8 +1078,9 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         result.solvation_model = solvation_model(method, result.solvent)
         steps = result.phase_steps
         if solvent:                  # a solvent run: where each step was computed, and why a step was not
-            if result.conformer_search == "crest":
-                steps["conformers"] = f"ALPB({conformer_solvent}) (CREST)" if conformer_solvent else "gas (CREST)"
+            if search_rule.used_crest(result.conformer_search):
+                steps["conformers"] = (f"ALPB({conformer_solvent}) (CREST)" if conformer_solvent else "gas (CREST)") \
+                    + (" + gas (RDKit's MMFF94s)" if result.conformer_search == search_rule.MERGED else "")
             else:
                 steps["conformers"] = (f"gas ({cs.forcefield or 'MMFF94s'} has no implicit solvent: the same "
                                        "conformer pool in every phase)")
@@ -1165,11 +1195,15 @@ def _engine_label(method: str, device: str, solvent: str) -> str:
 
 
 def _conformer_engine(result: MoleculeResult, cfg: BuildConfig, solvent: str) -> str:
-    """'crest gfnff quick (water)' or 'rdkit etkdg + MMFF94s' (with ' (crest failed)' after a fallback)."""
-    if result.conformer_search == "crest":
+    """'crest gfnff quick (water)' or 'rdkit etkdg + MMFF94s' (with ' (crest failed)' after a fallback; ' + rdkit
+    etkdg' for a merged pool)."""
+    from .search_rule import MERGED, used_crest
+
+    if used_crest(result.conformer_search):
         from ..dist.threads import crest_level
 
-        return f"crest {crest_level(cfg)}" + (f" ({solvent})" if solvent else "")
+        return f"crest {crest_level(cfg)}" + (f" ({solvent})" if solvent else "") \
+            + (" + rdkit etkdg" if result.conformer_search == MERGED else "")
     return f"rdkit etkdg + {result.forcefield or 'MMFF94s'}" + (" (crest failed)" if result.conformer_fallback else "")
 
 

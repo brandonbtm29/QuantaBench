@@ -52,6 +52,7 @@
 | `chem.rank` | The rank step (RANK-2): `rank_method` levels and the `auto` rules by phase with their fallbacks (`resolve`), single points of the refined conformers at the rank level (`compute`: g-xTB, AIMNet2, the GFN1-xTB CPCM ΔG_solv of tblite), the per-machine single-point cache, the rank window and the molecule's `rank` record. |
 | `chem.solvents` | One canonical solvent name mapped to ALPB/GBSA, COSMO (ε) and PCM keywords. |
 | `chem.crest` | CREST conformer search into a `ConformerSet` (atom order and topology checked). |
+| `chem.search_rule` | CONF-AUTO: which conformer search a molecule gets (`decide`, `crest_for`: "rdkit", "crest", or "auto" = CREST for a neutral molecule with at least `crest_min_rotors` strict rotatable bonds), the charge class and rotor count the advisor uses too, `may_use_crest` for run-level planning, and `merge_pools` (CREST's lowest `refine_top` + RDKit's, duplicates dropped, `ConformerSet.refine_count` so every conformer is refined). |
 | `chem.qm`, `chem.psi4_driver` | QM stage: the driver runs inside Psi4's own Python (stdlib + numpy + psi4) on a JSON task; the parent builds `result.qm`, descriptors and the vibrational analysis. |
 | `chem.cube`, `chem.surfaces` | Gaussian cubes; density isosurfaces, ESP mapping, GIPF descriptors, point-charge ESP surfaces. |
 | `chem.io_cclib`, `chem.spectra_io` | Import other programs' outputs (cclib) and experimental spectra (CSV, JCAMP-DX). |

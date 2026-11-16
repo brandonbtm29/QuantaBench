@@ -25,9 +25,9 @@ def test_each_builtin_recipe_makes_its_build_config():
     assert (std.conformer_search, std.max_conformers, std.method, std.refine_top, std.rank_method, std.qm_method) == \
         ("rdkit", 50, "auto", 20, "auto", "")
     careful = recipes.BY_KEY["careful"].config(BASE, available=here)
-    assert (careful.conformer_search, careful.crest_method, careful.crest_quick, careful.method, careful.refine_top,
-            careful.qm_method, careful.qm_task, careful.qm_top) == \
-        ("crest", "gfnff", True, "auto", 20, "wb97x-d/def2-svp", "energy", 3)
+    assert (careful.conformer_search, careful.crest_min_rotors, careful.crest_with_rdkit, careful.crest_method,
+            careful.crest_quick, careful.method, careful.refine_top, careful.qm_method, careful.qm_task,
+            careful.qm_top) == ("auto", 9, True, "gfnff", True, "auto", 20, "wb97x-d/def2-svp", "energy", 3)
     # a recipe leaves the resources, the solvent and the files alone
     for cfg in (screen, std, careful):
         assert (cfg.threads, cfg.priority, cfg.solvent, cfg.qm_memory_gb, cfg.molecule_timeout_s, cfg.formats) == \
@@ -61,7 +61,7 @@ def test_tasks_set_their_fields():
     sp = recipes.TASKS["single_point"].apply(cfg)
     assert (sp.max_conformers, sp.max_steps, sp.optimizer, sp.batched) == (1, 0, "lbfgs", "off")
     freq = recipes.TASKS["frequencies"].apply(cfg)
-    assert freq.frequencies and freq.max_conformers == 50 and freq.conformer_search == "crest"
+    assert freq.frequencies and freq.max_conformers == 50 and freq.conformer_search == "auto"
     assert recipes.TASKS["conformers"].apply(cfg) == cfg
     assert not recipes.TASKS["scan"].available and recipes.TASKS["scan"].why
     assert recipes.TASKS["optimize"].keeps_coordinates and not recipes.TASKS["conformers"].keeps_coordinates
