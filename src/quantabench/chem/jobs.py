@@ -509,9 +509,13 @@ class JobStore:
             cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(molecules)")}
             if "crashes" not in cols:     # version 1 tables
                 self.conn.execute("ALTER TABLE molecules ADD COLUMN crashes INTEGER NOT NULL DEFAULT 0")
-            if "accepted" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(run)")}:
+            run_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(run)")}
+            if "accepted" not in run_cols:
                 # newest version a forced resume accepted results from (version_differences); NULL = none
                 self.conn.execute("ALTER TABLE run ADD COLUMN accepted TEXT")
+            if "lanes" not in run_cols:
+                # the lane spec the run was started or last resumed with (lanes_record, RESUME-2); NULL = not stored
+                self.conn.execute("ALTER TABLE run ADD COLUMN lanes TEXT")
             # version 4: what each run measured (chem.telemetry); 5: the sensor columns of telemetry_load (added to
             # older tables here, NULL in their rows)
             telemetry.create_tables(self.conn)
@@ -532,9 +536,20 @@ class JobStore:
         if row is None:
             return None
         chunk = json.loads(row["chunk"]) if row["chunk"] else None
+        lanes = row["lanes"] if "lanes" in row.keys() else None
         return {"config": json.loads(row["config"]), "version": row["version"], "created": row["created"],
                 "updated": row["updated"], "chunk": tuple(chunk) if chunk else None,
-                "accepted": row["accepted"] if "accepted" in row.keys() else None}
+                "accepted": row["accepted"] if "accepted" in row.keys() else None,
+                "lanes": _lanes_from_json(lanes)}
+
+    def set_lanes(self, record: dict) -> None:
+        """Store the lane spec in force (``lanes_record``). A spec chosen for the run (``--lanes``) is replaced only by
+        another chosen one: a resume elsewhere that used that machine's setting keeps the run's own choice."""
+        old = (self.get_run() or {}).get("lanes")
+        if old and old.get("source") == "option" and record.get("source") != "option":
+            return
+        with self.conn:
+            self.conn.execute("UPDATE run SET lanes = ? WHERE id = 1", (_dumps(record),))
 
     def init_run(self, cfg: BuildConfig, chunk: Chunk | None) -> None:
         with self.conn:
@@ -808,14 +823,59 @@ def config_differences(stored: dict, cfg: BuildConfig) -> dict[str, tuple]:
     return diffs
 
 
+def lanes_record(spec: str, source: str, machine: str | None = None) -> dict:
+    """What a run stores about its lanes (RESUME-2): the spec in force, whether it was chosen for the run
+    (``"option"``: ``--lanes``, or a resume that kept the run's choice) or is this machine's setting (``"settings"``), and
+    the machine. Lane specs are per machine (a GPU lane, a thread count), so only a resume on the same machine reuses
+    a chosen one (``resume_lanes``)."""
+    if machine is None:
+        from ..dist import profile
+
+        machine = profile.machine_name()
+    return {"spec": str(spec), "source": source, "machine": str(machine)}
+
+
+def _lanes_from_json(text) -> dict | None:
+    if not text:
+        return None
+    try:
+        d = json.loads(text)
+    except ValueError:
+        return None
+    return d if isinstance(d, dict) and isinstance(d.get("spec"), str) else None
+
+
+def resume_lanes(stored: dict | None, given: str | None = None, machine: str | None = None) -> tuple[str | None, str]:
+    """(lane spec, note) for a resume: ``given`` (``--lanes`` now) wins; else the run's own chosen spec when the resume
+    runs on the machine that chose it; else None (this machine's setting, as before RESUME-2). The note says which, for
+    the log ("" when there is nothing to say)."""
+    if given is not None and str(given).strip():
+        return str(given).strip(), ""
+    if not stored or stored.get("source") != "option":
+        return None, ""
+    from .. import settings as settings_mod
+
+    if machine is None:
+        from ..dist import profile
+
+        machine = profile.machine_name()
+    spec, where = stored.get("spec", ""), stored.get("machine", "")
+    if settings_mod.machine_key(where) == settings_mod.machine_key(machine):
+        return spec, f"Lanes kept from the run: --lanes {spec} (give --lanes to change them)"
+    return None, (f"The run's --lanes {spec} was chosen on {where}; {machine} uses its own lane setting "
+                  "(give --lanes to choose)")
+
+
 def _prepare_run(store: JobStore, cfg: BuildConfig, chunk: Chunk | None, force: bool,
-                 log: Callable[[str], None]) -> Chunk | None:
+                 log: Callable[[str], None], lanes: dict | None = None) -> Chunk | None:
     """Create or check the run record; returns the chunk in force (a resume without a chunk keeps
     the stored one, weights included). A different chunk, or the same chunk with other weights, is a
     mismatch like a different method: it would select other molecules."""
     run = store.get_run()
     if run is None:
         store.init_run(cfg, chunk)
+        if lanes:
+            store.set_lanes(lanes)
         return chunk
     stored = check_chunk(run["chunk"])     # JSON lists -> tuples
     if chunk is None:
@@ -834,6 +894,8 @@ def _prepare_run(store: JobStore, cfg: BuildConfig, chunk: Chunk | None, force: 
     if run["version"] != __version__:
         log(f"Run started with QuantaBench {run['version']}, continuing with {__version__}")
     store.update_run(cfg, chunk, accepted=__version__ if version_diffs else None)
+    if lanes:
+        store.set_lanes(lanes)
     return chunk
 
 
@@ -881,7 +943,8 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
                   speed_aware: bool | None = None,
                   handoff: Handoff | None = None,
                   dynamic_threads: bool | None = None,
-                  control: BatchControl | None = None) -> tuple[list[MoleculeResult], Path]:
+                  control: BatchControl | None = None,
+                  lanes_spec: dict | None = None) -> tuple[list[MoleculeResult], Path]:
     """Run (or continue) a batch in ``run_dir``; returns the results computed by this call.
 
     ``keep_results=False`` returns light copies (``light_result``: no RDKit molecule, no normal modes) so a
@@ -909,10 +972,13 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
     ``control`` (``BatchControl``): pause this batch while it runs: hold (no new molecule), drain (no new molecule,
     return once none runs; the rest stays in the job table) and, with ``interrupt``, stop the molecules in progress
     at their next checkpoint; also a run priority applied live to the lane processes.
+
+    ``lanes_spec`` (``lanes_record``): the lane spec stored with the run, which a resume on the same machine reuses
+    (``resume_lanes``; RESUME-2).
     """
     try:
         return _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, retry_failed, chunk,
-                              force, lanes, keep_results, speed_aware, handoff, dynamic_threads, control)
+                              force, lanes, keep_results, speed_aware, handoff, dynamic_threads, control, lanes_spec)
     finally:
         if handoff is not None:
             handoff.close()
@@ -920,13 +986,13 @@ def run_resumable(inputs: Sequence[MoleculeInput] | None, cfg: BuildConfig, run_
 
 def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, retry_failed, chunk, force,
                    lanes, keep_results, speed_aware, handoff, dynamic_threads=None,
-                   control=None) -> tuple[list[MoleculeResult], Path]:
+                   control=None, lanes_spec=None) -> tuple[list[MoleculeResult], Path]:
     run_dir = Path(run_dir).expanduser()
     run_dir.mkdir(parents=True, exist_ok=True)
     chunk = check_chunk(chunk)
     results: list[MoleculeResult] = []
     with _RunLock(run_dir, force, log), JobStore(run_dir) as store:
-        chunk = _prepare_run(store, cfg, chunk, force, log)
+        chunk = _prepare_run(store, cfg, chunk, force, log, lanes=lanes_spec)
         # what ended runs and killed lanes left in scratch (Psi4's DF integrals: 10-20 GB per large molecule)
         external.sweep_scratch_quietly(log=log, what="left by ended runs")
         if cfg.method == "auto" and chunk is not None:
@@ -1170,6 +1236,7 @@ class RunStatus:
     failures: list[tuple[str, str]] = field(default_factory=list)
     # ok molecules whose conformers came from another search than asked for: (id, why), e.g. CREST failed -> RDKit
     fallbacks: list[tuple[str, str]] = field(default_factory=list)
+    lanes: dict | None = None          # lanes_record of the run (None: not stored, a run from before RESUME-2)
 
     @property
     def total(self) -> int:
@@ -1218,7 +1285,7 @@ def open_run(run_dir: str | Path) -> RunStatus:
         counts["running"] = 0
     return RunStatus(run_dir=run_dir, counts=counts, config=run["config"], version=run["version"],
                      created=run["created"], chunk=run["chunk"], active=bool(active), interrupted=interrupted,
-                     failures=failures, fallbacks=fallbacks)
+                     failures=failures, fallbacks=fallbacks, lanes=run.get("lanes"))
 
 
 _SRC = "\0src"      # the run folder a row was read from (merge_tables only; never written)

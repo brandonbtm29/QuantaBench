@@ -319,8 +319,12 @@ def _build(args) -> int:
         print("Nothing to build: give SMILES, names, --file, or --resume RUN_DIR.", file=sys.stderr)
         return 2
     base = here = None
+    lanes_given, lanes_note = args.lanes, ""
     if args.resume:  # continue with the science settings the run was started with; options given now still win
-        stored = jobs.open_run(args.resume).config
+        st = jobs.open_run(args.resume)
+        stored = st.config
+        # RESUME-2: a --lanes chosen for the run is kept on the machine that chose it
+        lanes_given, lanes_note = jobs.resume_lanes(st.lanes, args.lanes)
         known = jobs.stored_science(stored)     # a run from before the rank step resumes with rank_method "refine"
         here = BuildConfig.from_settings(settings_mod.load())
         base = replace(here, **known, **jobs.stored_run_options(stored))   # RESUME-1: the run's memory, cubes, limit
@@ -329,6 +333,8 @@ def _build(args) -> int:
     cfg = _config(args, base)
     if args.resume and (note := jobs.run_options_note(stored, here, cfg)):
         print(note)
+    if lanes_note:
+        print(lanes_note)
     if args.chunk_weights:  # weighted split (dist.plan): chunk becomes (i, n, weights), stored with the run
         from .dist import plan, profile
 
@@ -360,16 +366,17 @@ def _build(args) -> int:
         from .dist import profile as profile_mod
 
         try:  # an explicit --lanes that does not fit is an error; this machine's setting falls back to one lane
-            lanes, _spec = profile_mod.resolve_lanes(args.lanes, cfg, log=print)
+            lanes, spec = profile_mod.resolve_lanes(lanes_given, cfg, log=print)
         except ValueError as exc:
-            print(f"--lanes {args.lanes}: {exc}", file=sys.stderr)
+            print(f"--lanes {lanes_given}: {exc}", file=sys.stderr)
             return 2
+        lanes_spec = jobs.lanes_record(spec, "option" if lanes_given else "settings")
         try:
             results, out = jobs.run_resumable(items or None, cfg, run_dir, progress=_progress, log=print,
                                               retry_failed=args.retry_failed, chunk=chunk, force=args.force,
                                               lanes=lanes, keep_results=False,
                                               speed_aware=args.speed_aware_lanes,
-                                              dynamic_threads=args.dynamic_threads)
+                                              dynamic_threads=args.dynamic_threads, lanes_spec=lanes_spec)
         except (jobs.ConfigMismatchError, jobs.RunInUseError) as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -392,6 +399,9 @@ def _status(args) -> int:
         return 2
     print(f"{st.run_dir}\n  {st.summary()}\n  started {st.created} with QuantaBench {st.version}, "
           f"method {st.config.get('method')}")
+    if st.lanes:
+        how = "chosen with --lanes" if st.lanes.get("source") == "option" else "that machine's setting"
+        print(f"  lanes {st.lanes.get('spec')} on {st.lanes.get('machine')} ({how})")
     for ident, err in st.failures:
         print(f"  failed: {ident}: {err}")
     for ident, why in st.fallbacks:

@@ -87,10 +87,25 @@ Done in the branch:
 - The CLI resume, `stored_config` (Build > Resume run folder, a new phase) and the note line.
 - Tests: `tests/test_cli.py::test_resume_keeps_the_runs_options`,
   `tests/test_jobs.py::test_stored_config_keeps_the_run_options_and_old_runs_take_the_settings`.
-Follow-ups (ready):
-- Store the `--lanes` spec with the run too (today a resume without `--lanes` uses this machine's lane setting; with
-  the run's `--qm-memory` back, `auto` gives the same plan again).
+Follow-ups:
+- Done (RESUME-2, below): store the `--lanes` spec with the run.
 - `--priority` and `--free-threads` stay per machine on purpose.
+
+## RESUME-2: A resume keeps the run's `--lanes` on the machine that chose it · in-PR 2026-11-16 (branch `fix/resume-lanes`)
+RESUME-1's follow-up. Before this, a resume without `--lanes` used the machine's lane setting, whatever the run had been
+started with.
+Done in the branch:
+- `run.lanes` in the job table: `{"spec", "source": "option" | "settings", "machine"}` (`jobs.lanes_record`). The
+  column is added to older tables when they are opened for writing.
+  - `JobStore.set_lanes` never replaces a chosen spec with a machine's setting.
+  - `run_resumable(lanes_spec=...)`, `RunStatus.lanes`.
+- `jobs.resume_lanes`: `--lanes` given now wins. Otherwise the run's chosen spec is used on the machine that chose it
+  (with a note). Otherwise this machine's setting is used, with a note when the run chose one elsewhere.
+- The CLI `build --resume`, `status`, and the GUI's `BuildWorker` (a resume reads the stored spec; a new batch stores
+  the machine's setting).
+- Tests: `tests/test_jobs.py::test_the_run_stores_its_lanes_and_a_resume_on_that_machine_reuses_a_chosen_spec`,
+  `::test_the_gui_resume_takes_the_runs_lanes`, `tests/test_cli.py::test_resume_keeps_the_runs_lanes_on_the_same_machine`.
+Not stored: lanes of a grid worker's job (the worker plans its own) and of `grid build`'s local share.
 
 ## SCRATCH-1: Scratch cleanup and Psi4 memory · done 2026-11-13 (PR #5)
 Brandon (2026-11-13): "The hard drive was nearly filled last night. Can you make it so that the scratch files are
@@ -403,7 +418,7 @@ models or what they were intended to correct."
   - Measured rankings for transition-metal and main-group-element compounds: the review checks their coverage only.
   - Process-parallel profiling for very large lists (only needed if lists grow well past 14,000).
 
-## UI-5: Job dialog (level of theory × task × resources) and job monitor · in-PR 2026-11-15 (branch `feat/job-dialog`)
+## UI-5: Job dialog (level of theory × task × resources) and job monitor · done 2026-11-16 (PR #14)
 Depends on: UI-1.
 Done in the branch (Brandon, 2026-11-15: "merge #12, then start UI-5 as the next UI piece"):
 - `chem/recipes.py` (UI-agnostic):

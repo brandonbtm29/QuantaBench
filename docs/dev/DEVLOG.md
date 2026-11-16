@@ -169,8 +169,13 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Tasks are `BuildConfig` changes on top of the recipe.** Optimize and single point are one structure (`max_conformers=1`, `refine_top=1`, rank `refine`); single point adds `max_steps=0`, which is ASE's energy and forces at the start geometry. The pipeline MMFF-relaxes every embedded or seeded structure, so the single point is at that geometry: a follow-up for a geometry used unchanged.
 - **Recipes use the "gfn2" alias**, the first installed of dxtb, tblite and the xtb program, so one recipe works on NOVA (tblite) and on the MacBook alike. A user recipe stores every recipe field, not the difference from the defaults, so a later change of a default does not change a saved recipe.
 - **The workspace state version is now 3:** a new dock is not in an older saved state, and `restoreState` leaves it wherever it was. The saved arrangements are reset once.
-
 - **A cancelled job is "cancelled" only if a molecule was left undone.** macOS CI runs a batch in several lanes, and the molecules in flight finish after a cancel. There, all 7 of the test's molecules finished, so the job ends "done".
+
+## 2026-11-16: RESUME-2 a resume keeps the run's `--lanes` (branch `fix/resume-lanes`)
+- **Unlike the run options, a lane spec is machine-specific.** A GPU lane on NOVA (`gpu:1x4,cpu:5x2`) means nothing on the MacBook, and a thread count fits one CPU. So the record names the machine, and only a resume there reuses it. Elsewhere the machine's own setting applies, as before.
+- **Only a chosen spec is kept.** A run that used the machine's setting resumes with the setting as it is now. Someone who changed the setting in between wants the new one.
+- **A choice is never overwritten by a setting.** A resume on the MacBook with its own setting leaves NOVA's `--lanes` in the record, so a later resume on NOVA gets it back.
+- The column is added with `ALTER TABLE` when a table is opened for writing (as `accepted` was). Read-only opens of older tables return no record. The schema version stays 5: an older QuantaBench ignores the extra column.
 
 ## 2026-11-16: CONF-AUTO CREST for flexible neutral molecules (branch `feat/crest-auto`)
 - **One rule, three users.** The pipeline decides per molecule (`search_rule.decide` on the prepared structure). The
