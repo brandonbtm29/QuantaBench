@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -58,6 +59,7 @@ class SettingsDialog(QDialog):
         self.setMinimumHeight(640)   # the Engines tab: four paths, the detection report and run options
         self._closed = False
         self.s = s
+        self.sections = {}                  # key -> collapsible.Section (UI-8b)
         tabs = QTabWidget()
         tabs.addTab(self._resources_tab(report), "Compute")
         tabs.addTab(self._build_tab(), "Build defaults")
@@ -117,9 +119,38 @@ class SettingsDialog(QDialog):
                                                    self.s.resources.parallel_molecules))
 
     # ------------------------------------------------------------------ tabs
+    def _section_form(self, title: str, key: str, open_: bool, info: str = "") -> tuple:
+        """A folding section of a tab (UI-8b) with a form inside; its open state is remembered per machine."""
+        from .collapsible import Section
+
+        body = QWidget()
+        form = QFormLayout(body)
+        form.setContentsMargins(18, 2, 4, 6)
+        sec = Section(title, body, key=key, info=info, open_=open_, settings_key=f"settings_dialog/{key}_open")
+        self.sections[key] = sec
+        return sec, form
+
     def _resources_tab(self, report) -> QWidget:
+        """Compute: threads and priority, GPU, parallel lanes, limits and this computer's report, each a folding
+        section (UI-8b) with a one-line summary; the priority's explanation is behind an ⓘ."""
+        from .collapsible import InfoLabel, with_info
+
         w = QWidget()
-        form = QFormLayout(w)
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(0, 0, 0, 0)
+        inner = QWidget()
+        col = QVBoxLayout(inner)
+        col.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
+        threads_sec, form = self._section_form("Threads and priority", "compute_threads", True)
+        gpu_sec, gpu_form = self._section_form("GPU", "compute_gpu", False)
+        lanes_sec, lanes_form = self._section_form("Parallel lanes", "compute_lanes", True)
+        limits_sec, limits_form = self._section_form("Limits", "compute_limits", False)
         r = self.s.resources
         logical = resources.logical_cores()
         self.threads = QSpinBox()
@@ -138,10 +169,8 @@ class SettingsDialog(QDialog):
                                  "Normal: as fast as possible. Low: below-normal CPU and low I/O priority, so the\n"
                                  "run gives way to what you do. Background: idle CPU and very low I/O priority, and\n"
                                  "at least a quarter of the threads (at least 2) stay free.")
-        form.addRow("Run priority", self.priority)
-        self.priority_info = QLabel()
-        self.priority_info.setWordWrap(True)
-        form.addRow("", self.priority_info)
+        self.priority_info = InfoLabel()           # what the level does, behind the ⓘ next to it
+        form.addRow("Run priority", with_info(self.priority, self.priority_info))
         self.free_threads = QSpinBox()
         self.free_threads.setRange(0, max(0, logical - 1))
         self.free_threads.setSuffix(" threads")
@@ -154,7 +183,7 @@ class SettingsDialog(QDialog):
         self.gpu.addItems(["auto", "on", "off"])
         self.gpu.setCurrentText(r.gpu)
         self.gpu.setToolTip("auto: use the GPU when PyTorch sees one; on: require it; off: CPU only")
-        form.addRow("GPU", self.gpu)
+        gpu_form.addRow("GPU", self.gpu)
         self.gpu_index = QComboBox()
         gpus = report.gpus if report else []
         for g in gpus:
@@ -163,27 +192,27 @@ class SettingsDialog(QDialog):
             known = report is not None and report.torch_backend != "unknown"   # the probe may still be running
             self.gpu_index.addItem("No GPU visible to PyTorch" if known else "GPU not detected yet", 0)
         self.gpu_index.setCurrentIndex(max(0, min(r.gpu_index, self.gpu_index.count() - 1)))
-        form.addRow("Device", self.gpu_index)
+        gpu_form.addRow("Device", self.gpu_index)
         self.mem = QDoubleSpinBox()
         self.mem.setRange(0.1, 1.0)
         self.mem.setSingleStep(0.05)
         self.mem.setValue(r.gpu_memory_fraction)
         self.mem.setToolTip("Upper limit on the share of GPU memory PyTorch may allocate")
-        form.addRow("GPU memory cap", self.mem)
+        gpu_form.addRow("GPU memory cap", self.mem)
         self.dxtb_gpu = QComboBox()
         self.dxtb_gpu.addItems(["auto", "on", "off"])
         self.dxtb_gpu.setCurrentText(getattr(r, "dxtb_gpu", "auto") or "auto")
         self.dxtb_gpu.setToolTip("auto: dxtb (GFN1/GFN2-xTB) uses the GPU only where it has the linear algebra dxtb\n"
                                  "needs (CUDA); on AMD's Windows ROCm build and Apple GPUs it measured 5-8x slower\n"
                                  "than the CPU, so it stays on the CPU. on: use the GPU anyway; off: always the CPU.")
-        form.addRow("dxtb on the GPU", self.dxtb_gpu)
+        gpu_form.addRow("dxtb on the GPU", self.dxtb_gpu)
         self.linalg = QComboBox()
         self.linalg.addItems(["auto", "cpu", "device"])
         self.linalg.setCurrentText(getattr(r, "linalg", "auto") or "auto")
         self.linalg.setToolTip("Dense linear algebra a GPU build lacks (Cholesky on Windows ROCm, most of it on MPS):\n"
                                "auto: run just those operations on the CPU; cpu: all of them on the CPU;\n"
                                "device: never route (errors where the GPU lacks them).")
-        form.addRow("GPU linear algebra", self.linalg)
+        gpu_form.addRow("GPU linear algebra", self.linalg)
         self._report = report
         self.lanes = QComboBox()
         self.lanes.setEditable(True)
@@ -193,23 +222,24 @@ class SettingsDialog(QDialog):
                               "1 = one process with all threads; auto = from the hardware and the method;\n"
                               "N = N CPU lanes sharing the threads; or a list such as gpu:1x4,cpu:5x2\n"
                               "(1 GPU lane with 4 threads + 5 CPU lanes with 2 threads)")
-        form.addRow("Parallel lanes", self.lanes)
+        lanes_form.addRow("Parallel lanes", self.lanes)
         self.lane_plan = QLabel()
         self.lane_plan.setWordWrap(True)
-        form.addRow("", self.lane_plan)
+        self.lane_plan.setStyleSheet("color: gray;")
+        lanes_form.addRow("", self.lane_plan)
         self.speed_aware = QCheckBox("Speed-aware lanes: leave the last molecules to faster lanes")
         self.speed_aware.setChecked(bool(getattr(r, "speed_aware_lanes", True)))
         self.speed_aware.setToolTip("With lanes of different speed (a GPU lane next to CPU lanes), a slower lane does\n"
                                     "not start one of the last molecules when the faster lanes would finish all of\n"
                                     "them sooner. Off: every free lane takes the next molecule.")
-        form.addRow("", self.speed_aware)
+        lanes_form.addRow("", self.speed_aware)
         self.dynamic_threads = QCheckBox("Dynamic CREST threads: a CREST search may use idle lanes' threads")
         self.dynamic_threads.setChecked(bool(getattr(r, "dynamic_threads", True)))
         self.dynamic_threads.setToolTip("With CREST conformers and several lanes, a CREST search started while other\n"
                                         "lanes are idle may use their threads too (in whole lanes, when that is\n"
                                         "predicted to end the batch sooner). The threads go back when the search\n"
                                         "ends; the refinement after it runs on the lane's own threads.")
-        form.addRow("", self.dynamic_threads)
+        lanes_form.addRow("", self.dynamic_threads)
         self.memory_budget = QDoubleSpinBox()
         self.memory_budget.setRange(-1.0, 1024.0)
         self.memory_budget.setSingleStep(0.5)
@@ -222,7 +252,7 @@ class SettingsDialog(QDialog):
                                       "less memory (tblite polarizability, finite-difference Hessian) or is skipped with\n"
                                       "a note, instead of the process being killed for running out of memory.\n"
                                       "0 = auto (the available memory divided by the lanes, at least 1.5 GB); Off = no guard.")
-        form.addRow("Memory per lane", self.memory_budget)
+        limits_form.addRow("Memory per lane", self.memory_budget)
         self.molecule_timeout = QSpinBox()
         self.molecule_timeout.setRange(0, 7 * 86400)
         self.molecule_timeout.setSingleStep(300)
@@ -234,12 +264,44 @@ class SettingsDialog(QDialog):
                                          "is marked failed 'time limit (N s)' and --retry-failed redoes it. The conformer\n"
                                          "embedding gets a quarter of it and keeps the conformers it has by then.\n"
                                          "Off = no limit.")
-        form.addRow("Time limit per molecule", self.molecule_timeout)
+        limits_form.addRow("Time limit per molecule", self.molecule_timeout)
+        for sec in (threads_sec, gpu_sec, lanes_sec, limits_sec):
+            col.addWidget(sec)
         if report:
+            this_sec, this_form = self._section_form("This computer", "compute_hardware", False)
             info = QLabel(report.summary() + ("\n" + "\n".join(report.notes) if report.notes else ""))
             info.setWordWrap(True)
-            form.addRow(info)
+            info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            this_form.addRow(info)
+            this_sec.set_summary(report.summary().splitlines()[0] if report.summary() else "")
+            col.addWidget(this_sec)
+        col.addStretch(1)
+        for spin in (self.threads, self.free_threads, self.mem, self.memory_budget, self.molecule_timeout):
+            spin.valueChanged.connect(self._update_compute_summaries)
+        for combo in (self.priority, self.gpu, self.gpu_index, self.dxtb_gpu, self.linalg):
+            combo.currentIndexChanged.connect(self._update_compute_summaries)
+        self.lanes.currentTextChanged.connect(self._update_compute_summaries)
+        self.speed_aware.toggled.connect(self._update_compute_summaries)
+        self.dynamic_threads.toggled.connect(self._update_compute_summaries)
+        self._update_compute_summaries()
         return w
+
+    def _update_compute_summaries(self, *_args) -> None:
+        """The Compute sections' one-line summaries, shown while a section is folded."""
+        sec = self.sections
+        threads = self.threads.specialValueText() if self.threads.value() == 0 else f"{self.threads.value()} threads"
+        sec["compute_threads"].set_summary(f"{threads} · priority {self.priority.currentData()} · "
+                                           f"{self.free_threads.value()} free")
+        sec["compute_gpu"].set_summary(f"GPU {self.gpu.currentText()} · device {self.gpu_index.currentData() or 0} · "
+                                       f"cap {self.mem.value():.2f} · dxtb {self.dxtb_gpu.currentText()}")
+        extras = [n for n, b in (("speed-aware", self.speed_aware), ("dynamic CREST threads", self.dynamic_threads))
+                  if b.isChecked()]
+        sec["compute_lanes"].set_summary(" · ".join([self.lanes.currentText().strip() or "1", *extras]))
+        mem = self.memory_budget.specialValueText() if self.memory_budget.value() == self.memory_budget.minimum() \
+            else ("auto memory" if self.memory_budget.value() == 0 else f"{self.memory_budget.value():g} GB per lane")
+        limit = self.molecule_timeout.specialValueText() if self.molecule_timeout.value() == 0 \
+            else f"{self.molecule_timeout.value()} s per molecule"
+        sec["compute_limits"].set_summary(f"{mem} · {limit}")
 
     def _build_tab(self) -> QWidget:
         w = QWidget()
@@ -300,17 +362,17 @@ class SettingsDialog(QDialog):
         self.import_ask.setToolTip("2D structures, data fields, several fragments or several structures of one\n"
                                    "constitution. Off: these choices are used without asking.")
         self.import_ask.setChecked(im.ask)
-        lay.addWidget(self.import_ask)
         self.import_form = ImportOptionsWidget(ImportOptions.from_settings(im),
                                                [f for f in (im.id_field, im.name_field) if f])
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.import_form)
         lay.addWidget(scroll, 1)
-        note = QLabel("<code>quantabench-cli build --file</code> uses these too; its import flags "
-                      "(<code>--keep-coords</code>, <code>--filter</code>, ...) override them.")
-        note.setWordWrap(True)
-        lay.addWidget(note)
+        from .collapsible import InfoLabel, with_info
+
+        note = InfoLabel("<code>quantabench-cli build --file</code> uses these too; its import flags "
+                         "(<code>--keep-coords</code>, <code>--filter</code>, ...) override them.")
+        lay.insertWidget(0, with_info(self.import_ask, note))
         return w
 
     #: columns of the radii table
@@ -335,7 +397,12 @@ class SettingsDialog(QDialog):
         self.radii_set.setToolTip("Radii of the atom spheres for sasa_A2, vdw_area_A2 and vdw_volume_A3.\n"
                                   "cpk_area_A2 and cpk_volume_A3 always use Spartan's default radii, so they\n"
                                   "compare with Spartan's CPK area and volume whatever is chosen here.")
-        form.addRow("Radii set", self.radii_set)
+        from .collapsible import InfoLabel, with_info
+
+        self.surfaces_note = InfoLabel("Changes apply to molecules built from now on; finished runs keep their "
+                                       "values. The ESP polar areas use Spartan's fixed thresholds, |V| > 75, 100 and "
+                                       "125 kJ/mol.")
+        form.addRow("Radii set", with_info(self.radii_set, self.surfaces_note))
         self.sasa_probe = QDoubleSpinBox()
         self.sasa_probe.setRange(0.0, 3.0)
         self.sasa_probe.setDecimals(2)
@@ -345,22 +412,16 @@ class SettingsDialog(QDialog):
         self.sasa_probe.setToolTip("Solvent probe radius rolled over the atom spheres for sasa_A2: 1.4 Å for water.\n"
                                    "Spartan's accessible area uses 1.0 Å on its density surface, not on spheres.")
         form.addRow("SASA probe radius", self.sasa_probe)
-        note = QLabel("Changes apply to molecules built from now on; finished runs keep their values. "
-                      "The ESP polar areas use Spartan's fixed thresholds, |V| > 75, 100 and 125 kJ/mol.")
-        note.setWordWrap(True)
-        form.addRow(note)
         lay.addWidget(box)
 
         rbox = QGroupBox("Van der Waals radii")
         rl = QVBoxLayout(rbox)
-        hint = QLabel("Type a radius in <i>Your value</i> to replace the set's radius for that element; "
-                      "leave it blank to use the set's.")
-        hint.setWordWrap(True)
-        rl.addWidget(hint)
+        hint = InfoLabel("Type a radius in <i>Your value</i> to replace the set's radius for that element; "
+                         "leave it blank to use the set's.")
         self.radii_filter = QLineEdit()
         self.radii_filter.setPlaceholderText("Find an element (symbol or Z)")
         self.radii_filter.textChanged.connect(self._filter_radii)
-        rl.addWidget(self.radii_filter)
+        rl.addWidget(with_info(self.radii_filter, hint))
         bondi, spartan = radii_mod.table("bondi"), radii_mod.table("spartan")
         over = radii_mod.normalize_overrides(sf.radii_overrides)
         self.radii_table = QTableWidget(len(bondi), len(self.RADII_COLUMNS))
@@ -489,12 +550,12 @@ class SettingsDialog(QDialog):
         nform.addRow("Number style", self.number_style)
         self.display_preview = QLabel()
         self.display_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        nform.addRow("Example", self.display_preview)
+        from .collapsible import InfoLabel, with_info
+
+        note = InfoLabel("Display only: runs and exported files (CSV, JSON, SDF) keep their columns and units, such as "
+                         "<code>rel_kcal</code> and <code>best_energy_eV</code>.")
+        nform.addRow("Example", with_info(self.display_preview, note))
         lay.addWidget(nbox)
-        note = QLabel("Display only: runs and exported files (CSV, JSON, SDF) keep their columns and units, such as "
-                      "<code>rel_kcal</code> and <code>best_energy_eV</code>.")
-        note.setWordWrap(True)
-        lay.addWidget(note)
         lay.addStretch(1)
         for combo in (self.energy_unit, self.relative_unit, self.number_style):
             combo.currentIndexChanged.connect(self._update_display_preview)
@@ -531,11 +592,19 @@ class SettingsDialog(QDialog):
         box = QGroupBox("External programs")
         outer = QVBoxLayout(box)
         machine = settings_mod.this_machine()
-        hint = QLabel("Leave blank to search PATH and the usual conda/mamba environments.<br>"
-                      "On Windows, <code>wsl:/full/path/to/crest</code> runs a Linux build inside WSL.<br>"
-                      f"Paths are saved for this machine (<code>{machine}</code>) only: the settings file is shared "
-                      "by every machine.")
-        outer.addWidget(hint)
+        from .collapsible import InfoButton
+
+        hint_text = ("Leave blank to search PATH and the usual conda/mamba environments.<br>"
+                     "On Windows, <code>wsl:/full/path/to/crest</code> runs a Linux build inside WSL.<br>"
+                     f"Paths are saved for this machine (<code>{machine}</code>) only: the settings file is shared "
+                     "by every machine.")
+        hint_row = QHBoxLayout()
+        short = QLabel(f"Blank = found automatically. Saved for <code>{machine}</code> only.")
+        short.setStyleSheet("color: gray;")
+        hint_row.addWidget(short, 1)
+        self.engines_info = InfoButton(text=hint_text)
+        hint_row.addWidget(self.engines_info)
+        outer.addLayout(hint_row)
         form = QFormLayout()
         outer.addLayout(form)
         self.program_paths: dict[str, QLineEdit] = {}
@@ -660,13 +729,13 @@ class SettingsDialog(QDialog):
 
         set_box = QGroupBox("Settings folder")
         sl = QVBoxLayout(set_box)
-        info = QLabel("Where settings.json lives. Pick a folder inside SyncThing (for example "
-                      "~/SyncThing/QuantaBench/Settings) to share settings between computers.")
-        info.setWordWrap(True)
-        sl.addWidget(info)
+        from .collapsible import InfoLabel, with_info
+
+        info = InfoLabel("Where settings.json lives. Pick a folder inside SyncThing (for example "
+                         "~/SyncThing/QuantaBench/Settings) to share settings between computers.")
         self.settings_label = QLabel()
         self.settings_label.setWordWrap(True)
-        sl.addWidget(self.settings_label)
+        sl.addWidget(with_info(self.settings_label, info))
         row = QHBoxLayout()
         for text, fn in (("Change...", self._change_settings_dir), ("Use default", self._default_settings_dir),
                          ("Open folder", lambda: QDesktopServices.openUrl(

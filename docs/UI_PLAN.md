@@ -70,6 +70,11 @@ Model... (QSAR-4) fits cross-validated property models on the table's columns an
 **Less crowded (UI-8, 2026-11-14):** the Pipeline dock's stages are collapsible sections with one-line summaries,
 the method notes sit behind ⓘ pop-outs, a molecule's details and notes fold, the Table toolbar has four menus, and any
 panel pops out into a window of its own (View > Pop out panel; Dock all panels brings them back).
+**UI-8b (2026-11-16)** applies the same to more of the window:
+- the Surfaces panel (Surface / Color / Descriptors) and the Spectra panel (a Spectrum menu, Normal modes folding),
+  and Settings > Compute (sections with summaries), with the long explanations behind ⓘ;
+- every dock's title bar has ⧉ (pop out and back) and ✕;
+- the Results dock shrinks to one row for a molecule with one conformer (View > Fold Results for one conformer).
 
 **Shared chrome:**
 - A playback bar for conformers, molecules and trajectory frames.

@@ -1,8 +1,11 @@
 """Pop-out panels (UI-8): any dock can leave the window and come back.
 
     View > Pop out panel     the docks in view, each a check: checked = in its own window (``pop_out``), unchecked =
-                             back in the main window. The dock's own ⧉ title button and a double-click on its title do
+                             back in the main window. The ⧉ in the dock's title bar and a double-click on its title do
                              the same.
+    DockTitleBar             the docks' title bar (UI-8b): the title, ⧉ (pop out / dock back) and ✕ (close), instead
+                             of Qt's own float button, which is easy to miss. Dragging and double-clicking the title
+                             still move and float the dock (the bar leaves those mouse events to Qt).
     View > Dock all panels   every popped-out panel back into the main window (Ctrl+Shift+D)
     pop_out(dock)            float a dock as a window of a usable size (at least POPOUT_SIZE), next to the main
                              window, raised
@@ -14,9 +17,18 @@ so. The Plot dock has a ⧉ button of its own (``gui.plot_panel``): a scatter pl
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QDockWidget, QMainWindow, QMenu
+from PySide6.QtWidgets import (
+    QDockWidget,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMenu,
+    QSizePolicy,
+    QToolButton,
+    QWidget,
+)
 
 POPOUT_SIZE = QSize(640, 520)
 
@@ -50,6 +62,67 @@ def pop_out(dock: QDockWidget, on: bool = True) -> None:
     dock.activateWindow()
 
 
+class DockTitleBar(QWidget):
+    """A dock's title bar: its title, ⧉ and ✕. Clicks on the title and the empty part are left to QDockWidget (Qt
+    then drags, docks and floats it as with its own bar), so only the two buttons take mouse events."""
+
+    BUTTON_STYLE = "QToolButton { border: none; padding: 0 4px; } QToolButton:hover { background: palette(midlight); }"
+
+    def __init__(self, dock: QDockWidget):
+        super().__init__(dock)
+        self.dock = dock
+        self.setObjectName("dock_title_bar")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(6, 1, 2, 1)
+        lay.setSpacing(0)
+        self.title = QLabel(dock.windowTitle())
+        self.title.setObjectName("dock_title")
+        self.title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        lay.addWidget(self.title, 1)
+        self.popout_btn = QToolButton()
+        self.popout_btn.setObjectName("dock_popout_btn")
+        self.popout_btn.setText("⧉")
+        self.popout_btn.setCheckable(True)
+        self.popout_btn.setAutoRaise(True)
+        self.popout_btn.setStyleSheet(self.BUTTON_STYLE)
+        self.popout_btn.clicked.connect(lambda on: pop_out(self.dock, on))
+        self.close_btn = QToolButton()
+        self.close_btn.setObjectName("dock_close_btn")
+        self.close_btn.setText("✕")
+        self.close_btn.setAutoRaise(True)
+        self.close_btn.setStyleSheet(self.BUTTON_STYLE)
+        self.close_btn.setToolTip("Close the panel (View menu brings it back)")
+        self.close_btn.clicked.connect(lambda _c=False: self.dock.close())
+        lay.addWidget(self.popout_btn)
+        lay.addWidget(self.close_btn)
+        dock.windowTitleChanged.connect(self.title.setText)
+        dock.topLevelChanged.connect(self._sync)
+        dock.featuresChanged.connect(lambda _f: self._sync())
+        self._sync()
+
+    def _sync(self, *_args) -> None:
+        f = self.dock.features()
+        floating = self.dock.isFloating()
+        self.popout_btn.setVisible(bool(f & QDockWidget.DockWidgetFeature.DockWidgetFloatable))
+        self.close_btn.setVisible(bool(f & QDockWidget.DockWidgetFeature.DockWidgetClosable))
+        self.popout_btn.blockSignals(True)
+        self.popout_btn.setChecked(floating)
+        self.popout_btn.blockSignals(False)
+        self.popout_btn.setToolTip("Back into the main window (View > Dock all panels: every panel)" if floating
+                                   else "Pop out into a window of its own (or double-click the title)")
+
+
+def add_title_bar(dock: QDockWidget) -> DockTitleBar:
+    """Give ``dock`` the ⧉/✕ title bar (once)."""
+    bar = dock.titleBarWidget()
+    if isinstance(bar, DockTitleBar):
+        return bar
+    bar = DockTitleBar(dock)
+    dock.setTitleBarWidget(bar)
+    return bar
+
+
 def dock_all(win: QMainWindow) -> int:
     """Every floating dock back into the window; how many came back."""
     n = 0
@@ -73,7 +146,10 @@ def _fill(win: QMainWindow, menu: QMenu) -> None:
 
 
 def install(win: QMainWindow) -> None:
-    """View > Pop out panel and View > Dock all panels."""
+    """View > Pop out panel and View > Dock all panels, and the ⧉/✕ title bar on every dock the window has now (a
+    later dock can call ``add_title_bar``)."""
+    for d in docks(win):
+        add_title_bar(d)
     view = next((a.menu() for a in win.menuBar().actions()
                  if a.menu() is not None and a.text().replace("&", "") == "View"), None)
     if view is None:

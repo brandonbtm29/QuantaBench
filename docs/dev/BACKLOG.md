@@ -30,11 +30,32 @@ Done in the branch:
 - The Molecules dock's Details section and folded notes; the Table toolbar's Columns / Features / Models / Export
   menus; the Plot's ⧉ pop-out button.
 - Tests: `tests/test_gui_declutter.py`. Screenshots: `docs/dev/screenshots/UI-8/`.
-Follow-ups (ready):
-- The Surfaces, Spectra and Settings panels: the same sections and ⓘ (the Surfaces panel's colour legend text, the
-  Settings dialog's long explanations).
-- A per-dock ⧉ in each dock's title bar (Qt's own float button is there but easy to miss).
-- The Results dock: fold to its header row when the conformer table has one row.
+Follow-ups: done in UI-8b (below).
+
+## UI-8b: The UI-8 follow-ups · in-PR 2026-11-16 (branch `feat/ui-declutter-2`)
+Brandon (2026-11-16): "Do the backlog items." The three UI-8 follow-ups:
+- **Surfaces panel** (`gui/surface_panel.py`):
+  - Surface / Color / Descriptors sections (`surface_section`, `color_section`, `descriptors_section`) with summaries;
+    the colour bar outside them;
+  - `legend_text` is an `InfoLabel` behind the ⓘ next to Color; `source_info` and `iso_info` hold the other ⓘ texts;
+  - the HTML escaping of "Area V < 0".
+- **Spectra panel** (`gui/spectra_panel.py`):
+  - the Spectrum menu: `spectrum_btn`, with the actions `a_load`, `a_clear`, `a_export` (`load_btn`, `clear_btn`,
+    `export_btn` name them);
+  - `broadening_info`;
+  - the Normal modes section (`modes_section`), which folds the splitter's right pane to its header.
+- **Settings dialog** (`gui/settings_dialog.py`):
+  - Compute in sections (`sections`: `compute_threads`, `compute_gpu`, `compute_lanes`, `compute_limits`,
+    `compute_hardware`) with summaries;
+  - the notes of the other tabs, and `priority_info`, behind ⓘ.
+- **Dock title bars** (`gui/popout.py`): `DockTitleBar` (title, ⧉, ✕) on every dock at start (`add_title_bar` for
+  later ones). It leaves drags and double-clicks to Qt.
+- **Results fold** (`gui/results_fold.py`): `ResultsFolder` and View > Fold Results for one conformer.
+- Tests: five more in `tests/test_gui_declutter.py`. Screenshots: `docs/dev/screenshots/UI-8b/`.
+Follow-ups:
+- An OVITO viewport dock opened later still has Qt's own title bar (`popout.add_title_bar` can give it the ⧉ bar).
+- The Results fold stops at the dock's minimum height (about 120 px with the tab bar); a smaller minimum for the
+  table would fold it further.
 
 ## RESUME-1: A resume keeps the run's memory, cube and time-limit options · done 2026-11-14 (PR #11)
 Found in the b03 ESP pass (2026-11-13/14). The controller resumed the small part with a bare `build --resume`. That ran

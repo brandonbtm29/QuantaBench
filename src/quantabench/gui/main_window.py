@@ -229,6 +229,7 @@ class MainWindow(QMainWindow):
             plot_panel,
             popout,
             project_actions,
+            results_fold,
             review_panel,
             sketcher_dock,
             spectra_panel,
@@ -239,7 +240,7 @@ class MainWindow(QMainWindow):
 
         for panel in (spectra_panel, surface_panel, table_panel, plot_panel, project_actions, import_action,
                       machines_panel, machine_monitor, job_monitor, update_action, clipboard, sketcher_dock,
-                      review_panel, popout):
+                      review_panel, results_fold, popout):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting

@@ -171,3 +171,11 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **The workspace state version is now 3:** a new dock is not in an older saved state, and `restoreState` leaves it wherever it was. The saved arrangements are reset once.
 
 - **A cancelled job is "cancelled" only if a molecule was left undone.** macOS CI runs a batch in several lanes, and the molecules in flight finish after a cancel. There, all 7 of the test's molecules finished, so the job ends "done".
+
+## 2026-11-16: UI-8b the UI-8 follow-ups (branch `feat/ui-declutter-2`)
+- **The ⧉ needed a title bar of our own.** Qt draws a dock's title bar with its own float and close buttons, and has no hook for adding one. `DockTitleBar` replaces it with a title, ⧉ and ✕. The title label is transparent for mouse events and the bar leaves the rest to `QDockWidget`, so dragging, docking and double-click floating work as before. Tabified docks still show it above their content.
+- **The colour legend's sentence went behind the ⓘ next to Color, but the colour bar stays visible.** The bar with its −/0/+ ticks shows which colour is which, and it is the part that matters while a surface is on screen.
+- **Folding the Normal modes pane has to move the splitter.** A folded section in a horizontal splitter only hides its body, so the pane would stay as wide. `_on_modes_toggled` gives the pane the header's width and restores the old sizes on opening.
+- **The Results fold resizes the dock only when the Conformers tab is in front** and the dock is docked, visible and not behind another tab. It undoes the fold only if the height is still the folded one: a hand-made height is kept. `resizeDocks` takes effect after the event, so the folded height is read back on the next turn of the event loop.
+- **Signals from the table's model now go to a method of the folder (a QObject), not a lambda.** A lambda outlived the window in the tests and fired on a deleted timer.
+
