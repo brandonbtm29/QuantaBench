@@ -122,7 +122,10 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
   - **Queue and Jobs dock** (`gui.job_queue`, `gui.job_monitor`): every build is a job, one at a time in order.
     The dock shows each job's status, progress and log; it can cancel, reorder and open a job's folder, and shows
     what the running job uses next to this computer's live load.
-  - Run on lists the workers; routing a job to one is DIST-3's next step.
+  - **Run on** (2026-11-16, UI-5b / DIST-3): this computer, Auto (the fastest machine for the method per job it already
+    has), or a reachable worker. A job on a worker is sent there at once as one share and followed in the Jobs dock
+    (machine, state, molecule, log; Cancel goes there). Its results come back through the synced output folder,
+    else the worker's archive, into the Molecules list.
 - **Resources per job:** CPU threads, GPU on/off/device, memory cap, and the machine: this one, a
   worker such as BTM NOVA or the MacBook, or auto (DIST-3 in the backlog, PLATFORMS.md). Jobs run in a queue shown in the
   job monitor and can be resumed.
@@ -193,7 +196,7 @@ include a pause button on a machine and the work is redistributed?"
   and *Pause its worker while it runs on battery* (on by default). "Save for this machine" writes only that
   machine's entries (a fresh read and write), and says when they apply: the priority at once to running lanes, lanes
   and free threads with the next job.
-- **Later:** with UI-5's job dialog, "Run on" picks machines from these rows, and the job monitor shows each share's
+- **Done (UI-5b):** the job dialog's Run on sends a job to a worker. **Later:** the job monitor shows each share's
   moves (paused, away, work sharing) next to the sparklines. A tray icon on the laptop with Pause / Resume would save
   opening the app.
 

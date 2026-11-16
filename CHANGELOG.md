@@ -2,6 +2,22 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Run a job on a worker from the job dialog, UI-5 / DIST-3 (2026-11-16)
+- **Run on** in the job dialog (Resources) lists this computer, **Auto** and every known worker.
+  - The workers are asked in the background whether they answer. A reachable worker with the same QuantaBench version can be chosen and shows how busy it is ("macbook-pro (idle)"); one that is not reachable is listed as unavailable, with the reason in its tooltip.
+- **A job on a worker** is sent there at once, as one share the way `grid build` sends one: the molecules with the dialog's charge, multiplicity and starting coordinates, the science settings, the memory per DFT job and the time limit. The worker uses its own threads, GPU and priority; those fields are greyed out.
+- It does not wait in this computer's queue: local jobs keep running here one at a time meanwhile.
+- **The Jobs dock follows it** every few seconds on a thread of its own. It has a new Machine column, and shows the worker's state, counts, the molecule and stage running, and the worker's log.
+  - A worker that stops answering shows "unreachable" and is retried.
+  - **Cancel** sends the cancel to the worker.
+  - The job's molecules show "on <worker>" in the Molecules list while it runs.
+- **When it ends, the results come back like a grid share's:**
+  - the worker's run folder synced into this computer's output folder, once its `worker.json` vouches for its tables;
+  - otherwise the worker's archive, downloaded into `<output folder>/from_workers/<worker>/`.
+  - The job's rows in the Molecules list take the results (status, conformers, energy, folder).
+- **Auto** chooses when the job is sent: this computer or a worker, whichever has the highest speed for the job's method per job it already has. Speeds are taken the way `grid build --weights auto` splits a list: the Machines dock's split settings, the newest grid of the same protocol, else the benchmark. When this computer wins, the job runs in the local queue.
+- Closing the window stops following the jobs on workers; they go on there, and their run folders can be opened later (File > Open run folder).
+
 ### Job dialog, recipes and the Jobs dock, UI-5 (2026-11-15)
 - **Build > New job... (Ctrl+J)**, also a New job... button next to the Pipeline dock's Run buttons, submits the selected molecules (or all) as one job. It starts from the Pipeline dock's settings, and the job keeps its own: the dock is not changed. The dialog has four pages:
   - **Job:** the name, the molecules, a **recipe** and the **task**.

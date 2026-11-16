@@ -2292,6 +2292,7 @@ class MainWindow(QMainWindow):
             self.worker.cancel()
         if queue is not None:
             queue.cancel_queued()               # nothing new starts while the window closes
+            queue.stop_remote()                 # jobs on workers go on there; this window stops following them
         if self.worker is not None or self._busy_threads():
             self._quit_pending = True
             self._closing = True
