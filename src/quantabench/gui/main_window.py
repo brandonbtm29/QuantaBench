@@ -133,6 +133,11 @@ def _built(res) -> bool:
     return res is not None and res.status == "ok" and res.mol is not None and bool(res.conformers)
 
 
+def _then(first, then):
+    """``then(first())``: inputs read on the worker thread, then changed (``MainWindow.prepare_run``'s transform)."""
+    return then(first())
+
+
 class MainWindow(QMainWindow):
     #: The selected molecule changed, or its results did (MoleculeResult, or None when not built).
     #: Panels (spectra, surfaces) listen to this instead of reaching into the molecule list.
@@ -218,6 +223,7 @@ class MainWindow(QMainWindow):
         from . import (
             clipboard,
             import_action,
+            job_monitor,
             machine_monitor,
             machines_panel,
             plot_panel,
@@ -232,7 +238,8 @@ class MainWindow(QMainWindow):
         )
 
         for panel in (spectra_panel, surface_panel, table_panel, plot_panel, project_actions, import_action,
-                      machines_panel, machine_monitor, update_action, clipboard, sketcher_dock, review_panel, popout):
+                      machines_panel, machine_monitor, job_monitor, update_action, clipboard, sketcher_dock,
+                      review_panel, popout):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
@@ -1802,9 +1809,20 @@ class MainWindow(QMainWindow):
         if not ids:
             QMessageBox.information(self, "Run", "Add a molecule first (SMILES, name, or a file).")
             return
-        rows = [self.model.row(i) for i in ids]
         cfg = self.current_config()
         settings_mod.save(self.s)
+        todo, cfg, run_dir = self.prepare_run(ids, cfg)
+        self.submit_job(todo, cfg, run_dir, ids, name=f"{'Run selected' if selected_only else 'Run all'}: "
+                        f"{len(ids):,} molecule{'s' if len(ids) != 1 else ''}")
+
+    def prepare_run(self, ids: list[str], cfg: BuildConfig, transform=None) -> tuple:
+        """(molecules, configuration, run folder) for a build of ``ids``: the inputs (or, for rows of an opened run
+        folder, a callable that reads them on the worker thread), ``cfg`` with a project's runs folder, and a callable
+        that makes the run folder when the build starts (a batch, or any build in a project) or None. ``transform``:
+        applied to the inputs (the job dialog's charge, multiplicity and starting coordinates)."""
+        from functools import partial
+
+        rows = [self.model.row(i) for i in ids]
         project_runs = self.project.runs_dir() if getattr(self, "project", None) is not None else None
         if project_runs is not None:           # a project's builds write into it (UI-2), each through a run folder
             from dataclasses import replace as _replace
@@ -1812,19 +1830,44 @@ class MainWindow(QMainWindow):
             cfg = _replace(cfg, output_dir=str(project_runs))
         if all(r.input is not None for r in rows):
             todo = [r.input for r in rows]
+            if transform is not None:
+                todo = transform(todo)
         else:       # rows of an opened run folder: their inputs are read from its job table on the worker thread
-            from functools import partial
-
             todo = partial(molecule_list.gather_inputs,
                            [(r.id, r.run_dir, r.input, r.smiles, r.name, r.source) for r in rows])
+            if transform is not None:
+                todo = partial(_then, todo, transform)
         run_dir = None
         if (len(rows) > 1 or project_runs is not None) and cfg.write_files:
             # a batch goes through a job table: resumable, results stay on disk (in a project: every build)
             from ..chem.pipeline import new_run_dir
 
-            run_dir = new_run_dir(cfg.output_dir or self.s.output_path(),
-                                  f"batch_{len(rows)}" if len(rows) > 1 else f"build_{rows[0].id}")
-        self._start_worker(todo, cfg, run_dir, ids, total=len(ids), done=0)
+            run_dir = partial(new_run_dir, cfg.output_dir or self.s.output_path(),
+                              f"batch_{len(rows)}" if len(rows) > 1 else f"build_{rows[0].id}")
+        return todo, cfg, run_dir
+
+    def submit_job(self, todo, cfg: BuildConfig, run_dir, ids: list[str], *, name: str, total: int = 0,
+                   done: int = 0, **meta):
+        """Hand a build to the job queue (``gui.job_queue``; it starts at once when nothing runs). Without the queue
+        (the job monitor failed to install) the build starts directly, as before UI-5."""
+        queue = getattr(self, "job_queue", None)
+        if queue is None:
+            if self.worker is not None:
+                return None
+            self._start_worker(todo, cfg, run_dir() if callable(run_dir) else run_dir, ids,
+                               total=total or len(ids), done=done)
+            return None
+        from .job_queue import Job
+
+        return queue.submit(Job(name=name, ids=list(ids), cfg=cfg, todo=todo, run_dir=run_dir,
+                                total=total or len(ids), done_before=done, **meta))
+
+    def _start_job(self, job) -> None:
+        """The job queue's way to run a job: one build, as Run all always started it."""
+        self._start_worker(job.todo, job.cfg, job.output_dir, job.ids, total=job.total, done=job.done_before)
+
+    def _can_start_job(self) -> bool:
+        return self.worker is None and not self._closing and not self._quit_pending
 
     def _start_worker(self, todo, cfg: BuildConfig, run_dir: Path | None, ids: list[str], total: int,
                       done: int) -> None:
@@ -1834,6 +1877,9 @@ class MainWindow(QMainWindow):
         self.worker.molecule_done.connect(self._on_molecule_done)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
+        queue = getattr(self, "job_queue", None)
+        if queue is not None and queue.running is not None:
+            queue.attach(self.worker)            # before the thread starts: no signal is missed
         self._batch_dir = Path(run_dir) if run_dir is not None else None
         self._batch_ids = list(ids)
         self.running = dict.fromkeys(ids, "queued")
@@ -1855,6 +1901,9 @@ class MainWindow(QMainWindow):
             return
         self.worker.cancel()
         self.log("Cancelling after the current step...")
+        queue = getattr(self, "job_queue", None)
+        if queue is not None:
+            queue.cancel_requested()
 
     # ================================================================== run folders
     def open_run_folder(self, _checked=False, folder: str | Path | None = None) -> None:
@@ -1931,7 +1980,8 @@ class MainWindow(QMainWindow):
         ids = [r.id for r in self.model.rows()
                if r.status not in ("ok", "failed") and Path(r.run_dir or "") == folder]
         self.log(f"Resuming {folder}: {st.remaining} molecule(s) to do, method {cfg.method}")
-        self._start_worker(None, cfg, folder, ids, total=st.total, done=st.finished)
+        self.submit_job(None, cfg, folder, ids, name=f"Resume {folder.name}: {st.remaining:,} to do",
+                        total=st.total, done=st.finished)
 
     def _set_running(self, on: bool) -> None:
         self.progress.setVisible(on)
@@ -1983,6 +2033,9 @@ class MainWindow(QMainWindow):
     def _on_finished(self, results, run_dir) -> None:
         self._end_batch()
         self._set_running(False)
+        queue = getattr(self, "job_queue", None)
+        if queue is not None:
+            queue.ended(True, run_dir=run_dir)      # the next queued job starts after this event
         self.last_run_dir = run_dir
         ok = sum(r.status == "ok" for r in results)
         fell_back = fallback_count(results)
@@ -2001,6 +2054,9 @@ class MainWindow(QMainWindow):
     def _on_failed(self, msg) -> None:
         self._end_batch()
         self._set_running(False)
+        queue = getattr(self, "job_queue", None)
+        if queue is not None:
+            queue.ended(False, error=msg)
         self.log(msg)
         if not self._quit_pending:
             QMessageBox.critical(self, "Build failed", msg.splitlines()[0])
@@ -2225,12 +2281,17 @@ class MainWindow(QMainWindow):
             event.ignore()                  # Cancel in the unsaved-changes question (an open project only, UI-2)
             return
         self._probe_cancel.set()
+        queue = getattr(self, "job_queue", None)
         if self.worker is not None and not self._quit_pending:
-            if QMessageBox.question(self, "Quit", "A build is running. Cancel it and quit?") != \
+            n_queued = len(queue.queued()) if queue is not None else 0
+            more = f" {n_queued} more job{'s are' if n_queued != 1 else ' is'} queued." if n_queued else ""
+            if QMessageBox.question(self, "Quit", f"A build is running.{more} Cancel and quit?") != \
                     QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
             self.worker.cancel()
+        if queue is not None:
+            queue.cancel_queued()               # nothing new starts while the window closes
         if self.worker is not None or self._busy_threads():
             self._quit_pending = True
             self._closing = True

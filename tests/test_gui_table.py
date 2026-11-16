@@ -440,7 +440,7 @@ def test_analyze_shows_the_table_and_the_plot(tmp_path, built):
     app = _app()
     w = _window(tmp_path)
     try:
-        assert workspaces.STATE_VERSION == 2
+        assert workspaces.STATE_VERSION >= 2              # 2: the Table and Plot docks (3: Calculate's Jobs dock)
         ws = w.workspaces
         assert {"table", "plot"} <= ws.visible_docks()
         assert ws.dock("table") is w.table_dock and ws.dock("plot") is w.plot_dock

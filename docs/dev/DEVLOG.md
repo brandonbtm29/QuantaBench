@@ -161,3 +161,13 @@ Newest entries at the bottom. One entry per working session or nightly run.
 ## 2026-11-15: FIX-2 flaky CI tests (branch `fix/flaky-ci-tests`)
 - The sampler's sensor check was `if self.sensors and not self._halt.is_set()`. A stop between the wait and that line kept a sample with the load columns but no sensor columns. On a slow macOS runner the 0.35 s test saw it. Dropping the cut sample keeps every sample's columns consistent.
 - The Linux hang could not be reproduced. pytest-timeout's default signal method needs the interpreter to run a signal handler, which never happens while Qt's C++ event loop blocks (a modal dialog, a nested `exec`). The thread method dumps the stacks and exits, so the next occurrence costs 5 minutes and names the test.
+
+## 2026-11-15: UI-5 job dialog, recipes and the Jobs dock (branch `feat/job-dialog`)
+- **Every build is a job.** A queue that only the dialog used would let two builds race for `MainWindow.worker`. So `run_build`, `resume_run` and the dialog all hand a `Job` to one queue, which runs it through the window's existing `_start_worker`. The run folders, resume, cancel and the molecule list behave as before.
+- **The run folder is made when a job starts, not when it is queued.** `prepare_run` returns a callable for it, so a queued job that is cancelled leaves no empty folder, and the folder's timestamp is the start.
+- **The queue follows the worker through `attach`, connected before the thread starts.** A signal emitted before the connection would be lost: the queue's per-job log and counts come from the same `log`, `progress` and `molecule_done` signals as the window's.
+- **Tasks are `BuildConfig` changes on top of the recipe.** Optimize and single point are one structure (`max_conformers=1`, `refine_top=1`, rank `refine`); single point adds `max_steps=0`, which is ASE's energy and forces at the start geometry. The pipeline MMFF-relaxes every embedded or seeded structure, so the single point is at that geometry: a follow-up for a geometry used unchanged.
+- **Recipes use the "gfn2" alias**, the first installed of dxtb, tblite and the xtb program, so one recipe works on NOVA (tblite) and on the MacBook alike. A user recipe stores every recipe field, not the difference from the defaults, so a later change of a default does not change a saved recipe.
+- **The workspace state version is now 3:** a new dock is not in an older saved state, and `restoreState` leaves it wherever it was. The saved arrangements are reset once.
+
+- **A cancelled job is "cancelled" only if a molecule was left undone.** macOS CI runs a batch in several lanes, and the molecules in flight finish after a cancel. There, all 7 of the test's molecules finished, so the job ends "done".
