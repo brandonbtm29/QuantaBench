@@ -183,6 +183,15 @@ it is closed, and the method guide's notes behind ⓘ buttons (an orange ⚠ whe
 engine notes fold to one line under its **Details**. **View > Pop out panel** puts any panel in a window of its own (the
 Plot has a ⧉ button for it), and **View > Dock all panels** (Ctrl+Shift+D) brings them back.
 
+**Build > New job...** (Ctrl+J) submits molecules as a job:
+- a **recipe** (Screen, Standard, Careful, or one of your own);
+- a **task** (conformer distribution, optimize, single point, frequencies + thermochemistry);
+- a **level of theory** by family, with the solvent, charge and multiplicity;
+- the **resources**: threads, GPU, memory and a time limit;
+- the review of those molecules before Submit.
+
+Every build, including Run all, goes through the **Jobs** dock: jobs run one at a time in order. The dock shows each job's progress and log, cancels, reorders and opens a job's folder, and shows what the running job uses next to this computer's live load.
+
 ## Viewer
 
 The center of the window shows the 2D structure (left) and the 3D model (right). Both views share one

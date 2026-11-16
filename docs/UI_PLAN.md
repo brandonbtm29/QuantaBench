@@ -111,6 +111,18 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
   temperature/pressure, force field.
 - **Recipes:** saved multi-level protocols such as "Screen: MMFF conformers → GFN2 → AIMNet2 → DFT
   single point". A recipe is a generalization of today's pipeline.
+- **In the app since 2026-11-15 (UI-5):** Build > New job... (Ctrl+J) and the Jobs dock.
+  - **Job dialog** (`gui.job_dialog`, `chem.recipes`), four pages:
+    - Job: the name, the molecules, a recipe, the task;
+    - Level of theory: by family, with the solvent, charge and multiplicity, conformers, the rank step and DFT;
+    - Resources: Run on, threads, priority, GPU, memory, the time limit;
+    - Review: ADV-1's review of the molecules for this job, Apply and the presets acting on the dialog.
+  - **Recipes:** Screen, Standard and Careful are built in; the user's own are kept in the settings.
+  - **Tasks:** conformer distribution, optimize, single point, frequencies + thermochemistry; scan later.
+  - **Queue and Jobs dock** (`gui.job_queue`, `gui.job_monitor`): every build is a job, one at a time in order.
+    The dock shows each job's status, progress and log; it can cancel, reorder and open a job's folder, and shows
+    what the running job uses next to this computer's live load.
+  - Run on lists the workers; routing a job to one is DIST-3's next step.
 - **Resources per job:** CPU threads, GPU on/off/device, memory cap, and the machine: this one, a
   worker such as BTM NOVA or the MacBook, or auto (DIST-3 in the backlog, PLATFORMS.md). Jobs run in a queue shown in the
   job monitor and can be resumed.
@@ -154,7 +166,8 @@ thread speed is and the temperature of the PC."
   a QTimer only copies their latest samples. Both stop while the strip is hidden and when the window closes.
 - The Machines dock's worker status also shows each worker's latest CPU load, clock and temperature (from
   `/v1/info`).
-- **Later, with UI-5's job monitor dock:** the same blocks next to the job list, per-job markers on the sparklines
+- **With UI-5's Jobs dock (2026-11-15):** a line under the job list mirrors this computer's CPU, GPU and RAM from the
+  strip's monitor, next to the running job's threads, GPU and priority. **Later:** per-job markers on the sparklines
   (when a stage or molecule started), the run's own CPU share (the run timings' `own_cpu_percent`) against the
   machine's, and a throttling banner from `timings`' rule while a run is going.
 

@@ -8,7 +8,7 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
-## FIX-2: Flaky CI tests · in-PR 2026-11-15 (PR #13, branch `fix/flaky-ci-tests`)
+## FIX-2: Flaky CI tests · done 2026-11-15 (PR #13)
 - macOS (PR #11's first run): `tests/test_telemetry.py::test_the_load_sampler_records_sensors_or_skips_them`,
   KeyError `cpu_temp_c`. `LoadSampler.run` checked `_halt` before the sensor read and appended the sample anyway;
   it now drops a sample that `stop()` cut short. Test: `test_a_sample_cut_short_by_stop_is_dropped` (fails on main).
@@ -378,8 +378,33 @@ models or what they were intended to correct."
   - Measured rankings for transition-metal and main-group-element compounds: the review checks their coverage only.
   - Process-parallel profiling for very large lists (only needed if lists grow well past 14,000).
 
-## UI-5: Job dialog (level of theory × task × resources) and job monitor · ready
+## UI-5: Job dialog (level of theory × task × resources) and job monitor · done 2026-11-16 (PR #14)
 Depends on: UI-1.
+Done in the branch (Brandon, 2026-11-15: "merge #12, then start UI-5 as the next UI piece"):
+- `chem/recipes.py` (UI-agnostic):
+  - `Task` and `TASKS`: conformer distribution, optimize, single point, frequencies; scan listed, not available;
+  - `Recipe`, `BUILTIN` (Screen, Standard, Careful), the "gfn2" alias, `levels()` by family;
+  - user recipes in `Settings.recipes` (`save_recipe`, `user_recipes`; bad entries skipped);
+  - `JobSpec` (`config`, `problems`, `summary`) and `job_inputs` (charge and multiplicity overrides, a file's
+    coordinates for the single-structure tasks).
+- `gui/job_dialog.py`: the Job / Level of theory / Resources / Review pages, Save as recipe..., Submit
+  (`submit_spec`).
+- `gui/job_queue.py`: `Job`, `JobQueue`.
+  - Every build is a job: `MainWindow.run_build`, `resume_run` and the dialog call `submit_job`.
+  - The queue starts a job through `_start_job` and follows the worker's signals (`attach`).
+  - `_on_finished` / `_on_failed` end the job and start the next.
+- `gui/job_monitor.py`: the Jobs dock (Calculate, next to Results; workspace state version 3), Build > New job...
+  (Ctrl+J), and the New job... button.
+- Tests: `tests/test_recipes.py`, `tests/test_gui_jobs.py`. Screenshots: `docs/dev/screenshots/UI-5/`.
+Follow-ups (ready):
+- Run on a worker (DIST-3): submit the job to the worker's `/v1` API, follow it in the Jobs dock, and add "auto".
+- Scan: constrained optimizations in the refinement (a bond, angle or dihedral), then the task.
+- Single point on the file's geometry unchanged: today the structure is MMFF94s-relaxed first.
+- Parallel lanes per job in Resources (today: Settings > Resources > Parallel lanes).
+- The job monitor's MON-1 extras: per-job markers on the sparklines, the run's own CPU share, a throttling banner.
+- Run all / Run selected while a build runs: queue it instead of the buttons being disabled.
+- Recipes with more than one level: a refinement chain (MMFF → GFN2 → AIMNet2 as separate stages).
+
 - Calculate workspace: one dialog to submit selected molecules. **Level of theory** grouped by family
   (force field / tight binding / ML potential / DFT (disabled until available)), each with charge,
   multiplicity, solvent (where supported); **task** (single point, optimize, conformer distribution,
