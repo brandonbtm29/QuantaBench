@@ -162,7 +162,9 @@ def test_gui_batch_follows_this_machines_pause(tmp_path, monkeypatch):
     bw = BuildWorker(inputs(3), cfg, lanes="1", run_dir=tmp_path / "gui_batch")
     th = threading.Thread(target=bw.run)          # its signals are queued for the GUI thread: read the run folder
     th.start()
-    time.sleep(1.0)
+    # held as soon as the batch polls the pause file (the worker thread's start-up time varies: Windows CI)
+    wait_for(lambda: bw.control is not None and bw.control.mode == "hold", what="the hold")
+    time.sleep(0.5)
     assert started == [] and th.is_alive() and bw.control.mode == "hold"
     control.write_pause(None, False)
     th.join(60)
