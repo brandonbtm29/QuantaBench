@@ -58,6 +58,43 @@ class Harmonic(Calculator):
                         "charges": np.zeros(len(atoms))}
 
 
+class Flaky(Harmonic):
+    """Harmonic on the CPU, but the conformers numbered in ``fail`` (0-based, in refinement order) raise as a tblite
+    SCF that does not converge does."""
+
+    def __init__(self, device, fail):
+        super().__init__(device)
+        self.fail = set(fail)
+        self.index = -1
+        self._atoms_id = None
+
+    def calculate(self, atoms=None, properties=("energy",), system_changes=all_changes):
+        if atoms is not None and id(atoms) != self._atoms_id:      # the next conformer's Atoms
+            self._atoms_id = id(atoms)
+            self.index += 1
+            self.ref = None
+        if self.index in self.fail:
+            raise RuntimeError("tblite GFN2-xTB single point failed: SCF not converged in 250 cycles")
+        super().calculate(atoms, properties, system_changes)
+
+
+def test_one_conformers_failure_drops_that_conformer(tmp_path, monkeypatch):
+    """FAIL-1: an optimization that fails for one conformer (b03-b11: tblite SCFs not converged at some step) drops
+    that conformer with a note; the molecule fails only when every conformer does."""
+    monkeypatch.setattr(engines, "available", lambda key: (True, ""))
+    monkeypatch.setattr(engines, "supports", lambda key, numbers: (True, ""))
+    c = cfg(tmp_path, method="gfn1-xtb", batched="off", max_conformers=6, refine_top=4, energy_window_kcal=50,
+            rmsd_threshold=0.05)
+    monkeypatch.setattr(engines, "make_calculator", lambda key, numbers, q, m, dev, **_: Flaky(dev, fail=[1]))
+    r = pipeline.run_molecule(from_smiles("CCCCO", id="butanol"), c, threads=1)
+    assert r.status == "ok", r.error
+    n = len(r.conformers)
+    assert n >= 1 and any(f"1 of {n + 1} conformer(s) dropped" in x and "SCF not converged" in x for x in r.notes)
+    monkeypatch.setattr(engines, "make_calculator", lambda key, numbers, q, m, dev, **_: Flaky(dev, fail=range(99)))
+    r = pipeline.run_molecule(from_smiles("CCCCO", id="butanol"), c, threads=1)
+    assert r.status == "failed" and "SCF not converged" in r.error
+
+
 def _gpu_dxtb(monkeypatch):
     """Let gfn1-xtb (the stand-in GPU engine of these tests) keep the GPU it is given."""
     from quantabench.chem import torch_compat

@@ -68,6 +68,12 @@ DEBYE_PER_E_ANG = 4.80320471
 KCAL_PER_EV = 23.060548                  # same constant as conformers.KCAL_PER_EV
 AU_POLARIZABILITY_A3 = BOHR_ANG**3       # 1 bohr³ = 0.148185 Å³
 FIELD_STEP_AU = 5e-4                     # finite-field step (Hartree/(e·bohr) = 514 MV/cm per au)
+#: tblite's default Broyden mixer damping, and the gentler one (with more cycles) of the last try of a failed SCF:
+#: 1423-20-7 (C6F13-SF5) at a GFN2-xTB optimization step does not converge in 250 or 1000 cycles at 0.4 and
+#: converges at 0.2 (b03, 2026-11-11). Damping changes the path to the solution, not the converged energy.
+MIXER_DAMPING = 0.4
+RETRY_DAMPING = 0.2
+RETRY_MAX_ITERATIONS = 1000
 SOLVATION_MODELS = ("alpb", "gbsa", "cpcm")
 INSTALL_HINT = "pip install tblite (Linux/macOS) or conda install -c conda-forge tblite-python (Windows)"
 # PyPI has no Windows wheel: the brandonbtm29/tblite fork builds them (docs/INSTALL.md, FORK-2)
@@ -150,7 +156,8 @@ class TBLiteCalculator(Calculator):
     ``electric_field`` is a uniform field in atomic units (Hartree/(e·bohr)). A single point that fails
     (SCF not converged, inconsistent charge/spin, atoms too close) raises ``RuntimeError`` with tblite's
     message; a failure when restarting from the previous wavefunction is first retried once from the
-    superposition-of-atomic-densities guess.
+    superposition-of-atomic-densities guess, and then once more with a gentler mixer (``RETRY_DAMPING``, up to
+    ``RETRY_MAX_ITERATIONS`` cycles). ``n_damped`` counts the single points that needed that last try.
     """
 
     implemented_properties: ClassVar[list[str]] = ["energy", "free_energy", "forces", "dipole", "charges"]
@@ -172,6 +179,7 @@ class TBLiteCalculator(Calculator):
         self.accuracy = float(accuracy)
         self.max_iterations = int(max_iterations)
         self.n_singlepoints = 0
+        self.n_damped = 0       # single points that converged only with the gentler mixer
         self._numbers = np.asarray(numbers, dtype=int).ravel()
         self._api = None        # tblite.interface.Calculator, rebuilt when the atoms change identity
         self._res = None        # tblite.interface.Result: last wavefunction, the restart guess
@@ -238,15 +246,38 @@ class TBLiteCalculator(Calculator):
         try:
             res = self._api.singlepoint(restart)
         except RuntimeError as exc:
-            if restart is None:
-                raise RuntimeError(f"tblite {self.method} single point failed: {exc}") from exc
-            try:   # the restart guess may be poor after a large step: retry from atomic densities
-                res = self._api.singlepoint(None)
-            except RuntimeError as exc2:
+            first = exc
+            res = None
+            if restart is not None:
+                try:   # the restart guess may be poor after a large step: retry from atomic densities
+                    res = self._api.singlepoint(None)
+                except RuntimeError as exc2:
+                    first = exc2
+            if res is None:
                 self._res = None
-                raise RuntimeError(f"tblite {self.method} single point failed: {exc2}") from exc2
+                res = self._damped_singlepoint(first)
         self.n_singlepoints += 1
         self._res = res
+        return res
+
+    def _damped_singlepoint(self, failure: RuntimeError):
+        """The last try of a failed SCF: from atomic densities with the gentler mixer and more cycles; the calculator
+        goes back to its settings afterwards. Raises the original failure's ``RuntimeError`` if this fails too."""
+        api = self._api
+        try:
+            api.set("mixer-damping", RETRY_DAMPING)
+            api.set("max-iter", max(RETRY_MAX_ITERATIONS, self.max_iterations))
+            res = api.singlepoint(None)
+        except RuntimeError:
+            raise RuntimeError(f"tblite {self.method} single point failed: {failure} (also with mixer damping "
+                               f"{RETRY_DAMPING:g} and {max(RETRY_MAX_ITERATIONS, self.max_iterations)} cycles)") from failure
+        finally:
+            try:
+                api.set("mixer-damping", MIXER_DAMPING)
+                api.set("max-iter", self.max_iterations)
+            except RuntimeError:
+                self._api = None        # rebuilt with the default settings at the next single point
+        self.n_damped += 1
         return res
 
     # ------------------------------------------------------------------ ASE interface

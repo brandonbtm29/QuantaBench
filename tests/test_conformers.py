@@ -84,3 +84,37 @@ def test_embedding_stops_at_its_time_limit():
     assert elapsed < 6.0                                    # without the limit: ~20 s
     assert any(n.startswith(("conformer embedding limited by the time limit",
                              "conformer embedding stopped by the time limit")) for n in notes), notes
+
+
+def test_an_etkdg_start_that_finds_no_conformer_gives_way(monkeypatch):
+    """FAIL-1: with RDKit 2026.09's small-ring torsions, ETKDG found no conformer for digitoxin, digoxin, gitoxin,
+    glycyrrhizin and maltopentaose within the 450 s embedding limit; RDKit's timeout then returned the id -1, which
+    QuantaBench took for a conformer ("Bad Conformer Id"). Now -1 is dropped, the first conformer may take
+    FIRST_CONFORMER_S, and the next way of embedding (without small-ring torsions) follows, with a note."""
+    from rdkit.Chem import AllChem
+
+    real = AllChem.EmbedMultipleConfs
+    calls = []
+
+    def embed(mol, numConfs=1, params=None):
+        calls.append((params.useSmallRingTorsions, params.useRandomCoords, params.timeout))
+        if params.useSmallRingTorsions:
+            return [-1]                                       # what a call stopped by RDKit's timeout returns
+        return real(mol, numConfs=numConfs, params=params)
+
+    monkeypatch.setattr(confs.AllChem, "EmbedMultipleConfs", embed)
+    mol = Chem.AddHs(Chem.MolFromSmiles("OCC(O)CO"))
+    notes = []
+    ids = confs.embed(mol, 6, seed=3, notes=notes)
+    assert ids and all(i >= 0 for i in ids) and mol.GetNumConformers() == len(ids)
+    assert calls[0] == (True, False, int(confs.FIRST_CONFORMER_S))   # the first conformer, capped
+    assert any("with small-ring torsions found no conformer" in n for n in notes)
+    assert any("RDKit ETKDG found none; embedded without small-ring torsions" in n for n in notes)
+    cs = confs.generate(Chem.AddHs(Chem.MolFromSmiles("OCC(O)CO")), max_conformers=6, timeout_s=0)
+    assert cs.n_embedded >= 1                                 # the whole conformer search goes on from there
+
+
+def test_no_way_of_embedding_finds_one_is_a_clear_error(monkeypatch):
+    monkeypatch.setattr(confs.AllChem, "EmbedMultipleConfs", lambda mol, numConfs=1, params=None: [-1])
+    with pytest.raises(RuntimeError, match="could not embed"):
+        confs.embed(Chem.AddHs(Chem.MolFromSmiles("CCO")), 4)

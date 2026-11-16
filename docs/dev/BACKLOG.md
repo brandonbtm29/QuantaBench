@@ -8,6 +8,34 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
+## FAIL-1: The failed molecules of the QSAR tranches · in-PR 2026-11-16 (branch `fix/failed-molecules`)
+b01-b15 (13,206 molecules): 8 failed in gas and 13 in water (`Runs\failed-molecules-2026-11-16\report.md`).
+Done in the branch:
+- `conformers.embed`:
+  - RDKit's timeout id -1 is not a conformer;
+  - `FIRST_CONFORMER_S` (60 s) per ETKDG start, then the next start (without small-ring torsions, random
+    coordinates);
+  - the 5 glycosides ("Bad Conformer Id").
+- `chem/cpcm_worker.py`: the rank step's GFN1-xTB gas/CPCM terms in a helper process. `rank.CpcmTerm` uses it
+  (`in_process=`, `QUANTABENCH_CPCM_IN_PROCESS`). This fixes the 6 water crashes (tblite 0.8.0 ddX heap corruption at
+  some geometries; reproduced on Windows and Linux with 2447-54-3's water minimum).
+- `eng_tblite.TBLiteCalculator`: a failed SCF gets a last try with mixer damping 0.2 and up to 1,000 cycles
+  (`n_damped`).
+- `pipeline._refine`: a conformer whose optimization fails is dropped (noted); the molecule fails only if all do.
+  This fixes the 5 SCF failures.
+- Tests:
+  - `test_conformers.py::test_an_etkdg_start_that_finds_no_conformer_gives_way`,
+    `::test_no_way_of_embedding_finds_one_is_a_clear_error`;
+  - `test_rank.py::test_the_cpcm_helper_survives_a_crash`, `::test_the_cpcm_helper_gives_the_in_process_terms`,
+    `::test_a_crashed_cpcm_term_costs_that_conformer_only`;
+  - `test_eng_tblite.py::test_an_scf_that_fails_gets_a_gentler_last_try`;
+  - `test_pipeline.py::test_one_conformers_failure_drops_that_conformer`.
+Follow-ups:
+- Report the ddX crash upstream (tblite 0.8.0, CPCM, with 2447-54-3's geometry).
+- Rerun the 15 molecules (21 molecule-phases) with `--retry-failed` once this is merged (the report lists the commands).
+- 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
+  about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
+
 ## FIX-2: Flaky CI tests · done 2026-11-15 (PR #13)
 - macOS (PR #11's first run): `tests/test_telemetry.py::test_the_load_sampler_records_sensors_or_skips_them`,
   KeyError `cpu_temp_c`. `LoadSampler.run` checked `_halt` before the sensor read and appended the sample anyway;
