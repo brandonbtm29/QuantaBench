@@ -178,3 +178,26 @@ def test_resume_keeps_the_runs_options(tmp_path, capsys):
     assert line == "Run options kept from the run: --molecule-timeout 77 (give them again to change them)"
     cfg = jobs.open_run(run_dir).config
     assert cfg["qm_keep_cubes"] is True and cfg["qm_memory_gb"] == 5 and cfg["molecule_timeout_s"] == 77
+
+
+def test_resume_keeps_the_runs_lanes_on_the_same_machine(tmp_path, capsys, monkeypatch):
+    """RESUME-2: --lanes chosen for a run is stored with it; a resume on that machine without --lanes uses it again,
+    and says so; `status` shows it. On another machine the resume takes that machine's setting."""
+    from quantabench.chem import jobs
+    from quantabench.dist import profile
+
+    run_dir = tmp_path / "run"
+    assert cli.main(["build", "CCO eth", "OCC(F)(F)F tfe", "--method", "mmff", "--max-confs", "2", "--run-dir",
+                     str(run_dir), "--lanes", "1"]) == 0
+    capsys.readouterr()
+    here = profile.machine_name()
+    assert jobs.open_run(run_dir).lanes == {"spec": "1", "source": "option", "machine": here}
+    assert cli.main(["status", str(run_dir)]) == 0
+    assert f"lanes 1 on {here} (chosen with --lanes)" in capsys.readouterr().out
+    assert cli.main(["build", "--resume", str(run_dir)]) == 0
+    assert "Lanes kept from the run: --lanes 1 (give --lanes to change them)" in capsys.readouterr().out
+    monkeypatch.setattr(profile, "machine_name", lambda: "some-other-machine")
+    assert cli.main(["build", "--resume", str(run_dir)]) == 0
+    out = capsys.readouterr().out
+    assert f"The run's --lanes 1 was chosen on {here}; some-other-machine uses its own lane setting" in out
+    assert jobs.open_run(run_dir).lanes["machine"] == here                    # the run's choice stays stored

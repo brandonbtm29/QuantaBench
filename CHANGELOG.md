@@ -19,6 +19,11 @@
 - **The Results dock folds for one conformer.** A molecule with one conformer (or none) shrinks the Results dock to the table's header and its row, and the 3D view gets the height. A molecule with more conformers brings the height back, unless the dock was resized by hand. View > Fold Results for one conformer turns it off.
 - The open and closed sections are remembered per machine, like the Pipeline dock's.
 
+### A resume keeps the run's `--lanes` on the machine that chose it, RESUME-2 (2026-11-16)
+- The run stores the lane spec in force: the spec, whether it was chosen with `--lanes` or came from the machine's setting, and the machine.
+- `build --resume` without `--lanes`, and Build > Resume run folder, use a chosen spec again when they run on the machine that chose it ("Lanes kept from the run: --lanes auto"). Another machine uses its own setting and says so; the run keeps its choice for a later resume there.
+- `quantabench-cli status` shows the stored spec. Run folders from before this have no record and resume as before.
+
 ### Job dialog, recipes and the Jobs dock, UI-5 (2026-11-15)
 - **Build > New job... (Ctrl+J)**, also a New job... button next to the Pipeline dock's Run buttons, submits the selected molecules (or all) as one job. It starts from the Pipeline dock's settings, and the job keeps its own: the dock is not changed. The dialog has four pages:
   - **Job:** the name, the molecules, a **recipe** and the **task**.
