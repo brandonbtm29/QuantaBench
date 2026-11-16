@@ -809,3 +809,28 @@ def test_benchmark_modes():
     assert worker_mod.BENCH_MODES == ("auto", "always", "never")
     with pytest.raises(ValueError, match="bench must be"):
         worker_mod.Worker("127.0.0.1", 0, TOKEN, "out", bench="sometimes")
+
+
+def test_the_finished_job_table_is_one_file_once_a_status_poll_lets_go(tmp_path):
+    """A status poll's connection that overlaps the end of a job keeps jobs.sqlite-wal alive (CI on Windows saw it
+    left behind); the worker's checkpoint tries again until the poll has closed, so the folder ends as one file."""
+    import sqlite3
+    import threading
+
+    from quantabench.chem import jobs as jobs_mod
+    from quantabench.chem.pipeline import BuildConfig
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    store = jobs_mod.JobStore(run_dir)
+    store.init_run(BuildConfig(), None)
+    poll = sqlite3.connect(run_dir / jobs_mod.DB_NAME, check_same_thread=False)    # another reader, still open
+    poll.execute("SELECT count(*) FROM run").fetchall()
+    store.close()
+    wal = run_dir / f"{jobs_mod.DB_NAME}-wal"
+    assert wal.exists()
+    timer = threading.Timer(0.4, poll.close)
+    timer.start()
+    worker_mod.JobManager._checkpoint(run_dir, attempts=30, wait_s=0.1)
+    timer.join()
+    assert not wal.exists()

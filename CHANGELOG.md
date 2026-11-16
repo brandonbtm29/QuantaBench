@@ -5,6 +5,7 @@
 ### `grid build --molecule-timeout` (2026-11-16)
 - `grid build` takes `--molecule-timeout S`, like `build`, and every machine's share runs with it.
 - Before this, the option was `build`'s only. A grid run took the client's settings value (1,800 s by default) on every machine, which is too short for CREST on the largest flexible molecules.
+- **A worker's finished run folder is one file again on Windows.** When a status poll's connection overlapped the end of a job, `jobs.sqlite-wal` stayed beside the job table, and a flaky CI test (`test_archive_manifest_sync_temp_files_and_failed_streams`) failed on it. The worker's final checkpoint now tries again for up to 3 s, until the poll has let go.
 
 ### A resume keeps the run's `--lanes` on the machine that chose it, RESUME-2 (2026-11-16)
 - The run stores the lane spec in force: the spec, whether it was chosen with `--lanes` or came from the machine's setting, and the machine.

@@ -17,6 +17,13 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
   uses `--timeout-method=thread` and the suite `faulthandler_timeout = 240`, so the next hang names its test and
   shows every thread's stack.
 Follow-up: when it shows up, fix the hanging test itself (a modal dialog at window close is the first suspect).
+- 2026-11-16, the first stack (Windows CI of #15): `test_project.py::test_save_and_reopen_a_built_project` hung in
+  `MainWindow._show_info` → `collapsible.Notes.set_notes` → `self.setVisible(...)`, inside Qt, during the test's
+  `_wait` loop (a worker's `done` → `_on_loaded` → `_after_load` → `_on_molecule_selected`). 25 runs of the test on
+  Linux (xvfb) did not hang. Next: a layout loop of the word-wrapped labels in the Molecules dock's Details is the
+  suspect (the Nov 13 Linux hang, before UI-8, was in the same tests).
+- 2026-11-16: the flaky `test_worker.py::test_archive_manifest_sync_temp_files_and_failed_streams` (Windows, a
+  `jobs.sqlite-wal` left behind) is fixed in `JobManager._checkpoint` (it retries until a status poll lets go).
 
 ## UI-8: Collapsible sections and pop-out panels · done 2026-11-15 (PR #12)
 Brandon (2026-11-14): "At the moment it's kind of crowded. I think more collapsible menus / pop outs would be helpful";
