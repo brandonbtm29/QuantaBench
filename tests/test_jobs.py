@@ -439,3 +439,63 @@ def test_stored_config_keeps_the_run_options_and_old_runs_take_the_settings():
     assert (cfg.qm_memory_gb, cfg.qm_keep_cubes, cfg.molecule_timeout_s) == (4.0, True, 1800.0)
     assert jobs.run_options_note(old, here) == ""
     assert not set(jobs.RUN_OPTION_FIELDS) & set(jobs.SCIENCE_FIELDS)    # never a reason to refuse a resume
+
+
+def test_the_run_stores_its_lanes_and_a_resume_on_that_machine_reuses_a_chosen_spec(tmp_path):
+    """RESUME-2: the lane spec in force is stored with the run. A spec chosen for the run (--lanes) is reused by a
+    resume on the machine that chose it; another machine uses its own setting and leaves the run's choice stored."""
+    cfg = pipeline.BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False, write_files=False)
+    run_dir = tmp_path / "run"
+    jobs.run_resumable([from_smiles("CCO", id="eth")], cfg, run_dir,
+                       lanes_spec=jobs.lanes_record("auto", "option", "BTM-NOVA"))
+    st = jobs.open_run(run_dir)
+    assert st.lanes == {"spec": "auto", "source": "option", "machine": "BTM-NOVA"}
+    assert jobs.resume_lanes(st.lanes, machine="btm-nova") == (
+        "auto", "Lanes kept from the run: --lanes auto (give --lanes to change them)")
+    spec, note = jobs.resume_lanes(st.lanes, machine="brandons-macbook-pro")
+    assert spec is None and "chosen on BTM-NOVA" in note
+    assert jobs.resume_lanes(st.lanes, "2", machine="btm-nova") == ("2", "")      # given now: it wins
+    # a resume elsewhere with that machine's setting does not replace the run's choice; a new choice does
+    jobs.run_resumable(None, cfg, run_dir, lanes_spec=jobs.lanes_record("1", "settings", "brandons-macbook-pro"))
+    assert jobs.open_run(run_dir).lanes["spec"] == "auto"
+    jobs.run_resumable(None, cfg, run_dir, lanes_spec=jobs.lanes_record("gpu:1x4,cpu:5x2", "option", "BTM-NOVA"))
+    assert jobs.open_run(run_dir).lanes == {"spec": "gpu:1x4,cpu:5x2", "source": "option", "machine": "BTM-NOVA"}
+    # this machine's setting only: nothing to keep
+    other = tmp_path / "other"
+    jobs.run_resumable([from_smiles("CCO", id="eth")], cfg, other, lanes_spec=jobs.lanes_record("1", "settings", "x"))
+    assert jobs.resume_lanes(jobs.open_run(other).lanes, machine="x") == (None, "")
+    # a run folder from before RESUME-2: no lanes column; opening it read-only works, writing adds the column
+    old = tmp_path / "old"
+    jobs.run_resumable([from_smiles("CCO", id="eth")], cfg, old)
+    con = sqlite3.connect(old / jobs.DB_NAME)
+    con.execute("ALTER TABLE run DROP COLUMN lanes")
+    con.commit()
+    con.close()
+    assert jobs.open_run(old).lanes is None and jobs.resume_lanes(None) == (None, "")
+    jobs.run_resumable(None, cfg, old, lanes_spec=jobs.lanes_record("1", "option", "x"))
+    assert jobs.open_run(old).lanes["source"] == "option"
+
+
+def test_the_gui_resume_takes_the_runs_lanes(tmp_path, monkeypatch):
+    """RESUME-2 in Build > Resume run folder (gui.workers.BuildWorker with no inputs): the run's chosen spec on the
+    machine that chose it, said in the log; a new batch from the GUI stores this machine's setting."""
+    pytest.importorskip("PySide6")
+    from quantabench.dist import profile
+    from quantabench.gui.workers import BuildWorker
+
+    monkeypatch.setattr(profile, "machine_name", lambda: "nova")
+    cfg = pipeline.BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False, write_files=False)
+    run_dir = tmp_path / "run"
+    jobs.run_resumable([from_smiles("CCO", id="eth")], cfg, run_dir, lanes_spec=jobs.lanes_record("2", "option"))
+    w = BuildWorker(None, cfg, run_dir=run_dir)
+    lines = []
+    w.log.connect(lines.append)
+    w._resume_lanes(run_dir)
+    assert w.lanes == "2" and lines == ["Lanes kept from the run: --lanes 2 (give --lanes to change them)"]
+    w._lanes()
+    assert w.lanes_spec == {"spec": "2", "source": "option", "machine": "nova"}
+    fresh = BuildWorker([from_smiles("CCO", id="eth")], cfg, run_dir=tmp_path / "new")
+    fresh._resume_lanes(tmp_path / "new")                     # not a resume: nothing read
+    assert fresh.lanes is None
+    fresh._lanes()
+    assert fresh.lanes_spec["source"] == "settings" and fresh.lanes_spec["machine"] == "nova"

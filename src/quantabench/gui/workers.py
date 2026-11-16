@@ -30,25 +30,49 @@ class BuildWorker(QObject):
         self.run_dir = run_dir
         self._stop = threading.Event()
         self.control = None          # jobs.BatchControl of a running batch: this machine's pause (DIST-7)
+        self.lanes_spec = None       # what the run stores about its lanes (_lanes)
 
     def cancel(self) -> None:
         self._stop.set()
 
     def _lanes(self) -> list:
         """The lanes for a batch (parsed here, off the GUI thread: "auto" may detect the GPU). A setting that
-        cannot be used on this machine is reported and the batch runs in one lane."""
+        cannot be used on this machine is reported and the batch runs in one lane. Sets ``lanes_spec``, the record
+        the run stores (``jobs.lanes_record``)."""
+        from ..chem import jobs
         from ..dist import lanes as lanes_mod
         from ..dist import profile
 
         if isinstance(self.lanes, list):
+            self.lanes_spec = None
             return self.lanes
         if self.lanes is None:
-            return profile.resolve_lanes(None, self.cfg, log=self.log.emit)[0]
+            lanes, spec = profile.resolve_lanes(None, self.cfg, log=self.log.emit)
+            self.lanes_spec = jobs.lanes_record(spec, "settings")
+            return lanes
         try:
-            return lanes_mod.parse_lanes(self.lanes, self.cfg)
+            lanes = lanes_mod.parse_lanes(self.lanes, self.cfg)
+            self.lanes_spec = jobs.lanes_record(self.lanes, "option")
+            return lanes
         except ValueError as exc:
             self.log.emit(f"Parallel lanes {self.lanes!r} not usable here ({exc}); running in one lane")
+            self.lanes_spec = jobs.lanes_record("1", "settings")
             return lanes_mod.parse_lanes("1", self.cfg)
+
+    def _resume_lanes(self, run_dir) -> None:
+        """A resume (no inputs) without lanes of its own: the run's chosen spec on the machine that chose it
+        (``jobs.resume_lanes``, RESUME-2), else this machine's setting as before."""
+        from ..chem import jobs
+
+        if self.lanes is not None or self.inputs is not None:
+            return
+        try:
+            spec, note = jobs.resume_lanes(jobs.open_run(run_dir).lanes)
+        except (OSError, ValueError):
+            return
+        if note:
+            self.log.emit(note)
+        self.lanes = spec
 
     def run(self) -> None:
         """One molecule runs directly; a batch goes through the resumable job table (``chem.jobs``), so an
@@ -74,6 +98,7 @@ class BuildWorker(QObject):
             if run_dir is not None:
                 from ..dist import control as control_mod
 
+                self._resume_lanes(run_dir)
                 lanes = self._lanes()
                 in_process = len(lanes) <= 1          # several lanes: this thread only hands out the molecules
                 # this machine's pause (Machines dock, `worker pause`): the batch holds and goes on at resume
@@ -82,7 +107,8 @@ class BuildWorker(QObject):
                     results, run_dir = jobs.run_resumable(
                         inputs or None, self.cfg, run_dir,
                         progress=self.progress.emit, should_stop=self._stop.is_set, log=self.log.emit,
-                        on_result=self.molecule_done.emit, lanes=lanes, keep_results=False, control=self.control)
+                        on_result=self.molecule_done.emit, lanes=lanes, keep_results=False, control=self.control,
+                        lanes_spec=self.lanes_spec)
             else:
                 with priority.thread_lowered(self.cfg.priority):
                     results, run_dir = pipeline.run(
