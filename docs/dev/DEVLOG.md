@@ -161,3 +161,10 @@ Newest entries at the bottom. One entry per working session or nightly run.
 ## 2026-11-15: FIX-2 flaky CI tests (branch `fix/flaky-ci-tests`)
 - The sampler's sensor check was `if self.sensors and not self._halt.is_set()`. A stop between the wait and that line kept a sample with the load columns but no sensor columns. On a slow macOS runner the 0.35 s test saw it. Dropping the cut sample keeps every sample's columns consistent.
 - The Linux hang could not be reproduced. pytest-timeout's default signal method needs the interpreter to run a signal handler, which never happens while Qt's C++ event loop blocks (a modal dialog, a nested `exec`). The thread method dumps the stacks and exits, so the next occurrence costs 5 minutes and names the test.
+
+## 2026-11-16: RESUME-2 a resume keeps the run's `--lanes` (branch `fix/resume-lanes`)
+- **Unlike the run options, a lane spec is machine-specific.** A GPU lane on NOVA (`gpu:1x4,cpu:5x2`) means nothing on the MacBook, and a thread count fits one CPU. So the record names the machine, and only a resume there reuses it. Elsewhere the machine's own setting applies, as before.
+- **Only a chosen spec is kept.** A run that used the machine's setting resumes with the setting as it is now. Someone who changed the setting in between wants the new one.
+- **A choice is never overwritten by a setting.** A resume on the MacBook with its own setting leaves NOVA's `--lanes` in the record, so a later resume on NOVA gets it back.
+- The column is added with `ALTER TABLE` when a table is opened for writing (as `accepted` was). Read-only opens of older tables return no record. The schema version stays 5: an older QuantaBench ignores the extra column.
+

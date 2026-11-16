@@ -2,6 +2,11 @@
 
 ## 0.3.0.dev (unreleased)
 
+### A resume keeps the run's `--lanes` on the machine that chose it, RESUME-2 (2026-11-16)
+- The run stores the lane spec in force: the spec, whether it was chosen with `--lanes` or came from the machine's setting, and the machine.
+- `build --resume` without `--lanes`, and Build > Resume run folder, use a chosen spec again when they run on the machine that chose it ("Lanes kept from the run: --lanes auto"). Another machine uses its own setting and says so; the run keeps its choice for a later resume there.
+- `quantabench-cli status` shows the stored spec. Run folders from before this have no record and resume as before.
+
 ### CI: the two flaky tests (2026-11-15)
 - **macOS: `test_the_load_sampler_records_sensors_or_skips_them`.** It failed with KeyError `cpu_temp_c`. The load sampler kept a last sample without its sensor reading when `stop()` arrived while that sample was being taken. Such a sample is now dropped, so a sensors-on run's samples always carry the sensor columns. A new test reproduces the race deterministically.
 - **Linux: a test that hung for 30 minutes** (2026-11-13, somewhere in tests 1081-1152).
