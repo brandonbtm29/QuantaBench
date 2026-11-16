@@ -176,3 +176,11 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Only a chosen spec is kept.** A run that used the machine's setting resumes with the setting as it is now. Someone who changed the setting in between wants the new one.
 - **A choice is never overwritten by a setting.** A resume on the MacBook with its own setting leaves NOVA's `--lanes` in the record, so a later resume on NOVA gets it back.
 - The column is added with `ALTER TABLE` when a table is opened for writing (as `accepted` was). Read-only opens of older tables return no record. The schema version stays 5: an older QuantaBench ignores the extra column.
+
+## 2026-11-16: FIX-3 native stacks of a hung test (branch `fix/ci-hang-dump`)
+- **Why the hang ran into the 30 min limit despite `--timeout=300`.** pytest-timeout's thread method is a Python thread: it needs the GIL to print the stacks and call `os._exit`. A main thread stuck in Qt's C++ code with the GIL held never gives it back. faulthandler's timer is C and still printed the Python stack, which ends at the call into Qt.
+- **So the watchdog is another process.** It has its own interpreter and GIL, and gets "start"/"end" lines from a pytest hook over a pipe, plus end of input when pytest goes away. py-spy reads the hung process from outside: every thread's native frames, the Python frames, and which thread is "active+gil".
+- **`sudo -n` on Linux and macOS.** On Linux, Yama's ptrace_scope 1 lets a process read only its descendants, and the watchdog is pytest's child. On macOS, reading another process needs root. GitHub's runners allow passwordless sudo; Windows needs neither.
+- **The test hangs a process for real.** It uses catastrophic backtracking in `re` (C code that never releases the GIL), then checks the dump and the kill.
+- `test_lanes.lane_processes` skips the watchdog, as it skips multiprocessing's resource tracker.
+

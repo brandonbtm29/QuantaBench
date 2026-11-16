@@ -8,6 +8,23 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
+## FIX-3: The CI hang inside Qt · in-PR 2026-11-16 (branch `fix/ci-hang-dump`; the cause: open)
+The hang seen since Nov 13 (Linux, before UI-8) now has two stacks, both from a project load in the tests' `_wait`
+loop: a worker's `done` → `MainWindow._on_loaded` → `_after_load` → `_on_molecule_selected` → `_show_info` →
+`collapsible.Notes.set_notes` → `self.setVisible(...)`, inside Qt.
+- Windows CI of #15: `test_project.py::test_save_and_reopen_a_built_project`.
+- macOS CI of #18: `test_project.py::test_resume_a_half_finished_project`.
+Not reproduced: 65 runs of those tests on Linux (xvfb) passed. pytest-timeout (`--timeout=300`) never fired, so the
+main thread holds the GIL inside Qt; the other Python threads (the machine monitor's, the sensors') were idle.
+Suspects: a layout loop of the Molecules dock's word-wrapped labels; a deadlock between the main thread (GIL held,
+in Qt) and a thread waiting for the GIL while it holds a Qt lock.
+Done in the branch: `tests/hang_watchdog.py`, a separate process started by `tests/conftest.py` when
+`QB_HANG_WATCHDOG=1` (CI). After 200 s it runs `py-spy dump --native` on the test process (every thread, native
+frames, which thread holds the GIL; `sudo -n` on Linux and macOS), and at 420 s it kills the process.
+Tests: `tests/test_hang_watchdog.py` (a process stuck in the regex engine, holding the GIL).
+Next: the next hang's native frames name the Qt call; fix it from there. If it is a threads-and-GIL deadlock, the
+cure is in how the workers hand results to the GUI thread (no Python objects in cross-thread signals).
+
 ## FIX-2: Flaky CI tests · done 2026-11-15 (PR #13)
 - macOS (PR #11's first run): `tests/test_telemetry.py::test_the_load_sampler_records_sensors_or_skips_them`,
   KeyError `cpu_temp_c`. `LoadSampler.run` checked `_halt` before the sensor read and appended the sample anyway;
