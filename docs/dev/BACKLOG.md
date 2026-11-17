@@ -36,6 +36,24 @@ Follow-ups:
 - 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
   about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
 
+## FIX-3: The CI hang inside Qt · in-PR 2026-11-16 (branch `fix/ci-hang-dump`; the cause: open)
+The hang seen since Nov 13 (Linux, before UI-8) now has two stacks, both from a project load in the tests' `_wait`
+loop: a worker's `done` → `MainWindow._on_loaded` → `_after_load` → `_on_molecule_selected` → `_show_info` →
+`collapsible.Notes.set_notes` → `self.setVisible(...)`, inside Qt.
+- Windows CI of #15: `test_project.py::test_save_and_reopen_a_built_project`.
+- macOS CI of #18: `test_project.py::test_resume_a_half_finished_project`.
+Not reproduced: 65 runs of those tests on Linux (xvfb) passed. pytest-timeout (`--timeout=300`) never fired, so the
+main thread holds the GIL inside Qt; the other Python threads (the machine monitor's, the sensors') were idle.
+Suspects: a layout loop of the Molecules dock's word-wrapped labels; a deadlock between the main thread (GIL held,
+in Qt) and a thread waiting for the GIL while it holds a Qt lock.
+Done in the branch: `tests/hang_watchdog.py`, a separate process started by `tests/conftest.py` when
+`QB_HANG_WATCHDOG=1` (CI). After 200 s it runs `py-spy dump --native` on the test process (every thread, native
+frames, which thread holds the GIL; `sudo -n` on Linux and macOS; on macOS py-spy's Python frames plus `sample`), and
+at 420 s it kills the process.
+Tests: `tests/test_hang_watchdog.py` (a process stuck in the regex engine, holding the GIL).
+Next: the next hang's native frames name the Qt call; fix it from there. If it is a threads-and-GIL deadlock, the
+cure is in how the workers hand results to the GUI thread (no Python objects in cross-thread signals).
+
 ## FIX-2: Flaky CI tests · done 2026-11-15 (PR #13)
 - macOS (PR #11's first run): `tests/test_telemetry.py::test_the_load_sampler_records_sensors_or_skips_them`,
   KeyError `cpu_temp_c`. `LoadSampler.run` checked `_halt` before the sensor read and appended the sample anyway;
@@ -45,6 +63,13 @@ Follow-ups:
   uses `--timeout-method=thread` and the suite `faulthandler_timeout = 240`, so the next hang names its test and
   shows every thread's stack.
 Follow-up: when it shows up, fix the hanging test itself (a modal dialog at window close is the first suspect).
+- 2026-11-16, the first stack (Windows CI of #15): `test_project.py::test_save_and_reopen_a_built_project` hung in
+  `MainWindow._show_info` → `collapsible.Notes.set_notes` → `self.setVisible(...)`, inside Qt, during the test's
+  `_wait` loop (a worker's `done` → `_on_loaded` → `_after_load` → `_on_molecule_selected`). 25 runs of the test on
+  Linux (xvfb) did not hang. Next: a layout loop of the word-wrapped labels in the Molecules dock's Details is the
+  suspect (the Nov 13 Linux hang, before UI-8, was in the same tests).
+- 2026-11-16: the flaky `test_worker.py::test_archive_manifest_sync_temp_files_and_failed_streams` (Windows, a
+  `jobs.sqlite-wal` left behind) is fixed in `JobManager._checkpoint` (it retries until a status poll lets go).
 
 ## UI-8: Collapsible sections and pop-out panels · done 2026-11-15 (PR #12)
 Brandon (2026-11-14): "At the moment it's kind of crowded. I think more collapsible menus / pop outs would be helpful";

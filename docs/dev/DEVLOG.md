@@ -177,6 +177,19 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **A choice is never overwritten by a setting.** A resume on the MacBook with its own setting leaves NOVA's `--lanes` in the record, so a later resume on NOVA gets it back.
 - The column is added with `ALTER TABLE` when a table is opened for writing (as `accepted` was). Read-only opens of older tables return no record. The schema version stays 5: an older QuantaBench ignores the extra column.
 
+## 2026-11-16: `grid build --molecule-timeout` (branch `fix/grid-molecule-timeout`)
+- Found while preparing the CREST rebuild of the 1,674 flexible neutrals. `run_tranche.py` passes the CREST options to `grid build`, which stopped at `--molecule-timeout` as an unknown argument.
+- The option moved from `build`'s parser into `add_build_science_args`, which `build`, `grid build` and `review` share. `config_from_args` already read it. A worker takes `molecule_timeout_s` from the job's config (it is not a resource field), so every share gets the client's value.
+- **The flaky worker test on Windows (seen on #15 and #20).** The worker folds the WAL into jobs.sqlite when a job ends. SQLite deletes `-wal` only when the last connection closes, and on Windows not while another handle is open. A `GET /v1/jobs/<id>` poll that read the counts at that moment kept it. `_checkpoint` now opens and closes the store again, every 0.2 s for up to 3 s, until the file is gone. The new test holds a second connection for 0.4 s; it fails with the old single attempt.
+
+## 2026-11-16: FIX-3 native stacks of a hung test (branch `fix/ci-hang-dump`)
+- **Why the hang ran into the 30 min limit despite `--timeout=300`.** pytest-timeout's thread method is a Python thread: it needs the GIL to print the stacks and call `os._exit`. A main thread stuck in Qt's C++ code with the GIL held never gives it back. faulthandler's timer is C and still printed the Python stack, which ends at the call into Qt.
+- **So the watchdog is another process.** It has its own interpreter and GIL, and gets "start"/"end" lines from a pytest hook over a pipe, plus end of input when pytest goes away. py-spy reads the hung process from outside: every thread's native frames, the Python frames, and which thread is "active+gil".
+- **`sudo -n` on Linux and macOS.** On Linux, Yama's ptrace_scope 1 lets a process read only its descendants, and the watchdog is pytest's child. On macOS, reading another process needs root. GitHub's runners allow passwordless sudo; Windows needs neither.
+- **The test hangs a process for real.** It uses catastrophic backtracking in `re` (C code that never releases the GIL), then checks the dump and the kill.
+- `test_lanes.lane_processes` skips the watchdog, as it skips multiprocessing's resource tracker.
+- **macOS: `sample`, not `py-spy --native`.** py-spy has no native mode on macOS ("not supported on your platform", the first CI run). There the watchdog runs py-spy for the Python frames and the GIL, then macOS's own `sample <pid> 2` for every thread's native call graph, both with `sudo -n`.
+
 ## 2026-11-16: FAIL-1 the failed molecules of the QSAR tranches (branch `fix/failed-molecules`)
 - **"Bad Conformer Id" was RDKit's timeout id.**
   - `EmbedMultipleConfs` stopped by `params.timeout` before its first conformer returns `[-1]`.
