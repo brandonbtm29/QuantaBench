@@ -14,7 +14,7 @@ of aimnet's own:
    whenever a neighbor matrix is present and ``device.type == "cuda"``, which includes ROCm.
 4. DSF/Ewald/PME Coulomb (periodic systems only); not needed for molecules.
 
-Warp targets NVIDIA CUDA and the CPU: it rejects ROCm devices (BTM NOVA: "Invalid device identifier:
+Warp targets NVIDIA CUDA and the CPU: it rejects ROCm devices (the Windows workstation: "Invalid device identifier:
 cuda:0", because HIP builds of PyTorch also call the GPU ``cuda:0``) and is CPU-only on macOS.
 
 What this module does instead

@@ -1,7 +1,7 @@
 """Speed-aware lanes: the last molecules of a batch go to the lanes that finish them first (DIST-5).
 
 Lanes pull molecules first come, first served. When lanes differ a lot in speed (``--lanes auto`` for AIMNet2
-on BTM NOVA: one GPU lane about 10x faster per molecule than each of four CPU lanes), a CPU lane can start one
+on the Windows workstation: one GPU lane about 10x faster per molecule than each of four CPU lanes), a CPU lane can start one
 of the last molecules when the GPU lane would have finished it, and everything queued behind it, long before.
 For a small batch the run can then take longer than the GPU lane alone.
 

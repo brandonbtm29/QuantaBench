@@ -31,7 +31,7 @@ Splitting work (``quantabench.dist``):
     quantabench-cli build --file cohort.xlsx --method mmff --chunk-weights auto # this machine's weighted share;
         # the first machine stores the split (settings/machines/splits), the others reuse it for that list
     quantabench-cli worker                                                      # serve jobs over Tailscale
-    quantabench-cli grid build --file cohort.xlsx --method gfn2-xtb --machines btm-nova,local --wait
+    quantabench-cli grid build --file cohort.xlsx --method gfn2-xtb --machines bench-pc,local --wait
     quantabench-cli grid status|cancel|merge GRID_ID
 
 Batch runs: ``build`` uses the resumable job table (``chem.jobs``: ``jobs.sqlite`` in the run folder)

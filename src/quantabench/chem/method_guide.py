@@ -348,7 +348,7 @@ _ENTRIES: tuple[Entry, ...] = (
         "ions' conformers with the QM stage in PCM (RANK-1 has a cheap alternative). For neutral PFAS in the gas "
         "phase its picks were within 4 kJ/mol of ωB97X-D/6-31G*'s in 36 of 53 molecules.",
         "Milliseconds to a fraction of a second per energy and gradient for PFAS-size molecules on one core. "
-        "QuantaBench measured the whole pipeline for 24 PFAS on BTM NOVA: 126 s with tblite GFN2, against 76 s with "
+        "QuantaBench measured the whole pipeline for 24 PFAS on a Ryzen 9 7900X Windows workstation: 126 s with tblite GFN2, against 76 s with "
         "AIMNet2 and 34 s with MMFF94s alone (docs/dev/BACKLOG.md, PERF-1).",
         "Yes: D4, charge-dependent and self-consistent.",
         "ALPB and GBSA (tblite, the xtb program, CREST); CPCM (tblite). None in dxtb.",
@@ -486,8 +486,8 @@ _ENTRIES: tuple[Entry, ...] = (
         "geometries its relative energies were 51 kJ/mol off ωB97X-D/PCM's on average for PFAS ions and 8 kJ/mol "
         "off ωB97X-D/6-31G*'s for neutral PFAS (docs/VALIDATION.md, RANK-1). Molecules it has no parameters for (Sn, Hg, B, hypervalent "
         "iodine, radicals) go to [[uff|UFF]].",
-        "Milliseconds per conformer. QuantaBench measured 24 PFAS through the MMFF94s-only pipeline in 34 s on BTM "
-        "NOVA (docs/dev/BACKLOG.md, PERF-1).",
+        "Milliseconds per conformer. QuantaBench measured 24 PFAS through the MMFF94s-only pipeline in 34 s on a "
+        "Ryzen 9 7900X Windows workstation (docs/dev/BACKLOG.md, PERF-1).",
         "A buffered 14-7 van der Waals term (part of the force field, not a DFT-style correction).",
         "None.",
         (R_MMFF94, R_MMFF94S),
@@ -602,7 +602,7 @@ _ENTRIES: tuple[Entry, ...] = (
         "The ranking is at force-field level, so refine with xTB or better (the pipeline does). Bonds are fixed by "
         "GFN-FF's topology.",
         "QuantaBench measured 20 PFAS in the gas phase: 3,108 s on 6 lanes x 2 threads and 773 s on 3 x 4 threads "
-        "(M3 Max), 1,247 s on BTM NOVA's WSL (20 x 2) (docs/ENGINES.md).",
+        "(M3 Max), 1,247 s on a Ryzen 9 7900X's WSL (20 x 2) (docs/ENGINES.md).",
         "Yes: a simplified D4.",
         "ALPB.",
         (R_CREST, R_GFNFF),
@@ -774,7 +774,7 @@ _ENTRIES: tuple[Entry, ...] = (
         "Not selectable in the QM stage yet: the stage takes 'functional/basis', and Psi4 wants the -3c methods with "
         "an empty basis. Psi4 needs `mctc-gcp` on the PATH and `dftd4-python` for r2SCAN-3c. HF-3c is much cheaper "
         "but ranked PFAS conformers poorly (10 of 17 ions within 4 kJ/mol, leaning to extended ones; RANK-1).",
-        "r2SCAN-3c in PCM: 2x ωB97X-D/def2-SVP for a 37-atom PFAS ion on a 4-thread NOVA lane; HF-3c 0.2-0.3x "
+        "r2SCAN-3c in PCM: 2x ωB97X-D/def2-SVP for a 37-atom PFAS ion on a 4-thread Ryzen 9 7900X lane; HF-3c 0.2-0.3x "
         "(QuantaBench measured, Psi4 1.9.1, RANK-1).",
         "Yes: D4 (r2SCAN-3c), D3 with Becke-Johnson damping (HF-3c, PBEh-3c).",
         "PCM in Psi4 (single points).",

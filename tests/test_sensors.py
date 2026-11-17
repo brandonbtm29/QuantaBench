@@ -85,7 +85,7 @@ def lhm_tree(cpu_temp="48.1", fans=(0, 0), decimal="."):
     ram = _hw("/ram", "Total Memory", "ram.png", [
         _group("Data", [_sensor("/ram/data/0", "Memory Used", "Data", d("16.8"), "GB")])])
     return {"id": 0, "Text": "Sensor", "Min": "Min", "Value": "Value", "Max": "Max", "ImageURL": "", "Children": [
-        {"id": 1, "Text": "BTM-NOVA", "Min": "", "Value": "", "Max": "", "ImageURL": "images_icon/computer.png",
+        {"id": 1, "Text": "BENCH-PC", "Min": "", "Value": "", "Max": "", "ImageURL": "images_icon/computer.png",
          "Children": [board, cpu, ram, small_gpu, gpu]}]}
 
 
@@ -734,18 +734,18 @@ def test_monitor_idles_without_requests_and_wakes():
 # ----------------------------------------------------------------------------------------- settings
 def test_per_machine_sensor_settings(isolated_settings):
     s = settings_mod.Settings()
-    s.set_sensors_for("lhm_url", "http://127.0.0.1:8086", machine="BTM NOVA")
-    s.set_sensors_for("enabled", False, machine="brandons-macbook-pro")
-    s.set_sensors_for("interval_s", 0.1, machine="btm-nova")
+    s.set_sensors_for("lhm_url", "http://127.0.0.1:8086", machine="Bench PC")
+    s.set_sensors_for("enabled", False, machine="bench-mac")
+    s.set_sensors_for("interval_s", 0.1, machine="bench-pc")
     with pytest.raises(ValueError):
         s.set_sensors_for("password", "x")
     with pytest.raises(ValueError):
         s.set_sensors_for("enabled", "yes")
-    assert s.sensors.machine == {"btm-nova": {"lhm_url": "http://127.0.0.1:8086", "interval_s": 0.1},
-                                 "brandons-macbook-pro": {"enabled": False}}
-    nova = s.sensors_for("btm-nova")
-    assert nova.lhm_url == "http://127.0.0.1:8086" and nova.interval_s == 0.5 and nova.enabled   # clamped
-    assert not s.sensors_for("Brandons-MacBook-Pro").enabled
+    assert s.sensors.machine == {"bench-pc": {"lhm_url": "http://127.0.0.1:8086", "interval_s": 0.1},
+                                 "bench-mac": {"enabled": False}}
+    tower = s.sensors_for("bench-pc")
+    assert tower.lhm_url == "http://127.0.0.1:8086" and tower.interval_s == 0.5 and tower.enabled   # clamped
+    assert not s.sensors_for("Bench-Mac").enabled
     assert s.sensors_for("other").lhm_url == sensors.DEFAULT_LHM_URL
     settings_mod.save(s)
     back = settings_mod.load()
@@ -754,10 +754,10 @@ def test_per_machine_sensor_settings(isolated_settings):
     other = settings_mod.load()
     other.set_sensors_for("lhm_url", "http://10.0.0.2:8085", machine="wsl-box")
     settings_mod.save(other)
-    back.set_sensors_for("enabled", None, machine="brandons-macbook-pro")
+    back.set_sensors_for("enabled", None, machine="bench-mac")
     settings_mod.save(back)
     final = settings_mod.load().sensors.machine
-    assert final["wsl-box"] == {"lhm_url": "http://10.0.0.2:8085"} and "brandons-macbook-pro" not in final
+    assert final["wsl-box"] == {"lhm_url": "http://10.0.0.2:8085"} and "bench-mac" not in final
     junk = settings_mod.Settings.from_dict({"sensors": {"machine": {"a": {"enabled": "yes", "interval_s": [1],
                                                                           "lhm_url": 3}, "b": "nope"}}})
     assert junk.sensors.machine == {"a": {"enabled": "yes", "lhm_url": 3}}       # kept as found, but not used:

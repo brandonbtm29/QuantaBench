@@ -7,7 +7,7 @@ potentials or xTB, with descriptors and exports for QSAR and LAMMPS.
 Start with `docs/VISION.md` (why), `docs/ARCHITECTURE.md` (how), `docs/ROADMAP.md` and `docs/UI_PLAN.md` (what's next). Scheduled agent runs follow `docs/dev/RUNBOOK.md` and take work from `docs/dev/BACKLOG.md`.
 
 ## Layout rule (same as Brandon's other repos)
-- **Code** lives here: `GitHub Projects/QuantaBench` (Windows `C:\Users\Brand\GitHub Projects\QuantaBench`).
+- **Code** lives here: `GitHub Projects/QuantaBench` (Windows `%USERPROFILE%\GitHub Projects\QuantaBench`).
   It syncs between machines through GitHub only.
 - **Settings** live in `~/SyncThing/QuantaBench/Settings/settings.json`. A git-ignored
   `settings_location.json` in the repo root points there (`quantabench-cli settings --set-dir ...`).
@@ -27,7 +27,7 @@ Start with `docs/VISION.md` (why), `docs/ARCHITECTURE.md` (how), `docs/ROADMAP.m
 - Don't start the GUI or long batch runs in the background without saying so.
 - Keep scratch scripts in `scratch/` (gitignored).
 
-## Hardware notes (Brandon's workstation BTM NOVA)
+## Hardware notes (the main Windows workstation)
 - Ryzen 9 7900X (12C/24T), Radeon RX 9060 XT 16 GB (gfx1200), Windows 11.
 - WSL2 GPU pass-through for this card was fragile in earlier testing (`Ioctl failed: -22`); prefer
   native Windows for GPU work. LAMMPS GPU via OpenCL on native Windows gave ~9x over 12-core CPU.

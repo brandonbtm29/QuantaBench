@@ -513,19 +513,19 @@ def test_the_run_stores_its_lanes_and_a_resume_on_that_machine_reuses_a_chosen_s
     cfg = pipeline.BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False, write_files=False)
     run_dir = tmp_path / "run"
     jobs.run_resumable([from_smiles("CCO", id="eth")], cfg, run_dir,
-                       lanes_spec=jobs.lanes_record("auto", "option", "BTM-NOVA"))
+                       lanes_spec=jobs.lanes_record("auto", "option", "BENCH-PC"))
     st = jobs.open_run(run_dir)
-    assert st.lanes == {"spec": "auto", "source": "option", "machine": "BTM-NOVA"}
-    assert jobs.resume_lanes(st.lanes, machine="btm-nova") == (
+    assert st.lanes == {"spec": "auto", "source": "option", "machine": "BENCH-PC"}
+    assert jobs.resume_lanes(st.lanes, machine="bench-pc") == (
         "auto", "Lanes kept from the run: --lanes auto (give --lanes to change them)")
-    spec, note = jobs.resume_lanes(st.lanes, machine="brandons-macbook-pro")
-    assert spec is None and "chosen on BTM-NOVA" in note
-    assert jobs.resume_lanes(st.lanes, "2", machine="btm-nova") == ("2", "")      # given now: it wins
+    spec, note = jobs.resume_lanes(st.lanes, machine="bench-mac")
+    assert spec is None and "chosen on BENCH-PC" in note
+    assert jobs.resume_lanes(st.lanes, "2", machine="bench-pc") == ("2", "")      # given now: it wins
     # a resume elsewhere with that machine's setting does not replace the run's choice; a new choice does
-    jobs.run_resumable(None, cfg, run_dir, lanes_spec=jobs.lanes_record("1", "settings", "brandons-macbook-pro"))
+    jobs.run_resumable(None, cfg, run_dir, lanes_spec=jobs.lanes_record("1", "settings", "bench-mac"))
     assert jobs.open_run(run_dir).lanes["spec"] == "auto"
-    jobs.run_resumable(None, cfg, run_dir, lanes_spec=jobs.lanes_record("gpu:1x4,cpu:5x2", "option", "BTM-NOVA"))
-    assert jobs.open_run(run_dir).lanes == {"spec": "gpu:1x4,cpu:5x2", "source": "option", "machine": "BTM-NOVA"}
+    jobs.run_resumable(None, cfg, run_dir, lanes_spec=jobs.lanes_record("gpu:1x4,cpu:5x2", "option", "BENCH-PC"))
+    assert jobs.open_run(run_dir).lanes == {"spec": "gpu:1x4,cpu:5x2", "source": "option", "machine": "BENCH-PC"}
     # this machine's setting only: nothing to keep
     other = tmp_path / "other"
     jobs.run_resumable([from_smiles("CCO", id="eth")], cfg, other, lanes_spec=jobs.lanes_record("1", "settings", "x"))
@@ -549,7 +549,7 @@ def test_the_gui_resume_takes_the_runs_lanes(tmp_path, monkeypatch):
     from quantabench.dist import profile
     from quantabench.gui.workers import BuildWorker
 
-    monkeypatch.setattr(profile, "machine_name", lambda: "nova")
+    monkeypatch.setattr(profile, "machine_name", lambda: "tower")
     cfg = pipeline.BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False, write_files=False)
     run_dir = tmp_path / "run"
     jobs.run_resumable([from_smiles("CCO", id="eth")], cfg, run_dir, lanes_spec=jobs.lanes_record("2", "option"))
@@ -559,9 +559,9 @@ def test_the_gui_resume_takes_the_runs_lanes(tmp_path, monkeypatch):
     w._resume_lanes(run_dir)
     assert w.lanes == "2" and lines == ["Lanes kept from the run: --lanes 2 (give --lanes to change them)"]
     w._lanes()
-    assert w.lanes_spec == {"spec": "2", "source": "option", "machine": "nova"}
+    assert w.lanes_spec == {"spec": "2", "source": "option", "machine": "tower"}
     fresh = BuildWorker([from_smiles("CCO", id="eth")], cfg, run_dir=tmp_path / "new")
     fresh._resume_lanes(tmp_path / "new")                     # not a resume: nothing read
     assert fresh.lanes is None
     fresh._lanes()
-    assert fresh.lanes_spec["source"] == "settings" and fresh.lanes_spec["machine"] == "nova"
+    assert fresh.lanes_spec["source"] == "settings" and fresh.lanes_spec["machine"] == "tower"

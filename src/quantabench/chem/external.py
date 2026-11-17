@@ -407,7 +407,7 @@ def find_python_with(module: str, setting_key: str = "") -> str | None:
 
 # ----------------------------------------------------------------------------------- WSL
 def to_wsl_path(path: str | Path) -> str:
-    """``C:\\Users\\Brand\\x`` -> ``/mnt/c/Users/Brand/x`` (paths already POSIX are returned as is)."""
+    """``C:\\Users\\me\\x`` -> ``/mnt/c/Users/me/x`` (paths already POSIX are returned as is)."""
     s = str(path)
     if s.startswith("/"):
         return s

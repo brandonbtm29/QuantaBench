@@ -14,7 +14,7 @@ properties) runs on the lane's own threads.
     choose_width(cost, base, free, budget, rest) -> int     the policy below (a pure function)
     DynamicThreads(budget, cost_of)   one run's policy state: the budget, the running CREST calls, calibration
 
-Policy (chosen with a discrete-event simulation of batches on the Mac's and NOVA's lane plans, docs/ENGINES.md):
+Policy (chosen with a discrete-event simulation of batches on the Mac's and the workstation's lane plans, docs/ENGINES.md):
 a molecule gets more than its lane's threads only when it would set the end of the batch on its own: its
 predicted CREST time at the lane's width is more than ``DOMINANCE`` (2) times the rest of the work spread over
 the other threads. The size model is off by a factor of about 1.8 per molecule, and the factor 2 keeps a
@@ -48,7 +48,7 @@ from pathlib import Path
 
 #: predicted CREST time ~ size ** COST_POWER (size = atoms with hydrogens)
 COST_POWER = 4.0
-#: CREST speedup from base to w threads ~ (w / base) ** SPEEDUP_POWER (Mac 4 -> 13 threads: 0.48; NOVA 5 -> 23: 0.42;
+#: CREST speedup from base to w threads ~ (w / base) ** SPEEDUP_POWER (Mac 4 -> 13 threads: 0.48; the workstation 5 -> 23: 0.42;
 #: Mac 2 -> 4: 0.9)
 SPEEDUP_POWER = 0.6
 #: a wider CREST call must predict an end of the batch at least this much earlier than the narrower one

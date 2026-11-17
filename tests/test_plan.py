@@ -26,30 +26,30 @@ def prof(name, cores=8, engines=None, **throughput):
 def test_positional_and_named_weights():
     w = plan.parse_weights("3,1")
     assert dict(w) == {"1": 3.0, "2": 1.0} and not w.named and w.spec() == "3,1"
-    w = plan.parse_weights(" BTM NOVA=3, brandons-macbook-pro=1.5 ")
-    assert dict(w) == {"btm-nova": 3.0, "brandons-macbook-pro": 1.5} and w.named
-    assert list(w) == ["brandons-macbook-pro", "btm-nova"]               # a mapping: chunks in name order
-    assert w.spec() == "brandons-macbook-pro=1.5,btm-nova=3"
+    w = plan.parse_weights(" Bench PC=3, bench-mac=1.5 ")
+    assert dict(w) == {"bench-pc": 3.0, "bench-mac": 1.5} and w.named
+    assert list(w) == ["bench-mac", "bench-pc"]               # a mapping: chunks in name order
+    assert w.spec() == "bench-mac=1.5,bench-pc=3"
     for bad in ("", "3,x", "3,-1", "0,0", "a=3,1", "a=1,a=2", "3,auto", "=2", "inf,1"):
         with pytest.raises(ValueError):
             plan.parse_weights(bad, "mmff", [])
 
 
 def test_auto_weights_from_benchmarks():
-    profiles = [prof("brandons-macbook-pro", mmff_at_cpu=1000.0, gfn1_xtb_at_cpu=200.0),
-                prof("btm-nova", mmff_at_cpu=3000.0, gfn1_xtb_at_cpu=300.0, **{"gfn1_xtb_at_cuda:0": 900.0})]
+    profiles = [prof("bench-mac", mmff_at_cpu=1000.0, gfn1_xtb_at_cpu=200.0),
+                prof("bench-pc", mmff_at_cpu=3000.0, gfn1_xtb_at_cpu=300.0, **{"gfn1_xtb_at_cuda:0": 900.0})]
     w = plan.parse_weights("auto", "mmff", profiles)
-    assert list(w) == ["brandons-macbook-pro", "btm-nova"]          # sorted by name on every machine
-    assert dict(w) == {"brandons-macbook-pro": 1000.0, "btm-nova": 3000.0} and not w.notes
+    assert list(w) == ["bench-mac", "bench-pc"]          # sorted by name on every machine
+    assert dict(w) == {"bench-mac": 1000.0, "bench-pc": 3000.0} and not w.notes
     w = plan.parse_weights("auto", "gfn1-xtb", profiles)
-    assert w["btm-nova"] == 900.0 and w.sources["btm-nova"] == "benchmark gfn1-xtb@cuda:0"   # fastest device
+    assert w["bench-pc"] == 900.0 and w.sources["bench-pc"] == "benchmark gfn1-xtb@cuda:0"   # fastest device
     # measured numbers are rounded to 3 digits, so the printed explicit spec reproduces the split exactly
     profiles[0].throughput["mmff@cpu"] = 1234.567
     w = plan.parse_weights("auto", "mmff", profiles)
-    assert w["brandons-macbook-pro"] == 1230.0 and plan.parse_weights(w.spec()) == w
+    assert w["bench-mac"] == 1230.0 and plan.parse_weights(w.spec()) == w
     # named entries may say auto, mixed with numbers
-    w = plan.parse_weights("btm-nova=auto,brandons-macbook-pro=500", "mmff", profiles)
-    assert dict(w) == {"btm-nova": 3000.0, "brandons-macbook-pro": 500.0}
+    w = plan.parse_weights("bench-pc=auto,bench-mac=500", "mmff", profiles)
+    assert dict(w) == {"bench-pc": 3000.0, "bench-mac": 500.0}
     with pytest.raises(ValueError, match="explicit --method"):
         plan.parse_weights("auto", "auto", profiles)
     with pytest.raises(ValueError, match="not in the machine registry"):
@@ -57,14 +57,14 @@ def test_auto_weights_from_benchmarks():
     with pytest.raises(ValueError, match="registry is empty"):
         plan.parse_weights("auto", "mmff", [])
     # a WSL profile shares its computer's cores: plain auto leaves it out (and says so), naming it includes it
-    wsl = prof("btm-nova-wsl", mmff_at_cpu=2000.0)
+    wsl = prof("bench-pc-wsl", mmff_at_cpu=2000.0)
     wsl.wsl = True
     old = prof("old-laptop", mmff_at_cpu=10.0)
     old.updated = "2025-01-01T00:00:00+00:00"
     w = plan.parse_weights("auto", "mmff", [*profiles, wsl, old])
-    assert "btm-nova-wsl" not in w and any("left out WSL" in n for n in w.notes)
+    assert "bench-pc-wsl" not in w and any("left out WSL" in n for n in w.notes)
     assert any("old-laptop's profile is" in n for n in w.notes)
-    assert plan.parse_weights("btm-nova-wsl=auto,btm-nova=1", "mmff", [wsl])["btm-nova-wsl"] == 2000.0
+    assert plan.parse_weights("bench-pc-wsl=auto,bench-pc=1", "mmff", [wsl])["bench-pc-wsl"] == 2000.0
 
 
 def test_auto_weights_without_benchmarks_are_estimated_and_say_so():
@@ -84,12 +84,12 @@ def test_auto_weights_without_benchmarks_are_estimated_and_say_so():
 
 # ------------------------------------------------------------------------------------ splitting
 def test_weighted_split_converges_and_is_stable():
-    parts = plan.split(IDS, {"nova": 3.0, "mac": 1.0})
-    assert len(parts["nova"]) + len(parts["mac"]) == len(IDS)
-    assert len(parts["nova"]) / len(IDS) == pytest.approx(0.75, abs=0.01)
-    small = plan.split(IDS[:500], {"nova": 3.0, "mac": 1.0})
-    assert small["nova"] == [i for i in parts["nova"] if i in set(IDS[:500])]      # growing the list moves nothing
-    assert plan.split(list(reversed(IDS[:500])), {"nova": 3.0, "mac": 1.0})["mac"] == list(reversed(small["mac"]))
+    parts = plan.split(IDS, {"tower": 3.0, "mac": 1.0})
+    assert len(parts["tower"]) + len(parts["mac"]) == len(IDS)
+    assert len(parts["tower"]) / len(IDS) == pytest.approx(0.75, abs=0.01)
+    small = plan.split(IDS[:500], {"tower": 3.0, "mac": 1.0})
+    assert small["tower"] == [i for i in parts["tower"] if i in set(IDS[:500])]      # growing the list moves nothing
+    assert plan.split(list(reversed(IDS[:500])), {"tower": 3.0, "mac": 1.0})["mac"] == list(reversed(small["mac"]))
     for weights in ([1, 1, 1], [5, 2, 1], [0.1, 0.7]):
         counts = [0] * len(weights)
         for i in IDS:
@@ -99,18 +99,18 @@ def test_weighted_split_converges_and_is_stable():
 
 
 def test_zero_weight_target_changes_nothing():
-    base = plan.split(IDS[:3000], {"nova": 3.0, "mac": 1.0})
-    for extra in ({"nova": 3.0, "mac": 1.0, "wsl": 0.0}, {"nova": 3.0, "wsl": 0.0, "mac": 1.0},
-                  {"wsl": 0.0, "nova": 3.0, "mac": 1.0}):
+    base = plan.split(IDS[:3000], {"tower": 3.0, "mac": 1.0})
+    for extra in ({"tower": 3.0, "mac": 1.0, "wsl": 0.0}, {"tower": 3.0, "wsl": 0.0, "mac": 1.0},
+                  {"wsl": 0.0, "tower": 3.0, "mac": 1.0}):
         got = plan.split(IDS[:3000], extra)
-        assert got["wsl"] == [] and got["nova"] == base["nova"] and got["mac"] == base["mac"]
+        assert got["wsl"] == [] and got["tower"] == base["tower"] and got["mac"] == base["mac"]
     with pytest.raises(ValueError):
         plan.weighted_index("x", [0, 0])
 
 
 def test_explain_shares_and_exact_counts():
-    w = plan.parse_weights("btm-nova=3,brandons-macbook-pro=1")
-    text = plan.explain(w, 4700, this="btm-nova")
+    w = plan.parse_weights("bench-pc=3,bench-mac=1")
+    text = plan.explain(w, 4700, this="bench-pc")
     assert "75.0%" in text and "~3,525" in text and "<- this machine" in text
     exact = plan.explain(w, IDS[:4700])
     counts = [int(line.split()[4].replace(",", "")) for line in exact.splitlines()[1:]]
@@ -119,45 +119,45 @@ def test_explain_shares_and_exact_counts():
 
 
 def test_resolve_chunk():
-    profiles = [prof("btm-nova", mmff_at_cpu=3000.0), prof("brandons-macbook-pro", mmff_at_cpu=1000.0)]
-    chunk, w, warn = plan.resolve_chunk("3,1", (0, 2), "mmff", profiles, this="btm-nova")
+    profiles = [prof("bench-pc", mmff_at_cpu=3000.0), prof("bench-mac", mmff_at_cpu=1000.0)]
+    chunk, w, warn = plan.resolve_chunk("3,1", (0, 2), "mmff", profiles, this="bench-pc")
     assert chunk == (0, 2, (3.0, 1.0)) and not warn
-    chunk, w, warn = plan.resolve_chunk("auto", None, "mmff", profiles, this="BTM-NOVA")   # finds its own share
+    chunk, w, warn = plan.resolve_chunk("auto", None, "mmff", profiles, this="BENCH-PC")   # finds its own share
     assert chunk == (1, 2, (1000.0, 3000.0)) and not warn
-    chunk, w, warn = plan.resolve_chunk("auto", (0, 2), "mmff", profiles, this="btm-nova")
-    assert chunk[0] == 0 and "brandons-macbook-pro's share" in warn[0]
+    chunk, w, warn = plan.resolve_chunk("auto", (0, 2), "mmff", profiles, this="bench-pc")
+    assert chunk[0] == 0 and "bench-mac's share" in warn[0]
     with pytest.raises(ValueError, match="need --chunk"):
         plan.resolve_chunk("3,1", None, "mmff", profiles)
     with pytest.raises(ValueError, match="does not match"):
         plan.resolve_chunk("3,1", (0, 3), "mmff", profiles)
     with pytest.raises(ValueError, match="not in --chunk-weights"):
-        plan.resolve_chunk("a=1,b=2", None, "mmff", profiles, this="btm-nova")
+        plan.resolve_chunk("a=1,b=2", None, "mmff", profiles, this="bench-pc")
     with pytest.raises(ValueError, match="weight 0"):
         plan.resolve_chunk("0,1", (0, 2), "mmff", profiles)
-    text = plan.chunk_plan(w, chunk, IDS[:4700], warn, this="btm-nova")
+    text = plan.chunk_plan(w, chunk, IDS[:4700], warn, this="bench-pc")
     mine = sum(1 for i in IDS[:4700] if plan.weighted_index(i, chunk[2]) == 0)
-    assert f"this machine (btm-nova, chunk 1/2, weight 1000): {mine:,} of 4,700 molecules" in text
-    assert "--chunk-weights brandons-macbook-pro=1000,btm-nova=3000" in text and "warning:" in text
+    assert f"this machine (bench-pc, chunk 1/2, weight 1000): {mine:,} of 4,700 molecules" in text
+    assert "--chunk-weights bench-mac=1000,bench-pc=3000" in text and "warning:" in text
 
 
 def test_named_weights_in_any_order_give_one_split():
     """Two machines given the same named weights typed in different orders run complementary shares (in
     typed order they overlapped by a third and left a quarter of the list out)."""
-    a, wa, _ = plan.resolve_chunk("btm-nova=3,brandons-macbook-pro=1", None, this="btm-nova")
-    b, wb, _ = plan.resolve_chunk("brandons-macbook-pro=1,btm-nova=3", None, this="brandons-macbook-pro")
-    assert list(wa) == list(wb) == ["brandons-macbook-pro", "btm-nova"]
+    a, wa, _ = plan.resolve_chunk("bench-pc=3,bench-mac=1", None, this="bench-pc")
+    b, wb, _ = plan.resolve_chunk("bench-mac=1,bench-pc=3", None, this="bench-mac")
+    assert list(wa) == list(wb) == ["bench-mac", "bench-pc"]
     assert a == (1, 2, (1.0, 3.0)) and b == (0, 2, (1.0, 3.0))
     ids = IDS[:4000]
     mine_a = {i for i in ids if jobs.in_chunk(i, jobs.check_chunk(a))}
     mine_b = {i for i in ids if jobs.in_chunk(i, jobs.check_chunk(b))}
     assert not mine_a & mine_b and mine_a | mine_b == set(ids)
     # an explicit --chunk K/N counts in the same name order, and the plan says so
-    c, w, warn = plan.resolve_chunk("btm-nova=3,brandons-macbook-pro=1", (1, 2), this="btm-nova")
+    c, w, warn = plan.resolve_chunk("bench-pc=3,bench-mac=1", (1, 2), this="bench-pc")
     assert c == a and not warn
-    text = plan.chunk_plan(w, c, ids, warn, this="btm-nova")
-    assert "chunks are the machines in name order: 1/2 = brandons-macbook-pro, 2/2 = btm-nova" in text
-    _, _, warn = plan.resolve_chunk("btm-nova=3,brandons-macbook-pro=1", (0, 2), this="btm-nova")
-    assert "brandons-macbook-pro's share" in warn[0]
+    text = plan.chunk_plan(w, c, ids, warn, this="bench-pc")
+    assert "chunks are the machines in name order: 1/2 = bench-mac, 2/2 = bench-pc" in text
+    _, _, warn = plan.resolve_chunk("bench-pc=3,bench-mac=1", (0, 2), this="bench-pc")
+    assert "bench-mac's share" in warn[0]
 
 
 def test_equal_weights_printed_split_matches_what_runs():
@@ -181,35 +181,35 @@ def test_auto_split_is_stored_and_reused_by_the_other_machines():
     """--chunk-weights auto: the first machine stores the resolved split for the list; another machine that
     resolves auto later (after a re-benchmark changed the registry) reuses it, so the shares still add up."""
     ids = IDS[:3000]
-    profiles = [prof("btm-nova", mmff_at_cpu=3000.0), prof("brandons-macbook-pro", mmff_at_cpu=1000.0)]
-    a, wa, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="btm-nova", ids=ids)
+    profiles = [prof("bench-pc", mmff_at_cpu=3000.0), prof("bench-mac", mmff_at_cpu=1000.0)]
+    a, wa, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="bench-pc", ids=ids)
     assert any("stored this split" in n for n in wa.notes)
     files = list(plan.splits_dir().glob("*.json"))
     assert len(files) == 1 and files[0].stem == plan.split_key("mmff", list(reversed(ids)) + ids[:5])
     profiles[1].throughput["mmff@cpu"] = 2500.0                           # the MacBook re-benchmarked
-    b, wb, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="brandons-macbook-pro", ids=ids)
+    b, wb, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="bench-mac", ids=ids)
     assert b[2] == a[2] == (1000.0, 3000.0) and any("using the split stored for this list" in n for n in wb.notes)
     mine_a = {i for i in ids if jobs.in_chunk(i, jobs.check_chunk(a))}
     mine_b = {i for i in ids if jobs.in_chunk(i, jobs.check_chunk(b))}
     assert not mine_a & mine_b and mine_a | mine_b == set(ids)
-    text = plan.chunk_plan(wb, b, ids, this="brandons-macbook-pro")
-    assert "stored: benchmark mmff@cpu" in text and "--chunk-weights brandons-macbook-pro=1000,btm-nova=3000" in text
+    text = plan.chunk_plan(wb, b, ids, this="bench-mac")
+    assert "stored: benchmark mmff@cpu" in text and "--chunk-weights bench-mac=1000,bench-pc=3000" in text
     # another list or method resolves (and stores) anew; explicit weights never use the store
-    c, _, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="btm-nova", ids=ids[:10])
+    c, _, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="bench-pc", ids=ids[:10])
     assert c[2] == (2500.0, 3000.0)
-    assert plan.resolve_chunk("btm-nova=1,brandons-macbook-pro=1", None, "mmff", profiles, this="btm-nova",
+    assert plan.resolve_chunk("bench-pc=1,bench-mac=1", None, "mmff", profiles, this="bench-pc",
                               ids=ids)[0] == (1, 2, (1.0, 1.0))
     # SyncThing conflict copy (two machines stored at once): every machine takes the oldest and warns
     key = plan.split_key("mmff", ids)
     conflict = plan.splits_dir() / f"{key}.sync-conflict-20261105-000000-ABCDEFG.json"
-    record = {**json.loads(files[0].read_text()), "weights": {"btm-nova": 1.0, "brandons-macbook-pro": 9.0},
-              "created": "2000-01-01T00:00:00+00:00", "created_by": "brandons-macbook-pro"}
+    record = {**json.loads(files[0].read_text()), "weights": {"bench-pc": 1.0, "bench-mac": 9.0},
+              "created": "2000-01-01T00:00:00+00:00", "created_by": "bench-mac"}
     conflict.write_text(json.dumps(record))
-    d, wd, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="btm-nova", ids=ids)
+    d, wd, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="bench-pc", ids=ids)
     assert d[2] == (9.0, 1.0) and any("different splits were stored" in n for n in wd.notes)
     (plan.splits_dir() / f"{key}.json").write_text("{half a fi")      # unreadable files are ignored
     conflict.unlink()
-    e, we, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="btm-nova", ids=ids)
+    e, we, _ = plan.resolve_chunk("auto", None, "mmff", profiles, this="bench-pc", ids=ids)
     assert e[2] == (2500.0, 3000.0) and any("stored this split" in n for n in we.notes)
 
 

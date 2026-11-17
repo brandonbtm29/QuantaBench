@@ -74,7 +74,7 @@ larger dxtb calls (batched eigh and einsum instead of eight Python-level SCF loo
 cost of one call is nearly flat in B until the device fills, so the wall time should approach
 (max steps) x (one call) instead of (sum of steps) x (one call): at most 297/45 = 6.6x for this
 case, more for larger ensembles. Verify on real hardware before quoting GPU numbers.
-Measured for dxtb 0.4 on BTM NOVA's RX 9060 XT (2026-11-04): it does not happen. dxtb evaluates the
+Measured for dxtb 0.4 on the Windows workstation's RX 9060 XT (2026-11-04): it does not happen. dxtb evaluates the
 overlap integrals of each system of a batch in a Python loop full of host synchronizations, so a
 batched GPU call costs ~B single calls and the GPU is 6-7x slower than the CPU at B = 1..20
 (``torch_compat.DXTB_GPU_BENCHMARK``); dxtb therefore stays on the CPU there by default.

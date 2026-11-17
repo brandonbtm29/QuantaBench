@@ -98,7 +98,7 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 def pytest_unconfigure(config):
-    """AMD's Windows ROCm runtime can hang at interpreter shutdown after GPU tests (BTM NOVA): leave at once
+    """AMD's Windows ROCm runtime can hang at interpreter shutdown after GPU tests (the Windows workstation): leave at once
     once pytest has reported, keeping its exit status (``resources.hard_exit_if_needed``)."""
     import shutil
 

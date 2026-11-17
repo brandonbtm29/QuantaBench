@@ -6,9 +6,9 @@ merges the result tables into one folder. Plan and background: [PLATFORMS.md](PL
 code: `src/quantabench/dist/worker.py` and `client.py`.
 
 ```
-Mac: quantabench-cli grid build --file pfas.csv --method gfn2-xtb --machines btm-nova,local --wait
+Mac: quantabench-cli grid build --file pfas.csv --method gfn2-xtb --machines bench-pc,local --wait
         |  split by weight (dist.plan), the same BuildConfig for every share
-        |--- HTTP/JSON over Tailscale ---> btm-nova worker -> ~/SyncThing/QuantaBench/Runs/<date>_<label>_btm-nova
+        |--- HTTP/JSON over Tailscale ---> bench-pc worker -> ~/SyncThing/QuantaBench/Runs/<date>_<label>_bench-pc
         |--- in this process ------------> local share     -> ~/SyncThing/QuantaBench/Runs/<date>_<label>_<mac>
         '-- when all are done: summary.csv + descriptors.csv in Runs/<date>_grid_<label>/
             (a worker's run folder that has synced here completely is read in place; otherwise it is
@@ -43,7 +43,7 @@ quantabench-cli machines set [NAME] [--priority normal|low|background|default] [
                        [--[no-]pause-on-battery]
 quantabench-cli grid machines [--worker NAME=URL]
 quantabench-cli grid build <same inputs and science options as build> --method M
-                       [--machines btm-nova,brandons-macbook-pro,local]
+                       [--machines bench-pc,bench-mac,local]
                        [--weights auto|measured|equal|benchmark|NAME=W,...|3,1] [--exclude NAME] [--wait]
                        [--no-share-work] [--label L] [--worker NAME=URL] [--sync-wait 60] [--away-after S]
 quantabench-cli grid status [GRID_ID]          (no id: recent grid runs)
@@ -51,7 +51,7 @@ quantabench-cli grid cancel GRID_ID
 quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
 ```
 
-- **`--method` must be explicit.** `auto` picks the engine per machine (AIMNet2 on NOVA's GPU, something
+- **`--method` must be explicit.** `auto` picks the engine per machine (AIMNet2 on the workstation's GPU, something
   else on the Mac), which would mix levels of theory in one table; `grid build` refuses it unless
   `--allow-auto-method`.
 - **Weights** (DIST-7; the split is deterministic, SHA-256 of the molecule id, so re-running a list puts every
@@ -66,7 +66,7 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
   - `benchmark`: the old `auto`: `throughput` in the profile its worker reports (else the registry copy), an
     estimate from its core count when it has no benchmark for that method, 0 where the method is unavailable; a
     machine with no profile gets the mean of the others.
-  - `equal`; `3,1` (one weight per machine in the order of `--machines`); `btm-nova=3,local=1` (named).
+  - `equal`; `3,1` (one weight per machine in the order of `--machines`); `bench-pc=3,local=1` (named).
   - `--exclude NAME` (repeatable or a comma list; `local` = this machine) leaves a machine out; with `3,1` each
     weight stays with its machine.
   - At the end of a grid, `grid build --wait` and `grid status` print the molecules each machine contributed to
@@ -192,7 +192,7 @@ When the lid closes, the Mac sleeps: its worker stops answering and ssh times ou
    elsewhere is not waited for. With no other machine to take them, it is not waited for after the longer grace
    either: its molecules are reported missing, and `grid merge <id> --partial` adds them later. The grid then
    merges what it has, from the synced copy of the away machine's run folder for what it finished before the lid
-   closed. The end of the log lists what moved (`Moved: 17 molecule(s) brandons-macbook-pro -> btm-nova (away)`).
+   closed. The end of the log lists what moved (`Moved: 17 molecule(s) bench-mac -> bench-pc (away)`).
 3. **Back.**
    - The worker notices the sleep itself: a watcher thread checks every 2 s, and a wall-clock jump of more than
      30 s against its own sleep is a wake (`control.ClockWatch`). It works on every OS: macOS and Linux stop the
@@ -213,7 +213,7 @@ When the lid closes, the Mac sleeps: its worker stops answering and ssh times ou
    - `quantabench-cli timings` marks the dropped result's rows `duplicate=1`, leaves them out of the stage summary
      and prints the molecules per machine with each molecule counted once.
 
-Tested in the cloud with fake workers (tests/test_machine_control.py) and on NOVA with two throwaway workers, one of
+Tested in the cloud with fake workers (tests/test_machine_control.py) and on the workstation with two throwaway workers, one of
 them frozen for 55 s (`psutil` suspend, which is what a sleep looks like to the other side); see the backlog
 (DIST-7).
 
@@ -236,7 +236,7 @@ them frozen for 55 s (`psutil` suspend, which is what a sleep looks like to the 
   - **Lanes and free threads** apply with the machine's next job, or after a pause and resume, which restarts the
     job's lanes. A running pool is not resized.
 - **Max CPU %** (dock, `machines set --max-cpu 50`) sets the free threads from the machine's thread count, e.g.
-  12 of 24 on NOVA.
+  12 of 24 on the workstation.
 
 ### Keeping the Mac's worker running (and not draining its battery)
 
@@ -257,7 +257,7 @@ So: install the LaunchAgent of the setup section below. `RunAtLoad` starts it at
   while a job runs, and only prevents *idle* sleep, never the lid's.
 - **Battery:** `pause_on_battery` is on by default, so on battery the worker takes no work and holds no
   `caffeinate`. Plugged in, it resumes. To let it work on battery: `quantabench-cli machines set
-  brandons-macbook-pro --no-pause-on-battery`.
+  bench-mac --no-pause-on-battery`.
 - **Wake:** launchd keeps the same process across sleep. The worker notices the wake and checks with its grid client
   before it starts another molecule.
 
@@ -318,7 +318,7 @@ still running), 411/413/415 (body).
   being replaced by defaults and a new token.
 - On Windows the socket uses `SO_EXCLUSIVEADDRUSE`, so no other program can bind the same port.
 
-## Setup on BTM NOVA (Windows 11)
+## Setup on the Windows workstation (Windows 11)
 
 1. **Firewall rule** (PowerShell as administrator, once). It allows the worker port only on the Tailscale
    interface and only from tailnet addresses:
@@ -335,14 +335,14 @@ still running), 411/413/415 (body).
    and remove them with `Remove-NetFirewallRule`). A port rule is used rather than a program rule because the
    venv's `python.exe` is a launcher that starts the base interpreter, which is the process that listens.
 
-2. **First start, by hand** (generates the token and publishes `machines/btm-nova.json`):
+2. **First start, by hand** (generates the token and publishes `machines/bench-pc.json`):
 
    ```powershell
-   cd "C:\Users\Brand\GitHub Projects\QuantaBench"
+   cd "$HOME\GitHub Projects\QuantaBench"
    .venv\Scripts\quantabench-cli worker
    ```
 
-   It should print `worker 'btm-nova' at http://100.90.226.110:8765`. Ctrl+C stops it.
+   It should print `worker 'bench-pc' at http://100.64.0.10:8765`. Ctrl+C stops it.
 
    **A machine that joins is measured once.** On its first start (no throughput in its profile yet) the
    worker runs the throughput benchmark before it takes jobs: molecules/hour per installed engine on the CPU
@@ -354,7 +354,7 @@ still running), 411/413/415 (body).
 3. **Start at login** (normal PowerShell; no console window, log in `%LOCALAPPDATA%\QuantaBench\worker.log`):
 
    ```powershell
-   $repo = "C:\Users\Brand\GitHub Projects\QuantaBench"
+   $repo = "$HOME\GitHub Projects\QuantaBench"
    $log = Join-Path $env:LOCALAPPDATA "QuantaBench\worker.log"
    $action = New-ScheduledTaskAction -Execute "$repo\.venv\Scripts\pythonw.exe" `
      -Argument "-m quantabench.cli worker --log-file `"$log`"" -WorkingDirectory $repo
@@ -374,7 +374,7 @@ still running), 411/413/415 (body).
    worker asks Windows not to sleep.
 
    **Restarts are not verified.** Task Scheduler's restart settings (`-RestartCount`, `-RestartInterval`) are
-   documented for a task that *fails*, and it is not clear (not tested on NOVA) that a worker exiting with an
+   documented for a task that *fails*, and it is not clear (not tested on the workstation) that a worker exiting with an
    error code, or crashing, counts as that. The worker itself retries what is most likely at login: it waits
    `--tailscale-wait` (120 s) for Tailscale's address and then for the address to be usable. To check, after a
    reboot or a crash: `Get-ScheduledTaskInfo "QuantaBench worker"` (`LastTaskResult` 267009 = 0x41301 while it runs,
@@ -387,7 +387,7 @@ still running), 411/413/415 (body).
 1. **Firewall:** if the macOS firewall is on, the first start asks whether Python may accept incoming
    connections: choose Allow. Tailscale's ACLs must allow your devices to reach each other on tcp:8765 (the
    default policy does).
-2. **First start, by hand** (after SyncThing has brought `settings.json` with the token from NOVA):
+2. **First start, by hand** (after SyncThing has brought `settings.json` with the token from the workstation):
 
    ```bash
    cd "$HOME/GitHub Projects/QuantaBench"
@@ -452,7 +452,7 @@ The job dialog (Build > New job..., Resources) has **Run on**: this computer, **
 
 ```bash
 quantabench-cli grid machines                   # both workers, their versions and queues
-quantabench-cli grid build --file pfas.csv --method gfn2-xtb --machines btm-nova,local --weights auto --wait
+quantabench-cli grid build --file pfas.csv --method gfn2-xtb --machines bench-pc,local --weights auto --wait
 quantabench-cli grid status                     # recent grid runs
 ```
 

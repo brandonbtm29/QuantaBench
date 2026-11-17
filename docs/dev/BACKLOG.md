@@ -46,7 +46,7 @@ Follow-ups (ready):
 - Ions: a test of CREST in ALPB water for flexible anions (the gas test covered 7 ions; the DFT test suggested
   folded and extended pools in water). Until then "auto" keeps them on RDKit.
 - The full run: rebuild the list's ~1,674 flexible neutral molecules with `--conformers auto --crest-with-rdkit` per
-  phase (needs-Brandon: about 110-300 h per phase on half the MacBook; NOVA needs CREST in WSL).
+  phase (needs-Brandon: about 110-300 h per phase on half the MacBook; the workstation needs CREST in WSL).
 
 ## FAIL-1: The failed molecules of the QSAR tranches · done 2026-11-16 (PR #20; the reruns needs-Brandon)
 b01-b15 (13,206 molecules): 8 failed in gas and 13 in water (`Runs\failed-molecules-2026-11-16\report.md`).
@@ -105,14 +105,14 @@ Main's Windows CI for 486e332 (#19's merge, with #21) aborted in
     ends.
 - **The process then hung in Windows' process exit.** VTK's matplotlib text module, torn down with its DLL, called
   `PyGILState_Ensure`, and the GIL was held by a thread that `ExitProcess` had already ended. The watchdog printed
-  "killing pid 496" (`taskkill /F /T`) at 7 min, but the job ran into its 30 min limit. On NOVA the old kill does end
+  "killing pid 496" (`taskkill /F /T`) at 7 min, but the job ran into its 30 min limit. On the workstation the old kill does end
   a stuck process that started the watchdog, so the exit state is the likely reason.
   - The watchdog now kills with psutil (the test process first, then its other children, never itself) and logs if
     the process is still there 15 s later.
   - Test: `test_hang_watchdog.py::test_the_watchdog_kills_the_process_it_is_a_child_of`.
 - **Not reproduced:** Linux (xvfb), every GUI and project test with `gc.set_threshold(20, 1, 1)`: 166 passed; the
   two GUI modules 3 times: passed. Linux has no sensors thread loading certificates. The GUI tests were not run on
-  NOVA: they open windows on Brandon's desktop.
+  the workstation: they open windows on Brandon's desktop.
 - **Check:** the full suite with the change (cloud, Linux): 1,714 passed, 40 skipped, 7 min. Watch Windows CI for
   another "Fatal Python error: Aborted".
 
@@ -124,8 +124,8 @@ Main's Windows CI after #18 failed once in `test_worker.py::test_partial_merge_a
   a file cannot be deleted while it is open, so the removal raised `PermissionError` (WinError 32) out of
   `run_resumable`, and `JobManager._execute` marked the job failed. Antivirus opening the freshly written file can do
   the same.
-- **Shown on NOVA** (`scratch/lock_race.py`): with one thread reading the lock without pause, 1,592 of 3,000 lock
-  releases failed. 40 runs of the CI test itself on NOVA passed (the poll must land within the removal's moment).
+- **Shown on the workstation** (`scratch/lock_race.py`): with one thread reading the lock without pause, 1,592 of 3,000 lock
+  releases failed. 40 runs of the CI test itself on the workstation passed (the poll must land within the removal's moment).
 - **Fix:** `_remove_lock_file` tries again for up to 2 s (100 x 20 ms). Should it still fail, the run does not fail:
   the file is emptied (`{}` names no process, so the next run takes it over without a word) and the failure logged.
 - Tests (`tests/test_jobs.py`): three refused removals, then success; a removal that never succeeds (the run ends,
@@ -265,7 +265,7 @@ Done:
 
 Follow-ups:
 - QM memory per molecule within one run (lanes with different memory, or a size-aware queue) instead of one value per run.
-- Why NOVA's native Windows Psi4 looked slower than the Mac's (both ran DiskDF at 4 GB; disk speed or Defender scanning `%TEMP%`?). Measure one molecule on both with enough memory.
+- Why the workstation's native Windows Psi4 looked slower than the Mac's (both ran DiskDF at 4 GB; disk speed or Defender scanning `%TEMP%`?). Measure one molecule on both with enough memory.
 
 ## UI-1: App shell with task workspaces · done 2026-11-12 (PR #1)
 Done in the PR: the five workspaces (`gui.workspaces`), the Appearance dock, the playback bar (`gui.playback`),
@@ -457,7 +457,7 @@ Depends on: UI-4 for the MOL/CDXML plumbing; the spike can start any time.
     to the same canonical SMILES, an error message, a fragment, Edit selected, Add to list). It passed under
     xvfb on Linux (sketcher ready in about 3 s).
 - **Left:**
-  - Brandon: open the dock on Windows (NOVA, AMD) and the MacBook, with `pip install -e ".[editor]"` and
+  - Brandon: open the dock on Windows (the workstation, AMD) and the MacBook, with `pip install -e ".[editor]"` and
     `quantabench-cli sketcher --install`; check drawing, the 3D view next to it, and screenshots. Check
     whether `QUANTABENCH_SKETCHER_GPU=1` draws correctly there (faster, if it does).
   - Keep the coordinates of unchanged atoms on Replace selected (RDKit `coordMap` embedding), with UI-7's
@@ -651,10 +651,10 @@ Depends on: none (research only; can run any night).
 - 2026-11-01: GFN2-xTB is now available on Windows through the xtb program (`xtb-gfn2`, finite-difference
   IR intensities from its dipoles). What remains is dxtb's GPU/batched GFN2 path; lower priority.
 - 2026-11-05: done through FORK-1: the dxtb fork with tad-libcint 0.4 gives GFN2, polarizability and IR
-  intensities natively on Windows (NOVA: matches Linux to ~1e-15 to 4e-9).
+  intensities natively on Windows (the workstation: matches Linux to ~1e-15 to 4e-9).
 
 ## MD-1: Counter-ions in vacuum SMD (Windows LAMMPS non-determinism + ion-pair heating) · ready
-- On BTM NOVA, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a
+- On the Windows workstation, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a
   TFA⁻ + Na⁺ on graphite setup with "Out of range atoms - cannot compute PPPM" (also with
   `OMP_NUM_THREADS=1`: 1/20); Linux is deterministic and passes 12/12 seeds. Reproducer:
   `scratch/ionrepro.py` (in git history of docs/dev; regenerate from tests/test_lammps.py setup).
@@ -665,21 +665,21 @@ Depends on: none (research only; can run any night).
 - Acceptance: a documented protocol that keeps T within ±20% of target after the soft start, and a
   minimal upstream LAMMPS issue (or a confirmed local cause) for the Windows failures.
 - 2026-11-01: not only counter-ions: `test_smd_run_with_lammps_module` (TFA⁻ alone on graphite, PPPM)
-  failed 2 of 6 identical runs on BTM NOVA with the same error; now also marked flaky on Windows.
+  failed 2 of 6 identical runs on the Windows workstation with the same error; now also marked flaky on Windows.
   Compare with `lmp.exe` from the LAMMPS Windows installer to tell a wheel problem from an input problem.
-- 2026-11-05: a third test fails the same way on NOVA, 1 of 6 identical runs: the LAMMPS run of the periodic-boundary test (TFA alone, 2-layer slab, now `test_molecule_across_periodic_boundary_runs`); marked flaky on Windows too.
+- 2026-11-05: a third test fails the same way on the workstation, 1 of 6 identical runs: the LAMMPS run of the periodic-boundary test (TFA alone, 2-layer slab, now `test_molecule_across_periodic_boundary_runs`); marked flaky on Windows too.
 
 ## GPU-1 (= FORK-3): AIMNet2 on AMD and Apple GPUs (replace NVIDIA Warp D3) · done on ROCm 2026-11-05; MPS needs-Brandon
 - 2026-11-04: Warp is CPU-only on macOS too, so the same adapter enables AIMNet2 on the MacBook's GPU (MPS,
   float32). Test the adapter on `mps` as well (needs-Brandon), and offer the change upstream to `aimnet`.
 - `aimnet` 0.2 computes DFT-D3 (and neighbor lists) through `nvalchemi-toolkit-ops` / NVIDIA Warp, which
-  rejects ROCm devices ("Invalid device identifier: cuda:0" on BTM NOVA). The NN itself is plain PyTorch.
+  rejects ROCm devices ("Invalid device identifier: cuda:0" on the Windows workstation). The NN itself is plain PyTorch.
 - Load the model with dispersion disabled (`needs_dispersion=False`) and add D3(BJ) for ωB97M from
   `tad-dftd3` (pure PyTorch, already installed with dxtb) with AIMNet2's D3 parameters; keep the dense
   neighbor path (< `nb_threshold` atoms). Verify on CPU against the stock calculator to ~1e-5 eV and
   forces, then on GPU (needs-Brandon to run). Acceptance: AIMNet2 single + batched on a ROCm device.
 - 2026-11-05: `chem/aimnet_torch.py` (Warp-free calculator: dense neighbor path, tad-dftd3 D3(BJ) with
-  aimnet's parameters and reference tables). NOVA, real weights: CPU < 3.3e-6 eV and RX 9060 XT < 7.5e-6 eV
+  aimnet's parameters and reference tables). The workstation, real weights: CPU < 3.3e-6 eV and RX 9060 XT < 7.5e-6 eV
   from the stock calculator over 6 PFAS x 4 conformers; batched refinement of 8 PFOA conformers 5.7 s on
   the GPU vs 59.8 s on the CPU. Picked automatically on ROCm and MPS (`QUANTABENCH_AIMNET_BACKEND`).
   Found and fixed a stock aimnet bug on the way (`guard_neighbor_lists`, see DEVLOG). Left: a run on the
@@ -694,13 +694,13 @@ Depends on: none (research only; can run any night).
   WSL2/Linux ROCm wheels (which include MAGMA). Measure whether GPU dxtb beats CPU at all for these sizes;
   batched conformers are where it should.
 - 2026-11-05: `chem/torch_compat.py` routes Cholesky/solve (and everything on MPS) to the CPU inside dxtb
-  calls; GFN1 on the RX 9060 XT matches CPU float64 to 8.6e-6 Eh. Measured 5-8x *slower* than NOVA's CPU at
+  calls; GFN1 on the RX 9060 XT matches CPU float64 to 8.6e-6 Eh. Measured 5-8x *slower* than the workstation's CPU at
   every size and batch size (host synchronizations in dxtb 0.4's overlap integrals, not the routed ops), so
   `dxtb_device()` keeps dxtb on the CPU there by default (Settings > Compute > dxtb on the GPU,
   `QUANTABENCH_DXTB_GPU`). Follow-up (later): profile/upstream the overlap-integral syncs in dxtb.
 
 ## PERF-1: Separate CPU and GPU environments on Windows · done 2026-11-06 (keep the CPU torch in `.venv`)
-- Measured on NOVA (24 PFAS, 7-54 heavy atoms; `Runs/perf-2026-11-06/`, `timings.csv`). `.venv`: torch
+- Measured on the workstation (24 PFAS, 7-54 heavy atoms; `Runs/perf-2026-11-06/`, `timings.csv`). `.venv`: torch
   2.15.0+cpu with MKL (GEMM 912 GFLOP/s f32 at 12 threads). `.venv-rocm` (new, kept for GPU experiments):
   torch 2.9.1+rocm7.2.1 with OpenBLAS (49.5 GFLOP/s), and its threads oversubscribe (a 2-thread lane used
   ~2.8 cores), which likely explains the slow `doctor --bench` under ROCm.
@@ -712,16 +712,16 @@ Depends on: none (research only; can run any night).
   (exit hang) did not reproduce in 10 ROCm runs. Left: `doctor --bench` GFLOP/s with a warning (optional).
 
 ## ENG-1: External engines on native Windows · needs-Brandon
-- Install `envs/tools-windows.yml` and `envs/psi4.yml` on BTM NOVA, run `quantabench-cli doctor`, then
+- Install `envs/tools-windows.yml` and `envs/psi4.yml` on the Windows workstation, run `quantabench-cli doctor`, then
   `pytest -m external` with `QUANTABENCH_XTB`, `QUANTABENCH_MOPAC`, `QUANTABENCH_PSI4_PYTHON` set (or the
   paths in Settings > Engines). Check: conda's `Library\bin` discovery, process-tree cancellation
   (`taskkill /T`), paths with spaces ("GitHub Projects"), Psi4's PCMSolver on win-64, GUI Engines tab.
 
 ## ENG-2: CREST through WSL · needs-Brandon
-- 2026-11-06: Brandon's decision: Windows runs CREST through WSL (conda-forge linux-64 3.0.2 in NOVA's Ubuntu ran
-  the 20-molecule benchmark through QuantaBench). Set NOVA's path for NOVA only, so the Mac keeps its own in the
-  shared settings file: `quantabench-cli settings --engine-path crest=wsl:/home/brandonbtm29/micromamba/envs/qb-tools/bin/crest`
-  on NOVA (or Settings > Engines there; `engines.machine_paths`). The CLI batch path is proven; the GUI checks
+- 2026-11-06: Brandon's decision: Windows runs CREST through WSL (conda-forge linux-64 3.0.2 in the workstation's Ubuntu ran
+  the 20-molecule benchmark through QuantaBench). Set the workstation's path for that machine only, so the Mac keeps its own in the
+  shared settings file: `quantabench-cli settings --engine-path crest=wsl:/home/<you>/micromamba/envs/qb-tools/bin/crest`
+  on the workstation (or Settings > Engines there; `engines.machine_paths`). The CLI batch path is proven; the GUI checks
   below are still open.
 - `wsl:/home/<user>/miniforge3/envs/qb-tools/bin/crest` from the Windows GUI on a PFAS: `--cd` path
   translation, `WSLENV` thread variables, cancellation of the WSL process, and gfn2//gfnff (needs `xtb` on
@@ -784,7 +784,7 @@ Open (needs-Brandon):
   almost only for the charged cohorts, which have no PM6. Decide whether to add PM6 (or gas DFT) for those, or
   sample `--require dft` separately for the water comparison.
 - Run the 300 in the gas phase and in ALPB water at GFN2-xTB (and AIMNet2), then `validate`. **Done
-  2026-11-05:** grid NOVA + MacBook, gas 18 min, water 21 min, 298/300 ok in both phases. Findings and fixes are
+  2026-11-05:** grid workstation + MacBook, gas 18 min, water 21 min, 298/300 ok in both phases. Findings and fixes are
   in VAL-3.
 
 ## VAL-3: Follow-ups from the 300-molecule validation run · in progress
@@ -793,7 +793,7 @@ Open (needs-Brandon):
     10.5 D off).
   - tblite's electronic dipole stored for every conformer.
   - At Spartan's own geometries, GFN2/ALPB matches B3LYP/C-PCM water dipoles to 0.41 D for anions
-    (r 0.997) and 1.9 D for cations (`scratch/dipole_fixed_geom.py` on NOVA). The remaining 4.2 D MAE comes
+    (r 0.997) and 1.9 D for cations (`scratch/dipole_fixed_geom.py` on the workstation). The remaining 4.2 D MAE comes
     from the conformer each program picks.
   - 2026-11-06 (branch `feat/conformer-compare`; docs/VALIDATION.md, "VAL-3"): `quantabench-cli conformers compare`
     matches two programs' conformers. It reads Spartan documents or imports and QuantaBench run folders, uses a
@@ -819,7 +819,7 @@ Open (needs-Brandon):
         - Ions: the 10 worst. Pool: Spartan's, QuantaBench's and CREST's lowest 3 plus GFN2's best of Spartan's
           pool, 7-10 conformers per ion at common GFN2/ALPB geometries.
         - Levels: ωB97X-D, B3LYP-D3(BJ) and B3LYP with def2-SVP in PCM water; 168 + 22 Psi4 single points, 7.7 h
-          on NOVA.
+          on the workstation.
       - Dispersion does not explain it. D3(BJ) moves dE(Spartan's pick − GFN2's pick) by +10 kJ/mol of 68.
         ωB97X-D prefers Spartan's pick in 7 of 9 ions (B3LYP-D3(BJ) 6, plus 3 ties). No DFT level puts GFN2's pick
         lowest in any ion.
@@ -834,9 +834,9 @@ Open (needs-Brandon):
         `--qm-top N` in water.
       - Every descriptor from the QM-lowest conformer: today only `qm_*` follows it, and the xTB descriptors stay at
         GFN2's lowest.
-      - Cost: 4-27 min per conformer on a 4-thread NOVA lane (30-54 heavy atoms). The QSAR list has about 590
+      - Cost: 4-27 min per conformer on a 4-thread lane on the workstation (30-54 heavy atoms). The QSAR list has about 590
         molecules that are charged as drawn (largest fragment; median 26 heavy atoms, 90th percentile 46): at ~8
-        conformers and ~5 min each that is roughly 400 lane-hours, a few days on NOVA + MacBook.
+        conformers and ~5 min each that is roughly 400 lane-hours, a few days on the workstation + MacBook.
     - RANK-1 (done 2026-11-08, branch `feat/rank1`; docs/VALIDATION.md, "RANK-1"; `Runs/rank1-2026-11-08`): a
       cheap ranker against the DFT references, as single points at the references' geometries.
       - Sets: the DFT test's 9 ions (79 conformers), a holdout of 8 smaller ions (52 conformers, new ωB97X-D/PCM
@@ -861,7 +861,7 @@ Open (needs-Brandon):
       the gas phase and IEF-PCM water.
       - Sets: 12 hydrocarbons, 28 polar organics (C4A/C4B/C5A) and 20 matched C1A PFAS, gas and water; 2 usable
         C6A ions + 6 derived baseline ions (C4A carboxylates and ammoniums), water. RANK-1's PFAS ions (5 test + 8
-        holdout, 52 new r2SCAN-3c points) for context. 1,079 Psi4 single points, ~31 lane-hours, 4.4 h on NOVA +
+        holdout, 52 new r2SCAN-3c points) for context. 1,079 Psi4 single points, ~31 lane-hours, 4.4 h on the workstation +
         MacBook; 10,218 cheap single points.
       - GFN2's failure is not fluorine-specific for neutrals but its size is for ions. Neutrals: GFN2/ALPB picks
         within 4 kJ/mol in 12/12 hydrocarbons, 16/28 polar organics and 14/20 PFAS in water (polar − PFAS: −0.13
@@ -927,7 +927,7 @@ Open (needs-Brandon):
     (r 0.80-0.88). Document this as a systematic offset for QSAR: use the values as correlated descriptors,
     not as absolute values.
   - The Psi4 B3LYP subset on QuantaBench geometries (VAL-2) closes the loop on method vs geometry.
-- Done 2026-11-06: the 300 rebuilt with 0.3.0.dev3 (`Runs/validation-2026-11-06`, NOVA OpenBLAS tblite 12x1 +
+- Done 2026-11-06: the 300 rebuilt with 0.3.0.dev3 (`Runs/validation-2026-11-06`, the workstation OpenBLAS tblite 12x1 +
   MacBook, work sharing on): gas 7.1 min, water 7.2 min (Nov 5: 18 and 21); the machines finished within 1 s and
   12 s of each other; 298/300 ok in both phases. Validated against the v6 Spartan import (14,150 wide rows; the
   771 `MoleculeN` rows of v5 are gone):
@@ -964,10 +964,10 @@ Open (needs-Brandon):
     quarters of the cost.
   - QM stage fixes found on the way: scratch cleaned after a failed free-atom SCF; `run_driver` stops a driver
     that hangs after writing its result.
-- Open (needs-Brandon): run the stages in `scratch/val2/run_val2_nova.ps1` (and `run_val2_mac.sh`) when NOVA is
+- Open (needs-Brandon): run the stages in `scratch/val2/run_val2_<windows machine>.ps1` (and `run_val2_mac.sh`) when the workstation is
   free, then pick the default level from the report.
 - Open (code): an option to compute the QM polarizability in the gas phase (analytic) when the SCF is PCM, or to
-  skip it. Under PCM it is about 70 % of the QM stage, which takes the 4,700 run from about 1-2 weeks on NOVA in
+  skip it. Under PCM it is about 70 % of the QM stage, which takes the 4,700 run from about 1-2 weeks on the workstation in
   water to about the gas-phase cost.
 - Open: the full import's wide table (`spartan-qsar-v5`) has 771 `MoleculeN` rows from the Essential 76
   conformer documents. Re-import with this branch. Spartan reference values for HOMO/LUMO, ESP and areas at
@@ -1004,7 +1004,7 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
 ## Platform and multi-machine track (plan: docs/PLATFORMS.md)
 
 ### WIN-2: xtb and MOPAC on Windows disagree with the Linux reference values · ready
-- First full run of the external-engine tests on NOVA (2026-11-05, conda envs `qb-tools`/`qb-psi4` from
+- First full run of the external-engine tests on the workstation (2026-11-05, conda envs `qb-tools`/`qb-psi4` from
   `install_windows.ps1 -WithEngines`): 4 failures, all values the program prints, not QuantaBench's math:
   - xtb 6.7.1 (conda-forge win-64 build of 2026-06-10): water GFN2 dipole z -0.332 e·Å instead of -0.474
     (`test_eng_xtb.py::test_real_singlepoints_match_xtb_printout`); water in water `gfn2_dipole_debye` 2.032
@@ -1013,8 +1013,8 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
     3.0 ± 0.2 (`test_eng_mopac.py`); heat of formation, dipole, HOMO/LUMO and COSMO area/volume passed.
 - xtb: **fixed 2026-11-05.** xtb writes `"program call"` with raw Windows backslashes, so `xtbout.json`
   was invalid JSON. Dipoles and gaps fell back to the charge-only values. `eng_xtb.read_xtbout` now escapes
-  them, and the xtb tests pass on NOVA.
-- MOPAC: open. On NOVA, MOPAC 23.2.5 prints `ISOTROPIC AVERAGE ALPHA = 9.09001 A.U.` for the test's water,
+  them, and the xtb tests pass on the workstation.
+- MOPAC: open. On the workstation, MOPAC 23.2.5 prints `ISOTROPIC AVERAGE ALPHA = 9.09001 A.U.` for the test's water,
   where the reference output has 8.49573: a version difference in TDHF POLAR, not a parsing problem. Record
   the version that produced the reference and make the test version-aware. Until then, don't mix MOPAC
   polarizabilities from different versions in one QSAR table.
@@ -1041,7 +1041,7 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
 - 2026-11-06: GitHub stopped running `macos-14` after 2026-11-05 19:15 UTC (jobs cancelled in 2 s,
   "configuration 'macos-14-arm64-us-default' is not supported"); both workflows now use `macos-15`. The GUI
   tests now run on macOS too (they had always been skipped there for want of `$DISPLAY`). MOPAC: the
-  MacBook (OpenBLAS) and NOVA (MKL) both print 1.347, the cloud's Linux build (MKL) 1.259, all 23.2.5 build 0,
+  MacBook (OpenBLAS) and the workstation (MKL) both print 1.347, the cloud's Linux build (MKL) 1.259, all 23.2.5 build 0,
   so BLAS is not the cause: the Linux build differs from the macOS and Windows builds.
 
 ### DIST-1: Machine capability report and weighted chunks · done 2026-11-05
@@ -1052,17 +1052,17 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
 - Acceptance: tests for the report schema and the weighted split (deterministic, stable when the list grows).
 - 2026-11-05: `dist.profile` (registry in `<settings>/machines/`, `quantabench-cli machines [--refresh]
   [--bench METHODS]`), `dist.plan` (`--chunk-weights 3,1 | name=3,... | auto`), weights stored with the run.
-  Same-machine parallelism too: `dist.lanes` (`build --lanes auto | N | gpu:1x4,cpu:5x2`); NOVA: MMFF 3.7x,
+  Same-machine parallelism too: `dist.lanes` (`build --lanes auto | N | gpu:1x4,cpu:5x2`); the workstation: MMFF 3.7x,
   GFN1-xTB 3.45x with lanes.
 
-### DIST-2: `quantabench-cli worker` over Tailscale · done 2026-11-05 (NOVA + MacBook run needs-Brandon)
+### DIST-2: `quantabench-cli worker` over Tailscale · done 2026-11-05 (the workstation + MacBook run needs-Brandon)
 - Small HTTP/JSON service (stdlib or one light dependency) bound to the Tailscale interface only, with a
   token from settings: submit, status, cancel, list. Each job runs through `jobs.run_resumable` into the
   worker's own run folder under the synced Runs folder (one writer per run folder). Version/commit check;
   environment fingerprint in `summary.json`.
 - Windows firewall rule for the Tailscale interface; `caffeinate -i` on macOS while busy; pause switch.
 - Acceptance: two workers on one Linux box in tests (localhost), submit/cancel/resume; a manual
-  NOVA + MacBook run (needs-Brandon).
+  the workstation + MacBook run (needs-Brandon).
 - 2026-11-05: `dist.worker` + `dist.client` (`grid machines|build|status|cancel|merge`), docs/WORKERS.md
   (firewall rule, Task Scheduler and LaunchAgent autostart). Left: the two-machine run over Tailscale.
 
@@ -1087,7 +1087,7 @@ thread speed is and the temperature of the PC."
   job table schema 5 adds the clock, CPU temperature and power, and GPU utilization, temperature and power to the
   60 s load samples; `timings` prints them per run with a likely-throttling flag (docs/ENGINES.md, Live machine
   metrics; UI_PLAN.md, job monitor).
-- Checked on NOVA (2026-11-09, from a scratch copy, LHM's web server already on): every metric but the fans
+- Checked on the workstation (2026-11-09, from a scratch copy, LHM's web server already on): every metric but the fans
   (LHM reads 0 RPM on all of the ASUS B650E's headers); effective clock 4.9-5.0 GHz at idle against a 4,701 MHz
   base, CPU 52-58 °C, 62-83 W, RX 9060 XT 36 °C, VRAM 2.0/15.9 GB; a read takes 25-50 ms (the first 0.3 s). The
   WMI namespace `root\LibreHardwareMonitor` is absent there, so only the web server is used.
@@ -1095,19 +1095,19 @@ thread speed is and the temperature of the PC."
   - needs-Brandon: `brew install macmon` on the MacBook (not installed on 2026-11-09; the Mac reports utilization
     and RAM until then), then check the parser against its real JSON (`macmon pipe -s 1`; the fields the parser
     expects are in docs/ENGINES.md) and restart the worker so `/v1/sensors` includes temperatures.
-  - Fans on NOVA: the board's fan headers read 0 RPM in LHM; HWiNFO may read them, LHM may need a newer version.
+  - Fans on the workstation: the board's fan headers read 0 RPM in LHM; HWiNFO may read them, LHM may need a newer version.
   - With UI-5's job monitor dock: per-job markers on the sparklines, the run's own CPU share next to the machine's,
     a throttling banner during a run (UI_PLAN.md).
   - Use the sensor columns in the CREST cost-model fit (SCHED-1): leave out or down-weight runs flagged as
     throttling or busy.
   - Intel hybrid CPUs (P- and E-cores) and multi-GPU machines: the strip shows the GPU with the most memory only.
 
-### DIST-5: Speed-aware lanes at the end of a batch · done 2026-11-05 (NOVA measurement needs-Brandon)
-- `lanes auto` for AIMNet2 on NOVA gives 1 GPU lane + 4 CPU lanes, and the GPU is ~10x faster per molecule.
+### DIST-5: Speed-aware lanes at the end of a batch · done 2026-11-05 (the workstation measurement needs-Brandon)
+- `lanes auto` for AIMNet2 on the workstation gives 1 GPU lane + 4 CPU lanes, and the GPU is ~10x faster per molecule.
   Lanes pull molecules first-come, so near the end of a batch a CPU lane can start a molecule the GPU lane
   would have finished long before; for a small batch the run can end up slower than the GPU lane alone.
   Use each lane's measured time per molecule: when the queue is shorter than (slow lane's time / fast lane's
-  time), leave the rest to the fast lanes. Measure on NOVA with 8, 50 and 500 PFAS.
+  time), leave the rest to the fast lanes. Measure on the workstation with 8, 50 and 500 PFAS.
 - 2026-11-05: `dist.speed` + `run_parallel`. A free lane leaves the next molecule when the lanes >= 1.5x
   faster, simulated taking the queue in order (each molecule to the one that finishes it first, from when
   each is free), would finish all of it before this lane finished that one. Speeds are seconds per atom per
@@ -1118,7 +1118,7 @@ thread speed is and the temperature of the PC."
   8 PFAS 46 / 54 / 46 s, 50 PFAS 196 / 204 / 256 s, 500 PFAS 1804 / 1804 / 2506 s. With 10-40-atom molecules
   and 10 % scatter it never ended later than either; with the benchmark ratio 10 % off and 20 % scatter it
   lost up to ~25 % against the GPU lane alone on single 8-molecule runs, never on average.
-- Left (needs-Brandon): the real measurement on NOVA. In PowerShell, from the repo with this branch, with a
+- Left (needs-Brandon): the real measurement on the workstation. In PowerShell, from the repo with this branch, with a
   PFAS CSV (`pfas.csv`, a SMILES column; add `--smiles-col` if needed) and an empty folder for the runs:
   ```
   quantabench-cli machines --refresh --bench aimnet2          # seeds: aimnet2@cpu and aimnet2@cuda:0
@@ -1172,7 +1172,7 @@ thread speed is and the temperature of the PC."
     Idle RSS with the 14,000-molecule folder open: **1,133 -> 634 MB** (window alone 1,102 -> 602 MB). VTK
     is ~355 MB of that (libraries ~155 MB, llvmpipe context and buffers ~200 MB); without VTK ~280 MB. So
     the 500 MB target holds only without VTK under software OpenGL; on a GPU the buffers leave RSS. Check
-    the number on NOVA and the Mac before deciding on more.
+    the number on the workstation and the Mac before deciding on more.
   - (3) done: one render per selection (was 3-9: `Plotter.reset_camera` renders even with `render=False`,
     the selection clear rendered, and pyvistaqt's `auto_update` re-rendered 5x/s while idle). Selection
     median **557 -> 224 ms**; scrolling 14,000 rows in 200 steps 10.0 -> 2.5 s. What is left of a selection
@@ -1184,7 +1184,7 @@ thread speed is and the temperature of the PC."
     (`jobs.run_resumable` and `pipeline.run` call `resources.select_device` before knowing whether the
     method needs torch: +~500 MB for the rest of the session). Select the device lazily, or only for
     torch engines (chem/jobs.py, chem/pipeline.py).
-- 2026-11-05 (branch `fix/runtime-guards`), for the 14,223-molecule split across NOVA and the MacBook:
+- 2026-11-05 (branch `fix/runtime-guards`), for the 14,223-molecule split across the workstation and the MacBook:
   - `lanes auto` plans a GPU lane only where this machine's benchmark (`<method>@<gpu>` vs `<method>@cpu`)
     says the GPU is the faster lane; MacBook AIMNet2 (6,387/h CPU, 2,978/h MPS): CPU lanes only (6 x 2 with
     the default 13 threads). Without a benchmark the GPU lane as before, and the reason says so. Still to check: a lanes benchmark on the Mac
@@ -1222,16 +1222,16 @@ thread speed is and the temperature of the PC."
   molecules read; derived rows 2,480 resolved, 120 ambiguous (6 anions of C3A_P4 under two CAS numbers each),
   0 unresolved. Still open: (5) the optimized geometry of Spartan OPT jobs (Input keeps the starting one;
   probably in `Archive.carc`); (6) ambiguous structures (an anion under the CAS numbers of its salts): share
-  the result with all its labels in the wide table, or leave it out (now); (7) a full-run timing on NOVA.
+  the result with all its labels in the wide table, or leave it out (now); (7) a full-run timing on the workstation.
 
 ### QSAR-1: The PFAS QSAR cohorts in staged batches · b01/b02 run 2026-11-11; b03 run 2026-11-11 (evening); structure fixes 2026-11-12; the tranches b04-b08 wait for Brandon's review of b03
 Decided 2026-11-11 (Brandon): no single run over all 14,223 molecules (`data_engineering/Cohort */*.sdf`: C4A 9,052,
 C1A 2,492, C5A 930, C1B 409, C4B 376, C3A 341, C2A 331, C2B 193, C3B 80, C6A 19). Batches, each analysed before
 the next. Inputs and selections in `Runs/batches/<batch>/` (input.csv, selection.csv, selection.md, design.json);
-scripts in `scratch/batches/` on NOVA (not in the repository).
+scripts in `scratch/batches/` on the workstation (not in the repository).
 - **Protocol** (`run_batch.ps1`, per batch `run_b01.ps1`, `run_b02.ps1`): scratch/full_run.ps1's settings (RDKit
   ETKDG 50 + MMFF94s, the 5 lowest refined with GFN2-xTB/tblite, 6 kcal/mol window, `--freq`, `--no-protonate`)
-  plus `--rank auto`; gas, then ALPB water, then `pair`; `grid build --wait --machines brandons-macbook-pro,local
+  plus `--rank auto`; gas, then ALPB water, then `pair`; `grid build --wait --machines bench-mac,local
   --priority background` (work sharing on). Each run goes to `Runs/<date>_<batch>/` with timing.txt, run.json and
   the grid logs, and ends with the batch's analysis (`analysis/report.md`). The script stops before starting when
   the installed QuantaBench has no `--rank` (exit 3) or a remote worker is unreachable or on another commit (exit
@@ -1261,7 +1261,7 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   temperatures and of other compounds, water's σ and molecular weights (not parachors). `Runs/batches/
   gamma25_check.md` has the breakdown; b02 uses QuantaBench's PubChem pull instead.
 - **b01 and b02 ran** 2026-11-11 (both machines, `--rank auto`): 76/76 and 100/100 ok in both phases, 4 and 3 min
-  per phase. The E76 again with 20 refined conformers (`_rt20`, NOVA alone, 12 lanes): 3.7 min gas, 4.6 min water;
+  per phase. The E76 again with 20 refined conformers (`_rt20`, the workstation alone, 12 lanes): 3.7 min gas, 4.6 min water;
   the same lowest conformer as Spartan 11/63 (10/63 with 5), search misses 18 (37), conformer dipole MAE 1.21 D (1.39).
 - **Decided 2026-11-11** (Brandon): "a stratified batch of 1000", batches scheduled for the evenings.
 - **The partition** (`b03_select.py`; `Runs/batches/partition/`: records.csv with every record and where it went,
@@ -1287,7 +1287,7 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   - 49 records of the PFAS cohorts have no fluorine (C3A cations 32, C1A 8, C2A 8, C3B 1): fixed 2026-11-12, below.
 - **Evening runs** (`scratch/batches/run_tranche.ps1` + `run_tranche.py`, `run_b03.ps1`, `start_tranche.ps1`): the
   protocol above; before each attempt the MacBook is asked and joins when its worker answers, is idle and on this
-  commit, else NOVA runs alone. A deadline (default 07:00) cancels the remote shares and stops NOVA's at its next
+  commit, else the workstation runs alone. A deadline (default 07:00) cancels the remote shares and stops the workstation's at its next
   molecule; `-Resume` (or the same command the same day) runs only the molecules no run folder of the phase has
   finished, as a new grid in the same phase folder. Exit 0 done, 5 stopped (deadline or Ctrl+C, resumable).
   `qb_grid.py` wraps `grid build` for the deadline and the watch below. `analyze_tranche.py` (generic) writes
@@ -1301,23 +1301,23 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   ("may come back"). Tested with a throwaway local worker frozen mid-share (SIGSTOP, like a sleeping MacBook):
   the local share finished, the frozen share stayed `running` at 0/17, "cannot reach ... (retrying)", no return;
   work sharing cannot help (the frozen worker cannot release its molecules, and it has no rate before 3 are done).
-  DIST-7 (`feat/machine-control`) handles it in the client. Until that is on NOVA and the Mac, `qb_grid.py` stops
-  following once NOVA has nothing left and the remote worker has not answered for 10 min, copies what the remote
+  DIST-7 (`feat/machine-control`) handles it in the client. Until that is on the workstation and the Mac, `qb_grid.py` stops
+  following once the workstation has nothing left and the remote worker has not answered for 10 min, copies what the remote
   share finished from its synced run folder (a private copy of its job table), and the next attempt runs the
   rest; the orphaned job is cancelled when its worker answers again. Tested with the throwaway worker (frozen:
-  rescue on NOVA; deadline: stop and resume; Ctrl+C: stop and resume), all 30 molecules paired each time.
+  rescue on the workstation; deadline: stop and resume; Ctrl+C: stop and resume), all 30 molecules paired each time.
   Related: `grid merge --partial` and `grid status` look for a remote share's synced copy beside the grid folder
   (`<grid folder>/../<run folder>`), so with `--out <run root>/<phase>` (the batch scripts) they miss the Mac's
   folder in `Runs/` (for DIST-7).
-- **Lanes:** NOVA's `auto` (`dist.machine_lanes`) gives 12 CPU lanes x 1 thread for tblite-gfn2 at every priority
+- **Lanes:** the workstation's `auto` (`dist.machine_lanes`) gives 12 CPU lanes x 1 thread for tblite-gfn2 at every priority
   on 27a73bd (not 6 x 2); the Mac runs 10 x 1.
 - **Time estimate for b03** (per-stage power laws in atoms from the b01/b02 telemetry, the Mac at 10 lanes and
-  refine top 5, and the E76-rt20 telemetry, NOVA at 12 lanes; refine and rank scaled by the conformers refined;
-  the 64 molecules above 60 atoms extrapolated): gas + water about 0.6 h on both machines or 1.5-1.7 h on NOVA
+  refine top 5, and the E76-rt20 telemetry, the workstation at 12 lanes; refine and rank scaled by the conformers refined;
+  the 64 molecules above 60 atoms extrapolated): gas + water about 0.6 h on both machines or 1.5-1.7 h on the workstation
   alone with refine top 5; 1.2 h or 3.1-3.3 h with refine top 20. A tranche: 1.2 h or 3.1-3.3 h (top 5), 2.4 h or
-  6.4-6.6 h (top 20). The slowest molecule on a NOVA lane: 14-27 min (top 5), 23-40 min (top 20, near the 1800 s
+  6.4-6.6 h (top 20). The slowest molecule on a workstation lane: 14-27 min (top 5), 23-40 min (top 20, near the 1800 s
   molecule time limit). b03 measures it.
-- **Smoke test** 2026-11-11 (the first 5 of b03, gas, NOVA alone, background, `--rank auto`): 5/5 ok in 0.5 min
+- **Smoke test** 2026-11-11 (the first 5 of b03, gas, the workstation alone, background, `--rank auto`): 5/5 ok in 0.5 min
   (12 lanes; the AIMNet2 load is about 14 s per lane), the report in 0.1 min.
 - Open (needs-Brandon): TFA and PFPrA (recompute Spartan's conformers or leave them out, VAL-2); whether b02's σ
   should include values of gases above their boiling point (left out now; DESC-2: Sugden reproduces them within
@@ -1333,7 +1333,7 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   and 43 % (water, g-xTB + CPCM), anions 65-76 %. Outliers: imaginary frequencies 75 per phase (7.5 %; 60 of them
   C4A), dipoles > 30 D 49 (all ions but one), solvation energies out of range 10, best conformer not converged 3
   (C3 anions). The drift flags against b01/b02 come from their different selections. No throttling (CPU peaks 94 °C
-  Mac, 90 °C NOVA). Left before the tranches: the imaginary frequencies and the four failures.
+  Mac, 90 °C the workstation). Left before the tranches: the imaginary frequencies and the four failures.
 - **Structure fixes 2026-11-12** (Brandon: "Draw the PFAS part"; `scratch/batches/pfas_part_fix.py`,
   `apply_structure_fixes.py`, `verify_fixes.py`; `Runs/batches/structure-fixes-2026-11-12/`): the 49 fluorine-free
   PFAS-cohort records were PFAS salts, adducts or blends drawn as the non-fluorinated partner only (a counter-ion,
@@ -1366,7 +1366,7 @@ scripts in `scratch/batches/` on NOVA (not in the repository).
   `qm_surf_esp_area_*`, `<id>_esp_profile.csv`).
 - **QM-ESP options** · done 2026-11-12 (PR #3): `--no-qm-polarizability`, `--qm-properties/--no-qm-properties`,
   `--keep-cubes/--no-keep-cubes`, and the imaginary-mode steps in the Psi4 frequency path. Then the staged ESP pass over b03 (gas, `--qm
-  wb97x-d/6-31g* --cubes --no-qm-polarizability --no-keep-cubes`; `scratch/batches/run_b03_esp.ps1` on NOVA) for the ESP PCA substudy,
+  wb97x-d/6-31g* --cubes --no-qm-polarizability --no-keep-cubes`; `scratch/batches/run_b03_esp.ps1` on the workstation) for the ESP PCA substudy,
   appended to a night's chain once this is merged.
 - **b03's imaginary frequencies** (`scratch/batches/imag_look.py`, `imag_test.py`, `imag_summary.py`;
   `analysis/imag_test_{gas,water}.csv`): recomputed at the stored geometries, all 150 come back (not noise). Gas:
@@ -1424,7 +1424,7 @@ Still open:
   were killed by the memory cgroup at 2-3.9 GB resident: the MMFF run at a 90-heavy-atom cyclic peptide and
   a +2 alkaloid in the GFN1-xTB properties step (dxtb charges/polarizability, autograd field response),
   the gfn1-xtb run on a Cr(III) azo complex, and the tblite run in that properties step. The job table recovered (crash counted, molecule
-  moved last), but on NOVA with many lanes this can kill lanes repeatedly. Measure memory vs atom count and
+  moved last), but on the workstation with many lanes this can kill lanes repeatedly. Measure memory vs atom count and
   skip (with a note) or chunk the polarizability above a size; or use tblite's finite-field polarizability.
   Done on `fix/memory-time-guards` (2026-11-05): `chem/memory_guard.py`. The cause is dxtb's `scf_mode="full"`
   (memory goes as SCF iterations x nao²). An estimate per step is checked against a per-lane budget
@@ -1432,13 +1432,13 @@ Still open:
   tblite (the same value), or is skipped with a note; a refinement that does not fit fails with the reason, or
   `auto` moves on to its next engine. Measurements are in docs/ENGINES.md. Still open: the rule under-estimates
   hard SCF cases it cannot see (closed shell with near-degenerate levels: 5.8x the neutral run for a peptide
-  with two electrons removed); calibrate on NOVA's ROCm torch and on the MacBook, whose allocators may differ.
+  with two electrons removed); calibrate on the workstation's ROCm torch and on the MacBook, whose allocators may differ.
   Done on `fix/runtime-guards` (2026-11-05): the frequencies stage (`memory_guard.frequencies_plan`, one call at
   the start of `vibrations.analyze`'s Hessian step). The analytic Hessian grows as atoms x nao² (TFA anion
   353 MB, PFBA anion 1.2 GB, PFOA anion > 6 GB); over the budget it becomes finite differences (one energy +
   forces of memory, about the same time), and finite differences or IR dipole derivatives that do not fit are
   skipped with a note. Measured only up to 2 GB resident here (other agents on an 8 GB VM); the GFN2 and the
-  larger points of the rule are extrapolated: check a few on NOVA and the Mac. The pipeline could pass
+  larger points of the rule are extrapolated: check a few on the workstation and the Mac. The pipeline could pass
   `memory_budget_gb=memory_budget(cfg)` to `vibrations.analyze` explicitly (today: the lane's share through
   `resources.set_molecule_limits`, auto in one process).
 - **The xTB properties step on dications** (a piperazine, +2 at pH 7) took minutes of GFN1-xTB SCF in the
@@ -1450,7 +1450,7 @@ Still open:
 ### QSAR-3: Surface tension model on QuantaBench descriptors · ready (data pull needs-Brandon)
 Plan: docs/SURFACE_TENSION.md. Two targets, never pooled: pure-liquid σ at 25 °C for compounds that are liquid
 there, and γ_CMC/CMC of PFAS surfactants in water.
-- Data: `build --phases gas,water` on the QSAR cohorts, then on NOVA (PubChem is blocked in the cloud
+- Data: `build --phases gas,water` on the QSAR cohorts, then on the workstation (PubChem is blocked in the cloud
   environment) `pubchem enrich RUN --validate --experimental --records experimental.csv`. Add Jasper (1972)
   coefficients (via the MIT `chemicals` package) and NIST ThermoML (free bulk download) for pure liquids, and
   curated literature γ(c) data for PFAS (Brusseau 2019 Table S1 sources), each with the same provenance columns
@@ -1522,7 +1522,7 @@ Why: b02's quantum parachor failed because V_vdW is not the molar volume and the
 is half of DFT's. `chem/estimates.py` adds, for every molecule and phase: Girolami and packing-coefficient densities
 and molar volumes, Bosque-Sales, Crippen and D4 polarizabilities, Sugden's parachor; the properties step adds
 GFN2-xTB's polarizability where the refinement engine gave none. Validation in docs/VALIDATION.md (DESC-2); the
-options in docs/SURFACE_TENSION.md. Scripts in `scratch/desc2/` and `scratch/batches/analyze_b02_v2.py` on NOVA.
+options in docs/SURFACE_TENSION.md. Scripts in `scratch/desc2/` and `scratch/batches/analyze_b02_v2.py` on the workstation.
 Follow-ups (ready):
 - **GCVOL** (Elbro 1991, Ihmels & Gmehling 2003): type in and check the group tables, test the CF2/CF3 groups on the
   fluorinated liquids of `Runs/desc2-2026-11-11/liquids.csv`, and compare with the packing model.
@@ -1604,10 +1604,10 @@ pause button on a machine and the work is redistributed?"
 - Tested: tests/test_machine_control.py (batch hold/drain/now, sequential and lanes; worker pause, restart, sync,
   wake and lost-contact holds, battery; MachineWatch; end to end: a paused worker and a worker that goes dark mid-run,
   with duplicates merged once and counted once in the timings; weights; settings merge, conflict recovery; the CLI;
-  live priority), tests/test_gui_machines.py (the dock). On NOVA (2026-11-11, scratch settings, two throwaway
-  workers on localhost, 40 MMFF molecules): pausing nova-t1 after 4 molecules moved its 17 unstarted molecules to
-  nova-t2 (40/40 merged in 57 s); freezing nova-t1's process for 55 s (what a sleep looks like from outside) made it
-  away after 20 s (the test's setting), its 20 unfinished molecules went to nova-t2, it noticed the gap when thawed,
+  live priority), tests/test_gui_machines.py (the dock). On the workstation (2026-11-11, scratch settings, two throwaway
+  workers on localhost, 40 MMFF molecules): pausing tower-t1 after 4 molecules moved its 17 unstarted molecules to
+  tower-t2 (40/40 merged in 57 s); freezing tower-t1's process for 55 s (what a sleep looks like from outside) made it
+  away after 20 s (the test's setting), its 20 unfinished molecules went to tower-t2, it noticed the gap when thawed,
   the client told it 20 had moved (17 dropped there, 3 it had finished), and the merge kept each of the 3 duplicates
   once (40/40, 76 s).
 - Left:
@@ -1631,9 +1631,9 @@ pause button on a machine and the work is redistributed?"
   `jobs.Handoff`; docs/WORKERS.md), and every share runs its largest molecules first. In the 2026-11-05 water
   run the MacBook was idle for 8 of 21 minutes; with sharing that tail is about one molecule per lane. Left
   (optional): record molecules/hour per protocol from finished grids and use it for `--weights auto`, so
-  fewer molecules move; measure the first real grid with sharing on NOVA + MacBook.
+  fewer molecules move; measure the first real grid with sharing on the workstation + MacBook.
 - Validation run (tblite GFN2, 50 conformers, top 5, frequencies), water phase: the MacBook finished its 169
-  molecules in 12.5 min (811/h); NOVA took 20.8 min for its 131 (378/h). `--weights auto` had split them
+  molecules in 12.5 min (811/h); the workstation took 20.8 min for its 131 (378/h). `--weights auto` had split them
   2680:2240 from the single-molecule benchmark. For the full run pass measured weights (about 2:1), and
   have `grid build` learn: record each machine's molecules/hour per protocol from finished grids, and
   prefer that over the benchmark in `--weights auto`. Work stealing (a machine that finishes early takes
@@ -1641,10 +1641,10 @@ pause button on a machine and the work is redistributed?"
 - Lane layouts: both machines ran 6 lanes x 2 threads. Timed on 49 molecules (`scratch/lanes_test` on
   each machine, 2026-11-05):
   - Mac 6x2 181 s, 14x1 141 s.
-  - NOVA 6x2 427 s, 12x1 363 s, 24x1 331 s, 12x2 318 s.
+  - The workstation 6x2 427 s, 12x1 363 s, 24x1 331 s, 12x2 318 s.
 
   `lanes auto` now gives tblite one lane per physical core with the threads shared out (c0427d9). On the same
-  49 molecules the Mac is 2.3x NOVA, so pass `--weights brandons-macbook-pro=2.3,local=1` until grids
+  49 molecules the Mac is 2.3x the workstation, so pass `--weights bench-mac=2.3,local=1` until grids
   learn their weights.
 
 ### UPD-1: Update button gaps · in review 2026-11-06 (branch `feat/update-packages`; worker updates: design only)
@@ -1660,7 +1660,7 @@ the code, but three things never arrived through it.
 2. **Windows fork pins lived only in `install_windows.ps1`**, so a new tblite build (win2, PERF-2) could
    never arrive through Update. Done: `scripts/fork-packages.json`.
    - Per platform: `packages`, `only_binary`, `find_links` as {package: URL}. All three installers read it,
-     with the same pip lines and stamps as before (checked by dry runs, the stamp files, and NOVA's
+     with the same pip lines and stamps as before (checked by dry runs, the stamp files, and the workstation's
      PowerShell 5.1 parser).
    - `update` reinstalls when this platform's entry changes in a pull. It then force-reinstalls
      (`--no-deps`) a git-tag or release-page package whose requirement or link changed.
@@ -1691,7 +1691,7 @@ the code, but three things never arrived through it.
     usually manages by moving the files aside, leaving `~...` folders in site-packages, but it can fail on a
     locked DLL. The message then says to close the app and use the CLI. A sturdier route is to finish the
     upgrade in a helper process after the GUI exits: a console window shows pip, then the GUI starts again.
-    Try `--upgrade-packages` from the app on NOVA first (needs-Brandon), and clean up `~...` leftovers on
+    Try `--upgrade-packages` from the app on the workstation first (needs-Brandon), and clean up `~...` leftovers on
     the next start if they appear.
   - `--check --upgrade-packages` could preview the upgrade with `pip install --dry-run --report -`.
   - The worker update (3).
@@ -1710,24 +1710,24 @@ the code, but three things never arrived through it.
 - Left: a release with 3.11-3.13 wheels (enable Actions on the fork, or add the matrix and a release job on
   the CI branch), then the rollout below.
 - One GFN2/ALPB energy+gradient (`scratch/tblite_scf_bench.py`, 1 thread): MacBook 13.5 / 32.5 / 81 ms
-  for 31 / 62 / 110 atoms, NOVA 24.8 / 66.8 / 212 ms. The gap grows with size (1.8x to 2.6x). The macOS
+  for 31 / 62 / 110 atoms, the workstation 24.8 / 66.8 / 212 ms. The gap grows with size (1.8x to 2.6x). The macOS
   wheel links OpenBLAS; the fork's Windows wheel bundles reference BLAS/LAPACK.
 - To rebuild with MSYS2's `mingw-w64-ucrt-x86_64-openblas` (`-Dtblite:lapack=openblas`), check first:
   - That package depends on LLVM's OpenMP (`-omp`), while tblite links libgomp, so two OpenMP runtimes
     would sit in one process.
   - It ships `openblas.pc` but no `lapack.pc`, which dftd4 and multicharge may look for.
   - Energies must match win1 to 1e-10 Eh.
-- Expected gain: NOVA 1.5-2x on mid-size and large molecules, about 15 % off a two-machine full run.
+- Expected gain: the workstation 1.5-2x on mid-size and large molecules, about 15 % off a two-machine full run.
 - Rolling it out (UPD-1): point `windows.find_links.tblite` in `scripts/fork-packages.json` at the
   `qb-v0.8.0-win2` release, and change `chem/eng_tblite.py` `WINDOWS_WHEELS` to match
-  (`tests/test_install_scripts.py` checks both). Help > Check for updates then reinstalls tblite on NOVA,
+  (`tests/test_install_scripts.py` checks both). Help > Check for updates then reinstalls tblite on the workstation,
   even under the same version number. Give the wheel a new version (e.g. `0.8.0.post1`, pinned as
   `tblite==0.8.0.post1`) so rerunning the installer picks it up too. Its pip run does not replace a
   version that still fits.
 
 ### DIST-4: Per-stage routing · later
 - Different stages of one molecule on different machines (CREST + Psi4 on the Mac, GPU refinement +
-  LAMMPS on NOVA), handed over through run-folder artifacts.
+  LAMMPS on the workstation), handed over through run-folder artifacts.
 - 2026-11-06: CREST on the Mac needs the fork build (FORK-5); conda-forge's fails from 19 atoms. The machines'
   CREST paths can differ now (`engines.machine_paths`), which routing will rely on.
 - Shared-settings race, fixed for the per-machine tables (2026-11-06): the GUI saves the settings it loaded at
@@ -1749,11 +1749,11 @@ the code, but three things never arrived through it.
 - Upstream PR adding Windows wheels (cibuildwheel, MinGW-w64 gfortran); interim builds in
   `brandonbtm29/quantabench-wheels` attached to GitHub releases (`pip install tblite --find-links ...`).
 - 2026-11-05: built in the fork itself instead (`brandonbtm29/tblite`, branch `qb/windows-wheels`, release
-  `qb-v0.8.0-win1`, CPython 3.11-3.13 win_amd64, MSYS2 gfortran). NOVA reproduces the Linux energies to
+  `qb-v0.8.0-win1`, CPython 3.11-3.13 win_amd64, MSYS2 gfortran). The workstation reproduces the Linux energies to
   1e-14 Eh. tblite's own CI, docs and wheel workflows are disabled in the fork (2026-11-05); only `qb-windows-wheels` runs.
 
 ### FORK-11: ROCm runtime hangs at process exit on Windows · ready (workaround in place)
-- On NOVA (torch 2.9.1+rocm7.2.1), a Python process that used the GPU often never exits: `main()` returns
+- On the workstation (torch 2.9.1+rocm7.2.1), a Python process that used the GPU often never exits: `main()` returns
   and pytest prints its summary, then the process spins one core in the HIP runtime's teardown until it is
   killed (5 such processes on 2026-11-04/05). Workaround: `resources.hard_exit_if_needed` (`os._exit` after
   flushing) in `quantabench-cli`, the GUI, lane processes and pytest's `conftest.py`
@@ -1761,7 +1761,7 @@ the code, but three things never arrived through it.
   device="cuda")`, then exit) and a report to ROCm/PyTorch; drop the workaround once fixed.
 
 ### FORK-10: ROCm SDK warning about paths with spaces · later
-- On NOVA, AMD's Windows ROCm SDK prints "Unknown command line argument ...offload-arch.exe" when the venv
+- On the workstation, AMD's Windows ROCm SDK prints "Unknown command line argument ...offload-arch.exe" when the venv
   path has a space ("GitHub Projects"): an unquoted path in its device-detection call. Harmless so far;
   reproduce outside QuantaBench and report to ROCm.
 
@@ -1783,7 +1783,7 @@ the code, but three things never arrived through it.
     crest-lab/crest#412 with the diagnosis. Watch both; when a fixed conda-forge build ships, check it and
     consider going back to it.
   - The 20-molecule benchmark with the fork build (docs/ENGINES.md, CREST): GFN-FF gas and water 20/20 CREST,
-    searches as close to NOVA's as two CREST runs are. Since 2026-11-07 the MacBook's own CREST path
+    searches as close to the workstation's as two CREST runs are. Since 2026-11-07 the MacBook's own CREST path
     (`engines.machine_paths`, that machine only) is
     `~/Library/Application Support/QuantaBench/programs/crest-qb-v3.0.2-macos1/crest-macos-arm64/bin/crest`, so the
     GUI, the worker and the CLI use the fork build there (`doctor`: "settings (this machine)").
@@ -1793,16 +1793,16 @@ the code, but three things never arrived through it.
     **3 x 4 773 s**, 5 x 2 1,457 s, auto 6 x 2 3,108 s.
     - Done: on Apple Silicon the CREST auto plan is 4 threads per lane, one lane per 4 performance cores
       (`hw.perflevel0.physicalcpu`), so 3 x 4 on the M3 Max. Other machines keep 2-thread lanes on all threads:
-      on NOVA's 24 threads the code plans 11 x 2. NOVA's 2026-11-06 run was 11 x 2 too (its job table: 11
+      on the workstation's 24 threads the code plans 11 x 2. The workstation's 2026-11-06 run was 11 x 2 too (its job table: 11
       molecules started at once), not "20 x 2" as the docs said; fixed. Every parallel run now starts its largest
       molecules first.
     - Done 2026-11-07 (branch `feat/dynamic-threads`): dynamic CREST threads. A running CREST cannot take more
       threads, but each CREST call's `-T` is set when it starts: a molecule that would set the end of the batch
       on its own gets whole lanes' worth of idle threads, and a run with fewer molecules than lanes lends the
       unused lanes' threads (docs/ENGINES.md, CREST). Simulated: no change for the Mac's 3 x 4 on the 20 PFAS or
-      for large batches; NOVA's 11 x 2 on the 20 PFAS 1,244 -> 819 s. Measured on the Mac: the 20 PFAS 842 s
+      for large batches; the workstation's 11 x 2 on the 20 PFAS 1,244 -> 819 s. Measured on the Mac: the 20 PFAS 842 s
       (nothing widened); two large PFAS 585 and 555 s vs 1,309 and 1,096 s (part of it CREST's sampling).
-    - Left: time it on NOVA (11 x 2, where the simulation predicts the gain; NOVA was busy with DFT on
+    - Left: time it on the workstation (11 x 2, where the simulation predicts the gain; the workstation was busy with DFT on
       2026-11-07). Widening for the time limit (the GFN2 failures: 54950-05-9 needs about 3.7 h on 4 threads)
       needs the cost model in seconds before the first CREST call ends (a machine's `timings --fit` has that
       scale since 2026-11-08, SCHED-1; the policy does not use it for the limit yet). The xtb program and Psi4 could borrow
@@ -1816,7 +1816,7 @@ the code, but three things never arrived through it.
   Look at it again only if WSL becomes a problem.
 
 ### PRIO-1: Runs that keep the PC responsive · done 2026-11-09 (branch `feat/prio1`)
-Brandon (2026-11-09): a 5-lane x 4-thread run on NOVA (below-normal CPU priority) made the PC hard to use, even
+Brandon (2026-11-09): a 5-lane x 4-thread run on the workstation (below-normal CPU priority) made the PC hard to use, even
 deleting files; Psi4's scratch I/O probably made it worse. QuantaBench had no priority or reserved-threads setting.
 - Done: `quantabench/priority.py`; docs/ENGINES.md, "Run priority and free threads".
   - Two per-machine settings (`resources.machine_priority`, `resources.machine_free_threads`; the shared
@@ -1832,11 +1832,11 @@ deleting files; Psi4's scratch I/O probably made it worse. QuantaBench had no pr
   - Surfaces: `--priority`/`--free-threads` on `build`, `grid build`, `worker` and `lanes`; `settings --priority
     --free-threads [--machine]`; Settings > Compute "Run priority" and "Leave free"; `doctor`; run timings
     (`config_json`).
-- Checked on NOVA (2026-11-09, a throwaway copy): a program started through `run_program` at `low` got
+- Checked on the workstation (2026-11-09, a throwaway copy): a program started through `run_program` at `low` got
   BELOW_NORMAL_PRIORITY_CLASS and low I/O priority, at `background` IDLE_PRIORITY_CLASS and very low I/O, and the
   process it started inherited both.
 - Left (needs-Brandon):
-  - Time one CREST or Psi4 batch at `low` while using NOVA, against `normal`: is it fast enough when idle and
+  - Time one CREST or Psi4 batch at `low` while using the workstation, against `normal`: is it fast enough when idle and
     light enough while working? If not, try `background` or more free threads.
   - WSL's VM (vmmem) runs at normal priority on Windows: niceness inside WSL does not make a CREST run through
     WSL give way to Windows programs; only fewer threads do.
@@ -1857,7 +1857,7 @@ small job may start in a gap if it does not delay the reserved start of the big 
      every run's jobs.sqlite (run, load every 60 s, attempt, stage; partial rows for lost lanes),
      `quantabench-cli timings` (one CSV over run folders and grid parts) and `timings --fit` (per machine and CREST
      level, saved to `<settings>/machines/cost-models/<machine>.json` with >= 30 molecules over >= 2 widths; the
-     dynamic threads use it). Overhead about 0.3 % (20 MMFF molecules). Left: run `timings --fit` on NOVA and the
+     dynamic threads use it). Overhead about 0.3 % (20 MMFF molecules). Left: run `timings --fit` on the workstation and the
      Mac once they have recorded runs (fixed lanes give one width: the fit needs dynamic-thread runs or other
      lane plans); leave out samples from a busy machine (own vs machine CPU percent) in the fit; the xtb program
      and Psi4 stages are recorded but have no cost model yet; Windows CPU time of `wsl:` CREST is not
@@ -1867,7 +1867,7 @@ small job may start in a gap if it does not delay the reserved start of the big 
      from the molecules already finished in the same run.
   3. Better runtime prediction: atoms, rotatable bonds, rings, charge and engine as features; a power law vs a
      small gradient-boosted model, judged by makespan, not by fit.
-  4. Measure on the MacBook (performance + efficiency cores) and NOVA (SMT), batches of 20, 300 and 2,000, and on
+  4. Measure on the MacBook (performance + efficiency cores) and the workstation (SMT), batches of 20, 300 and 2,000, and on
      the GFN2 CREST tail, where widening could also avoid the 3 h time limit.
 - Expectations: for thousands of molecules every policy ties (the queue empties evenly); the gains are in small
   batches, narrow lanes, a few dominant molecules and expensive stages (CREST GFN2, DFT re-ranking). Could become a
@@ -1887,13 +1887,13 @@ small job may start in a gap if it does not delay the reserved start of the big 
 
 ## Needs Brandon (hardware / Windows / decisions)
 
-- **HW-1 · done 2026-10-28:** ROCm 7.2.1 PyTorch 2.9.1 on BTM NOVA sees the RX 9060 XT (matmul
+- **HW-1 · done 2026-10-28:** ROCm 7.2.1 PyTorch 2.9.1 on the Windows workstation sees the RX 9060 XT (matmul
   6.1 TFLOP/s fp32). But: no QuantaBench engine runs on it yet (see GPU-1, GPU-2), and AMD's Windows
   wheel ships a slow CPU BLAS (52 vs 881 GFLOP/s for PyPI's CPU torch), so CPU work got ~17x slower.
 - **HW-2 · done 2026-11-05:** dxtb and AIMNet2 on the RX 9060 XT (single + batched), energies CPU vs GPU:
   see GPU-1 (AIMNet2 ~10x faster on the GPU) and GPU-2 (dxtb works but is 5-8x slower there).
 - **HW-3 · needs-Brandon:** GUI on Windows 11. Done 2026-10-27: the full suite including all GUI tests
-  passes natively on BTM NOVA (Radeon RX 9060 XT, OpenGL 4.6) with pyvistaqt 0.12; pyvistaqt 0.13
+  passes natively on the Windows workstation (Radeon RX 9060 XT, OpenGL 4.6) with pyvistaqt 0.12; pyvistaqt 0.13
   crashed (now pinned `<0.13`). Still to check by hand: HiDPI picking feel, 20k-atom slab frame rate.
 - **HW-4 · needs-Brandon:** LAMMPS `in.smd` with the GPU (OpenCL) build on Windows.
 - **DEC-1 · needs-Brandon:** approve `docs/SIMULATE_DESIGN.md` (after RES-1).
