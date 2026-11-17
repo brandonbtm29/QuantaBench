@@ -271,7 +271,7 @@ that cap. The stages that are not handed the run's settings (the Hessian, the em
 `resources.set_molecule_limits`, which the lanes, the CLI build, the GUI and grid workers call before the first
 molecule.
 
-**Time limit per molecule.** `resources.molecule_timeout_s` (`build --molecule-timeout S`) defaults to 1800 s;
+**Time limit per molecule.** `resources.molecule_timeout_s` (`build --molecule-timeout S`, and `grid build --molecule-timeout S` for every machine's share) defaults to 1800 s;
 0 turns it off. The slowest molecule of the stress sample that finished took 429 s (a Cr complex in `auto`), so
 30 min only ends molecules that are stuck, and a stuck molecule costs at most 30 lane-minutes of a
 14,000-molecule batch. QM stages and CREST can take longer per molecule: raise the limit for those runs. A
