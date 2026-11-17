@@ -364,13 +364,22 @@ class JobDialog(QDialog):
             others = [n for n in client.known_workers() if settings_mod.machine_key(n) != settings_mod.machine_key(me)]
         except Exception:  # noqa: BLE001 - the registry is optional here
             others = []
+        self.w_run_on.addItem("Auto (the fastest free machine for this job)", recipes.AUTO)
+        auto = model.item(self.w_run_on.count() - 1)
+        auto.setToolTip("Chosen when the job is sent: this computer or a worker, by its measured speed for this "
+                        "method (as grid build splits a list) per job it already has")
+        auto.setEnabled(bool(others))
         for name in others:
-            self.w_run_on.addItem(f"{name} (later: DIST-3)", name)
+            self.w_run_on.addItem(f"{name} (checking...)", name)
             item = model.item(self.w_run_on.count() - 1)
             item.setEnabled(False)
-            item.setToolTip("Routing a job to a worker from this dialog is the next step (DIST-3). Today "
-                            "quantabench-cli grid build runs a batch across machines.")
+            item.setToolTip("Checking whether it answers...")
+        self.worker_refs: dict = {}
+        self.run_on_info = _note()
         form.addRow("Run on", self.w_run_on)
+        form.addRow(self.run_on_info)
+        if others:
+            self.start_probe()
         self.w_threads = QSpinBox()
         self.w_threads.setRange(0, 512)
         self.w_threads.setSpecialValueText(f"Auto ({priority.budget_of(self.base)} here)")
@@ -416,6 +425,54 @@ class JobDialog(QDialog):
         form.addRow("Time limit per molecule", self.w_timeout)
         form.addRow("", _note("Lanes (parallel molecules) are this machine's Settings > Resources > Parallel lanes."))
         return page
+
+    # ================================================================== the workers (Run on)
+    def start_probe(self) -> None:
+        """Ask every known worker for its info on a thread (``client.discover``, 3 s each, in parallel); the answers
+        enable the reachable ones in Run on."""
+        from ..dist import client
+
+        workers.start(workers.FunctionWorker(client.discover, timeout=3.0), self.win, on_done=self._probe_done,
+                      on_failed=lambda msg: self._probe_done({}, msg))
+
+    def _probe_done(self, refs: dict, failed: str = "") -> None:
+        from ..dist import remote_job
+
+        try:
+            self.worker_refs = dict(refs or {})
+            why = remote_job.worker_choices(self.worker_refs)
+            model = self.w_run_on.model()
+            for i in range(self.w_run_on.count()):
+                name = self.w_run_on.itemData(i)
+                if name in (recipes.LOCAL, recipes.AUTO):
+                    continue
+                item = model.item(i)
+                reason = why.get(name, failed or "not reachable")
+                if reason:
+                    self.w_run_on.setItemText(i, f"{name} (unavailable)")
+                    item.setEnabled(False)
+                    item.setToolTip(reason)
+                    if self.w_run_on.currentIndex() == i:
+                        self.w_run_on.setCurrentIndex(0)
+                else:
+                    n = remote_job.busy_jobs(self.worker_refs[name].info)
+                    self.w_run_on.setItemText(i, f"{name} ({'idle' if not n else f'{n} job(s) there'})")
+                    item.setEnabled(True)
+                    item.setToolTip(f"{self.worker_refs[name].url}: QuantaBench "
+                                    f"{self.worker_refs[name].info.get('quantabench_version', '?')}")
+            self._update()
+        except RuntimeError:          # the dialog was closed meanwhile
+            pass
+
+    def _run_on_note(self) -> str:
+        run_on = self.w_run_on.currentData() or recipes.LOCAL
+        if run_on == recipes.LOCAL:
+            return ""
+        where = ("this computer or a worker, whichever is fastest for this method per job it already has (chosen "
+                 "when the job is sent)" if run_on == recipes.AUTO else run_on)
+        return (f"Runs on {where}. A worker uses its own threads, GPU and priority; the memory per DFT job and the "
+                "time limit go with the job. The results come back into this computer's output folder (synced, else "
+                "downloaded) and into the Molecules list.")
 
     def _review_page(self) -> QWidget:
         page = QWidget()
@@ -612,6 +669,11 @@ class JobDialog(QDialog):
         for w in (self.w_qm_func, self.w_qm_basis, self.w_qm_task, self.w_qm_top):
             w.setEnabled(qm)
         self.level_info.setText(self._level_note())
+        local = (self.w_run_on.currentData() or recipes.LOCAL) == recipes.LOCAL
+        for w in (self.w_threads, self.w_priority, self.w_gpu, self.w_gpu_index):
+            w.setEnabled(local)
+        self.run_on_info.setText(self._run_on_note())
+        self.run_on_info.setVisible(not local)
         spec = self.spec()
         problems = spec.problems()
         if not spec.cfg.qm_method and self.w_qm_on.isChecked():
@@ -818,8 +880,11 @@ class JobDialog(QDialog):
 
 def submit_spec(win, spec: recipes.JobSpec, ids: list[str]):
     """Queue ``spec`` for ``ids`` in ``win``: the molecules with the job's charge, multiplicity and starting
-    coordinates, the job's configuration, a run folder made when it starts."""
+    coordinates, the job's configuration, a run folder made when it starts. A job on a worker (``run_on``) is sent
+    there at once (``gui.job_queue``); its run folder is the worker's."""
     cfg = spec.config()
     todo, cfg, run_dir = win.prepare_run(ids, cfg, transform=lambda inputs: recipes.job_inputs(inputs, spec))
+    if spec.run_on not in (recipes.LOCAL, ""):
+        run_dir = None
     return win.submit_job(todo, cfg, run_dir, ids, name=spec.name, summary=spec.summary(), recipe=spec.recipe,
                           task=spec.task, run_on=spec.run_on)

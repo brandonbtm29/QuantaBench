@@ -1,17 +1,22 @@
 """The Jobs dock (UI-5): the job queue, each job's progress and log, and what the running job uses.
 
-    #  Job                               Status      Progress        Time
-    1  Screen: conformer distribution..  done        12 / 12         4 min
-    2  Careful: frequencies, 3 mol...    running     1 / 3 (aspirin: refine)
-    3  Run all: 40 molecules             queued      40 molecules
+    #  Job                               Machine         Status      Progress        Time
+    1  Screen: conformer distribution..  this computer   done        12 / 12         4 min
+    2  Careful: frequencies, 3 mol...    this computer   running     1 / 3 (aspirin: refine)
+    3  Standard: 40 molecules            macbook-pro     running     12 / 40 (PFOS: refine)
+    4  Run all: 40 molecules             this computer   queued      40 molecules
 
 Below the list: Cancel (a queued job never starts; the running job stops after its current step, as the Cancel
 button does), Up / Down (queued jobs), Open output folder, Clear finished; the selected job's settings, run folder and
 log; and a line of what the running job uses: its threads, GPU and memory settings, and this computer's live load,
 temperatures and memory, mirrored from the machine monitor strip (MON-1) in the Pipeline dock.
 
-``install(win)`` makes the queue (``win.job_queue``), the dock (object name "jobs", in the Calculate workspace next
-to Results), Build > New job... (Ctrl+J) and a New job... button next to the Pipeline dock's Run buttons.
+A job on a worker (the job dialog's Run on, DIST-3) is listed with its machine; Cancel sends the cancel there, and
+when it ends its molecules' rows in the Molecules list take the results (``apply_remote_rows``).
+
+``install(win)`` makes the queue (``win.job_queue``, with ``make_follower`` for jobs on workers), the dock (object
+name "jobs", in the Calculate workspace next to Results), Build > New job... (Ctrl+J) and a New job... button next to
+the Pipeline dock's Run buttons.
 """
 
 from __future__ import annotations
@@ -38,7 +43,9 @@ from PySide6.QtWidgets import (
 
 from .job_queue import FINISHED, JobQueue
 
-COLUMNS = ("#", "Job", "Status", "Progress", "Time")
+COLUMNS = ("#", "Job", "Machine", "Status", "Progress", "Time")
+C_NAME, C_MACHINE, C_STATUS, C_PROGRESS, C_TIME = 1, 2, 3, 4, 5
+HERE = "this computer"
 NUMBER_ROLE = Qt.ItemDataRole.UserRole
 STATUS_COLORS = {"running": "#2471a3", "cancelling": "#d35400", "done": "#1e8449", "failed": "#c0392b",
                  "cancelled": "gray", "queued": ""}
@@ -70,8 +77,8 @@ class JobMonitor(QWidget):
         self.tree.setRootIsDecorated(False)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         hdr = self.tree.header()
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for c in (0, 2, 3, 4):
+        hdr.setSectionResizeMode(C_NAME, QHeaderView.ResizeMode.Stretch)
+        for c in (0, C_MACHINE, C_STATUS, C_PROGRESS, C_TIME):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         self.tree.currentItemChanged.connect(lambda *_a: self._show_selected())
         self.empty = QLabel("No jobs yet. Run all, Run selected or Build > New job... (Ctrl+J) put one here.")
@@ -146,7 +153,7 @@ class JobMonitor(QWidget):
         job = self.queue.job(number)
         if job is None:
             return
-        it = QTreeWidgetItem([str(job.number), job.name, "", "", ""])
+        it = QTreeWidgetItem([str(job.number), job.name, "", "", "", ""])
         it.setData(0, NUMBER_ROLE, job.number)
         self.items[number] = it
         self.tree.addTopLevelItem(it)
@@ -194,15 +201,19 @@ class JobMonitor(QWidget):
             self.tree.setCurrentItem(self.items[cur.number])
 
     def _fill(self, it: QTreeWidgetItem, job) -> None:
-        it.setText(1, job.name)
-        it.setToolTip(1, job.summary or job.name)
-        status = job.status + (f": {job.current}" if job.active and job.current else "")
-        it.setText(2, job.status)
-        it.setToolTip(2, status + (f"\n{job.error}" if job.error else ""))
+        it.setText(C_NAME, job.name)
+        it.setToolTip(C_NAME, job.summary or job.name)
+        machine = job.machine or HERE if job.is_remote else HERE
+        it.setText(C_MACHINE, machine + (" (unreachable)" if job.unreachable else ""))
+        it.setToolTip(C_MACHINE, f"{machine}: worker job {job.remote_id}" if job.remote_id else machine)
+        live = job.active or (job.is_remote and job.status == "queued")
+        status = job.status + (f": {job.current}" if live and job.current else "")
+        it.setText(C_STATUS, job.status)
+        it.setToolTip(C_STATUS, status + (f"\n{job.error}" if job.error else ""))
         color = STATUS_COLORS.get(job.status, "")
-        it.setForeground(2, self.palette().text() if not color else _brush(color))
-        it.setText(3, job.progress_text() + (f"  ({job.current})" if job.active and job.current else ""))
-        it.setText(4, _duration(job.elapsed()))
+        it.setForeground(C_STATUS, self.palette().text() if not color else _brush(color))
+        it.setText(C_PROGRESS, job.progress_text() + (f"  ({job.current})" if live and job.current else ""))
+        it.setText(C_TIME, _duration(job.elapsed()))
 
     def selected(self):
         it = self.tree.currentItem()
@@ -225,7 +236,12 @@ class JobMonitor(QWidget):
         if job.summary:
             lines.append(html.escape(job.summary))
         cfg = job.cfg
-        if cfg is not None:
+        if job.is_remote:
+            where = job.machine or job.run_on
+            lines.append(html.escape(f"on {where}" + (f", worker job {job.remote_id}" if job.remote_id else "")
+                                     + ": that machine's threads, GPU and priority"
+                                     + (f"; {job.current}" if job.current else "")))
+        elif cfg is not None:
             lines.append(html.escape(f"threads {cfg.threads or 'auto'}, priority {cfg.priority}, GPU {cfg.gpu}"
                                      + (f", {cfg.qm_memory_gb:g} GB per DFT job" if cfg.qm_memory_gb else "")
                                      + (f", time limit {cfg.molecule_timeout_s:g} s" if cfg.molecule_timeout_s
@@ -247,7 +263,8 @@ class JobMonitor(QWidget):
 
     def _update_buttons(self) -> None:
         job = self.selected()
-        self.cancel_btn.setEnabled(job is not None and job.status in ("queued", "running"))
+        self.cancel_btn.setEnabled(job is not None and job.status in ("queued", "running")
+                                   and (not job.is_remote or job.follower is not None))
         queued = self.queue.queued()
         self.up_btn.setEnabled(job is not None and job.status == "queued" and queued and queued[0] is not job)
         self.down_btn.setEnabled(job is not None and job.status == "queued" and queued and queued[-1] is not job)
@@ -259,7 +276,7 @@ class JobMonitor(QWidget):
         job = self.selected()
         if job is None:
             return False
-        if job.status == "queued":
+        if job.status == "queued" or job.is_remote:
             return self.queue.cancel(job.number)
         if job.status == "running" and job is self.queue.running:
             self.win.cancel_build()
@@ -281,11 +298,12 @@ class JobMonitor(QWidget):
         for n, it in self.items.items():
             job = self.queue.job(n)
             if job is not None and job.active:
-                it.setText(4, _duration(job.elapsed(time.time())))
+                it.setText(C_TIME, _duration(job.elapsed(time.time())))
         self._update_usage()
 
     def _update_usage(self) -> None:
-        self.usage.setText(usage_html(self.win, self.queue.running))
+        remote = [j.machine for j in self.queue.jobs if j.is_remote and j.status not in FINISHED]
+        self.usage.setText(usage_html(self.win, self.queue.running, remote))
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -303,9 +321,9 @@ def _brush(color: str):
     return QBrush(QColor(color))
 
 
-def usage_html(win, job) -> str:
+def usage_html(win, job, remote: list[str] | None = None) -> str:
     """What the running job uses (its resource settings) and this computer's live load (the machine monitor's
-    latest sample, never a new reading: nothing here blocks)."""
+    latest sample, never a new reading: nothing here blocks). ``remote``: the machines of jobs on workers."""
     from .. import priority
 
     parts = []
@@ -319,7 +337,12 @@ def usage_html(win, job) -> str:
                      f"{' (auto)' if not cfg.threads else ''}, GPU {html.escape(cfg.gpu)}, priority "
                      f"{html.escape(cfg.priority)}")
     else:
-        parts.append("<b>No job running</b>")
+        parts.append("<b>No job running here</b>" if remote else "<b>No job running</b>")
+    if remote:
+        counts: dict[str, int] = {}
+        for m in remote:
+            counts[m] = counts.get(m, 0) + 1
+        parts.append(", ".join(f"{n} on {html.escape(m)}" for m, n in counts.items()))
     strip = getattr(win, "machine_monitor", None)
     sample = None
     if strip is not None:
@@ -362,8 +385,61 @@ def _on_submitted(win, job) -> None:
         win.job_monitor.select(job.number)
 
 
+def make_follower(win, job, on_update, on_local, local_busy):
+    """A started ``dist.remote_job.RemoteJob`` for a job on a worker (``JobQueue.make_follower``): the worker token
+    from the settings, this computer's output folder (where a worker's synced run folder arrives), the job's own
+    folder (a project's) for a downloaded archive."""
+    from .. import settings as settings_mod
+    from ..dist import profile, remote_job
+
+    s = settings_mod.load()
+    out = s.output_path()
+    return remote_job.RemoteJob(
+        job.run_on, job.todo, job.cfg, remote_job.label_for(job.name, job.number),
+        token=s.dist.worker_token, out_dir=out,
+        download_dir=getattr(job.cfg, "output_dir", "") or out, on_update=on_update, on_local=on_local,
+        local_busy=local_busy, client_name=profile.machine_name()).start()
+
+
+def apply_remote_rows(win, number: int, rows) -> int:
+    """A worker job's results in the Molecules list: each of its molecules' rows takes the status, method,
+    conformers, energy, folder and run folder of the run folder that came back (``JobQueue.remote_rows``)."""
+    job = win.job_queue.job(number)
+    ids = set(job.ids) if job is not None else set()
+    n = 0
+    for r in rows:
+        if r.id not in ids or win.model.row(r.id) is None:
+            continue
+        fields = dict(status=r.status, stage="", method=r.method, n_conformers=r.n_conformers,
+                      energy_ev=r.energy_ev, error=r.error, folder=r.folder, run_dir=r.run_dir)
+        if r.formula:
+            fields["formula"] = r.formula
+        win.model.update(r.id, **fields)
+        win.results.discard(r.id)            # an older result of it must not come back from the cache
+        n += 1
+    if win.mol_list.current_id() in ids:
+        win._on_molecule_selected()
+    counts = getattr(win, "_update_counts", None)
+    if callable(counts):
+        counts()
+    return n
+
+
+def _mark_remote(win, number: int, text: str) -> None:
+    job = win.job_queue.job(number)
+    if job is None:
+        return
+    ids = [i for i in job.ids if win.model.row(i) is not None]
+    if ids:
+        win.model.update_many(ids, stage=text)
+
+
 def install(win) -> None:
-    queue = JobQueue(win._start_job, win._can_start_job, win)
+    queue = JobQueue(win._start_job, win._can_start_job, win,
+                     make_follower=lambda job, on_update, on_local, busy: make_follower(win, job, on_update,
+                                                                                         on_local, busy))
+    queue.remote_rows.connect(lambda n, rows: apply_remote_rows(win, n, rows))
+    queue.remote_marked.connect(lambda n, text: _mark_remote(win, n, text))
     win.job_queue = queue
     monitor = JobMonitor(win, queue)
     win.job_monitor = monitor

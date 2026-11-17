@@ -432,6 +432,22 @@ still running), 411/413/415 (body).
    `nohup` start over ssh: a restart or logout ends a `nohup` worker (that is how it was found gone on
    2026-11-09), and launchd starts it again at login.
 
+## From the app: Run on (UI-5b)
+
+The job dialog (Build > New job..., Resources) has **Run on**: this computer, **Auto**, or a worker.
+- **The worker list:** the dialog asks every known worker whether it answers. Those that answer, with the same
+  QuantaBench version, can be chosen; the others are listed as unavailable, with the reason in their tooltip.
+- **Sending:** a job on a worker is sent at once, as one share the way `grid build` sends one. The worker runs it with
+  its own threads, GPU, priority and lanes.
+- **Following:** the Jobs dock follows the job every few seconds (state, counts, the molecule running, the worker's
+  log). Cancel sends the cancel to the worker.
+- **The results:** when the job ends, its run folder comes back. That is the synced copy in this computer's output
+  folder once its `worker.json` vouches for its tables, else the archive, downloaded into
+  `<output folder>/from_workers/<worker>/`. The job's rows in the Molecules list then take the results.
+- **Auto** picks the machine when the job is sent: the highest `grid build --weights auto` speed for the job's method
+  per job the machine already has, this computer included. If this computer wins, the job runs in the local queue.
+- **Closing the app** stops following; the job goes on on the worker, and its run folder can be opened later.
+
 ## Trying it
 
 ```bash

@@ -313,8 +313,10 @@ def method_name(key: str) -> str:
 
 
 # ============================================================================================ the job
-#: where a job runs: this computer only for now; the dialog lists the workers (DIST-3 routes to them later)
+#: where a job runs: this computer, a worker by name (``dist.client.known_workers``), or "auto" (the fastest free
+#: machine for the job: ``dist.remote_job.choose_machine``; DIST-3)
 LOCAL = "local"
+AUTO = "auto"
 
 
 @dataclass
@@ -342,9 +344,8 @@ class JobSpec:
             out.append(f"unknown task {self.task!r}")
         elif not task.available:
             out.append(f"{task.label}: {task.why}")
-        if self.run_on != LOCAL:
-            out.append(f"Run on {self.run_on}: jobs run on this computer for now (routing to workers is DIST-3); "
-                       "quantabench-cli grid build runs a batch across machines today")
+        if not str(self.run_on or "").strip():
+            out.append("Run on: choose this computer, a worker or Auto")
         if self.multiplicity is not None and self.multiplicity < 1:
             out.append("the multiplicity is 1 (singlet) or more")
         return out
@@ -365,6 +366,10 @@ class JobSpec:
         if self.charge is not None or self.multiplicity is not None:
             parts.append(f"charge {self.charge if self.charge is not None else 'own'}, "
                          f"multiplicity {self.multiplicity if self.multiplicity is not None else 'own'}")
+        if self.run_on == AUTO:
+            parts.append("on the fastest free machine")
+        elif self.run_on not in (LOCAL, ""):
+            parts.append(f"on {self.run_on}")
         return " · ".join(parts)
 
 

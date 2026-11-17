@@ -502,6 +502,31 @@ models or what they were intended to correct."
   - Measured rankings for transition-metal and main-group-element compounds: the review checks their coverage only.
   - Process-parallel profiling for very large lists (only needed if lists grow well past 14,000).
 
+## UI-5b: Run on a worker from the job dialog · in-PR 2026-11-16 (branch `feat/run-on-worker`)
+Brandon (2026-11-16): "Do the backlog items." UI-5's first follow-up, and the "Run on" part of DIST-3.
+Done in the branch:
+- `dist/remote_job.py`:
+  - `RemoteJob` (one thread per job): submit as one share (`client.job_body`), follow `GET /v1/jobs/<id>`,
+    cancel, then the run folder (`client.final_tables` of the synced copy, else `download_archive` into
+    `from_workers/<worker>/`);
+  - `choose_machine` ("auto": `client.resolve_weights` "auto" per waiting job);
+  - `worker_choices` (reachable, same version), `label_for`.
+- `gui/job_queue.py`: a job with `run_on` other than "local" goes to `make_follower` at once and never waits in the
+  local queue; `_relay` brings the thread's updates to the GUI thread; `remote_rows` / `remote_marked` for the
+  Molecules list; `stop_remote` when the window closes; "auto" that picks this computer becomes a local job.
+- `gui/job_monitor.py`: the Machine column, Cancel for jobs on workers, `make_follower`, `apply_remote_rows`; a
+  usage line that counts the jobs on workers.
+- `gui/job_dialog.py`: Run on with Auto and the workers, a threaded `client.discover` that enables the reachable ones;
+  threads, priority and GPU greyed out for a worker. `chem/recipes.py`: `JobSpec` takes a worker or "auto".
+- Tests: `tests/test_gui_run_on.py` (localhost workers: synced and archive results, cancel, an unreachable worker,
+  auto). Screenshots: `docs/dev/screenshots/UI-5b/`.
+Follow-ups (ready):
+- Split one job over several machines from the dialog (a grid build with its shares in the Jobs dock), with work
+  sharing and DIST-7's moves while the window follows it.
+- Follow a worker job again after the window was closed and reopened (the job's id and worker are not saved yet; its
+  run folder can be opened by hand).
+- The worker's lanes for the job (today the worker's own setting).
+
 ## UI-5: Job dialog (level of theory × task × resources) and job monitor · done 2026-11-16 (PR #14)
 Depends on: UI-1.
 Done in the branch (Brandon, 2026-11-15: "merge #12, then start UI-5 as the next UI piece"):
@@ -521,7 +546,7 @@ Done in the branch (Brandon, 2026-11-15: "merge #12, then start UI-5 as the next
   (Ctrl+J), and the New job... button.
 - Tests: `tests/test_recipes.py`, `tests/test_gui_jobs.py`. Screenshots: `docs/dev/screenshots/UI-5/`.
 Follow-ups (ready):
-- Run on a worker (DIST-3): submit the job to the worker's `/v1` API, follow it in the Jobs dock, and add "auto".
+- Done (UI-5b, below): Run on a worker (DIST-3), and "auto".
 - Scan: constrained optimizations in the refinement (a bond, angle or dihedral), then the task.
 - Single point on the file's geometry unchanged: today the structure is MMFF94s-relaxed first.
 - Parallel lanes per job in Resources (today: Settings > Resources > Parallel lanes).
@@ -983,11 +1008,12 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
 - 2026-11-05: `dist.worker` + `dist.client` (`grid machines|build|status|cancel|merge`), docs/WORKERS.md
   (firewall rule, Task Scheduler and LaunchAgent autostart). Left: the two-machine run over Tailscale.
 
-### DIST-3: Machines dock and "Run on" routing · in progress (dock done; Run on needs UI-5)
+### DIST-3: Machines dock and "Run on" routing · in-PR 2026-11-16 (dock done; Run on: UI-5b, branch `feat/run-on-worker`)
 - Machines dock (status, load, engines). The job dialog's resources get "Run on: this machine / <worker> /
   auto"; auto picks by engine availability and throughput.
 - 2026-11-05: minimal Machines dock (registry, worker status on demand, this computer's lane plan). Left:
   the "Run on" choice, which belongs in UI-5's job dialog.
+- 2026-11-16: Run on in the job dialog (UI-5b): this computer, Auto, or a worker; see UI-5b.
 
 ### MON-1: Live machine metrics while jobs run · done 2026-11-09 (branch `feat/machine-monitor`; the Mac's temperatures need-Brandon: `brew install macmon`)
 Brandon (2026-11-09): "during the submit job page, we could monitor other PC metrics like what the current actual

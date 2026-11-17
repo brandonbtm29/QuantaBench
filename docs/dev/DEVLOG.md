@@ -237,3 +237,19 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **The Results fold resizes the dock only when the Conformers tab is in front** and the dock is docked, visible and not behind another tab. It undoes the fold only if the height is still the folded one: a hand-made height is kept. `resizeDocks` takes effect after the event, so the folded height is read back on the next turn of the event loop.
 - **Signals from the table's model now go to a method of the folder (a QObject), not a lambda.** A lambda outlived the window in the tests and fired on a deleted timer.
 
+## 2026-11-16: UI-5b run a job on a worker (branch `feat/run-on-worker`)
+- **One worker job per GUI job, sent the way `grid build` sends a share.** The worker API, its validation, the run
+  folder and the archive are the same, so a job from the dialog is resumable on the worker. It can also be opened
+  there like any other, and `grid status` tools work on it.
+- **A job on a worker does not wait in the local queue.** It uses another machine, so holding it behind a local build
+  would waste that machine. "Auto" decides on the follower's thread (it needs every worker's queue, a network call).
+  When it picks this computer, the job is handed back to the local queue as an ordinary local job.
+- **Everything that touches the network runs on a thread:** the dialog's `discover`, the submit, the polls, the
+  download, and reading the run folder's rows. The GUI thread only applies the updates (`JobQueue._relay`, a queued
+  signal).
+- **Results:** the synced copy is used only when its `worker.json` vouches for its tables, as in `grid merge`. A
+  folder that SyncThing is still filling would give a partial list. Otherwise the archive is downloaded into
+  `from_workers/<worker>/`, so it never lands where SyncThing writes the worker's folder.
+- **Auto weighs speed by waiting jobs:** score = the `grid build --weights auto` weight / (1 + jobs running or queued).
+  A fast machine with three jobs ahead loses to a free one a third as fast. Ties go to this computer.
+
