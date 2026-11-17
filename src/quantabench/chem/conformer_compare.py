@@ -796,7 +796,7 @@ def read_run(folder: str | Path) -> list[ConformerSet]:
         phase = res.solvent or "gas"
         method = (res.descriptors or {}).get("method") or res.method
         level = f"QuantaBench {method} {phase}"
-        crest = res.conformer_search == "crest"
+        crest = str(res.conformer_search or "").startswith("crest")
         cs = ConformerSet(key=constitution_key(numbers, bonds, res.charge), numbers=numbers, bonds=bonds,
                           charge=int(res.charge), multiplicity=int(res.multiplicity or 1),
                           program="QuantaBench (CREST)" if crest else "QuantaBench", label=res.input.id,

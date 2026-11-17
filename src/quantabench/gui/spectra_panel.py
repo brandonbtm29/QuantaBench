@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QElapsedTimer, QEvent, QObject, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QAction, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -52,12 +52,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSlider,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -66,6 +68,12 @@ VIEW_RANGE = (400.0, 4000.0)       # default x range (shown 4000 -> 400)
 GRID_STEP = 1.0                    # cm⁻¹
 GRID_MIN = 50.0
 FPS = 25
+#: the ⓘ next to Scale (UI-8b)
+BROADENING_HELP = ("<b>Broadening:</b> each stick at the scaled wavenumber becomes a Lorentzian band of this full width "
+                   "at half maximum (FWHM); an isolated band peaks at its stick's height (km/mol).<br><b>Scale:</b> "
+                   "harmonic frequencies run high; the scale factor of the mode set (the method's default, or yours) "
+                   "multiplies them for the plot and the table's Scaled column. Each mode set keeps its own factor.<br>"
+                   "Click near a band to select its mode; Play animates it in the 3D view.")
 PERIOD_S = 1.0                     # one vibration per second on screen
 DEFAULT_AMPLITUDE = 0.25           # Å, largest atomic excursion
 
@@ -221,16 +229,33 @@ class SpectraPanel(QWidget):
         self.normalize = QCheckBox("Normalize")
         self.normalize.setToolTip("Scale every trace to a maximum of 1 (off: IR intensity in km/mol)")
         self.normalize.toggled.connect(self._replot)
-        self.load_btn = QPushButton("Load experimental...")
-        self.load_btn.setToolTip("Overlay a measured spectrum: CSV/TSV (two columns) or JCAMP-DX (.jdx, .dx)")
-        self.load_btn.clicked.connect(lambda: self.load_experimental())
-        self.clear_btn = QPushButton("Clear")
-        self.clear_btn.setToolTip("Remove the experimental overlay")
-        self.clear_btn.clicked.connect(self.clear_experimental)
-        self.clear_btn.setEnabled(False)
-        self.export_btn = QPushButton("Export...")
-        self.export_btn.setToolTip("Save the broadened spectrum as shown (CSV)")
-        self.export_btn.clicked.connect(lambda: self.export_csv())
+        # UI-8b: the overlay and the export in one Spectrum menu instead of three buttons; load_btn, clear_btn and
+        # export_btn stay as names of its actions
+        self.a_load = QAction("Load experimental...", self)
+        self.a_load.setToolTip("Overlay a measured spectrum: CSV/TSV (two columns) or JCAMP-DX (.jdx, .dx)")
+        self.a_load.triggered.connect(lambda _c=False: self.load_experimental())
+        self.a_clear = QAction("Clear the experimental spectrum", self)
+        self.a_clear.setToolTip("Remove the experimental overlay")
+        self.a_clear.triggered.connect(lambda _c=False: self.clear_experimental())
+        self.a_clear.setEnabled(False)
+        self.a_export = QAction("Export the spectrum (CSV)...", self)
+        self.a_export.setToolTip("Save the broadened spectrum as shown (CSV)")
+        self.a_export.triggered.connect(lambda _c=False: self.export_csv())
+        self.load_btn, self.clear_btn, self.export_btn = self.a_load, self.a_clear, self.a_export
+        self.spectrum_btn = QToolButton()
+        self.spectrum_btn.setText("Spectrum")
+        self.spectrum_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.spectrum_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.spectrum_btn.setToolTip("Overlay a measured spectrum, or export the computed one")
+        menu = QMenu(self.spectrum_btn)
+        menu.setToolTipsVisible(True)
+        for a in (self.a_load, self.a_clear):
+            menu.addAction(a)
+        menu.addSeparator()
+        menu.addAction(self.a_export)
+        self.spectrum_btn.setMenu(menu)
+
+        from .collapsible import InfoButton
 
         top = QHBoxLayout()
         top.setContentsMargins(4, 2, 4, 2)
@@ -240,10 +265,11 @@ class SpectraPanel(QWidget):
         top.addWidget(self.fwhm)
         top.addWidget(QLabel("Scale"))
         top.addWidget(self.scale)
+        self.broadening_info = InfoButton(text=BROADENING_HELP)
+        top.addWidget(self.broadening_info)
         top.addWidget(self.normalize)
         top.addStretch(1)
-        for b in (self.load_btn, self.clear_btn, self.export_btn):
-            top.addWidget(b)
+        top.addWidget(self.spectrum_btn)
 
         # ---- plot
         self.plot = pg.PlotWidget()
@@ -297,12 +323,24 @@ class SpectraPanel(QWidget):
         anim.addWidget(QLabel("Amplitude"))
         anim.addWidget(self.amp, 1)
         anim.addWidget(self.amp_label)
-        right = QWidget()
-        rl = QVBoxLayout(right)
+        body = QWidget()
+        rl = QVBoxLayout(body)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.addWidget(self.table, 1)
         rl.addWidget(self.info)
         rl.addLayout(anim)
+        # UI-8b: the mode table and the animation fold to a header, so the plot can take the dock's width
+        from .collapsible import Section
+
+        self.modes_section = Section("Normal modes", body, key="modes", open_=True, settings_key="spectra/modes_open")
+        self.modes_section.layout().setStretch(1, 1)
+        self.modes_section.toggled.connect(self._on_modes_toggled)
+        right = QWidget()
+        right_lay = QVBoxLayout(right)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.addWidget(self.modes_section, 1)
+        self._right_lay = right_lay
+        self._modes_sizes = None
 
         self.status = QLabel("")
         self.status.setWordWrap(True)
@@ -322,6 +360,8 @@ class SpectraPanel(QWidget):
         lay.addWidget(self.splitter, 1)
         self._apply_theme()
         self._update_enabled()
+        if not self.modes_section.is_open():
+            self._on_modes_toggled(False)
 
     # ================================================================== public API
     @property
@@ -695,7 +735,36 @@ class SpectraPanel(QWidget):
             self._apply_theme()
         super().changeEvent(event)
 
+    def _on_modes_toggled(self, on: bool) -> None:
+        """Folded: the plot takes the width, the modes keep a header; open: the widths as they were."""
+        sizes = self.splitter.sizes()
+        total = sum(sizes) or self.splitter.width() or 900
+        # folded, the header sits at the top of the pane; open, the table takes the pane's height
+        self._right_lay.setAlignment(self.modes_section, Qt.AlignmentFlag(0) if on else Qt.AlignmentFlag.AlignTop)
+        if on:
+            prev = self._modes_sizes
+            self.splitter.setSizes(prev if prev and sum(prev) else [total * 3 // 5, total * 2 // 5])
+            return
+        if sizes and sizes[1] > 0:
+            self._modes_sizes = sizes
+        self._update_modes_summary()
+        sec = self.modes_section
+        summary = sec.summary.fontMetrics().horizontalAdvance(sec.summary.text())
+        head = min(max(sec.toggle.sizeHint().width() + summary + 36, 140), max(140, total // 3))
+        self.splitter.setSizes([max(1, total - head), head])
+
+    def _update_modes_summary(self) -> None:
+        ms = self.active_set
+        if ms is None:
+            self.modes_section.set_summary("no modes")
+            return
+        text = f"{ms.n_modes} modes"
+        if self.selected is not None:
+            text += f" · mode {self.selected + 1}: {_fmt_freq(float(ms.freqs[self.selected]))} cm⁻¹"
+        self.modes_section.set_summary(text)
+
     def _update_enabled(self) -> None:
+        self._update_modes_summary()
         ms = self.active_set
         can = ms is not None and ms.disp is not None and self.selected is not None
         self.play_btn.setEnabled(can and not self.playing)

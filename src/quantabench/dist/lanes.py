@@ -303,7 +303,9 @@ def workload(cfg) -> tuple[str, str, bool]:
     if method == "auto" or method not in infos:
         method = engines.resolve_auto(list(TYPICAL_ELEMENTS), solvents.canonical(cfg.solvent))
     info = infos[method]
-    if info.external or cfg.conformer_search == "crest" or cfg.qm_method:
+    from ..chem.search_rule import may_use_crest
+
+    if info.external or may_use_crest(cfg) or cfg.qm_method:
         kind = "external"
     elif method == "mmff":
         kind = "mmff"
@@ -386,7 +388,9 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
     hw = report if report is not None else cpu_report()
     cores = max(1, min(int(hw.physical_cores or total), total))
     perf = max(0, min(int(getattr(hw, "performance_cores", 0) or 0), cores))
-    crest = getattr(cfg, "conformer_search", "") == "crest"
+    from ..chem.search_rule import may_use_crest
+
+    crest = may_use_crest(cfg)
     method, kind, gpu_capable = workload(cfg)
     device = "cpu"
     why_gpu = ""
@@ -1027,7 +1031,9 @@ def dynamic_threads_for(cfg, lanes: list[Lane], enabled: bool | None = None, bud
     from . import threads as threads_mod
 
     cpu = [x.threads for x in lanes if x.device == "cpu"]
-    if not cpu or getattr(cfg, "conformer_search", "") != "crest":
+    from ..chem.search_rule import may_use_crest
+
+    if not cpu or not may_use_crest(cfg):
         return 0
     if enabled is None:
         enabled = threads_mod.setting()
@@ -1081,7 +1087,9 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     from . import threads as threads_mod
 
     tm = telemetry if telemetry is not None else telemetry_mod.NullTelemetry()
-    crest_run = getattr(cfg, "conformer_search", "") == "crest"
+    from ..chem.search_rule import may_use_crest
+
+    crest_run = may_use_crest(cfg)     # "auto": the CREST molecules among them
 
     limit = max(0.0, float(getattr(cfg, "molecule_timeout_s", 0) or 0))
     cap = max_lanes()

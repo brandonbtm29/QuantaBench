@@ -200,7 +200,9 @@ def load_cost_model(machine: str, level: str, log: Callable[[str], None] | None 
 
 def cost_model_for(cfg, log: Callable[[str], None] | None = None) -> CostModel | None:
     """This machine's cost model for a CREST run of ``cfg``; None when the run has no CREST search."""
-    if getattr(cfg, "conformer_search", "") != "crest":
+    from ..chem.search_rule import may_use_crest
+
+    if not may_use_crest(cfg):
         return None
     try:
         from .profile import machine_name

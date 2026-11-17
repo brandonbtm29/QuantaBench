@@ -59,6 +59,7 @@ EVIDENCE_DFT_TEST = "docs/VALIDATION.md, DFT conformer test"
 EVIDENCE_RANK1 = "docs/VALIDATION.md, RANK-1"
 EVIDENCE_RANK1B = "docs/VALIDATION.md, RANK-1b"
 EVIDENCE_VAL3 = "docs/VALIDATION.md, VAL-3"
+EVIDENCE_CONF_CHECKS = "docs/VALIDATION.md, conformer checks and the CREST test (CONF-AUTO)"
 
 #: (key, label, SMARTS) of the functional groups in the profile; matched on the species the run computes
 GROUPS: tuple[tuple[str, str, str], ...] = (
@@ -940,16 +941,32 @@ def rank_seconds(m: _Mol, level: str, n_conf: int) -> float:
     return n_conf * per
 
 
+def uses_crest(cfg, m: _Mol) -> bool:
+    """Whether molecule ``m`` gets CREST under ``cfg`` (``search_rule``: "crest", or "auto" for a neutral molecule with
+    at least ``crest_min_rotors`` rotatable bonds; the same charge class and strict rotor count as here)."""
+    from .search_rule import flexible_neutral
+
+    search = getattr(cfg, "conformer_search", "rdkit")
+    if search == "crest":
+        return True
+    return search == "auto" and flexible_neutral(m.charge_class, m.rot, getattr(cfg, "crest_min_rotors", 9))
+
+
 def molecule_seconds(m: _Mol, cfg, engine: str, crest_model=None, rank: str = "refine") -> dict[str, float]:
     """Estimated seconds of each stage of one molecule on a 4-thread lane (``rank``: its rank step's level)."""
     size = max(m.atoms, 4) / 25.0
     out = {}
-    if cfg.conformer_search == "crest":
+    rdkit_s = cfg.max_conformers * CONF_EMBED_S * size ** 1.9
+    rdkit_n = max(1, min(cfg.refine_top, cfg.max_conformers, 10 + m.rot * 3))
+    if uses_crest(cfg, m):
         out["conformers"] = _crest_seconds(m, cfg, crest_model)
         n_conf = max(1, min(cfg.refine_top, 30))
+        if getattr(cfg, "crest_with_rdkit", False) and engine != "mmff":     # both pools refined
+            out["conformers"] += rdkit_s
+            n_conf += rdkit_n
     else:
-        out["conformers"] = cfg.max_conformers * CONF_EMBED_S * size ** 1.9
-        n_conf = max(1, min(cfg.refine_top, cfg.max_conformers, 10 + m.rot * 3))
+        out["conformers"] = rdkit_s
+        n_conf = rdkit_n
     fam = _family(engine)
     step = STEP_S.get(fam, 0.015) * size ** (1.5 if fam == "aimnet2" else 2.5)
     out["refine"] = n_conf * OPT_STEPS * step
@@ -971,9 +988,10 @@ def molecule_seconds(m: _Mol, cfg, engine: str, crest_model=None, rank: str = "r
 
 def estimate_cost(mols: list[tuple[str, _Mol]], cfg, resolve: _Resolver) -> CostEstimate:
     from .. import resources
+    from .search_rule import may_use_crest
 
     model, notes = None, []
-    if cfg.conformer_search == "crest":
+    if may_use_crest(cfg):
         try:
             from ..dist import threads as dthreads
 
@@ -1303,8 +1321,9 @@ def _element_findings(ctx: _Ctx) -> list[Finding]:
             why="Element coverage from each method's documentation (quantabench-cli methods, the coverage table); "
                 "RANK-1b's polar organics included Si, P and I, so the ranking results apply to them.",
             guide=("auto",), evidence="method_guide.COVERAGE"))
-    no_mmff = [i for i, m in ctx.mols if m.mmff is False]
-    if no_mmff and cfg.conformer_search != "crest":
+    no_mmff = [i for i, m in ctx.mols if m.mmff is False
+               and (not uses_crest(cfg, m) or getattr(cfg, "crest_with_rdkit", False))]   # RDKit's pool is built
+    if no_mmff:
         els = sorted({guide.SYMBOLS[z] for i, m in ctx.mols if m.mmff is False for z in m.z
                       if z not in guide.Z_MMFF94})
         out.append(ctx.finding(
@@ -1314,10 +1333,10 @@ def _element_findings(ctx: _Ctx) -> list[Finding]:
             why="MMFF94 covers C, H, N, O, F, Si, P, S, Cl, Br, I and a few free ions (Halgren 1996; checked with "
                 "RDKit); the refinement then re-optimizes the pool.", guide=("mmff94s", "uff"),
             evidence="method_guide.COVERAGE"))
-    if cfg.conformer_search == "crest":
+    if cfg.conformer_search in ("crest", "auto"):
         cov = guide.coverage_for_crest(cfg.crest_method)
         if cov is not None:
-            bad = [i for i, m in ctx.mols if not cov.handles(m.z, m.charge, m.mult)[0]]
+            bad = [i for i, m in ctx.mols if uses_crest(cfg, m) and not cov.handles(m.z, m.charge, m.mult)[0]]
             if bad:
                 out.append(ctx.finding("problem", "elements", "elements.crest",
                                        f"CREST ({cov.label}) cannot take {len(bad)} molecule(s).", bad,
@@ -1493,8 +1512,8 @@ def _solvent_findings(ctx: _Ctx) -> list[Finding]:
 
 def _cost_findings(ctx: _Ctx, cost: CostEstimate) -> list[Finding]:
     cfg, out = ctx.cfg, []
-    if cfg.conformer_search == "crest" and str(cfg.crest_method).lower() in ("gfn2", "gfn1"):
-        big = [i for i, m in ctx.mols if m.heavy > 40 or m.rot > 15]
+    if cfg.conformer_search in ("crest", "auto") and str(cfg.crest_method).lower() in ("gfn2", "gfn1"):
+        big = [i for i, m in ctx.mols if uses_crest(cfg, m) and (m.heavy > 40 or m.rot > 15)]
         if big:
             out.append(ctx.finding(
                 "warning", "cost", "cost.crest-gfn2",
@@ -1542,8 +1561,29 @@ def _search_findings(ctx: _Ctx) -> list[Finding]:
                 "lowest conformer in 35 of 120 neutral pools, and Spartan's pool had a GFN2-lower conformer for 49 of "
                 "61 ions.", changes={"refine_top": 20}, recommendation="Refine the lowest 20 (the default).",
             guide=("rdkit-etkdg", "crest"), evidence=f"{EVIDENCE_RANK1B}; {EVIDENCE_VAL3}"))
+    # flexible neutral molecules: the conformer checks of Nov 13-15 (CONF-AUTO)
+    from .search_rule import DEFAULT_MIN_ROTORS
+
+    need = int(getattr(cfg, "crest_min_rotors", DEFAULT_MIN_ROTORS))
+    flex_neutral = [i for i, m in ctx.mols if not m.ion and m.rot >= need]
+    if flex_neutral and cfg.conformer_search == "rdkit":
+        crest_ok = "crest" in ctx.available
+        out.append(ctx.finding(
+            "warning", "conformer search", "search.flexible-neutrals",
+            f"{len(flex_neutral)} neutral molecule(s) with {need} or more rotatable bonds get RDKit's conformers, "
+            "which miss their lowest conformer for most such molecules.", flex_neutral,
+            why="In the conformer checks (110 molecules, Nov 13-15) RDKit's search converged up to 8 rotatable bonds "
+                "but not from 9. For the flexible neutral molecules, CREST's lowest conformer was the best known for 10 "
+                "of 23 in the gas phase (RDKit's for 3) and the lower of the two for 16 of 21 in ALPB water (RDKit's "
+                "for 6); the dipole of the lowest conformer moved by a median 2.6 D.",
+            changes={"conformer_search": "auto", "crest_method": "gfnff", "crest_quick": True} if crest_ok else {},
+            recommendation=("Conformer search 'auto' runs CREST (GFN-FF, quick) for them and RDKit for the rest; add "
+                            "RDKit's pool to CREST's (crest_with_rdkit) to keep the lower of both."
+                            if crest_ok else "CREST (not found here) with the conformer search 'auto' would run it "
+                            "for them only."),
+            guide=("crest", "crest-gfnff", "rdkit-etkdg"), evidence=EVIDENCE_CONF_CHECKS))
     ions_flex = [i for i, m in ctx.mols if m.ion and m.rot >= 8]
-    if ions_flex and ctx.solvent and cfg.conformer_search != "crest":
+    if ions_flex and ctx.solvent and cfg.conformer_search == "rdkit":     # "auto" keeps ions on RDKit by design
         crest_ok = "crest" in ctx.available
         out.append(ctx.finding(
             "info", "conformer search", "search.crest-ions",
@@ -1731,8 +1771,18 @@ def phase_steps(ctx: _Ctx) -> list[tuple[str, str]]:
     engine = Counter(ctx.engine.values()).most_common(1)[0][0] if ctx.engine else cfg.method
     solvated = engines.supports_solvent(engine, ctx.solvent) if engine in engines.all_engines() else False
     label = pipeline.solvation_label(engine, ctx.solvent) if solvated else "gas (no implicit solvent model)"
-    steps = [("conformer search", f"ALPB({ctx.solvent}) (CREST)" if cfg.conformer_search == "crest" else
-              "gas (RDKit's MMFF94s has no solvent: the same pool in every phase)"),
+    rdkit_step = "gas (RDKit's MMFF94s has no solvent: the same pool in every phase)"
+    n_crest = sum(uses_crest(cfg, m) for _i, m in ctx.mols)
+    if cfg.conformer_search == "crest":
+        search_step = f"ALPB({ctx.solvent}) (CREST)"
+    elif cfg.conformer_search == "auto" and n_crest:
+        search_step = (f"ALPB({ctx.solvent}) (CREST) for {n_crest} flexible neutral molecule(s), {rdkit_step} for the "
+                       "rest")
+    else:
+        search_step = rdkit_step
+    if cfg.conformer_search != "rdkit" and n_crest and getattr(cfg, "crest_with_rdkit", False):
+        search_step += "; CREST's pool merged with RDKit's"
+    steps = [("conformer search", search_step),
              ("refinement", f"{label} ({engine})"),
              ("conformer ranking", _rank_step_text(ctx)),
              ("xTB properties", f"{pipeline.solvation_label('tblite-gfn1', ctx.solvent)}, tblite GFN1-xTB" if solvated
@@ -1863,9 +1913,12 @@ def _presets(ctx: _Ctx) -> list[Preset]:
     # ---- Careful
     careful = dict(rec, refine_top=30)
     careful_needs = list(rec_needs)
-    if crest_here:
-        careful.update(conformer_search="crest", crest_method="gfnff", crest_quick=True, max_conformers=50)
-        search = "CREST's metadynamics search at GFN-FF" + (" in ALPB water" if water else "")
+    if crest_here:      # CONF-AUTO: CREST for the flexible neutral molecules, merged with RDKit's pool
+        careful.update(conformer_search="auto", crest_min_rotors=9, crest_with_rdkit=True, crest_method="gfnff",
+                       crest_quick=True, max_conformers=50)
+        search = ("CREST's metadynamics search at GFN-FF" + (" in ALPB water" if water else "")
+                  + " for the neutral molecules with 9 or more rotatable bonds (with RDKit's pool added), RDKit's "
+                  "for the rest,")
     else:
         careful.update(conformer_search="rdkit", max_conformers=200)
         search = "200 RDKit conformers (CREST, which would search wider, is not found here)"
@@ -1932,6 +1985,7 @@ def review(inputs, cfg, *, available: Iterable[str] | None = None, max_ids: int 
     settings = {"phase": ctx.phase, "solvent": ctx.solvent, "method": cfg.method, "ph": cfg.ph,
                 "protonate": cfg.protonate, "keep_largest_fragment": cfg.keep_largest_fragment,
                 "conformer_search": cfg.conformer_search, "crest_method": cfg.crest_method,
+                "crest_min_rotors": cfg.crest_min_rotors, "crest_with_rdkit": cfg.crest_with_rdkit,
                 "max_conformers": cfg.max_conformers, "refine_top": cfg.refine_top,
                 "energy_window_kcal": cfg.energy_window_kcal, "rank_method": cfg.rank_method,
                 "rank_window_kj": cfg.rank_window_kj, "rank_levels": dict(Counter(ctx.rank.values()).most_common()),
@@ -1945,6 +1999,7 @@ def review(inputs, cfg, *, available: Iterable[str] | None = None, max_ids: int 
 # ======================================================================================= text
 #: BuildConfig field -> the build option that sets it (None: Settings only)
 CLI_FLAGS = {"method": "--method", "solvent": "--solvent", "conformer_search": "--conformers",
+             "crest_min_rotors": "--crest-min-rotors",
              "crest_method": "--crest-method", "max_conformers": "--max-confs", "refine_top": "--refine-top",
              "energy_window_kcal": "--window", "rank_method": "--rank", "rank_window_kj": "--rank-window",
              "qm_method": "--qm", "qm_top": "--qm-top", "qm_task": "--qm-task",
@@ -1964,6 +2019,9 @@ def cli_options(changes: dict) -> str:
             continue
         if k == "frequencies":
             parts.append("--freq" if v else "--no-freq")
+            continue
+        if k == "crest_with_rdkit":
+            parts.append("--crest-with-rdkit" if v else "--no-crest-with-rdkit")
             continue
         flag = CLI_FLAGS.get(k)
         if flag is None:
@@ -1991,7 +2049,9 @@ def _ids(ids: list[str], n: int, max_ids: int) -> str:
 
 def settings_line(r: Review) -> str:
     s = r.settings
-    search = "CREST " + str(s["crest_method"]).upper() if s["conformer_search"] == "crest" else "RDKit ETKDGv3 + MMFF94s"
+    crest = "CREST " + str(s["crest_method"]).upper() + (" + RDKit's pool" if s.get("crest_with_rdkit") else "")
+    search = {"crest": crest, "auto": f"{crest} for neutral molecules with >= {s.get('crest_min_rotors', 9)} rotatable "
+              "bonds, RDKit for the rest"}.get(s["conformer_search"], "RDKit ETKDGv3 + MMFF94s")
     methods = ", ".join(f"{k} {n}" for k, n in r.methods.items())
     return (f"{s['phase'] if s['phase'] == 'gas' else s['solvent']} phase, pH {s['ph']:g}"
             + ("" if s["protonate"] else " (protonation off)") + f", method {s['method']}"

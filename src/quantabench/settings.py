@@ -74,7 +74,11 @@ class BuildDefaults:
     random_seed: int = 42
     batched: str = "auto"             # batched conformer refinement: "auto" (GPU only) | "on" | "off"
     frequencies: bool = False         # frequencies + thermochemistry of the best conformer
-    conformer_search: str = "rdkit"   # "rdkit" (ETKDGv3 + MMFF) | "crest" (iMTD-GC, external)
+    # "rdkit" (ETKDGv3 + MMFF) | "crest" (iMTD-GC, external) | "auto" (CREST for neutral molecules with at least
+    # crest_min_rotors rotatable bonds, RDKit for the rest; chem.search_rule)
+    conformer_search: str = "rdkit"
+    crest_min_rotors: int = 9
+    crest_with_rdkit: bool = False    # where CREST runs, also refine RDKit's pool (search_rule.merge_pools)
     solvent: str = ""                 # implicit solvent for engines that support one ("" = gas phase)
     qm_method: str = ""               # final QM level, e.g. "wb97x-d/def2-svp" ("" = no QM stage)
 

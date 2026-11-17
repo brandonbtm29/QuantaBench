@@ -177,6 +177,62 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **A choice is never overwritten by a setting.** A resume on the MacBook with its own setting leaves NOVA's `--lanes` in the record, so a later resume on NOVA gets it back.
 - The column is added with `ALTER TABLE` when a table is opened for writing (as `accepted` was). Read-only opens of older tables return no record. The schema version stays 5: an older QuantaBench ignores the extra column.
 
+## 2026-11-16: `grid build --molecule-timeout` (branch `fix/grid-molecule-timeout`)
+- Found while preparing the CREST rebuild of the 1,674 flexible neutrals. `run_tranche.py` passes the CREST options to `grid build`, which stopped at `--molecule-timeout` as an unknown argument.
+- The option moved from `build`'s parser into `add_build_science_args`, which `build`, `grid build` and `review` share. `config_from_args` already read it. A worker takes `molecule_timeout_s` from the job's config (it is not a resource field), so every share gets the client's value.
+- **The flaky worker test on Windows (seen on #15 and #20).** The worker folds the WAL into jobs.sqlite when a job ends. SQLite deletes `-wal` only when the last connection closes, and on Windows not while another handle is open. A `GET /v1/jobs/<id>` poll that read the counts at that moment kept it. `_checkpoint` now opens and closes the store again, every 0.2 s for up to 3 s, until the file is gone. The new test holds a second connection for 0.4 s; it fails with the old single attempt.
+
+## 2026-11-16: FIX-3 native stacks of a hung test (branch `fix/ci-hang-dump`)
+- **Why the hang ran into the 30 min limit despite `--timeout=300`.** pytest-timeout's thread method is a Python thread: it needs the GIL to print the stacks and call `os._exit`. A main thread stuck in Qt's C++ code with the GIL held never gives it back. faulthandler's timer is C and still printed the Python stack, which ends at the call into Qt.
+- **So the watchdog is another process.** It has its own interpreter and GIL, and gets "start"/"end" lines from a pytest hook over a pipe, plus end of input when pytest goes away. py-spy reads the hung process from outside: every thread's native frames, the Python frames, and which thread is "active+gil".
+- **`sudo -n` on Linux and macOS.** On Linux, Yama's ptrace_scope 1 lets a process read only its descendants, and the watchdog is pytest's child. On macOS, reading another process needs root. GitHub's runners allow passwordless sudo; Windows needs neither.
+- **The test hangs a process for real.** It uses catastrophic backtracking in `re` (C code that never releases the GIL), then checks the dump and the kill.
+- `test_lanes.lane_processes` skips the watchdog, as it skips multiprocessing's resource tracker.
+- **macOS: `sample`, not `py-spy --native`.** py-spy has no native mode on macOS ("not supported on your platform", the first CI run). There the watchdog runs py-spy for the Python frames and the GIL, then macOS's own `sample <pid> 2` for every thread's native call graph, both with `sudo -n`.
+
+## 2026-11-16: FAIL-1 the failed molecules of the QSAR tranches (branch `fix/failed-molecules`)
+- **"Bad Conformer Id" was RDKit's timeout id.**
+  - `EmbedMultipleConfs` stopped by `params.timeout` before its first conformer returns `[-1]`.
+  - The embedding's timing call took the whole 450 s (a quarter of the 1,800 s limit). It came back with `[-1]` and that was used as a conformer.
+  - The glycosides fail only with RDKit 2026.09's small-ring torsions: without them ETKDG embeds one in about a second, and with them none in minutes, with or without random coordinates.
+- **The water crashes were a tblite bug at specific geometries.**
+  - They are not about threads or lanes. With 2 threads per lane the refined geometries differ in the last digits, and the crash did not happen.
+  - 2447-54-3's GFN2-xTB/ALPB minimum crashes a fresh Python process in one GFN1-xTB (or GFN2-xTB) CPCM single point, on Windows and on Linux. A crash cannot be caught in the process, so the terms moved to a helper process.
+  - A helper per call to `compute` would cost a Python start per molecule. One kept per process costs about 0.2 s once.
+  - Lanes are daemonic `multiprocessing` processes, which may not start their own: the helper is a `subprocess`. A killed lane takes it along, since the lane kill takes the process tree.
+- **SCF: damping rather than temperature.** For 1423-20-7, 1,000 cycles at tblite's default damping do not converge, and damping 0.2 does. A higher electronic temperature would change the energy; the damping only changes the path. The geometry is from an optimization step of a molecule without force-field parameters.
+
+## 2026-11-16: CONF-AUTO CREST for flexible neutral molecules (branch `feat/crest-auto`)
+- **One rule, three users.** The pipeline decides per molecule (`search_rule.decide` on the prepared structure). The
+  advisor estimates per molecule from its own profile (`advisor.uses_crest`, with the same charge class and strict
+  rotor count). Run-level code (lanes, dynamic threads, the cost model, telemetry) only asks whether CREST can run
+  at all (`may_use_crest`).
+- **The charge class is the advisor's, not the conformer checks' net charge.** The checks counted a zwitterion as
+  neutral (net 0). Charged chains are what GFN-FF got wrong, so a zwitterion gets RDKit. A nitro group's N+/O- is a
+  bonded pair and stays neutral.
+- **Rotatable bonds: RDKit's strict count on the heavy-atom graph**, as the conformer checks (`analyze_conf.py`) and
+  the advisor counted them. On the prepared molecule with explicit hydrogens every methyl would count.
+- **The merged pool never compares energies across the two searches.** CREST's are GFN-FF (or GFN2) energies and
+  RDKit's are MMFF94s.
+  - So the refinement takes each pool's lowest `refine_top` (`ConformerSet.refine_count` = all of them) and ranks them
+    at its own level.
+  - With the refinement "mmff" there is no such level (it uses the pool's energies), so the merge is skipped with a
+    note.
+  - Duplicates against CREST's conformers are found by an RMSD on the same atom order (`AlignMol`: fast). The
+    symmetry-aware `GetBestRMS` on 20 x 20 pairs of a perfluorinated chain could take minutes. A symmetric
+    duplicate is refined twice and removed by the re-pruning after the refinement.
+- **The Careful preset and recipe now use "auto" + merge** instead of CREST for every molecule. CREST for ions was
+  the part the gas test found worse.
+- **The crest-ions finding** (CREST for flexible ions in water, from the DFT conformer test) now fires only under the
+  RDKit search. Under "auto" ions stay on RDKit by design, until a water test of ions says otherwise (BACKLOG).
+
+## 2026-11-16: UI-8b the UI-8 follow-ups (branch `feat/ui-declutter-2`)
+- **The ⧉ needed a title bar of our own.** Qt draws a dock's title bar with its own float and close buttons, and has no hook for adding one. `DockTitleBar` replaces it with a title, ⧉ and ✕. The title label is transparent for mouse events and the bar leaves the rest to `QDockWidget`, so dragging, docking and double-click floating work as before. Tabified docks still show it above their content.
+- **The colour legend's sentence went behind the ⓘ next to Color, but the colour bar stays visible.** The bar with its −/0/+ ticks shows which colour is which, and it is the part that matters while a surface is on screen.
+- **Folding the Normal modes pane has to move the splitter.** A folded section in a horizontal splitter only hides its body, so the pane would stay as wide. `_on_modes_toggled` gives the pane the header's width and restores the old sizes on opening.
+- **The Results fold resizes the dock only when the Conformers tab is in front** and the dock is docked, visible and not behind another tab. It undoes the fold only if the height is still the folded one: a hand-made height is kept. `resizeDocks` takes effect after the event, so the folded height is read back on the next turn of the event loop.
+- **Signals from the table's model now go to a method of the folder (a QObject), not a lambda.** A lambda outlived the window in the tests and fired on a deleted timer.
+
 ## 2026-11-16: UI-5b run a job on a worker (branch `feat/run-on-worker`)
 - **One worker job per GUI job, sent the way `grid build` sends a share.** The worker API, its validation, the run
   folder and the archive are the same, so a job from the dialog is resumable on the worker. It can also be opened

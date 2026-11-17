@@ -120,7 +120,8 @@ def resolve_method(method: str, available: set[str] | None = None) -> tuple[str,
 # ============================================================================================ recipes
 #: the BuildConfig fields a recipe may set (the dialog's level of theory, task and conformer settings; not the
 #: resources, the input preparation or the output files)
-RECIPE_FIELDS = ("method", "solvent", "conformer_search", "crest_method", "crest_quick", "max_conformers", "refine_top",
+RECIPE_FIELDS = ("method", "solvent", "conformer_search", "crest_method", "crest_quick", "crest_min_rotors",
+                 "crest_with_rdkit", "max_conformers", "refine_top",
                  "energy_window_kcal", "rank_method", "rank_window_kj", "fmax", "max_steps", "optimizer",
                  "xtb_properties", "frequencies", "qm_method", "qm_task", "qm_top", "qm_properties",
                  "qm_polarizability", "qm_frequencies", "qm_cubes")
@@ -154,7 +155,7 @@ class Recipe:
     def needs(self, programs: set[str] | None = None) -> list[str]:
         """External programs the recipe uses that are not found here ("crest", "psi4")."""
         need = []
-        if self.changes.get("conformer_search") == "crest":
+        if self.changes.get("conformer_search") in ("crest", "auto"):
             need.append("crest")
         if self.changes.get("qm_method"):
             need.append("psi4")
@@ -193,14 +194,17 @@ BUILTIN: tuple[Recipe, ...] = (
            {"conformer_search": "rdkit", "max_conformers": 50, "method": "auto", "refine_top": 20,
             "rank_method": "auto", "qm_method": "", "frequencies": False}),
     Recipe("careful", "Careful",
-           "Flexible molecules and final numbers: CREST's metadynamics search (GFN-FF, quick: the best search for "
-           "flexible neutral molecules in the Nov 14 test), the auto refinement and rank step, then ωB97X-D/def2-SVP "
-           "single points of the lowest three conformers. Hours per molecule for large ones.",
-           ("CREST iMTD-GC, GFN-FF, quick", "Auto refinement on the lowest 20", "rank: auto by phase",
-            "DFT: ωB97X-D/def2-SVP single points of the lowest 3"),
-           {"conformer_search": "crest", "crest_method": "gfnff", "crest_quick": True, "max_conformers": 50,
-            "method": "auto", "refine_top": 20, "rank_method": "auto", "qm_method": "wb97x-d/def2-svp",
-            "qm_task": "energy", "qm_top": 3, "frequencies": False}),
+           "Flexible molecules and final numbers: CREST's metadynamics search (GFN-FF, quick) for the neutral "
+           "molecules with 9 or more rotatable bonds, with RDKit's 50 conformers added to its pool (the conformer "
+           "checks of Nov 14-15: CREST found the lower conformer for most of them in gas and in water, RDKit still for "
+           "some; for ions CREST was worse), RDKit's search for the rest; the auto refinement and rank step, then "
+           "ωB97X-D/def2-SVP single points of the lowest three conformers. Hours per molecule for large ones.",
+           ("CREST iMTD-GC (GFN-FF, quick) + RDKit's pool for neutral molecules with >= 9 rotatable bonds, RDKit "
+            "ETKDGv3 + MMFF94s (50) for the rest", "Auto refinement on the lowest 20 (of each pool)",
+            "rank: auto by phase", "DFT: ωB97X-D/def2-SVP single points of the lowest 3"),
+           {"conformer_search": "auto", "crest_min_rotors": 9, "crest_with_rdkit": True, "crest_method": "gfnff",
+            "crest_quick": True, "max_conformers": 50, "method": "auto", "refine_top": 20, "rank_method": "auto",
+            "qm_method": "wb97x-d/def2-svp", "qm_task": "energy", "qm_top": 3, "frequencies": False}),
 )
 BY_KEY = {r.key: r for r in BUILTIN}
 CUSTOM = ""          # the dialog's "Custom" entry: no recipe
@@ -281,8 +285,11 @@ def delete_recipe(settings, name: str) -> bool:
 def describe_steps(changes: dict) -> tuple[str, ...]:
     """The steps of a recipe's changes, in words (a user recipe's)."""
     c = {**{k: getattr(_DEFAULTS, k) for k in RECIPE_FIELDS}, **changes}
-    search = (f"CREST, {c['crest_method']}{', quick' if c['crest_quick'] else ''}" if c["conformer_search"] == "crest"
-              else f"RDKit ETKDGv3 + MMFF94s, {c['max_conformers']} conformers")
+    crest = f"CREST, {c['crest_method']}{', quick' if c['crest_quick'] else ''}" \
+        + (" + RDKit's pool" if c["crest_with_rdkit"] else "")
+    rdkit = f"RDKit ETKDGv3 + MMFF94s, {c['max_conformers']} conformers"
+    search = {"crest": crest, "auto": f"{crest} for neutral molecules with >= {c['crest_min_rotors']} rotatable "
+              f"bonds, {rdkit} for the rest"}.get(c["conformer_search"], rdkit)
     steps = [search, f"{method_name(c['method'])} on the lowest {c['refine_top']}"]
     if c["rank_method"] != "refine":
         steps.append(f"rank: {c['rank_method']}")
@@ -349,7 +356,8 @@ class JobSpec:
         task = TASKS.get(self.task)
         parts = [method_name(cfg.method), cfg.solvent.capitalize() if cfg.solvent else "Gas phase"]
         if self.task == "conformers" or self.task == "frequencies":
-            search = "CREST" if cfg.conformer_search == "crest" else f"{cfg.max_conformers} conformers"
+            search = {"crest": "CREST", "auto": f"CREST from {cfg.crest_min_rotors} rotatable bonds, else "
+                      f"{cfg.max_conformers} conformers"}.get(cfg.conformer_search, f"{cfg.max_conformers} conformers")
             parts.append(f"{task.label.lower()} ({search} → lowest {cfg.refine_top})")
         elif task is not None:
             parts.append(task.label.lower())

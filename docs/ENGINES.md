@@ -66,8 +66,17 @@ after it. Why: GFN2-xTB ranks polar molecules poorly and PFAS ions no better tha
 - **Run timings.** A `rank` stage in `telemetry_stages`, its engine naming the g-xTB build ("g-xTB 2.0.1 (sha256
   c2af5f3db917) + tblite 0.8.0 GFN1-xTB CPCM (ddX, water)"); `telemetry_runs.engines_json` records the build in
   full, and `config_json` the rank method and window.
-- **Threads.** g-xTB runs with the molecule's threads (`OMP_NUM_THREADS`; a lane's, usually 1); tblite runs in the
-  process with the OpenMP threads it started with (the lane's); AIMNet2 on the run's device.
+- **Threads.** g-xTB runs with the molecule's threads (`OMP_NUM_THREADS`; a lane's, usually 1); the GFN1-xTB terms
+  run in a helper process with the same threads (below); AIMNet2 on the run's device.
+- **The CPCM helper process (FAIL-1).** tblite 0.8.0's ddX CPCM solver corrupts the heap at some geometries. The
+  process then dies: on Windows with exit code 0xC0000374 (STATUS_HEAP_CORRUPTION), on Linux with glibc's
+  "malloc(): invalid size". In the QSAR tranches it killed the lane, and six molecules were marked failed after two
+  crashes each (b03, b10, b12, b15 water). So the GFN1-xTB gas and CPCM terms are computed in a helper process
+  (`chem.cpcm_worker`): one per process (per lane), kept for the following molecules and started again after a crash.
+  - A crash loses that conformer's term only. Its rank energy is left out with a note ("rank: conformer 6 has no
+    aimnet2+cpcm energy (HelperCrashed: ...)"), and the molecule goes on.
+  - The helper takes about 0.2 s to start on Linux and runs at the run's priority.
+  - `QUANTABENCH_CPCM_IN_PROCESS=1` computes the terms in the process instead, as before FAIL-1.
 - **Cost** (NOVA, 1-thread lanes at idle priority, RANK-2 integration check): g-xTB about 0.1 s per single point for
   20-40 atoms, the program's start included; the GFN1-xTB gas + CPCM pair 0.2-1.2 s (the ddX CPCM SCF is most of it;
   one calculator per molecule restarts from the previous conformer's wavefunction); AIMNet2 0.01 s, after 5-8 s to
@@ -271,7 +280,7 @@ that cap. The stages that are not handed the run's settings (the Hessian, the em
 `resources.set_molecule_limits`, which the lanes, the CLI build, the GUI and grid workers call before the first
 molecule.
 
-**Time limit per molecule.** `resources.molecule_timeout_s` (`build --molecule-timeout S`) defaults to 1800 s;
+**Time limit per molecule.** `resources.molecule_timeout_s` (`build --molecule-timeout S`, and `grid build --molecule-timeout S` for every machine's share) defaults to 1800 s;
 0 turns it off. The slowest molecule of the stress sample that finished took 429 s (a Cr complex in `auto`), so
 30 min only ends molecules that are stuck, and a stuck molecule costs at most 30 lane-minutes of a
 14,000-molecule batch. QM stages and CREST can take longer per molecule: raise the limit for those runs. A
@@ -466,6 +475,21 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     the log instead.
 
 ## CREST (`--conformers crest`)
+
+- **For whom (CONF-AUTO, 2026-11-16).** `--conformers auto` runs CREST only for neutral molecules with at least
+  `--crest-min-rotors` rotatable bonds (default 9, RDKit's strict count on the heavy-atom graph). Ions, zwitterions
+  (a nitro group's N+/O- pair counts as neutral) and smaller molecules get RDKit.
+  - The decision is made per molecule on the prepared structure at the run's pH, so a carboxylic acid at pH 7 is an
+    anion and gets RDKit. The log line says which and why; summary.csv's `conformer_search` records it.
+  - Why: in the conformer checks (docs/VALIDATION.md, "Conformer checks and the CREST test") RDKit converged up to 8
+    rotatable bonds. From 9 CREST found the lower conformer for most neutral molecules, and it was worse for ions.
+  - `--crest-with-rdkit`: where CREST runs, RDKit's search runs too. The lowest `--refine-top` of each pool (CREST's
+    by its own energies, RDKit's by MMFF94s's) are refined, after dropping RDKit conformers within `--rmsd` of a
+    CREST one (aligned on the same atom order; symmetry-related copies go at the re-pruning after the refinement).
+    The two energy scales are never compared before the refinement. Not with `--method mmff`, which takes the
+    pool's own energies (a note says so). summary.csv: `crest+rdkit`.
+  - Lane planning, dynamic CREST threads and the cost model treat "auto" like "crest" (a mixed batch is planned
+    for its CREST molecules).
 
 - **Install.**
   - Linux/WSL: `conda install -c conda-forge crest "xtb>=6.7.1"` in one environment (`envs/tools.yml`).

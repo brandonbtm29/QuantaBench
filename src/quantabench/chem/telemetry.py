@@ -346,7 +346,9 @@ def engines_info(cfg) -> dict:
 
     out: dict = {"packages": package_versions()}
     wanted = []
-    if getattr(cfg, "conformer_search", "") == "crest":
+    from .search_rule import may_use_crest
+
+    if may_use_crest(cfg):
         wanted.append("crest")
         if str(getattr(cfg, "crest_method", "")) == "gfn2//gfnff":
             wanted.append("xtb")
@@ -573,7 +575,9 @@ class RunTelemetry:
             lanes_planned = list(lanes_planned or [])
             lanes_used = list(lanes_used or [])
             level = ""
-            if getattr(cfg, "conformer_search", "") == "crest":
+            from .search_rule import may_use_crest
+
+            if may_use_crest(cfg):
                 from ..dist import threads as threads_mod
 
                 level = threads_mod.crest_level(cfg)

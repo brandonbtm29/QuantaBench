@@ -564,7 +564,7 @@ def refine_batched(result: MoleculeResult, conf_set: ConformerSet, cfg: BuildCon
                    should_stop: Callable[[], bool], log: Callable[[str], None]) -> list[ConformerResult]:
     """Drop-in replacement for ``pipeline._refine`` that optimizes conformers in batches.
 
-    Same contract: refines ``conf_set.conf_ids[:cfg.refine_top]``, writes the optimized coordinates
+    Same contract: refines ``conf_set.refine_ids(cfg.refine_top)``, writes the optimized coordinates
     back into ``conf_set.mol``, fills charges and dipoles when the model predicts charges, drops to
     the CPU (with a note) when the device fails, and raises ``Cancelled`` when ``should_stop()``.
     Methods without a batched adapter are handed to ``pipeline._refine``.
@@ -575,7 +575,7 @@ def refine_batched(result: MoleculeResult, conf_set: ConformerSet, cfg: BuildCon
     from . import pipeline
 
     mol = conf_set.mol
-    ids = conf_set.conf_ids[: max(1, cfg.refine_top)]
+    ids = conf_set.refine_ids(cfg.refine_top)
     ff = conf_set.energies_kcal[: len(ids)]
     if result.method == "mmff" or result.method not in BATCHED_METHODS:
         return pipeline._refine(result, conf_set, cfg, device, should_stop, log)

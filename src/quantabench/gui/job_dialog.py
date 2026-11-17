@@ -277,6 +277,8 @@ class JobDialog(QDialog):
         crest_ok = "crest" in self.programs
         self.w_search.addItem("CREST iMTD-GC" + ("" if crest_ok else "  (not found: RDKit instead, flagged)"),
                               "crest")
+        self.w_search.addItem("Auto: CREST for flexible neutral molecules, RDKit for the rest"
+                              + ("" if crest_ok else "  (CREST not found)"), "auto")
         self.w_crest_method = QComboBox()
         for k, label in CREST_METHODS:
             self.w_crest_method.addItem(label, k)
@@ -285,6 +287,14 @@ class JobDialog(QDialog):
         crest_row = QHBoxLayout()
         crest_row.addWidget(self.w_crest_method, 1)
         crest_row.addWidget(self.w_crest_quick)
+        self.w_crest_min_rotors = QSpinBox()
+        self.w_crest_min_rotors.setRange(0, 100)
+        self.w_crest_min_rotors.setSuffix(" rotatable bonds")
+        self.w_crest_min_rotors.setToolTip("Auto: a neutral molecule with at least this many rotatable bonds gets CREST; "
+                                           "ions, zwitterions and smaller molecules get RDKit")
+        self.w_crest_with_rdkit = QCheckBox("Add RDKit's conformers to CREST's pool")
+        self.w_crest_with_rdkit.setToolTip("Where CREST runs, RDKit's search runs too and the lowest of each pool are "
+                                           "refined, so the refinement keeps the lower of both")
         self.w_max_confs = QSpinBox()
         self.w_max_confs.setRange(1, 5000)
         self.w_refine_top = QSpinBox()
@@ -296,6 +306,8 @@ class JobDialog(QDialog):
             self.w_rank.addItem(label, k)
         cf.addRow("Search", self.w_search)
         cf.addRow("CREST level", crest_row)
+        cf.addRow("CREST from", self.w_crest_min_rotors)
+        cf.addRow("", self.w_crest_with_rdkit)
         cf.addRow("Conformers (RDKit)", self.w_max_confs)
         cf.addRow("Refine the lowest", self.w_refine_top)
         cf.addRow("Rank step", self.w_rank)
@@ -524,7 +536,8 @@ class JobDialog(QDialog):
             w.valueChanged.connect(self._changed)
         for w in (self.w_qm_mem, self.w_mem):
             w.valueChanged.connect(self._changed)
-        for w in (self.w_crest_quick, self.w_qm_on, self.w_sel, self.w_all):
+        self.w_crest_min_rotors.valueChanged.connect(self._changed)
+        for w in (self.w_crest_quick, self.w_crest_with_rdkit, self.w_qm_on, self.w_sel, self.w_all):
             w.toggled.connect(self._changed)
         self.w_name.textChanged.connect(self._changed)
         self.w_task.currentIndexChanged.connect(self._changed)
@@ -540,6 +553,8 @@ class JobDialog(QDialog):
             _set(self.w_search, cfg.conformer_search)
             _set(self.w_crest_method, cfg.crest_method)
             self.w_crest_quick.setChecked(cfg.crest_quick)
+            self.w_crest_min_rotors.setValue(cfg.crest_min_rotors)
+            self.w_crest_with_rdkit.setChecked(cfg.crest_with_rdkit)
             self.w_max_confs.setValue(cfg.max_conformers)
             self.w_refine_top.setValue(cfg.refine_top)
             _set(self.w_rank, cfg.rank_method)
@@ -568,6 +583,8 @@ class JobDialog(QDialog):
         return replace(self.cfg, method=self.w_method.currentData() or "auto", solvent=self.w_solvent.currentData(),
                        conformer_search=self.w_search.currentData(), crest_method=self.w_crest_method.currentData(),
                        crest_quick=self.w_crest_quick.isChecked(), max_conformers=self.w_max_confs.value(),
+                       crest_min_rotors=self.w_crest_min_rotors.value(),
+                       crest_with_rdkit=self.w_crest_with_rdkit.isChecked(),
                        refine_top=self.w_refine_top.value(), rank_method=self.w_rank.currentData(),
                        qm_method=qm_method, qm_task=self.w_qm_task.currentData(), qm_top=self.w_qm_top.value(),
                        threads=self.w_threads.value(), priority=self.w_priority.currentData(),
@@ -641,10 +658,13 @@ class JobDialog(QDialog):
         self.task_info.setText(task.description if task is not None else "")
         conformers = task is not None and not task.keeps_coordinates
         self.conf_box.setEnabled(conformers)
-        crest = self.w_search.currentData() == "crest"
+        search = self.w_search.currentData()
+        crest = search in ("crest", "auto")
         self.w_crest_method.setEnabled(crest)
         self.w_crest_quick.setEnabled(crest)
-        self.w_max_confs.setEnabled(not crest)
+        self.w_crest_with_rdkit.setEnabled(crest)
+        self.w_crest_min_rotors.setEnabled(search == "auto")
+        self.w_max_confs.setEnabled(search != "crest" or self.w_crest_with_rdkit.isChecked())
         qm = self.w_qm_on.isChecked()
         for w in (self.w_qm_func, self.w_qm_basis, self.w_qm_task, self.w_qm_top):
             w.setEnabled(qm)

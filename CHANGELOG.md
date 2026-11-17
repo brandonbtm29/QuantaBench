@@ -18,6 +18,62 @@
 - **Auto** chooses when the job is sent: this computer or a worker, whichever has the highest speed for the job's method per job it already has. Speeds are taken the way `grid build --weights auto` splits a list: the Machines dock's split settings, the newest grid of the same protocol, else the benchmark. When this computer wins, the job runs in the local queue.
 - Closing the window stops following the jobs on workers; they go on there, and their run folders can be opened later (File > Open run folder).
 
+### More collapsible sections and pop-outs, UI-8b (2026-11-16)
+- **Surfaces panel:** three folding sections.
+  - **Surface:** show, source, isovalue.
+  - **Color:** folded by default to a one-line summary (`ESP · bwr reversed · ±129.0 kJ/mol (auto) · opacity 0.85`).
+  - **Descriptors:** the GIPF table; folded it shows V min and max.
+  - The colour bar stays in view while Color is folded.
+  - The legend's sentence (which colour is negative), the sources and the isovalue are explained behind ⓘ buttons.
+  - The rows "Area V > 0" and "Area V < 0" show their full labels again (the "<" was read as HTML).
+- **Spectra panel:**
+  - Load experimental..., Clear and Export... are one **Spectrum** menu.
+  - The broadening and scale factor are explained behind an ⓘ next to Scale.
+  - The **Normal modes** table and animation fold to a header with "18 modes · mode 18: 3659.8 cm⁻¹", and the plot takes the dock's width.
+- **Settings > Compute:** folding sections with summaries: Threads and priority, GPU, Parallel lanes, Limits, This computer. The run priority's explanation is behind an ⓘ, as are the notes of the Import, Surfaces & radii, Display, Engines and Folders tabs.
+- **Every dock's title bar has ⧉ and ✕:** ⧉ pops the panel into a window of its own and back, ✕ closes it. Dragging and double-clicking the title still move and float it.
+- **The Results dock folds for one conformer.** A molecule with one conformer (or none) shrinks the Results dock to the table's header and its row, and the 3D view gets the height. A molecule with more conformers brings the height back, unless the dock was resized by hand. View > Fold Results for one conformer turns it off.
+- The open and closed sections are remembered per machine, like the Pipeline dock's.
+
+### Conformer search "auto": CREST for flexible neutral molecules, CONF-AUTO (2026-11-16)
+- **`--conformers auto`** (GUI: Search > Auto, in the Pipeline dock and the job dialog) decides per molecule:
+  - CREST for a neutral molecule with at least `--crest-min-rotors` rotatable bonds (default 9; RDKit's strict count);
+  - RDKit ETKDGv3 + MMFF94s for ions, zwitterions and smaller molecules.
+  - The log says which, and why ("conformer search auto: CREST (neutral, 12 rotatable bonds >= 9)"). summary.csv's `conformer_search` records the search each molecule got.
+- **Why:** the conformer checks of Nov 13-15.
+  - RDKit's search converged up to 8 rotatable bonds but not from 9.
+  - For flexible neutral molecules CREST (GFN-FF, quick) found the lower conformer for most: 10 of 23 best known in gas (RDKit 3), 16 of 21 in ALPB water (RDKit 6).
+  - For ions it was worse (two anions 108 and 281 kJ/mol above the best known in gas).
+- **`--crest-with-rdkit`** (GUI: "Add RDKit's conformers to CREST's pool"): where CREST runs, RDKit's search runs too, and the lowest `--refine-top` of each pool are refined. The two energy scales (CREST's, MMFF94s's) are never compared; the refinement ranks them. In water RDKit still held a conformer more than 5 kJ/mol lower for 5 of 21 molecules. Not with `--method mmff`, which ranks by the pool's own energies. summary.csv says `crest+rdkit`.
+- **The Careful recipe and the review's Careful preset** use "auto" with the merged pool instead of CREST for every molecule.
+- **The review flags flexible neutral molecules** under the RDKit search ("search.flexible-neutrals"), with Apply for "auto". Its cost estimate charges CREST only to the molecules that get it.
+- Lane planning, dynamic CREST threads, the cost model and the engines a run records treat "auto" like "crest". A merged pool's conformer-stage time is left out of the CREST cost-model fit.
+
+### The failed molecules of the QSAR tranches, FAIL-1 (2026-11-16)
+Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, for three causes. Each one is fixed here:
+- **"Bad Conformer Id"** (5 glycosides, both phases: digitoxin, digoxin, gitoxin, glycyrrhizin, maltopentaose).
+  - With RDKit 2026.09's small-ring torsions, ETKDG found no conformer within the 450 s embedding limit.
+  - RDKit's timeout then returned the id -1, which QuantaBench took for a conformer.
+  - Now -1 is dropped. An ETKDG start that finds no first conformer in 60 s gives way to the next one (without small-ring torsions, then random coordinates), with a note. Digitoxin now embeds 50 conformers (its whole MMFF build took 40 s on NOVA).
+- **"crashed the process 2 times"** (6 molecules in water, all at the rank step).
+  - tblite 0.8.0's ddX CPCM solver corrupts the heap at some geometries, which killed the lane: 0xC0000374 on Windows, glibc's abort on Linux.
+  - The rank step's GFN1-xTB CPCM terms now run in a helper process. A crash there costs that conformer's rank energy (noted), not the molecule.
+- **"SCF not converged in 250 cycles"** (tblite GFN2-xTB: 3 molecules in gas, 2 in water; 1423-20-7 in both phases).
+  - A failed SCF now gets a last try from atomic densities, with mixer damping 0.2 and up to 1,000 cycles. 1423-20-7 does not converge in 1,000 cycles at tblite's default damping (0.4), but converges at 0.2. The damping changes the path to the solution, not the converged energy. A note counts these single points.
+  - A conformer whose optimization still fails is dropped with a note. The molecule fails only if every conformer does.
+
+### CI: native stacks of a hung test, FIX-3 (2026-11-16)
+- **The hang is in Qt's own code.** It was seen on Windows (#15) and macOS (#18): `test_project.py`'s reopen and resume tests stop in `Notes.set_notes` → `setVisible`, inside Qt, during a project load. The faulthandler stack ends there, so the frames below are missing.
+- **Why pytest-timeout never fired.** That thread holds Python's GIL, and pytest-timeout's thread needs the GIL to dump and exit. So the Windows job ran into its 30 min limit.
+- **A watchdog process now watches the tests in CI** (`tests/hang_watchdog.py`, `QB_HANG_WATCHDOG=1`). It has its own interpreter:
+  - a test still running after 200 s gets every thread's native and Python frames dumped into the log with `py-spy dump --native`, including whether the thread holds the GIL (macOS, where py-spy has no native mode: py-spy's Python frames and the system's `sample`);
+  - at 420 s the watchdog kills the process, so the job fails in 7 minutes instead of 30.
+
+### `grid build --molecule-timeout` (2026-11-16)
+- `grid build` takes `--molecule-timeout S`, like `build`, and every machine's share runs with it.
+- Before this, the option was `build`'s only. A grid run took the client's settings value (1,800 s by default) on every machine, which is too short for CREST on the largest flexible molecules.
+- **A worker's finished run folder is one file again on Windows.** When a status poll's connection overlapped the end of a job, `jobs.sqlite-wal` stayed beside the job table, and a flaky CI test (`test_archive_manifest_sync_temp_files_and_failed_streams`) failed on it. The worker's final checkpoint now tries again for up to 3 s, until the poll has let go.
+
 ### A resume keeps the run's `--lanes` on the machine that chose it, RESUME-2 (2026-11-16)
 - The run stores the lane spec in force: the spec, whether it was chosen with `--lanes` or came from the machine's setting, and the machine.
 - `build --resume` without `--lanes`, and Build > Resume run folder, use a chosen spec again when they run on the machine that chose it ("Lanes kept from the run: --lanes auto"). Another machine uses its own setting and says so; the run keeps its choice for a later resume there.

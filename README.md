@@ -21,7 +21,7 @@ dynamics. Every step is visible in an OVITO-style 3D workspace.
 |---|---|
 | Input | SMILES, InChI, InChIKeys, chemical names or CAS (PubChem); SDF/MOL (V2000, V3000), MOL2, PDB, XYZ, ChemDraw CDX/CDXML, Marvin MRV, CML, CIF, Gaussian/ORCA inputs, SMILES and InChI lists, CSV and Excel lists (CompTox exports: DTXSID, preferred name, SMILES / QSAR-ready / MS-ready fallback); other formats through Open Babel when installed. Spartan-style import options (2D to 3D, hydrogens, data fields, filters, atom order); paste from ChemDraw (CDX, CDXML, MOL) and drag and drop |
 | Standardize & protonate | Largest fragment (strips counter-ions, named in the results; metal complexes drawn as ions are refused, not computed without their metal), neutral parent, dominant charge state at your pH, spin from drawn radicals. PFAS-aware: carboxylates, sulfonates and acidic perfluoroalkane sulfonamides are handled |
-| Conformer search | RDKit ETKDGv3, MMFF94s pre-optimization, energy window, symmetry-aware RMSD de-duplication; or **CREST** (iMTD-GC metadynamics with GFN2-xTB / GFN-FF) |
+| Conformer search | RDKit ETKDGv3, MMFF94s pre-optimization, energy window, symmetry-aware RMSD de-duplication; or **CREST** (iMTD-GC metadynamics with GFN2-xTB / GFN-FF); or **auto**: CREST for flexible neutral molecules (9+ rotatable bonds), RDKit for the rest, optionally with both pools refined |
 | Refinement | **AIMNet2** (ML, ωB97M-D3 quality, neutral and charged), **GFN1/GFN2-xTB** (dxtb, PyTorch; tblite; or the xtb program), **GFN-FF**, **PM7/PM6** (MOPAC), or MMFF94s, optionally in an implicit solvent (ALPB, COSMO). On GPU when available with automatic CPU fallback; on a GPU all conformers of a molecule are optimized in one batch |
 | Properties | Boltzmann weights, volume, SASA, radius of gyration, shape, TPSA, CF2/CF3 counts, F/C ratio, charges, dipoles, polarizabilities, HOMO/LUMO, heats of formation and solvation energies from each engine |
 | QM (DFT) | **Psi4** single points or optimizations of the lowest conformers at any `functional/basis` (ωB97X-D/def2-SVP, ...), with PCM: dipole, MBIS charges, orbitals, polarizability, frequencies, and density/ESP cubes with 0.002 au volume, area and ESP surface statistics |
@@ -182,6 +182,11 @@ The docks stay short: the **Pipeline** dock shows one collapsible section per st
 it is closed, and the method guide's notes behind ⓘ buttons (an orange ⚠ when something is not installed). A molecule's
 engine notes fold to one line under its **Details**. **View > Pop out panel** puts any panel in a window of its own (the
 Plot has a ⧉ button for it), and **View > Dock all panels** (Ctrl+Shift+D) brings them back.
+- **Every panel's title bar** has ⧉ (pop out and back) and ✕ (close).
+- **Surfaces** and **Spectra** panels: their settings and explanations fold the same way; the Spectra panel's Normal
+  modes table folds so the plot takes the width.
+- **Settings > Compute:** the same folding sections.
+- **The Results dock** shrinks to one row for a molecule with one conformer.
 
 **Build > New job...** (Ctrl+J) submits molecules as a job:
 - a **recipe** (Screen, Standard, Careful, or one of your own);

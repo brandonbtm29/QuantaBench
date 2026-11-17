@@ -67,11 +67,13 @@ def cores(monkeypatch):
 
 
 def lane_processes():
-    """Live children of this process except multiprocessing's resource tracker (one per parent, by design)."""
+    """Live children of this process except multiprocessing's resource tracker (one per parent, by design) and the CI
+    hang watchdog (tests/hang_watchdog.py)."""
     out = []
     for p in psutil.Process().children(recursive=True):
         try:
-            if p.status() == psutil.STATUS_ZOMBIE or "resource_tracker" in " ".join(p.cmdline()):
+            cmd = " ".join(p.cmdline())
+            if p.status() == psutil.STATUS_ZOMBIE or "resource_tracker" in cmd or "hang_watchdog" in cmd:
                 continue
         except psutil.Error:
             continue
