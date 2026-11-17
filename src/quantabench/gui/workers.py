@@ -170,25 +170,29 @@ class _Runner(QObject):
 
     @Slot()
     def run(self) -> None:
+        worker = self._worker
         try:
-            self._worker.run()
+            worker.run()
         finally:
-            self._worker.moveToThread(self._home)
+            self._worker = None                 # no reference cycle with the worker (``_Keeper``)
+            worker.moveToThread(self._home)
             self.moveToThread(self._home)
 
 
 class _Keeper(QObject):
-    """Holds a worker's Python wrapper until its thread has ended, and lets go of it in the GUI thread (a slot of an
-    object that lives there)."""
+    """Holds the Python wrappers of a worker and its runner until their thread has ended, and lets go of them in the
+    GUI thread (a slot of an object that lives there). Nothing else refers to both, so no reference cycle holds them:
+    they are freed right here, never by the garbage collector in whichever thread it happens to run (FIX-5)."""
 
-    def __init__(self, owner: QObject, alive: set, worker: QObject):
+    def __init__(self, owner: QObject, alive: set, worker: QObject, runner: QObject):
         super().__init__(owner)
-        self._alive, self._worker = alive, worker
+        self._alive, self._held = alive, (worker, runner)
 
     @Slot()
     def release(self) -> None:
-        self._alive.discard(self._worker)
-        self._worker = None
+        if self._held is not None:
+            self._alive.discard(self._held[0])
+            self._held = None
         self.deleteLater()
 
 
@@ -208,7 +212,6 @@ def start(worker: QObject, owner: QObject, on_done=None, on_failed=None) -> QThr
     runner = _Runner(worker, owner.thread())
     runner.moveToThread(thread)
     thread.started.connect(runner.run)                    # a slot of an object in the new thread: runs there
-    worker._runner = runner
     if on_done is not None or on_failed is not None:
         relay = _Relay(owner, on_done, on_failed)
         if on_done is not None:
@@ -224,11 +227,11 @@ def start(worker: QObject, owner: QObject, on_done=None, on_failed=None) -> QThr
     thread.finished.connect(runner.deleteLater)
     thread.finished.connect(thread.deleteLater)
     worker._thread = thread
-    # Python must hold the worker until its thread ends, or the wrapper is garbage-collected mid-run; it lets go in
-    # the GUI thread (_Keeper)
+    # Python must hold the worker and its runner until their thread ends, or the wrappers are garbage-collected
+    # mid-run; it lets go in the GUI thread (_Keeper)
     alive = owner.__dict__.setdefault("_live_workers", set())
     alive.add(worker)
-    keeper = _Keeper(owner, alive, worker)
+    keeper = _Keeper(owner, alive, worker, runner)
     thread.finished.connect(keeper.release)
     thread.start()
     return thread

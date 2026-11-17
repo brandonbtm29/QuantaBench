@@ -17,6 +17,7 @@ the watchdog.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import signal
@@ -72,13 +73,30 @@ def dump(pid: int, test: str, seconds: float) -> None:
 
 
 def kill(pid: int) -> None:
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
-    else:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+    """Kill the test process first, then the processes it started, except this watchdog (its child) and the
+    watchdog's own children, and say so if the test process is still there 15 s later. On main's Windows CI
+    (2026-11-16) the job went on for 20 min after "killing pid" (``taskkill /F /T``, run from inside that process
+    tree): the process had aborted and was stuck in Windows' process exit (VTK's DLL teardown waiting for the GIL).
+    Whether anything can kill it there is unknown; the next time the log will say."""
+    try:
+        import psutil
+    except ImportError:                       # not in this environment: the test process alone
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM if os.name == "nt" else signal.SIGKILL)   # Windows: TerminateProcess
+        return
+    try:
+        target = psutil.Process(pid)
+        me = psutil.Process()
+        mine = {me.pid} | {p.pid for p in me.children(recursive=True)}
+        others = [p for p in target.children(recursive=True) if p.pid not in mine]
+    except psutil.Error:
+        return
+    for proc in (target, *others):
+        with contextlib.suppress(psutil.Error):
+            proc.kill()
+    gone, alive = psutil.wait_procs([target], timeout=15)
+    if alive:
+        log(f"pid {pid} is still there 15 s after the kill")
 
 
 def main(argv: list[str]) -> int:

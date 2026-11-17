@@ -268,3 +268,24 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - The retry runs under `_held_guard`, so no other run in this process can take the lock between the release and the
   removal and lose its own lock file to it.
 
+## 2026-11-16: FIX-5 garbage collection in the tests' main thread (branch `fix/ci-abort-gc`)
+- **What the abort showed:** a pure virtual call in `~QObject` while the GUI thread processed a DeferredDelete. That
+  means an object was destroyed from two places at once. The other place was most likely Python's cyclic collector in
+  a sensors thread, which was allocating hard (loading Windows' certificate store) when the main thread aborted.
+- **#22's Windows CI crashed too** (heap corruption, 0xc0000374, found while the main thread collected garbage), with
+  the same two sensors threads. The common thread is FIX-3's worker/runner cycle. After `_Keeper.release`, only the
+  collector frees those two wrappers. PySide owns their C++ objects, so a collection in a sensors thread deletes them
+  there, while their `deleteLater` events wait in the GUI thread's queue. Delivering one to an object that the other
+  thread is destroying gives exactly crash 1.
+- **The app already guards against this.** `gui/app.py` turns automatic collection off and collects on a GUI timer,
+  for the same reason (a closed dialog destroyed in a batch thread). The tests only collected at module ends, so
+  inside a module the collector could still run in any thread. Now it is off for the session, and generation 1 is
+  collected after each test. The full suite took 7 min in the cloud (1,714 passed).
+- **The worker/runner cycle from FIX-3** was a new way to leave Qt objects to the collector. `_Keeper` now holds both
+  wrappers, so they are freed by reference counting in the GUI thread.
+- **Why the job hung after the abort:** CRT `abort` → process exit → DLL detach → VTK's
+  `vtkMatplotlibMathTextUtilities` destructor → `PyGILState_Ensure`. The GIL belonged to a thread that process exit
+  had already ended, so this can never finish. A scratch check on NOVA (`scratch/wd_inside.py`) showed that the old
+  `taskkill /F /T` kills a stuck process that started the watchdog. So the kill most likely failed because the process
+  was already exiting. psutil's kill plus a "still there" log will tell next time.
+
