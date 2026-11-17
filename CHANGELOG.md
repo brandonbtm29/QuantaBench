@@ -4,9 +4,10 @@
 
 ### Tests: garbage collected only in the main thread; a worker and its runner hold no cycle, FIX-5 (2026-11-16)
 - **Main's Windows CI after #21 aborted** in `test_gui_declutter.py` ("Fatal Python error: Aborted"). The native stack: the GUI thread was deleting a Qt object (a posted DeferredDelete), and inside `~QObject` a pure virtual function was called. A sensors thread was busy allocating at that moment.
-  - The likely cause: Python's cyclic garbage collector runs in whichever thread allocates, and there it destroyed Qt objects (or the connections PySide keeps for them) outside the GUI thread, while the GUI thread destroyed them too.
+  - #22's Windows CI then crashed the same way with a corrupted heap (0xc0000374), in `test_gui_table.py`.
+  - The likely cause: the worker and its runner from FIX-3 referred to each other, so only Python's cyclic garbage collector could free them. The collector runs in whichever thread allocates. In a sensors thread it deleted their Qt objects outside the GUI thread, while the GUI thread delivered their posted `deleteLater` to the same objects.
   - The app has collected only in its GUI thread since `a717844` (`gui/app.py`). **The tests now do the same:** automatic collection is off; the young generations are collected after every test and everything at the end of each module, in the main thread.
-  - Not reproduced: Linux runs of every GUI test with the collector made to run very often passed.
+  - Not reproduced on Linux (no sensors thread loading certificates there): every GUI test passed with the collector made to run very often.
 - **`gui.workers.start`:** a worker and its runner (FIX-3) referred to each other, so only the garbage collector could free them. `_Keeper` now holds both and lets go of them in the GUI thread.
 - **The CI hang watchdog** kills with psutil: the test process first, then the other processes it started, never itself. It logs if the process is still there 15 s later.
   - After the abort the process hung in Windows' process exit: VTK's DLL teardown waited for the GIL. The watchdog said "killing pid" at 7 min, but the job still ran into its 30 min limit.

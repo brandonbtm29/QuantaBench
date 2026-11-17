@@ -76,7 +76,7 @@ Follow-ups:
 - 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
   about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
 
-## FIX-5: An abort in the GUI tests (Windows CI) · in-PR 2026-11-16 (branch `fix/ci-abort-gc`)
+## FIX-5: Crashes in the GUI tests (Windows CI) · in-PR 2026-11-16 (branch `fix/ci-abort-gc`)
 Main's Windows CI for 486e332 (#19's merge, with #21) aborted in
 `test_gui_declutter.py::test_table_toolbar_menus_and_popout`, in the first `_wait` after a new window opened.
 - **faulthandler:** "Fatal Python error: Aborted" in the main thread (`_wait` → `processEvents`). Two
@@ -84,10 +84,19 @@ Main's Windows CI for 486e332 (#19's merge, with #21) aborted in
 - **py-spy's native stack** of the main thread: `sendPostedEvents` → `QApplication::notify` → `QObject::event`
   (DeferredDelete) → a PySide wrapper's destructor → `QObject::~QObject` → `_purecall` → `abort`. A pure virtual call
   inside `~QObject` means something touched an object that was already being destroyed.
-- **Likely cause:** the cyclic garbage collector, which runs in whichever thread allocates. In a sensors thread it
-  destroyed Qt objects, or the receivers PySide keeps for Python callables, while the GUI thread destroyed the same
-  ones. The app has avoided this since `a717844` (`gui/app.py`: automatic collection off, `gc.collect` on a GUI timer).
-  The tests collected only at the end of each module.
+- **A second crash, on #22's Windows CI** (main + FIX-4): "Windows fatal exception: code 0xc0000374" (heap
+  corruption), in the main thread while it collected garbage, in `test_gui_table.py`'s `_wait` after a new window
+  opened. Again two sensors threads were running, one inside `_load_windows_store_certs`.
+- **Likely cause: FIX-3's worker/runner cycle, collected in a sensors thread.**
+  - The worker and its runner referred to each other, so once `_Keeper` let go of them, only the cyclic collector could
+    free them. At that moment their `deleteLater` events are posted to the GUI thread.
+  - The collector runs in whichever thread allocates. In a sensors thread (allocating hard while loading the
+    certificate store) it freed the wrappers. PySide owns these objects, so it deleted the C++ objects right there,
+    outside the GUI thread.
+  - Meanwhile the GUI thread delivered the posted DeferredDelete to the same object: a pure virtual call in `~QObject`
+    (crash 1), or a corrupted heap found later (crash 2).
+  - Before FIX-3 no cycle held a worker. The app collects only in its GUI thread (`a717844`, `gui/app.py`), so this
+    can happen only in the tests, which collected automatically in any thread, plus once per module.
 - **Fix:**
   - `tests/conftest.py`: automatic collection off for the session; `gc.collect(1)` after every test and a full
     collection after each module, in the main thread.
@@ -102,7 +111,8 @@ Main's Windows CI for 486e332 (#19's merge, with #21) aborted in
     the process is still there 15 s later.
   - Test: `test_hang_watchdog.py::test_the_watchdog_kills_the_process_it_is_a_child_of`.
 - **Not reproduced:** Linux (xvfb), every GUI and project test with `gc.set_threshold(20, 1, 1)`: 166 passed; the
-  two GUI modules 3 times: passed. The GUI tests were not run on NOVA: they open windows on Brandon's desktop.
+  two GUI modules 3 times: passed. Linux has no sensors thread loading certificates. The GUI tests were not run on
+  NOVA: they open windows on Brandon's desktop.
 - **Check:** the full suite with the change (cloud, Linux): 1,714 passed, 40 skipped, 7 min. Watch Windows CI for
   another "Fatal Python error: Aborted".
 

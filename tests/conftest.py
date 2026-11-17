@@ -65,8 +65,8 @@ def _collect_in_main_thread_only() -> None:
     """Python's cyclic garbage collector runs in whichever thread allocates when a threshold is passed. In the GUI
     tests that is often a sensors or worker thread, and garbage that holds a Qt object (a window and its panels refer to
     each other) is then destroyed there, outside the GUI thread, possibly while the GUI thread deletes the same object
-    (a posted DeferredDelete): the process aborts. Main's Windows CI, 2026-11-16: a pure virtual call in ``~QObject``
-    during ``sendPostedEvents``, while a sensors thread was loading certificates (FIX-5). As in the app (gui/app.py),
+    (a posted DeferredDelete): the process aborts or the heap is corrupted (Windows CI, 2026-11-16: a pure virtual call
+    in ``~QObject`` during ``sendPostedEvents``, and a 0xc0000374, while a sensors thread loaded certificates; FIX-5). As in the app (gui/app.py),
     automatic collection is off: the young generations are collected after every test, everything at the end of each
     module (``_collect_in_main_thread``), always in the main thread."""
     gc.disable()

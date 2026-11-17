@@ -272,6 +272,11 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **What the abort showed:** a pure virtual call in `~QObject` while the GUI thread processed a DeferredDelete. That
   means an object was destroyed from two places at once. The other place was most likely Python's cyclic collector in
   a sensors thread, which was allocating hard (loading Windows' certificate store) when the main thread aborted.
+- **#22's Windows CI crashed too** (heap corruption, 0xc0000374, found while the main thread collected garbage), with
+  the same two sensors threads. The common thread is FIX-3's worker/runner cycle. After `_Keeper.release`, only the
+  collector frees those two wrappers. PySide owns their C++ objects, so a collection in a sensors thread deletes them
+  there, while their `deleteLater` events wait in the GUI thread's queue. Delivering one to an object that the other
+  thread is destroying gives exactly crash 1.
 - **The app already guards against this.** `gui/app.py` turns automatic collection off and collects on a GUI timer,
   for the same reason (a closed dialog destroyed in a batch thread). The tests only collected at module ends, so
   inside a module the collector could still run in any thread. Now it is off for the session, and generation 1 is
