@@ -2,6 +2,11 @@
 
 ## 0.3.0.dev (unreleased)
 
+### A finished run is no longer failed by a status poll at its last moment, FIX-4 (2026-11-16)
+- **On Windows, a run could end "failed" just after its last molecule.** The end of a run removes its lock file, `jobs.lock`, and status polls read that file (a worker's job status, the GUI, `status`). Windows cannot delete a file while anyone has it open, so a poll at that moment made the removal raise, and a worker marked the whole job failed.
+  - Most likely what failed one CI run (main after #18, Windows, `test_worker.py::test_partial_merge_and_per_share_errors`; the job's error was not printed). In a scratch test on NOVA with a thread reading the lock without pause, 1,592 of 3,000 lock releases failed.
+  - **The fix:** the removal is tried again for up to 2 s; a reader holds the file for microseconds. Should it still fail, the run does not fail for it: the lock file is emptied, so it no longer names a live process, and the next run takes it over without a word.
+
 ### Run a job on a worker from the job dialog, UI-5 / DIST-3 (2026-11-16)
 - **Run on** in the job dialog (Resources) lists this computer, **Auto** and every known worker.
   - The workers are asked in the background whether they answer. A reachable worker with the same QuantaBench version can be chosen and shows how busy it is ("macbook-pro (idle)"); one that is not reachable is listed as unavailable, with the reason in its tooltip.

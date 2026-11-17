@@ -8,7 +8,7 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
-## CONF-AUTO: CREST for flexible neutral molecules · in-PR 2026-11-16 (branch `feat/crest-auto`)
+## CONF-AUTO: CREST for flexible neutral molecules · done 2026-11-16 (PR #17)
 Brandon (2026-11-16), after the CREST gas and water tests: "Let's do it all". That means CREST (GFN-FF, quick) for
 neutral molecules with 9 or more rotatable bonds, not for ions, optionally with the RDKit pool merged in. The evidence
 is in docs/VALIDATION.md, "Conformer checks and the CREST test".
@@ -48,7 +48,7 @@ Follow-ups (ready):
 - The full run: rebuild the list's ~1,674 flexible neutral molecules with `--conformers auto --crest-with-rdkit` per
   phase (needs-Brandon: about 110-300 h per phase on half the MacBook; NOVA needs CREST in WSL).
 
-## FAIL-1: The failed molecules of the QSAR tranches · in-PR 2026-11-16 (branch `fix/failed-molecules`)
+## FAIL-1: The failed molecules of the QSAR tranches · done 2026-11-16 (PR #20; the reruns needs-Brandon)
 b01-b15 (13,206 molecules): 8 failed in gas and 13 in water (`Runs\failed-molecules-2026-11-16\report.md`).
 Done in the branch:
 - `conformers.embed`:
@@ -76,7 +76,25 @@ Follow-ups:
 - 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
   about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
 
-## FIX-3: The CI hang inside Qt · in-PR 2026-11-16 (branch `fix/ci-hang-dump`; the cause: open)
+## FIX-4: A run failed by a status poll at its end (Windows) · in-PR 2026-11-16 (branch `fix/run-lock-release`)
+Main's Windows CI after #18 failed once in `test_worker.py::test_partial_merge_and_per_share_errors`: the job ended
+"failed" instead of "done" after its last molecule (the job's error is not in the test's output).
+- **Likely cause** (the CI log has no job error; the test now prints it): `_RunLock.__exit__` removes `jobs.lock` at the end of every run, and status polls read that file
+  (`open_run` → `_read_lock`: the worker's job status, polled every 0.1 s by the test; the GUI; `status`). On Windows
+  a file cannot be deleted while it is open, so the removal raised `PermissionError` (WinError 32) out of
+  `run_resumable`, and `JobManager._execute` marked the job failed. Antivirus opening the freshly written file can do
+  the same.
+- **Shown on NOVA** (`scratch/lock_race.py`): with one thread reading the lock without pause, 1,592 of 3,000 lock
+  releases failed. 40 runs of the CI test itself on NOVA passed (the poll must land within the removal's moment).
+- **Fix:** `_remove_lock_file` tries again for up to 2 s (100 x 20 ms). Should it still fail, the run does not fail:
+  the file is emptied (`{}` names no process, so the next run takes it over without a word) and the failure logged.
+- Tests (`tests/test_jobs.py`): three refused removals, then success; a removal that never succeeds (the run ends,
+  the lock is emptied and taken over); 300 lock releases while a thread reads the lock (the race itself, with real
+  files; it fails on Windows without the fix).
+- Not changed: the worker's own files (`worker.json`, the state) are written with `_atomic_write`, which already
+  retries a refused rename.
+
+## FIX-3: The CI hang inside Qt · done 2026-11-16 (PR #21; the cause: a deadlock, fixed)
 The hang seen since Nov 13 (Linux, before UI-8) now has two stacks, both from a project load in the tests' `_wait`
 loop: a worker's `done` → `MainWindow._on_loaded` → `_after_load` → `_on_molecule_selected` → `_show_info` →
 `collapsible.Notes.set_notes` → `self.setVisible(...)`, inside Qt.
@@ -135,7 +153,7 @@ Done in the branch:
 - Tests: `tests/test_gui_declutter.py`. Screenshots: `docs/dev/screenshots/UI-8/`.
 Follow-ups: done in UI-8b (below).
 
-## UI-8b: The UI-8 follow-ups · in-PR 2026-11-16 (branch `feat/ui-declutter-2`)
+## UI-8b: The UI-8 follow-ups · done 2026-11-16 (PR #19)
 Brandon (2026-11-16): "Do the backlog items." The three UI-8 follow-ups:
 - **Surfaces panel** (`gui/surface_panel.py`):
   - Surface / Color / Descriptors sections (`surface_section`, `color_section`, `descriptors_section`) with summaries;
@@ -175,7 +193,7 @@ Follow-ups:
 - Done (RESUME-2, below): store the `--lanes` spec with the run.
 - `--priority` and `--free-threads` stay per machine on purpose.
 
-## RESUME-2: A resume keeps the run's `--lanes` on the machine that chose it · in-PR 2026-11-16 (branch `fix/resume-lanes`)
+## RESUME-2: A resume keeps the run's `--lanes` on the machine that chose it · done 2026-11-16 (PR #15)
 RESUME-1's follow-up. Before this, a resume without `--lanes` used the machine's lane setting, whatever the run had been
 started with.
 Done in the branch:
@@ -502,7 +520,7 @@ models or what they were intended to correct."
   - Measured rankings for transition-metal and main-group-element compounds: the review checks their coverage only.
   - Process-parallel profiling for very large lists (only needed if lists grow well past 14,000).
 
-## UI-5b: Run on a worker from the job dialog · in-PR 2026-11-16 (branch `feat/run-on-worker`)
+## UI-5b: Run on a worker from the job dialog · done 2026-11-16 (PR #18)
 Brandon (2026-11-16): "Do the backlog items." UI-5's first follow-up, and the "Run on" part of DIST-3.
 Done in the branch:
 - `dist/remote_job.py`:

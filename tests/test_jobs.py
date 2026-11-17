@@ -278,6 +278,72 @@ def test_lock_from_another_os_on_the_same_host_needs_force(tmp_path, monkeypatch
     assert not (run_dir / jobs.LOCK_NAME).exists()
 
 
+def _unlink_refused(monkeypatch, name, times):
+    """Path.unlink of ``name`` raises PermissionError ``times`` times, as Windows does while a reader has it open."""
+    real = jobs.Path.unlink
+    refused = []
+
+    def unlink(self, *a, **k):
+        if self.name == name and len(refused) < times:
+            refused.append(self)
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(jobs.Path, "unlink", unlink)
+    return refused
+
+
+def test_a_run_ends_even_while_a_status_poll_reads_its_lock(tmp_path, monkeypatch):
+    """FIX-4: the end of a run removes jobs.lock; on Windows that fails while a status poll reads it, which turned a
+    worker's finished job into a failed one. The removal is tried again."""
+    monkeypatch.setattr(jobs, "LOCK_RELEASE_WAIT_S", 0.001)
+    refused = _unlink_refused(monkeypatch, jobs.LOCK_NAME, 3)
+    run_dir = tmp_path / "run"
+    jobs.run_resumable(inputs(["ethanol"]), cfg(tmp_path), run_dir)
+    assert len(refused) == 3 and not (run_dir / jobs.LOCK_NAME).exists()
+    assert jobs.open_run(run_dir).counts["ok"] == 1
+
+
+def test_a_lock_that_cannot_be_removed_is_emptied_and_taken_over(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "LOCK_RELEASE_ATTEMPTS", 3)
+    monkeypatch.setattr(jobs, "LOCK_RELEASE_WAIT_S", 0.001)
+    refused = _unlink_refused(monkeypatch, jobs.LOCK_NAME, 3)
+    run_dir = tmp_path / "run"
+    logs = []
+    jobs.run_resumable(inputs(["ethanol"]), cfg(tmp_path), run_dir, log=logs.append)   # no error
+    assert len(refused) == 3 and any("Could not remove" in m for m in logs)
+    assert jobs._read_lock(run_dir) == {} and jobs._lock_alive(jobs._read_lock(run_dir)) is False
+    logs.clear()
+    jobs.run_resumable(inputs(["ethanol", "TFE"]), cfg(tmp_path), run_dir, log=logs.append)
+    assert not any("ended without cleaning up" in m for m in logs)          # an emptied lock is no one's
+    assert not (run_dir / jobs.LOCK_NAME).exists() and jobs.open_run(run_dir).counts["ok"] == 2
+
+
+def test_lock_release_while_another_thread_reads_the_lock(tmp_path, monkeypatch):
+    """The race itself, with real files: on Windows, before FIX-4, about half of these releases failed."""
+    import threading
+
+    monkeypatch.setattr(jobs, "LOCK_RELEASE_WAIT_S", 0.002)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    stop = threading.Event()
+
+    def poll():
+        while not stop.is_set():
+            jobs._read_lock(run_dir)
+
+    t = threading.Thread(target=poll, daemon=True)
+    t.start()
+    try:
+        for _ in range(300):
+            with jobs._RunLock(run_dir, False, lambda m: None):
+                pass
+    finally:
+        stop.set()
+        t.join()
+    assert not (run_dir / jobs.LOCK_NAME).exists()
+
+
 def test_merge_reports_missing_and_unfinished_folders(tmp_path):
     done, killed = tmp_path / "done", tmp_path / "killed"
     jobs.run_resumable(inputs(["ethanol"]), cfg(tmp_path), done)
