@@ -16,6 +16,31 @@
 - **The review flags flexible neutral molecules** under the RDKit search ("search.flexible-neutrals"), with Apply for "auto". Its cost estimate charges CREST only to the molecules that get it.
 - Lane planning, dynamic CREST threads, the cost model and the engines a run records treat "auto" like "crest". A merged pool's conformer-stage time is left out of the CREST cost-model fit.
 
+### The failed molecules of the QSAR tranches, FAIL-1 (2026-11-16)
+Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, for three causes. Each one is fixed here:
+- **"Bad Conformer Id"** (5 glycosides, both phases: digitoxin, digoxin, gitoxin, glycyrrhizin, maltopentaose).
+  - With RDKit 2026.09's small-ring torsions, ETKDG found no conformer within the 450 s embedding limit.
+  - RDKit's timeout then returned the id -1, which QuantaBench took for a conformer.
+  - Now -1 is dropped. An ETKDG start that finds no first conformer in 60 s gives way to the next one (without small-ring torsions, then random coordinates), with a note. Digitoxin now embeds 50 conformers (its whole MMFF build took 40 s on NOVA).
+- **"crashed the process 2 times"** (6 molecules in water, all at the rank step).
+  - tblite 0.8.0's ddX CPCM solver corrupts the heap at some geometries, which killed the lane: 0xC0000374 on Windows, glibc's abort on Linux.
+  - The rank step's GFN1-xTB CPCM terms now run in a helper process. A crash there costs that conformer's rank energy (noted), not the molecule.
+- **"SCF not converged in 250 cycles"** (tblite GFN2-xTB: 3 molecules in gas, 2 in water; 1423-20-7 in both phases).
+  - A failed SCF now gets a last try from atomic densities, with mixer damping 0.2 and up to 1,000 cycles. 1423-20-7 does not converge in 1,000 cycles at tblite's default damping (0.4), but converges at 0.2. The damping changes the path to the solution, not the converged energy. A note counts these single points.
+  - A conformer whose optimization still fails is dropped with a note. The molecule fails only if every conformer does.
+
+### CI: native stacks of a hung test, FIX-3 (2026-11-16)
+- **The hang is in Qt's own code.** It was seen on Windows (#15) and macOS (#18): `test_project.py`'s reopen and resume tests stop in `Notes.set_notes` → `setVisible`, inside Qt, during a project load. The faulthandler stack ends there, so the frames below are missing.
+- **Why pytest-timeout never fired.** That thread holds Python's GIL, and pytest-timeout's thread needs the GIL to dump and exit. So the Windows job ran into its 30 min limit.
+- **A watchdog process now watches the tests in CI** (`tests/hang_watchdog.py`, `QB_HANG_WATCHDOG=1`). It has its own interpreter:
+  - a test still running after 200 s gets every thread's native and Python frames dumped into the log with `py-spy dump --native`, including whether the thread holds the GIL (macOS, where py-spy has no native mode: py-spy's Python frames and the system's `sample`);
+  - at 420 s the watchdog kills the process, so the job fails in 7 minutes instead of 30.
+
+### `grid build --molecule-timeout` (2026-11-16)
+- `grid build` takes `--molecule-timeout S`, like `build`, and every machine's share runs with it.
+- Before this, the option was `build`'s only. A grid run took the client's settings value (1,800 s by default) on every machine, which is too short for CREST on the largest flexible molecules.
+- **A worker's finished run folder is one file again on Windows.** When a status poll's connection overlapped the end of a job, `jobs.sqlite-wal` stayed beside the job table, and a flaky CI test (`test_archive_manifest_sync_temp_files_and_failed_streams`) failed on it. The worker's final checkpoint now tries again for up to 3 s, until the poll has let go.
+
 ### A resume keeps the run's `--lanes` on the machine that chose it, RESUME-2 (2026-11-16)
 - The run stores the lane spec in force: the spec, whether it was chosen with `--lanes` or came from the machine's setting, and the machine.
 - `build --resume` without `--lanes`, and Build > Resume run folder, use a chosen spec again when they run on the machine that chose it ("Lanes kept from the run: --lanes auto"). Another machine uses its own setting and says so; the run keeps its choice for a later resume there.

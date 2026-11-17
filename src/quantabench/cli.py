@@ -948,6 +948,10 @@ def add_build_science_args(q: argparse.ArgumentParser) -> None:
                         "lowest --refine-top; not with --method mmff)")
     q.add_argument("--crest-method", choices=["gfn2", "gfnff", "gfn2//gfnff", "gfn1"])
     q.add_argument("--crest-full", action="store_true", help="full CREST run instead of --quick (much slower)")
+    q.add_argument("--molecule-timeout", type=float, metavar="S",
+                   help="wall-clock limit per molecule, s (0 = none; default from settings, 1800): a lane past it is "
+                        "killed and restarted, one process stops at the next checkpoint; the molecule is marked "
+                        "failed 'time limit (S s)' and --retry-failed redoes it. In grid build: every machine's share")
     q.add_argument("--crest-fallback", choices=["rdkit", "fail"],
                    help="when CREST is missing or fails for a molecule: 'rdkit' (default) builds it with RDKit's "
                         "conformers and flags it (note, summary.csv conformer_fallback, a count at the end); 'fail' "
@@ -1149,10 +1153,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="memory per process for the dxtb steps: larger estimates take a cheaper path or skip the "
                         "step with a note (0 = available memory / lanes, at least 1.5 GB; < 0 = no guard; "
                         "default from settings); see docs/ENGINES.md")
-    b.add_argument("--molecule-timeout", type=float, metavar="S",
-                   help="wall-clock limit per molecule, s (0 = none; default from settings, 1800): a lane past it is "
-                        "killed and restarted, one process stops at the next checkpoint; the molecule is marked "
-                        "failed 'time limit (S s)' and --retry-failed redoes it")
     add_priority_args(b)
     from .cli_review import add_review_flag
 

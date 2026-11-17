@@ -49,6 +49,7 @@
 | `chem.external` | External programs: discovery (settings, `QUANTABENCH_<NAME>`, PATH, conda envs, `wsl:`), `program_env` (threads, `OMP_STACKSIZE`, `PSI_SCRATCH`, `WSLENV`), `work_dir`, `run_program` (log file, timeout, process-tree cancellation, the run priority through `popen_args`). |
 | `chem.eng_xtb`, `chem.eng_tblite`, `chem.eng_mopac` | Plugin engines: the xtb program (GFN2/GFN1/GFN-FF), tblite in process, MOPAC PM7/PM6-D3H4X. |
 | `chem.eng_gxtb` | g-xTB single points with the official g-xtb build of xtb (`xtb --gxtb`): its own program entry `gxtb`, the build's SHA-256 against the pinned releases (`KNOWN_BUILDS`), a start check, the command and the energy. Not a refinement engine. |
+| `chem.cpcm_worker` | FAIL-1: the rank step's GFN1-xTB gas and CPCM terms in a helper process (one per process, started again after a crash), because tblite 0.8.0's ddX CPCM corrupts the heap at some geometries; JSON lines over stdin/stdout. |
 | `chem.rank` | The rank step (RANK-2): `rank_method` levels and the `auto` rules by phase with their fallbacks (`resolve`), single points of the refined conformers at the rank level (`compute`: g-xTB, AIMNet2, the GFN1-xTB CPCM ΔG_solv of tblite), the per-machine single-point cache, the rank window and the molecule's `rank` record. |
 | `chem.solvents` | One canonical solvent name mapped to ALPB/GBSA, COSMO (ε) and PCM keywords. |
 | `chem.crest` | CREST conformer search into a `ConformerSet` (atom order and topology checked). |

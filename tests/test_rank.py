@@ -211,6 +211,74 @@ def test_cpcm_term_and_the_cache(tmp_path):
     broken.put("k", 1.0)
 
 
+def test_the_cpcm_helper_survives_a_crash(monkeypatch):
+    """FAIL-1: tblite's ddX CPCM crashes its process at some geometries. The helper process that computes the terms
+    reports the crash (``HelperCrashed``, with the exit code) and the next request starts a new helper."""
+    import subprocess
+
+    from quantabench.chem import cpcm_worker
+
+    h = cpcm_worker.Helper(1)
+    starts = []
+
+    def start():                       # a helper that dies on its first request, like the ddX crash
+        starts.append(1)
+        return subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.readline(); sys.exit(3)"],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                bufsize=1)
+
+    monkeypatch.setattr(h, "_start", start)
+    water = np.array([[0, 0, 0.1173], [0, 0.7572, -0.4692], [0, -0.7572, -0.4692]])
+    for _ in range(2):
+        with pytest.raises(cpcm_worker.HelperCrashed, match="exit code 3"):
+            h.term("t", [8, 1, 1], water, 0, 1, "water")
+    assert len(starts) == 2 and h.crashes == 2 and h.proc is None
+    h.close()
+
+
+@needs_tblite
+def test_the_cpcm_helper_gives_the_in_process_terms():
+    from quantabench.chem import cpcm_worker
+
+    water = [8, 1, 1]
+    pos = np.array([[0, 0, 0.1173], [0, 0.7572, -0.4692], [0, -0.7572, -0.4692]])
+    here = rank.cpcm_term_eh(water, pos, 0, 1, "water", in_process=True)
+    there = rank.cpcm_term_eh(water, pos, 0, 1, "water", in_process=False)
+    assert there == pytest.approx(here, abs=1e-9)
+    # the helper's own loop: a reply per request, an SCF that cannot run is an error reply, not the end of it
+    replies = []
+    req = {"token": "a", "numbers": water, "positions": pos.tolist(), "charge": 0, "multiplicity": 1, "solvent": "water"}
+    bad = {**req, "token": "b", "multiplicity": 2}             # 10 electrons cannot be a doublet
+    cpcm_worker.serve([json.dumps(req), "", json.dumps(bad), json.dumps(req)], replies.append)
+    out = [json.loads(r) for r in replies]
+    assert [o["ok"] for o in out] == [True, False, True] and out[0]["gas"] == pytest.approx(here[0], abs=1e-9)
+    assert "unpaired" in out[1]["error"] or "RuntimeError" in out[1]["error"]
+
+
+@posix_only
+@needs_tblite
+def test_a_crashed_cpcm_term_costs_that_conformer_only(fake_gxtb, monkeypatch, tmp_path):
+    """The rank step goes on when one conformer's CPCM term crashed its helper: that conformer has no rank energy
+    (a note says why), the others are ranked."""
+    from quantabench.chem import cpcm_worker
+
+    cs, pool = _pool(n=3)
+    real = cpcm_worker.Helper.term
+    seen = []
+
+    def term(self, token, numbers, positions, *a):
+        seen.append(1)
+        if len(seen) == 2:
+            raise cpcm_worker.HelperCrashed("tblite's ddX CPCM crashed its process at this geometry (exit code -6)")
+        return real(self, token, numbers, positions, *a)
+
+    monkeypatch.setattr(cpcm_worker.Helper, "term", term)
+    r = rank.compute("gxtb+cpcm", cs.mol, pool, solvent="water", threads=1)
+    got = [r.energies_ev[c.conf_id] for c in pool]
+    assert got[1] is None and got[0] is not None and got[2] is not None
+    assert any("HelperCrashed" in n and "ddX CPCM crashed" in n for n in r.notes)
+
+
 def _pool(smiles=HEXANOL, n=6):
     """An MMFF94s conformer set and its 'refined' conformers (the force-field energies)."""
     from quantabench.chem.standardize import prepare

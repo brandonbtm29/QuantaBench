@@ -19,6 +19,44 @@ _SESSION_DIRS = {"QUANTABENCH_SETTINGS_DIR": "settings", "QUANTABENCH_WINDOW_STA
                  "QUANTABENCH_CACHE_DIR": "cache", "QUANTABENCH_WORKER_STATE": "worker_state",
                  "QUANTABENCH_SCRATCH_DIR": "scratch"}
 _SESSION_ROOT: list[str] = []
+#: the CI hang watchdog process (tests/hang_watchdog.py, QB_HANG_WATCHDOG=1): told when each test starts and ends
+_WATCHDOG: list = []
+
+
+def _start_watchdog() -> None:
+    """Start tests/hang_watchdog.py for this pytest process (CI only: QB_HANG_WATCHDOG=1). It dumps the native stacks
+    of a test that runs longer than QB_HANG_DUMP_S (default 200 s) and kills the process after QB_HANG_KILL_S (420 s):
+    a hang inside Qt that holds the GIL is out of reach of pytest-timeout and shows only Python frames in faulthandler's
+    dump."""
+    if os.environ.get("QB_HANG_WATCHDOG") != "1" or os.environ.get("QB_TEST_SKETCHER_CHILD") == "1":
+        return
+    import subprocess
+
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hang_watchdog.py")
+    args = [sys.executable, script, str(os.getpid()), os.environ.get("QB_HANG_DUMP_S", "200"),
+            os.environ.get("QB_HANG_KILL_S", "420")]
+    try:
+        _WATCHDOG.append(subprocess.Popen(args, stdin=subprocess.PIPE, text=True, bufsize=1))
+    except OSError as exc:
+        sys.stderr.write(f"hang watchdog not started: {exc}\n")
+
+
+def _tell_watchdog(line: str) -> None:
+    for proc in _WATCHDOG:
+        try:
+            proc.stdin.write(line + "\n")
+            proc.stdin.flush()
+        except (OSError, ValueError):
+            pass
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    _tell_watchdog(f"start {item.nodeid}")
+    try:
+        yield
+    finally:
+        _tell_watchdog("end")
 
 
 def pytest_configure(config):
@@ -38,6 +76,7 @@ def pytest_configure(config):
         from quantabench.gui import sketcher_web
 
         sketcher_web.prepare_before_app()
+    _start_watchdog()
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -53,6 +92,12 @@ def pytest_unconfigure(config):
 
     for root in _SESSION_ROOT:
         shutil.rmtree(root, ignore_errors=True)
+    for proc in _WATCHDOG:              # end of input ends it
+        try:
+            proc.stdin.close()
+            proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001 - never worth failing the session
+            proc.kill()
     resources.hard_exit_if_needed(_EXIT_STATUS[0])
 
 

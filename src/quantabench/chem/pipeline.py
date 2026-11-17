@@ -457,26 +457,40 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
 
     calc = build(device)
     out = []
+    failed: list[tuple[int, Exception]] = []     # conformers whose optimization failed on the CPU (FAIL-1)
     for i, (cid, e_ff) in enumerate(zip(ids, ff)):
         if should_stop():
             raise Cancelled()
         atoms = export.mol_to_atoms(mol, cid)
         atoms.calc = calc
+        res = None
         try:
             res = run_opt(atoms)
         except Cancelled:
             raise
         except Exception as exc:
-            if result.device == "cpu":
-                raise
-            result.notes.append(f"{result.method} failed on {result.device} ({type(exc).__name__}: {exc}); "
-                                "fell back to CPU")
-            log(result.notes[-1])
-            result.device = "cpu"
-            calc = build("cpu")
-            atoms = export.mol_to_atoms(mol, cid)
-            atoms.calc = calc
-            res = run_opt(atoms)
+            error = exc
+            if result.device != "cpu":
+                result.notes.append(f"{result.method} failed on {result.device} ({type(exc).__name__}: {exc}); "
+                                    "fell back to CPU")
+                log(result.notes[-1])
+                result.device = "cpu"
+                calc = build("cpu")
+                atoms = export.mol_to_atoms(mol, cid)
+                atoms.calc = calc
+                try:
+                    res = run_opt(atoms)
+                except Cancelled:
+                    raise
+                except Exception as exc2:
+                    error = exc2
+            if res is None:
+                # one conformer's failure (an SCF that does not converge at some step) drops that conformer; the
+                # molecule fails only if every conformer does (b03-b11: 4 molecules failed on one conformer's SCF)
+                failed.append((cid, error))
+                first = str(error).splitlines()[0][:160] if str(error) else ""
+                log(f"  conformer {i + 1}/{len(ids)}: failed ({type(error).__name__}: {first}); dropped")
+                continue
         conf = mol.GetConformer(cid)
         for j, p in enumerate(atoms.get_positions()):
             conf.SetAtomPosition(j, p.tolist())
@@ -491,6 +505,21 @@ def _refine(result: MoleculeResult, conf_set: confs.ConformerSet, cfg: BuildConf
                                    converged=res.converged, steps=res.steps, charges=charges, dipole_debye=dip))
         log(f"  conformer {i + 1}/{len(ids)}: E = {res.energy_ev:.5f} eV, {res.steps} steps"
             + ("" if res.converged else " (not converged)"))
+    if failed and not out:
+        raise failed[0][1]
+    if failed:
+        err = failed[0][1]
+        first = str(err).splitlines()[0][:160] if str(err) else ""
+        result.notes.append(f"{len(failed)} of {len(ids)} conformer(s) dropped: their {result.method} optimization "
+                            f"failed ({type(err).__name__}: {first})")
+        log(f"  {result.notes[-1]}")
+    damped = int(getattr(calc, "n_damped", 0) or 0)
+    if damped:
+        from .eng_tblite import RETRY_DAMPING, RETRY_MAX_ITERATIONS
+
+        result.notes.append(f"{result.method}: {damped} single point(s) converged only with a gentler SCF mixer "
+                            f"(tblite mixer damping {RETRY_DAMPING:g}, up to {RETRY_MAX_ITERATIONS} cycles)")
+        log(f"  {result.notes[-1]}")
     return out
 
 

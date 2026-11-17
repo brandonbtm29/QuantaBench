@@ -48,6 +48,52 @@ Follow-ups (ready):
 - The full run: rebuild the list's ~1,674 flexible neutral molecules with `--conformers auto --crest-with-rdkit` per
   phase (needs-Brandon: about 110-300 h per phase on half the MacBook; NOVA needs CREST in WSL).
 
+## FAIL-1: The failed molecules of the QSAR tranches · in-PR 2026-11-16 (branch `fix/failed-molecules`)
+b01-b15 (13,206 molecules): 8 failed in gas and 13 in water (`Runs\failed-molecules-2026-11-16\report.md`).
+Done in the branch:
+- `conformers.embed`:
+  - RDKit's timeout id -1 is not a conformer;
+  - `FIRST_CONFORMER_S` (60 s) per ETKDG start, then the next start (without small-ring torsions, random
+    coordinates);
+  - the 5 glycosides ("Bad Conformer Id").
+- `chem/cpcm_worker.py`: the rank step's GFN1-xTB gas/CPCM terms in a helper process. `rank.CpcmTerm` uses it
+  (`in_process=`, `QUANTABENCH_CPCM_IN_PROCESS`). This fixes the 6 water crashes (tblite 0.8.0 ddX heap corruption at
+  some geometries; reproduced on Windows and Linux with 2447-54-3's water minimum).
+- `eng_tblite.TBLiteCalculator`: a failed SCF gets a last try with mixer damping 0.2 and up to 1,000 cycles
+  (`n_damped`).
+- `pipeline._refine`: a conformer whose optimization fails is dropped (noted); the molecule fails only if all do.
+  This fixes the 5 SCF failures.
+- Tests:
+  - `test_conformers.py::test_an_etkdg_start_that_finds_no_conformer_gives_way`,
+    `::test_no_way_of_embedding_finds_one_is_a_clear_error`;
+  - `test_rank.py::test_the_cpcm_helper_survives_a_crash`, `::test_the_cpcm_helper_gives_the_in_process_terms`,
+    `::test_a_crashed_cpcm_term_costs_that_conformer_only`;
+  - `test_eng_tblite.py::test_an_scf_that_fails_gets_a_gentler_last_try`;
+  - `test_pipeline.py::test_one_conformers_failure_drops_that_conformer`.
+Follow-ups:
+- Report the ddX crash upstream (tblite 0.8.0, CPCM, with 2447-54-3's geometry).
+- Rerun the 15 molecules (21 molecule-phases) with `--retry-failed` once this is merged (the report lists the commands).
+- 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
+  about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
+
+## FIX-3: The CI hang inside Qt · in-PR 2026-11-16 (branch `fix/ci-hang-dump`; the cause: open)
+The hang seen since Nov 13 (Linux, before UI-8) now has two stacks, both from a project load in the tests' `_wait`
+loop: a worker's `done` → `MainWindow._on_loaded` → `_after_load` → `_on_molecule_selected` → `_show_info` →
+`collapsible.Notes.set_notes` → `self.setVisible(...)`, inside Qt.
+- Windows CI of #15: `test_project.py::test_save_and_reopen_a_built_project`.
+- macOS CI of #18: `test_project.py::test_resume_a_half_finished_project`.
+Not reproduced: 65 runs of those tests on Linux (xvfb) passed. pytest-timeout (`--timeout=300`) never fired, so the
+main thread holds the GIL inside Qt; the other Python threads (the machine monitor's, the sensors') were idle.
+Suspects: a layout loop of the Molecules dock's word-wrapped labels; a deadlock between the main thread (GIL held,
+in Qt) and a thread waiting for the GIL while it holds a Qt lock.
+Done in the branch: `tests/hang_watchdog.py`, a separate process started by `tests/conftest.py` when
+`QB_HANG_WATCHDOG=1` (CI). After 200 s it runs `py-spy dump --native` on the test process (every thread, native
+frames, which thread holds the GIL; `sudo -n` on Linux and macOS; on macOS py-spy's Python frames plus `sample`), and
+at 420 s it kills the process.
+Tests: `tests/test_hang_watchdog.py` (a process stuck in the regex engine, holding the GIL).
+Next: the next hang's native frames name the Qt call; fix it from there. If it is a threads-and-GIL deadlock, the
+cure is in how the workers hand results to the GUI thread (no Python objects in cross-thread signals).
+
 ## FIX-2: Flaky CI tests · done 2026-11-15 (PR #13)
 - macOS (PR #11's first run): `tests/test_telemetry.py::test_the_load_sampler_records_sensors_or_skips_them`,
   KeyError `cpu_temp_c`. `LoadSampler.run` checked `_halt` before the sensor read and appended the sample anyway;
@@ -57,6 +103,13 @@ Follow-ups (ready):
   uses `--timeout-method=thread` and the suite `faulthandler_timeout = 240`, so the next hang names its test and
   shows every thread's stack.
 Follow-up: when it shows up, fix the hanging test itself (a modal dialog at window close is the first suspect).
+- 2026-11-16, the first stack (Windows CI of #15): `test_project.py::test_save_and_reopen_a_built_project` hung in
+  `MainWindow._show_info` → `collapsible.Notes.set_notes` → `self.setVisible(...)`, inside Qt, during the test's
+  `_wait` loop (a worker's `done` → `_on_loaded` → `_after_load` → `_on_molecule_selected`). 25 runs of the test on
+  Linux (xvfb) did not hang. Next: a layout loop of the word-wrapped labels in the Molecules dock's Details is the
+  suspect (the Nov 13 Linux hang, before UI-8, was in the same tests).
+- 2026-11-16: the flaky `test_worker.py::test_archive_manifest_sync_temp_files_and_failed_streams` (Windows, a
+  `jobs.sqlite-wal` left behind) is fixed in `JobManager._checkpoint` (it retries until a status poll lets go).
 
 ## UI-8: Collapsible sections and pop-out panels · done 2026-11-15 (PR #12)
 Brandon (2026-11-14): "At the moment it's kind of crowded. I think more collapsible menus / pop outs would be helpful";

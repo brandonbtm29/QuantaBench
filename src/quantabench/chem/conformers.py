@@ -47,6 +47,11 @@ def _invariant(exc: Exception) -> str:
 
 #: Share of the per-molecule time limit (``BuildConfig.molecule_timeout_s``) the embedding may use by default
 EMBED_TIME_FRACTION = 0.25
+#: Seconds the first conformer of an attempt may take before the embedding moves on to the next way of embedding
+#: (``embed``). With RDKit 2026.09's small-ring torsions, ETKDG finds no conformer for sugar-rich glycosides
+#: (digitoxin, digoxin, glycyrrhizin, maltopentaose: b05-b12, 2026-11-12) in 7.5 minutes; without them it takes
+#: about a second.
+FIRST_CONFORMER_S = 60.0
 
 
 def embed_time_limit(molecule_timeout_s: float | None = None) -> float:
@@ -79,19 +84,30 @@ def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1, notes: list[s
     embedded first and timed: when ``n`` of them would not fit the time left, fewer are asked for (a note
     says how many), and every call carries the time left as RDKit's timeout as a hard stop (a note says when
     it fired, and with how many conformers). Molecules that embed within the limit get the same conformers
-    as without it."""
+    as without it.
+
+    An ETKDG start that finds no first conformer within ``FIRST_CONFORMER_S`` gives way to the next one (without
+    small-ring torsions, then random starting coordinates), with a note: sugar-rich glycosides found none with
+    small-ring torsions in 7.5 minutes and took about a second without them. A call stopped by RDKit's timeout
+    before its first conformer returns the id -1, which is not a conformer (it failed those molecules with
+    "Bad Conformer Id")."""
     t0 = time.monotonic()
 
     def left() -> float:
         return timeout_s - (time.monotonic() - t0) if timeout_s > 0 else 0.0
 
-    def run(params, count: int) -> list[int]:
+    def run(params, count: int, cap: float = 0.0) -> list[int]:
+        """``count`` conformers; RDKit's timeout is the time left (``timeout_s``) and at most ``cap`` s. A call that
+        RDKit's timeout stopped before its first conformer returns [-1] (RDKit 2026.09): not a conformer, dropped."""
+        limit = 0.0
         if timeout_s > 0:
-            remaining = left()
-            if remaining <= 0:
+            limit = left()
+            if limit <= 0:
                 raise _OutOfTime()
-            params.timeout = max(1, math.ceil(remaining))
-        return list(AllChem.EmbedMultipleConfs(mol, numConfs=count, params=params))
+        if cap > 0:
+            limit = min(limit, cap) if limit > 0 else cap
+        params.timeout = max(1, math.ceil(limit)) if limit > 0 else 0
+        return [int(i) for i in AllChem.EmbedMultipleConfs(mol, numConfs=count, params=params) if int(i) >= 0]
 
     def attempt(seed_: int, small_rings: bool, random_coords: bool) -> list[int]:
         params = AllChem.ETKDGv3()
@@ -102,11 +118,21 @@ def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1, notes: list[s
         params.useRandomCoords = random_coords
         with rdBase.BlockLogs():      # an invariant's C++ stack trace goes to the log; the exception is enough
             count = n
-            if timeout_s > 0 and n > 1:     # time one conformer; ask for no more than fit the time left
+            # one conformer first: it is timed (to fit the time limit), and an ETKDG start that finds none within
+            # FIRST_CONFORMER_S gives way to the next way of embedding instead of using up the time limit
+            if not random_coords or (timeout_s > 0 and n > 1):
                 t1 = time.monotonic()
-                one = run(params, 1)
+                one = run(params, 1, cap=0.0 if random_coords else FIRST_CONFORMER_S)
                 per = time.monotonic() - t1
-                if one and per * n > left():
+                if not one:
+                    if not random_coords:
+                        if notes is not None:
+                            notes.append(f"RDKit ETKDG{' with small-ring torsions' if small_rings else ''} found no "
+                                         f"conformer in {per:.0f} s")
+                        return []
+                elif n == 1:
+                    return one            # the conformer asked for
+                elif timeout_s > 0 and per * n > left():
                     count = max(1, int(0.8 * left() / max(per, 1e-6)))
                     if notes is not None:
                         notes.append(f"conformer embedding limited by the time limit: {count} of {n} conformers "
@@ -120,6 +146,7 @@ def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1, notes: list[s
         return ids
 
     first: RuntimeError | None = None
+    ids: list[int] = []
     try:
         for seed_, small_rings, random_coords in ((seed, True, False), (seed, False, False), (seed + 1, False, True)):
             try:
@@ -129,12 +156,16 @@ def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1, notes: list[s
             except RuntimeError as exc:
                 first = first or exc
                 continue
-            if first is not None and notes is not None:
-                notes.append(f"RDKit ETKDG aborted ({_invariant(first)}); embedded without small-ring torsions"
+            if not ids:                   # none found this way (the note says how long it tried): the next way
+                continue
+            if (seed_, small_rings, random_coords) != (seed, True, False) and notes is not None:
+                why = f"RDKit ETKDG aborted ({_invariant(first)})" if first is not None else "RDKit ETKDG found none"
+                notes.append(f"{why}; embedded without small-ring torsions"
                              + (f", seed {seed_}, random start" if random_coords else ""))
             break
         else:
-            raise RuntimeError(f"RDKit could not embed 3D coordinates for this structure ({_invariant(first)})")
+            if first is not None:
+                raise RuntimeError(f"RDKit could not embed 3D coordinates for this structure ({_invariant(first)})")
     except _OutOfTime:
         raise RuntimeError(f"conformer embedding ran out of time ({timeout_s:.0f} s) without a conformer") from None
     elapsed = time.monotonic() - t0
