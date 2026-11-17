@@ -2,6 +2,15 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Tests: garbage collected only in the main thread; a worker and its runner hold no cycle, FIX-5 (2026-11-16)
+- **Main's Windows CI after #21 aborted** in `test_gui_declutter.py` ("Fatal Python error: Aborted"). The native stack: the GUI thread was deleting a Qt object (a posted DeferredDelete), and inside `~QObject` a pure virtual function was called. A sensors thread was busy allocating at that moment.
+  - The likely cause: Python's cyclic garbage collector runs in whichever thread allocates, and there it destroyed Qt objects (or the connections PySide keeps for them) outside the GUI thread, while the GUI thread destroyed them too.
+  - The app has collected only in its GUI thread since `a717844` (`gui/app.py`). **The tests now do the same:** automatic collection is off; the young generations are collected after every test and everything at the end of each module, in the main thread.
+  - Not reproduced: Linux runs of every GUI test with the collector made to run very often passed.
+- **`gui.workers.start`:** a worker and its runner (FIX-3) referred to each other, so only the garbage collector could free them. `_Keeper` now holds both and lets go of them in the GUI thread.
+- **The CI hang watchdog** kills with psutil: the test process first, then the other processes it started, never itself. It logs if the process is still there 15 s later.
+  - After the abort the process hung in Windows' process exit: VTK's DLL teardown waited for the GIL. The watchdog said "killing pid" at 7 min, but the job still ran into its 30 min limit.
+
 ### A finished run is no longer failed by a status poll at its last moment, FIX-4 (2026-11-16)
 - **On Windows, a run could end "failed" just after its last molecule.** The end of a run removes its lock file, `jobs.lock`, and status polls read that file (a worker's job status, the GUI, `status`). Windows cannot delete a file while anyone has it open, so a poll at that moment made the removal raise, and a worker marked the whole job failed.
   - Most likely what failed one CI run (main after #18, Windows, `test_worker.py::test_partial_merge_and_per_share_errors`; the job's error was not printed). In a scratch test on NOVA with a thread reading the lock without pause, 1,592 of 3,000 lock releases failed.

@@ -76,6 +76,36 @@ Follow-ups:
 - 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
   about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
 
+## FIX-5: An abort in the GUI tests (Windows CI) · in-PR 2026-11-16 (branch `fix/ci-abort-gc`)
+Main's Windows CI for 486e332 (#19's merge, with #21) aborted in
+`test_gui_declutter.py::test_table_toolbar_menus_and_popout`, in the first `_wait` after a new window opened.
+- **faulthandler:** "Fatal Python error: Aborted" in the main thread (`_wait` → `processEvents`). Two
+  "quantabench-sensors" threads were running, one inside `ssl._load_windows_store_certs` (allocating a lot).
+- **py-spy's native stack** of the main thread: `sendPostedEvents` → `QApplication::notify` → `QObject::event`
+  (DeferredDelete) → a PySide wrapper's destructor → `QObject::~QObject` → `_purecall` → `abort`. A pure virtual call
+  inside `~QObject` means something touched an object that was already being destroyed.
+- **Likely cause:** the cyclic garbage collector, which runs in whichever thread allocates. In a sensors thread it
+  destroyed Qt objects, or the receivers PySide keeps for Python callables, while the GUI thread destroyed the same
+  ones. The app has avoided this since `a717844` (`gui/app.py`: automatic collection off, `gc.collect` on a GUI timer).
+  The tests collected only at the end of each module.
+- **Fix:**
+  - `tests/conftest.py`: automatic collection off for the session; `gc.collect(1)` after every test and a full
+    collection after each module, in the main thread.
+  - `gui.workers.start`: the worker and its runner (FIX-3) referred to each other, so only the collector could free
+    them. Now `_Keeper` holds both and lets go of them in the GUI thread, and the runner drops its worker when `run`
+    ends.
+- **The process then hung in Windows' process exit.** VTK's matplotlib text module, torn down with its DLL, called
+  `PyGILState_Ensure`, and the GIL was held by a thread that `ExitProcess` had already ended. The watchdog printed
+  "killing pid 496" (`taskkill /F /T`) at 7 min, but the job ran into its 30 min limit. On NOVA the old kill does end
+  a stuck process that started the watchdog, so the exit state is the likely reason.
+  - The watchdog now kills with psutil (the test process first, then its other children, never itself) and logs if
+    the process is still there 15 s later.
+  - Test: `test_hang_watchdog.py::test_the_watchdog_kills_the_process_it_is_a_child_of`.
+- **Not reproduced:** Linux (xvfb), every GUI and project test with `gc.set_threshold(20, 1, 1)`: 166 passed; the
+  two GUI modules 3 times: passed. The GUI tests were not run on NOVA: they open windows on Brandon's desktop.
+- **Check:** the full suite with the change (cloud, Linux): 1,714 passed, 40 skipped, 7 min. Watch Windows CI for
+  another "Fatal Python error: Aborted".
+
 ## FIX-4: A run failed by a status poll at its end (Windows) · in-PR 2026-11-16 (branch `fix/run-lock-release`)
 Main's Windows CI after #18 failed once in `test_worker.py::test_partial_merge_and_per_share_errors`: the job ended
 "failed" instead of "done" after its last molecule (the job's error is not in the test's output).
