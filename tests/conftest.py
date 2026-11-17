@@ -1,3 +1,4 @@
+import gc
 import os
 import sys
 
@@ -57,6 +58,18 @@ def pytest_runtest_protocol(item, nextitem):
         yield
     finally:
         _tell_watchdog("end")
+        gc.collect(1)                   # this test's young cycles, here in the main thread (_collect_in_main_thread_only)
+
+
+def _collect_in_main_thread_only() -> None:
+    """Python's cyclic garbage collector runs in whichever thread allocates when a threshold is passed. In the GUI
+    tests that is often a sensors or worker thread, and garbage that holds a Qt object (a window and its panels refer to
+    each other) is then destroyed there, outside the GUI thread, possibly while the GUI thread deletes the same object
+    (a posted DeferredDelete): the process aborts. Main's Windows CI, 2026-11-16: a pure virtual call in ``~QObject``
+    during ``sendPostedEvents``, while a sensors thread was loading certificates (FIX-5). As in the app (gui/app.py),
+    automatic collection is off: the young generations are collected after every test, everything at the end of each
+    module (``_collect_in_main_thread``), always in the main thread."""
+    gc.disable()
 
 
 def pytest_configure(config):
@@ -77,6 +90,7 @@ def pytest_configure(config):
 
         sketcher_web.prepare_before_app()
     _start_watchdog()
+    _collect_in_main_thread_only()
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -106,10 +120,9 @@ def _collect_in_main_thread():
     """Collect each test module's reference cycles here, in the main thread. Left to chance, a cycle that
     holds a Qt window (a panel and its window refer to each other) may be collected by a worker thread of a
     later module (the HTTP worker tests), and Qt aborts the process when a widget is destroyed outside the
-    GUI thread. The app itself collects in its GUI thread on a timer (gui/app.py)."""
+    GUI thread. The app itself collects in its GUI thread on a timer (gui/app.py). Automatic collection is off
+    for the session (``_collect_in_main_thread_only``)."""
     yield
-    import gc
-
     gc.collect()
 
 
