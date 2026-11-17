@@ -206,3 +206,27 @@ Newest entries at the bottom. One entry per working session or nightly run.
   - Lanes are daemonic `multiprocessing` processes, which may not start their own: the helper is a `subprocess`. A killed lane takes it along, since the lane kill takes the process tree.
 - **SCF: damping rather than temperature.** For 1423-20-7, 1,000 cycles at tblite's default damping do not converge, and damping 0.2 does. A higher electronic temperature would change the energy; the damping only changes the path. The geometry is from an optimization step of a molecule without force-field parameters.
 
+## 2026-11-16: CONF-AUTO CREST for flexible neutral molecules (branch `feat/crest-auto`)
+- **One rule, three users.** The pipeline decides per molecule (`search_rule.decide` on the prepared structure). The
+  advisor estimates per molecule from its own profile (`advisor.uses_crest`, with the same charge class and strict
+  rotor count). Run-level code (lanes, dynamic threads, the cost model, telemetry) only asks whether CREST can run
+  at all (`may_use_crest`).
+- **The charge class is the advisor's, not the conformer checks' net charge.** The checks counted a zwitterion as
+  neutral (net 0). Charged chains are what GFN-FF got wrong, so a zwitterion gets RDKit. A nitro group's N+/O- is a
+  bonded pair and stays neutral.
+- **Rotatable bonds: RDKit's strict count on the heavy-atom graph**, as the conformer checks (`analyze_conf.py`) and
+  the advisor counted them. On the prepared molecule with explicit hydrogens every methyl would count.
+- **The merged pool never compares energies across the two searches.** CREST's are GFN-FF (or GFN2) energies and
+  RDKit's are MMFF94s.
+  - So the refinement takes each pool's lowest `refine_top` (`ConformerSet.refine_count` = all of them) and ranks them
+    at its own level.
+  - With the refinement "mmff" there is no such level (it uses the pool's energies), so the merge is skipped with a
+    note.
+  - Duplicates against CREST's conformers are found by an RMSD on the same atom order (`AlignMol`: fast). The
+    symmetry-aware `GetBestRMS` on 20 x 20 pairs of a perfluorinated chain could take minutes. A symmetric
+    duplicate is refined twice and removed by the re-pruning after the refinement.
+- **The Careful preset and recipe now use "auto" + merge** instead of CREST for every molecule. CREST for ions was
+  the part the gas test found worse.
+- **The crest-ions finding** (CREST for flexible ions in water, from the DFT conformer test) now fires only under the
+  RDKit search. Under "auto" ions stay on RDKit by design, until a water test of ions says otherwise (BACKLOG).
+

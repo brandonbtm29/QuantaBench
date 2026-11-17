@@ -1713,7 +1713,7 @@ ENGINE_ENTRIES: dict[str, str] = {
     "mopac-pm6": "pm6-d3h4x", "mmff": "mmff94s", "gfnff": "gfn-ff",
 }
 #: BuildConfig.conformer_search -> entry key
-CONFORMER_SEARCH_ENTRIES: dict[str, str] = {"rdkit": "rdkit-etkdg", "crest": "crest"}
+CONFORMER_SEARCH_ENTRIES: dict[str, str] = {"rdkit": "rdkit-etkdg", "crest": "crest", "auto": "crest"}
 #: BuildConfig.crest_method -> entry key
 CREST_LEVEL_ENTRIES: dict[str, str] = {"gfn2": "crest-gfn2", "gfnff": "crest-gfnff", "gff": "crest-gfnff",
                                        "gfn2//gfnff": "crest-gfn2//gfnff", "gfn1": "crest-gfn1"}

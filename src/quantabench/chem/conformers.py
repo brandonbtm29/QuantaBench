@@ -22,6 +22,14 @@ class ConformerSet:
     forcefield: str               # "MMFF94s" | "UFF" | "none"
     n_embedded: int
     notes: list[str] = field(default_factory=list)   # what the conformer search had to work around
+    # how many of ``conf_ids`` the refinement takes; 0 = ``BuildConfig.refine_top``. A merged CREST + RDKit pool
+    # (``search_rule.merge_pools``) sets it to all of its conformers: its two energy scales cannot pick a top N
+    refine_count: int = 0
+
+    def refine_ids(self, refine_top: int) -> list[int]:
+        """The conformers the refinement takes (lowest first within each source)."""
+        n = self.refine_count if self.refine_count > 0 else max(1, int(refine_top))
+        return self.conf_ids[:n]
 
 
 def suggested_count(mol: Chem.Mol, cap: int) -> int:

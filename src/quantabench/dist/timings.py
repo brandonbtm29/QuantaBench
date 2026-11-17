@@ -293,7 +293,10 @@ def machine_lines(counts: dict[str, dict]) -> list[str]:
 
 # ---------------------------------------------------------------------------------------- summary
 def _is_crest(row: dict) -> bool:
-    return row.get("stage") == "conformers" and str(row.get("engine") or "").startswith("crest")
+    """A CREST search's row. A merged pool's ("crest ... + rdkit etkdg", CONF-AUTO) also timed RDKit's search, so it
+    is left out of the CREST statistics and the cost-model fit."""
+    engine = str(row.get("engine") or "")
+    return row.get("stage") == "conformers" and engine.startswith("crest") and "+ rdkit" not in engine
 
 
 def summarize(rows: list[dict], crest_power: float | None = None) -> list[dict]:

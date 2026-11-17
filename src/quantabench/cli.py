@@ -244,6 +244,8 @@ def _config(args, base=None, **extra):
         "temperature_k": getattr(args, "temperature", None), "solvent": getattr(args, "solvent", None),
         "optimizer": getattr(args, "optimizer", None), "conformer_search": getattr(args, "conformers", None),
         "crest_method": getattr(args, "crest_method", None), "crest_fallback": getattr(args, "crest_fallback", None),
+        "crest_min_rotors": getattr(args, "crest_min_rotors", None),
+        "crest_with_rdkit": getattr(args, "crest_with_rdkit", None),
         "qm_method": getattr(args, "qm", None),
         "qm_task": getattr(args, "qm_task", None), "qm_top": getattr(args, "qm_top", None),
         "memory_budget_gb": getattr(args, "memory_budget", None),
@@ -252,6 +254,8 @@ def _config(args, base=None, **extra):
     }.items() if v is not None}
     if getattr(args, "crest_full", False):
         overrides["crest_quick"] = False
+    if overrides.get("crest_min_rotors", 0) < 0:
+        raise SystemExit("--crest-min-rotors must be 0 or more")
     if getattr(args, "qm_freq", None) is not None:
         overrides["qm_frequencies"] = args.qm_freq
     if getattr(args, "cubes", None) is not None:
@@ -933,8 +937,15 @@ def add_build_science_args(q: argparse.ArgumentParser) -> None:
     """The science options of ``build`` beyond the engine ones (``config_from_args`` reads them); shared with
     ``grid build`` so both accept the same settings."""
     q.add_argument("--ph", type=float)
-    q.add_argument("--conformers", choices=["rdkit", "crest"],
-                   help="conformer search: RDKit ETKDGv3 + MMFF94s (default) or CREST iMTD-GC (external)")
+    q.add_argument("--conformers", choices=["rdkit", "crest", "auto"],
+                   help="conformer search: RDKit ETKDGv3 + MMFF94s (default), CREST iMTD-GC (external), or auto: CREST "
+                        "for neutral molecules with at least --crest-min-rotors rotatable bonds, RDKit for the rest")
+    q.add_argument("--crest-min-rotors", type=int, metavar="N",
+                   help="with --conformers auto: the rotatable bonds (RDKit's strict count) from which a neutral "
+                        "molecule gets CREST (default 9)")
+    q.add_argument("--crest-with-rdkit", action=argparse.BooleanOptionalAction, default=None,
+                   help="where CREST runs, also run the RDKit search and refine the lowest of both pools (each pool's "
+                        "lowest --refine-top; not with --method mmff)")
     q.add_argument("--crest-method", choices=["gfn2", "gfnff", "gfn2//gfnff", "gfn1"])
     q.add_argument("--crest-full", action="store_true", help="full CREST run instead of --quick (much slower)")
     q.add_argument("--molecule-timeout", type=float, metavar="S",
@@ -1125,7 +1136,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="near the end of a batch, slower lanes leave the last molecules to clearly faster ones "
                         "(a GPU lane) when those finish them first; default from settings (on)")
     b.add_argument("--dynamic-threads", action=argparse.BooleanOptionalAction, default=None,
-                   help="with --conformers crest and lanes: a CREST search may also use the threads of idle lanes "
+                   help="with --conformers crest (or auto) and lanes: a CREST search may also use the threads of idle lanes "
                         "(a large molecule at the end of a batch, a batch with fewer molecules than lanes); "
                         "default from settings (on)")
     b.add_argument("--chunk-weights", metavar="SPEC",

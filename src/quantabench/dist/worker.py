@@ -112,7 +112,7 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "optimizer": ("lbfgs", "fire", "native"),
     "batched": ("auto", "on", "off"),
     "freq_hessian": ("auto", "analytic", "finite"),
-    "conformer_search": ("rdkit", "crest"),
+    "conformer_search": ("rdkit", "crest", "auto"),
     "crest_method": ("gfn2", "gfnff", "gfn2//gfnff", "gfn1"),
     "crest_fallback": ("rdkit", "fail"),
     "qm_task": ("energy", "optimize"),

@@ -408,7 +408,7 @@ def _valid(cfg):
     from quantabench.chem import crest, pipeline, qm, solvents
 
     assert cfg.method in engines.method_keys()
-    assert cfg.conformer_search in ("rdkit", "crest") and cfg.crest_method in crest.METHOD_FLAGS
+    assert cfg.conformer_search in ("rdkit", "crest", "auto") and cfg.crest_method in crest.METHOD_FLAGS
     if cfg.qm_method:
         qm.parse_level(cfg.qm_method)
     solvents.canonical(cfg.solvent)
@@ -461,7 +461,8 @@ def test_recommended_preset_by_phase():
     assert careful.needs == [] and careful.config.conformer_search == "rdkit"     # no CREST: more RDKit conformers
     assert careful.config.max_conformers == 200
     careful = review(["PFOA"], "water", available=ALL - {"crest"} | {"crest"}).preset("careful")
-    assert careful.config.conformer_search == "crest" and careful.config.crest_method == "gfnff"
+    assert careful.config.conformer_search == "auto" and careful.config.crest_method == "gfnff"   # CONF-AUTO
+    assert careful.config.crest_with_rdkit and careful.config.crest_min_rotors == 9
     no_psi4 = review(["PFOA"], "water", available={"tblite-gfn2"}).preset("recommended")
     assert no_psi4.needs == ["Psi4"]
 

@@ -476,6 +476,21 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
 
 ## CREST (`--conformers crest`)
 
+- **For whom (CONF-AUTO, 2026-11-16).** `--conformers auto` runs CREST only for neutral molecules with at least
+  `--crest-min-rotors` rotatable bonds (default 9, RDKit's strict count on the heavy-atom graph). Ions, zwitterions
+  (a nitro group's N+/O- pair counts as neutral) and smaller molecules get RDKit.
+  - The decision is made per molecule on the prepared structure at the run's pH, so a carboxylic acid at pH 7 is an
+    anion and gets RDKit. The log line says which and why; summary.csv's `conformer_search` records it.
+  - Why: in the conformer checks (docs/VALIDATION.md, "Conformer checks and the CREST test") RDKit converged up to 8
+    rotatable bonds. From 9 CREST found the lower conformer for most neutral molecules, and it was worse for ions.
+  - `--crest-with-rdkit`: where CREST runs, RDKit's search runs too. The lowest `--refine-top` of each pool (CREST's
+    by its own energies, RDKit's by MMFF94s's) are refined, after dropping RDKit conformers within `--rmsd` of a
+    CREST one (aligned on the same atom order; symmetry-related copies go at the re-pruning after the refinement).
+    The two energy scales are never compared before the refinement. Not with `--method mmff`, which takes the
+    pool's own energies (a note says so). summary.csv: `crest+rdkit`.
+  - Lane planning, dynamic CREST threads and the cost model treat "auto" like "crest" (a mixed batch is planned
+    for its CREST molecules).
+
 - **Install.**
   - Linux/WSL: `conda install -c conda-forge crest "xtb>=6.7.1"` in one environment (`envs/tools.yml`).
   - Windows: install it inside WSL2 and set NOVA's CREST path to
