@@ -2,6 +2,23 @@
 
 ## 0.3.0.dev (unreleased)
 
+### More collapsible sections and pop-outs, UI-8b (2026-11-16)
+- **Surfaces panel:** three folding sections.
+  - **Surface:** show, source, isovalue.
+  - **Color:** folded by default to a one-line summary (`ESP · bwr reversed · ±129.0 kJ/mol (auto) · opacity 0.85`).
+  - **Descriptors:** the GIPF table; folded it shows V min and max.
+  - The colour bar stays in view while Color is folded.
+  - The legend's sentence (which colour is negative), the sources and the isovalue are explained behind ⓘ buttons.
+  - The rows "Area V > 0" and "Area V < 0" show their full labels again (the "<" was read as HTML).
+- **Spectra panel:**
+  - Load experimental..., Clear and Export... are one **Spectrum** menu.
+  - The broadening and scale factor are explained behind an ⓘ next to Scale.
+  - The **Normal modes** table and animation fold to a header with "18 modes · mode 18: 3659.8 cm⁻¹", and the plot takes the dock's width.
+- **Settings > Compute:** folding sections with summaries: Threads and priority, GPU, Parallel lanes, Limits, This computer. The run priority's explanation is behind an ⓘ, as are the notes of the Import, Surfaces & radii, Display, Engines and Folders tabs.
+- **Every dock's title bar has ⧉ and ✕:** ⧉ pops the panel into a window of its own and back, ✕ closes it. Dragging and double-clicking the title still move and float it.
+- **The Results dock folds for one conformer.** A molecule with one conformer (or none) shrinks the Results dock to the table's header and its row, and the 3D view gets the height. A molecule with more conformers brings the height back, unless the dock was resized by hand. View > Fold Results for one conformer turns it off.
+- The open and closed sections are remembered per machine, like the Pipeline dock's.
+
 ### Conformer search "auto": CREST for flexible neutral molecules, CONF-AUTO (2026-11-16)
 - **`--conformers auto`** (GUI: Search > Auto, in the Pipeline dock and the job dialog) decides per molecule:
   - CREST for a neutral molecule with at least `--crest-min-rotors` rotatable bonds (default 9; RDKit's strict count);

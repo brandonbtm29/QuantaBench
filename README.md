@@ -182,6 +182,11 @@ The docks stay short: the **Pipeline** dock shows one collapsible section per st
 it is closed, and the method guide's notes behind ⓘ buttons (an orange ⚠ when something is not installed). A molecule's
 engine notes fold to one line under its **Details**. **View > Pop out panel** puts any panel in a window of its own (the
 Plot has a ⧉ button for it), and **View > Dock all panels** (Ctrl+Shift+D) brings them back.
+- **Every panel's title bar** has ⧉ (pop out and back) and ✕ (close).
+- **Surfaces** and **Spectra** panels: their settings and explanations fold the same way; the Spectra panel's Normal
+  modes table folds so the plot takes the width.
+- **Settings > Compute:** the same folding sections.
+- **The Results dock** shrinks to one row for a molecule with one conformer.
 
 **Build > New job...** (Ctrl+J) submits molecules as a job:
 - a **recipe** (Screen, Standard, Careful, or one of your own);

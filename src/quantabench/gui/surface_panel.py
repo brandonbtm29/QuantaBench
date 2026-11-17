@@ -76,6 +76,20 @@ SYNC_ATOM_LIMIT = 40                    # charge surfaces of molecules this smal
 GEOMETRY_TOL_A = 1e-4                   # displayed atoms moved more than this: the surface is stale
 QM_RMSD_WARN, QM_RMSD_MAX = 0.05, 0.5   # Å between the cube's atoms and the displayed ones
 CACHE_SIZE = 8
+#: the ⓘ texts (UI-8b)
+SOURCE_HELP = ("<b>QM density isosurface</b>: the electron density of the QM stage's cube files at the isovalue, coloured "
+               "by the QM electrostatic potential. It is there when the QM stage ran with <i>Density/ESP cubes</i> "
+               "(CLI: <code>--cubes</code>) and the cubes were kept.<br><b>van der Waals / solvent-accessible</b>: the "
+               "union of Bondi spheres (SAS: each grown by a 1.4 Å probe), coloured by the ESP of the atomic point "
+               "charges of the displayed conformer (else the best conformer's, the QM charges, or Gasteiger).")
+ISO_HELP = ("The electron density (e/bohr³) the QM surface is drawn at. 0.001 au is the envelope of the GIPF "
+            "descriptors (Murray and Politzer); 0.002 au, the QM stage's default, is closer to the volume a molecule "
+            "takes in a crystal or liquid.")
+DESCRIPTORS_HELP = ("Murray-Politzer statistics of the electrostatic potential on the surface, area-weighted: the "
+                    "extremes V<sub>S,min</sub> and V<sub>S,max</sub>, the mean and the means of the positive and "
+                    "negative regions, the variances σ²<sub>+</sub>, σ²<sub>−</sub> and σ²<sub>tot</sub>, the balance "
+                    "ν = σ²<sub>+</sub>σ²<sub>−</sub>/(σ²<sub>tot</sub>)² and the local polarity Π. ESP values are in "
+                    "the relative-energy unit of Settings &gt; Display.")
 
 
 def colormap_rgb(name: str, n: int = 256, reverse: bool = False) -> np.ndarray:
@@ -234,12 +248,20 @@ class SurfacePanel(QWidget):
 
     # ------------------------------------------------------------------ widgets
     def _build(self) -> None:
+        """The controls in three folding sections (UI-8b): Surface (show, source, isovalue), Color (colouring, colormap,
+        range, opacity; folded by default to a one-line summary) and Descriptors (the GIPF table). The colour bar
+        stays in view; the explanations sit behind ⓘ buttons (the legend's sentence next to Color)."""
+        from .collapsible import InfoLabel, Section, with_info
+
         lay = QVBoxLayout(self)
         self.message = QLabel("Select a built molecule and tick Show.")
         self.message.setWordWrap(True)
         self.message.setStyleSheet("color: gray;")
         lay.addWidget(self.message)
-        form = QFormLayout()
+
+        sbody = QWidget()
+        form = QFormLayout(sbody)
+        form.setContentsMargins(18, 2, 4, 6)
         self.show_box = QCheckBox("Show surface")
         self.show_box.setToolTip("Draw the molecular surface in the 3D view (atoms can still be clicked through it)")
         form.addRow(self.show_box)
@@ -248,7 +270,8 @@ class SurfacePanel(QWidget):
             self.source_box.addItem(label, key)
         self.source_box.setToolTip("QM: electron-density isosurface from the QM stage's cube files.\n"
                                    "vdW / SAS: union of Bondi spheres (SAS: + 1.4 Å), ESP from atomic point charges.")
-        form.addRow("Surface", self.source_box)
+        self.source_info = InfoLabel(SOURCE_HELP)
+        form.addRow("Surface", with_info(self.source_box, self.source_info))
         self.iso_box = QDoubleSpinBox()
         self.iso_box.setDecimals(4)
         self.iso_box.setRange(0.0001, 0.1)
@@ -257,11 +280,20 @@ class SurfacePanel(QWidget):
         self.iso_box.setSuffix(" au")
         self.iso_box.setToolTip("Electron density isovalue (e/bohr³): 0.001 au is the GIPF/Bader envelope, 0.002 au "
                                 "is closer to crystal-packing volumes")
-        form.addRow("Isovalue", self.iso_box)
+        self.iso_info = InfoLabel(ISO_HELP)
+        form.addRow("Isovalue", with_info(self.iso_box, self.iso_info))
+        self.surface_section = Section("Surface", sbody, key="surface", open_=True,
+                                       settings_key="surfaces/surface_open")
+        lay.addWidget(self.surface_section)
+
+        cbody = QWidget()
+        form = QFormLayout(cbody)
+        form.setContentsMargins(18, 2, 4, 6)
         self.color_box = QComboBox()
         self.color_box.addItem("Electrostatic potential", "esp")
         self.color_box.addItem("None", "none")
-        form.addRow("Color", self.color_box)
+        self.legend_text = InfoLabel()           # the legend's sentence (which colour is negative), behind ⓘ
+        form.addRow("Color", with_info(self.color_box, self.legend_text))
         row = QHBoxLayout()
         self.cmap_box = QComboBox()
         for name in COLORMAPS:
@@ -287,8 +319,10 @@ class SurfacePanel(QWidget):
         self.opacity_box.setSingleStep(0.05)
         self.opacity_box.setValue(0.85)
         form.addRow("Opacity", self.opacity_box)
-        lay.addLayout(form)
-        self.legend_bar = QFrame()
+        self.color_section = Section("Color", cbody, key="color", open_=False, settings_key="surfaces/color_open")
+        lay.addWidget(self.color_section)
+
+        self.legend_bar = QFrame()               # the colour bar stays in view while Color is folded
         self.legend_bar.setFixedHeight(14)
         self.legend_bar.setFrameShape(QFrame.Shape.StyledPanel)
         lay.addWidget(self.legend_bar)
@@ -299,13 +333,18 @@ class SurfacePanel(QWidget):
         for w in (self.legend_lo, self.legend_mid, self.legend_hi):
             ticks.addWidget(w, 1)
         lay.addLayout(ticks)
-        self.legend_text = QLabel()
-        self.legend_text.setWordWrap(True)
-        lay.addWidget(self.legend_text)
+
+        dbody = QWidget()
+        dl = QVBoxLayout(dbody)
+        dl.setContentsMargins(18, 2, 4, 6)
         self.readout = QLabel()
         self.readout.setWordWrap(True)
         self.readout.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        lay.addWidget(self.readout)
+        dl.addWidget(self.readout)
+        self.descriptors_section = Section("Descriptors", dbody, key="descriptors", info=DESCRIPTORS_HELP, open_=True,
+                                           settings_key="surfaces/descriptors_open")
+        self.descriptors_section.set_summary("no surface")
+        lay.addWidget(self.descriptors_section)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color: gray;")
@@ -314,6 +353,8 @@ class SurfacePanel(QWidget):
         self._controls = [self.show_box, self.source_box, self.iso_box, self.color_box, self.cmap_box,
                           self.reverse_box, self.range_box, self.range_value, self.opacity_box]
         self.show_box.toggled.connect(self._schedule)
+        self.show_box.toggled.connect(lambda _on: self._update_summaries())
+        self.iso_box.valueChanged.connect(lambda _v: self._update_summaries())
         self.source_box.activated.connect(self._on_source_picked)
         self.source_box.currentIndexChanged.connect(self._on_source_changed)
         self.iso_box.valueChanged.connect(self._schedule)
@@ -350,6 +391,7 @@ class SurfacePanel(QWidget):
 
     def _on_source_changed(self, *_args) -> None:
         self.iso_box.setEnabled(self.source() == "qm")
+        self._update_summaries()
         self._schedule()
 
     def _update_sources(self, res) -> None:
@@ -577,8 +619,27 @@ class SurfacePanel(QWidget):
         self.current, self._key = None, None
         self.readout.setText("")
         self.status.setText("")
+        self.descriptors_section.set_summary("no surface")
+
+    def _update_summaries(self) -> None:
+        """The one-line summaries the Surface and Color sections show while folded."""
+        if not hasattr(self, "color_section"):
+            return
+        src = {"qm": "QM density", "vdw": "vdW", "sas": "SAS"}.get(self.source(), self.source())
+        iso = f" {self.iso_box.value():g} au" if self.source() == "qm" else ""
+        self.surface_section.set_summary(f"{'shown' if self.show_box.isChecked() else 'off'} · {src}{iso}")
+        if self.color_box.currentData() != "esp":
+            self.color_section.set_summary(f"uniform · opacity {self.opacity_box.value():.2f}")
+            return
+        e = self.energy
+        rng = e.with_unit(self.color_range(), units.KCAL, "relative", 1)
+        how = "auto" if self.range_box.currentData() == "auto" else "fixed"
+        rev = " reversed" if self.reverse_box.isChecked() else ""
+        self.color_section.set_summary(f"ESP · {self.cmap_box.currentData()}{rev} · ±{rng} ({how}) · "
+                                       f"opacity {self.opacity_box.value():.2f}")
 
     def _update_legend(self) -> None:
+        self._update_summaries()
         rgb = colormap_rgb(self.cmap_box.currentData(), 9, self.reverse_box.isChecked())
         stops = ", ".join(f"stop:{i / (len(rgb) - 1):.3f} rgb({int(r * 255)}, {int(g * 255)}, {int(b * 255)})"
                           for i, (r, g, b) in enumerate(rgb))
@@ -614,8 +675,8 @@ class SurfacePanel(QWidget):
                      ("σ²<sub>tot</sub>", "esp_sigma2_tot", "", 1, 2),
                      ("ν (balance)", "esp_nu", "", 3, 0),
                      ("Π (local polarity)", "esp_pi", "", 2, 1),
-                     ("Area V > 0", "esp_area_pos_A2", "Å²", 1, 0),
-                     ("Area V < 0", "esp_area_neg_A2", "Å²", 1, 0)]
+                     ("Area V &gt; 0", "esp_area_pos_A2", "Å²", 1, 0),
+                     ("Area V &lt; 0", "esp_area_neg_A2", "Å²", 1, 0)]
 
         def cell(key, unit, nd, power):
             if power:
@@ -626,6 +687,13 @@ class SurfacePanel(QWidget):
                        for label, key, unit, nd, p in rows if key in d)
         self.readout.setText("<b>Surface descriptors</b> (Murray-Politzer, area-weighted)"
                              f"<table cellspacing='4'>{body}</table>")
+        if "esp_min_kcal" in d and "esp_max_kcal" in d:
+            lo = e.text(d["esp_min_kcal"], units.KCAL, "relative", 1)
+            hi = e.text(d["esp_max_kcal"], units.KCAL, "relative", 1)
+            summary = f"V min {lo}, max {hi} {e.label('relative')}"
+        else:
+            summary = f"area {d.get('surf_area_A2', float('nan')):.0f} Å²"
+        self.descriptors_section.set_summary(summary)
 
 
 # ====================================================================== install
