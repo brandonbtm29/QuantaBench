@@ -41,7 +41,10 @@ Follow-up: when it shows up, fix the hanging test itself (a modal dialog at wind
   Linux (xvfb) did not hang. Next: a layout loop of the word-wrapped labels in the Molecules dock's Details is the
   suspect (the Nov 13 Linux hang, before UI-8, was in the same tests).
 - 2026-11-16: the flaky `test_worker.py::test_archive_manifest_sync_temp_files_and_failed_streams` (Windows, a
-  `jobs.sqlite-wal` left behind) is fixed in `JobManager._checkpoint` (it retries until a status poll lets go).
+  `jobs.sqlite-wal` left behind). First try (#16): `JobManager._checkpoint` retries until a status poll lets go; it
+  failed again on #21's Windows run. The cause: a poll that came after the checkpoint and before "done" opened the
+  table read-only, which recreates `-wal` and cannot remove it. Fixed (#21): from the final counts on, `Job.finishing`
+  makes polls report the stored counts without opening the table.
 
 ## UI-8: Collapsible sections and pop-out panels · done 2026-11-15 (PR #12)
 Brandon (2026-11-14): "At the moment it's kind of crowded. I think more collapsible menus / pop outs would be helpful";

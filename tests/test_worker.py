@@ -834,3 +834,22 @@ def test_the_finished_job_table_is_one_file_once_a_status_poll_lets_go(tmp_path)
     worker_mod.JobManager._checkpoint(run_dir, attempts=30, wait_s=0.1)
     timer.join()
     assert not wal.exists()
+
+
+def test_a_finishing_job_reports_its_stored_counts_and_leaves_the_table_alone(make_worker, monkeypatch, tmp_path):
+    """The flaky Windows CI failure behind `test_archive_manifest...`: a status poll between the worker's last
+    checkpoint and "done" opened the job table read-only, which recreates jobs.sqlite-wal and cannot remove it. Once
+    a job is finishing, polls report the stored counts."""
+    w = make_worker("w1")
+    run_dir = tmp_path / "r"
+    run_dir.mkdir()
+    (run_dir / jobs.DB_NAME).write_bytes(b"")
+    job = worker_mod.Job(id="cccccccccccc", label="x", config={}, state="running", run_dir=str(run_dir),
+                         counts={"ok": 2, "pending": 0})
+    opened = []
+    monkeypatch.setattr(jobs, "open_run", lambda d: opened.append(d))
+    job.finishing = True
+    assert w.manager.public(job)["counts"] == {"ok": 2, "pending": 0} and opened == []
+    job.finishing = False                                     # a running job still reads the live counts
+    w.manager.public(job)
+    assert opened

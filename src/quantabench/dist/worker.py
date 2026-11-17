@@ -754,6 +754,10 @@ class Job:
     stop: threading.Event = field(default_factory=threading.Event, repr=False)
     log: collections.deque = field(default_factory=lambda: collections.deque(maxlen=LOG_TAIL), repr=False)
     progress: dict = field(default_factory=dict, repr=False)
+    # the run has ended and the worker is writing its last counts, tables and checkpoint: status polls report the
+    # stored counts instead of opening the job table (a read-only connection can recreate jobs.sqlite-wal after the
+    # checkpoint, and cannot remove it)
+    finishing: bool = field(default=False, repr=False)
     handoff: object = field(default=None, repr=False)     # jobs.Handoff of the running batch (work sharing)
     control: object = field(default=None, repr=False)     # jobs.BatchControl of the running batch (DIST-7)
     # DIST-7: a hold after this machine slept, or lost its grid client, until the client says what is still ours
@@ -1495,8 +1499,10 @@ class JobManager:
                     jobs_mod.run_resumable(inputs or None, cfg, run_dir, progress=progress,
                                            should_stop=job.stop.is_set, log=log, lanes=lanes, chunk=chunk,
                                            keep_results=False, handoff=job.handoff, control=job.control)
-                # final counts before the state changes, so no client sees "done" with old counts
+                # final counts before the state changes, so no client sees "done" with old counts; from here status
+                # polls use them and leave the job table alone
                 job.counts = self._counts(job)
+                job.finishing = True
                 left = sum(int(job.counts.get(k, 0)) for k in ("pending", "running", "cancelled"))
                 tables = self._final_tables(run_dir)
                 self._checkpoint(run_dir)
@@ -1600,7 +1606,7 @@ class JobManager:
 
     def public(self, job: Job, tail: int = 20) -> dict:
         """The job as the API reports it."""
-        counts = self._counts(job) if job.state == "running" else dict(job.counts)
+        counts = self._counts(job) if job.state == "running" and not job.finishing else dict(job.counts)
         lines = list(job.log)[-tail:] if tail else []
         if tail and not lines:
             lines = _tail(Path(job.run_dir) / JOB_LOG, tail)
