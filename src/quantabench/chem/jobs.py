@@ -41,6 +41,7 @@ import platform
 import socket
 import sqlite3
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field, fields
@@ -774,7 +775,34 @@ class _RunLock:
     def __exit__(self, *_exc) -> None:
         with _held_guard:
             _held_locks.discard(self.key)
-            self.path.unlink(missing_ok=True)
+            _remove_lock_file(self.path, self.log)
+
+
+#: how long the end of a run keeps trying to remove jobs.lock that a reader holds open (Windows)
+LOCK_RELEASE_ATTEMPTS, LOCK_RELEASE_WAIT_S = 100, 0.02
+
+
+def _remove_lock_file(path: Path, log: Callable[[str], None]) -> None:
+    """Remove the run lock at the end of a run. On Windows a file cannot be deleted while anyone has it open, and
+    status polls read jobs.lock (``_read_lock``: a worker's job status, the GUI, ``status``), so a poll at the moment
+    a run ends made the deletion fail and turned a finished run into a failed one (FIX-4). Readers hold it for
+    microseconds, so this tries again for up to ``LOCK_RELEASE_ATTEMPTS`` x ``LOCK_RELEASE_WAIT_S`` seconds. Should
+    it still fail, the run is not failed for it: the file is emptied, so that it no longer names a live process
+    (a lock without an owner is taken over without a word), and the failure is logged."""
+    for attempt in range(LOCK_RELEASE_ATTEMPTS):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if attempt + 1 < LOCK_RELEASE_ATTEMPTS:
+                time.sleep(LOCK_RELEASE_WAIT_S)
+        except OSError:
+            break
+    try:
+        path.write_text("{}", encoding="utf-8")
+    except OSError:
+        pass
+    log(f"Could not remove {path} at the end of the run (in use); emptied it, so it no longer holds the run")
 
 
 # -------------------------------------------------------------------------------------- running
