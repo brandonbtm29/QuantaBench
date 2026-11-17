@@ -69,7 +69,8 @@ SCIENCE_FIELDS = (
     "method", "ph", "protonate", "protonation_method", "keep_largest_fragment", "max_conformers",
     "refine_top", "energy_window_kcal", "rmsd_threshold", "fmax", "max_steps", "optimizer",
     "temperature_k", "xtb_properties", "seed", "frequencies", "freq_hessian", "symmetry_number", "freq_qrrho",
-    "freq_imag_retries", "solvent", "conformer_search", "crest_method", "crest_quick", "qm_method", "qm_task", "qm_top",
+    "freq_imag_retries", "solvent", "conformer_search", "crest_method", "crest_quick", "crest_min_rotors",
+    "crest_with_rdkit", "qm_method", "qm_task", "qm_top",
     "qm_properties", "qm_polarizability", "qm_frequencies", "qm_cubes", "qm_program", "radii_set", "radii_overrides",
     "sasa_probe_A",
     "rank_method", "rank_window_kj",
@@ -84,8 +85,12 @@ LEGACY_DEFAULTS = {"rank_method": "refine", "freq_imag_retries": 0}   # 2026-11-
 #: them from the settings: b03's ESP pass, started with --qm-memory 6 and --no-keep-cubes, resumed at 4 GB (5 lanes of
 #: 2 threads instead of 3 of 4) and kept 14.5 GB of cube files.
 RUN_OPTION_FIELDS = ("qm_memory_gb", "qm_keep_cubes", "molecule_timeout_s")
-#: fields that only matter with another field's value: rank_window_kj only when a rank step runs
-_ONLY_WITH = {"rank_window_kj": ("rank_method", "refine")}
+#: fields that only matter with another field's value: rank_window_kj only when a rank step runs, crest_min_rotors only
+#: with the search "auto", crest_with_rdkit only where CREST can run. (field, the other field, its value(s) that make
+#: the field idle)
+_ONLY_WITH = {"rank_window_kj": ("rank_method", "refine"),
+              "crest_min_rotors": ("conformer_search", ("rdkit", "crest")),
+              "crest_with_rdkit": ("conformer_search", "rdkit")}
 
 #: Versions before this one ran the stock AIMNet2 calculator with aimnet 0.2's adaptive neighbor lists
 #: unguarded: after a smaller molecule they silently dropped neighbors of larger ones (0.1-0.2 eV). Results of
@@ -812,7 +817,8 @@ def config_differences(stored: dict, cfg: BuildConfig) -> dict[str, tuple]:
         if old != new:
             diffs[name] = (old, new)
     for name, (other, idle) in _ONLY_WITH.items():
-        if name in diffs and known.get(other, getattr(defaults, other)) == idle and getattr(cfg, other) == idle:
+        idle = idle if isinstance(idle, tuple) else (idle,)
+        if name in diffs and known.get(other, getattr(defaults, other)) in idle and getattr(cfg, other) in idle:
             del diffs[name]
     return diffs
 
@@ -922,7 +928,9 @@ def log_time_limit(cfg: BuildConfig, parallel: bool, log: Callable[[str], None])
            "best effort in one process: the molecule stops at its next checkpoint")
     log(f"Per-molecule time limit: {limit:g} s ({how}; the molecule is marked failed, --retry-failed redoes it, "
         "--molecule-timeout 0 turns the limit off)")
-    if cfg.qm_method or cfg.conformer_search == "crest":
+    from .search_rule import may_use_crest
+
+    if cfg.qm_method or may_use_crest(cfg):
         log("  Note: QM stages and CREST can take longer than that per molecule; raise --molecule-timeout if they do")
 
 
@@ -1099,7 +1107,9 @@ def _run_todo(store, todo, cfg, lanes, run_dir, tm, wide, cost_model, total, don
     if todo:
         cfg_run = replace(cfg_run, memory_budget_gb=pipeline.resolved_budget(cfg_run, 1, log))
     lane_name = lanes[0].name if lanes else "main"
-    crest_width = (cfg_run.crest_threads or threads) if cfg.conformer_search == "crest" else None
+    from .search_rule import may_use_crest
+
+    crest_width = (cfg_run.crest_threads or threads) if may_use_crest(cfg) else None
     queue = deque(todo)
     results: list[MoleculeResult] = []
 

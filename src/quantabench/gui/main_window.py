@@ -104,7 +104,8 @@ CREST_METHODS = (("gfn2", "GFN2-xTB"), ("gfnff", "GFN-FF (fast, large molecules)
                  ("gfn2//gfnff", "GFN2-xTB // GFN-FF (needs xtb)"), ("gfn1", "GFN1-xTB"))
 OPTIMIZERS = (("lbfgs", "L-BFGS (ASE)"), ("fire", "FIRE (ASE)"),
               ("native", "Engine's own optimizer (xtb, MOPAC; else L-BFGS)"))
-CONFORMER_SEARCHES = (("rdkit", "RDKit ETKDGv3 + MMFF94s"), ("crest", "CREST iMTD-GC"))
+CONFORMER_SEARCHES = (("rdkit", "RDKit ETKDGv3 + MMFF94s"), ("crest", "CREST iMTD-GC"),
+                      ("auto", "Auto: CREST for flexible neutral molecules"))
 
 
 def _window_settings() -> QSettings:
@@ -452,7 +453,7 @@ class MainWindow(QMainWindow):
             self.w_confsearch = QComboBox()
             ok, why = crest.available()
             for k, label in CONFORMER_SEARCHES:
-                self.w_confsearch.addItem(label + ("" if ok or k != "crest" else " (not installed)"), k)
+                self.w_confsearch.addItem(label + ("" if ok or k == "rdkit" else " (not installed)"), k)
             self._guide_tooltips(self.w_confsearch, guide.CONFORMER_SEARCH_ENTRIES)
             i = self.w_confsearch.findData("crest")
             self.w_confsearch.setItemData(i, self.w_confsearch.itemData(i, Qt.ItemDataRole.ToolTipRole)
@@ -470,6 +471,19 @@ class MainWindow(QMainWindow):
             self.w_crest_fallback.setToolTip(
                 "Checked: a molecule CREST fails on is built with RDKit ETKDGv3 + MMFF94s and flagged (a note, "
                 "summary.csv conformer_fallback, a count at the end of the batch). Unchecked: the molecule fails.")
+            self.w_crest_min_rotors = QSpinBox()
+            self.w_crest_min_rotors.setRange(0, 100)
+            self.w_crest_min_rotors.setValue(9)
+            self.w_crest_min_rotors.setSuffix(" rotatable bonds")
+            self.w_crest_min_rotors.setToolTip(
+                "Auto: a neutral molecule with at least this many rotatable bonds (RDKit's strict count) gets CREST; "
+                "ions, zwitterions and smaller molecules get RDKit. 9: where RDKit's search stopped converging in the "
+                "conformer checks of Nov 13-15 (--crest-min-rotors)")
+            self.w_crest_with_rdkit = QCheckBox("Add RDKit's conformers to CREST's pool")
+            self.w_crest_with_rdkit.setToolTip(
+                "Where CREST runs, the RDKit search runs too, and the lowest of each pool (Refine lowest, each) are "
+                "refined: the refinement keeps the lower of both. In ALPB water RDKit still held a conformer more than "
+                "5 kJ/mol lower for 5 of 21 flexible neutral molecules (--crest-with-rdkit)")
             self.search_info = self._guide_label()
             self.crest_info = self._guide_label()
             self.w_confsearch.currentIndexChanged.connect(self._update_crest_widgets)
@@ -478,6 +492,8 @@ class MainWindow(QMainWindow):
             form.addRow("CREST level", with_info(self.w_crest_method, self.crest_info))
             form.addRow(self.w_crest_quick)
             form.addRow(self.w_crest_fallback)
+            form.addRow("CREST from", self.w_crest_min_rotors)
+            form.addRow(self.w_crest_with_rdkit)
             self.w_maxconf = QSpinBox()
             self.w_maxconf.setRange(1, 1000)
             # stored in kcal/mol (BuildDefaults.energy_window_kcal, a science setting), shown in the display unit
@@ -1066,6 +1082,8 @@ class MainWindow(QMainWindow):
         methods = method_keys()
         self.w_method.setCurrentIndex(methods.index(b.refine_method) if b.refine_method in methods else 0)
         self._set_combo(self.w_confsearch, b.conformer_search)
+        self.w_crest_min_rotors.setValue(b.crest_min_rotors)
+        self.w_crest_with_rdkit.setChecked(b.crest_with_rdkit)
         self._set_combo(self.w_solvent, solvents.canonical(b.solvent) if b.solvent in solvents.SOLVENTS
                         or not b.solvent else "")
         level = (b.qm_method or "").split("/", 1)
@@ -1110,6 +1128,8 @@ class MainWindow(QMainWindow):
         b.frequencies = self.w_freq.isChecked()
         b.batched = self.w_batched.currentData()
         b.conformer_search = self.w_confsearch.currentData()
+        b.crest_min_rotors = self.w_crest_min_rotors.value()
+        b.crest_with_rdkit = self.w_crest_with_rdkit.isChecked()
         b.solvent = self.w_solvent.currentData()
         b.qm_method = self.qm_level() if self.w_qm_on.isChecked() else ""
 
@@ -1125,10 +1145,13 @@ class MainWindow(QMainWindow):
         combo.setCurrentIndex(i if i >= 0 else 0)
 
     def _update_crest_widgets(self, _index=0) -> None:
-        on = self.w_confsearch.currentData() == "crest"
+        search = self.w_confsearch.currentData()
+        on = search in ("crest", "auto")
         self.w_crest_method.setEnabled(on)
         self.w_crest_quick.setEnabled(on)
         self.w_crest_fallback.setEnabled(on)
+        self.w_crest_with_rdkit.setEnabled(on)
+        self.w_crest_min_rotors.setEnabled(search == "auto")
         self._update_conformer_info()          # crest_info stays enabled: its "More…" link works before CREST is on
 
     # ------------------------------------------------------------------ methods guide (chem.method_guide)
@@ -1257,7 +1280,9 @@ class MainWindow(QMainWindow):
         self.w_method.blockSignals(False)
         self._method_tooltips()
         ok, _why = crest.available()
-        self.w_confsearch.setItemText(1, "CREST iMTD-GC" + ("" if ok else " (not installed)"))
+        for i, (k, label) in enumerate(CONFORMER_SEARCHES):
+            if k != "rdkit":
+                self.w_confsearch.setItemText(i, label + ("" if ok else " (not installed)"))
         ok, _why = qm.available()
         self.w_qm_on.setText("Run a QM stage" + ("" if ok else " (Psi4 not found)"))
         self._update_engine_info()
@@ -1770,8 +1795,13 @@ class MainWindow(QMainWindow):
                 parts.append("largest fragment")
             return " · ".join(parts)
         if key == "conformers":
-            search = "CREST " + combo("w_crest_method") if combo("w_confsearch").startswith("CREST") else "RDKit ETKDG"
-            return f"{search} · up to {val('w_maxconf')}"
+            data = self.w_confsearch.currentData() if hasattr(self, "w_confsearch") else "rdkit"
+            crest = "CREST " + combo("w_crest_method").split(" (")[0] + (" + RDKit" if on("w_crest_with_rdkit") else "")
+            if data == "crest":
+                return f"{crest} · up to {val('w_maxconf')}"
+            if data == "auto":
+                return f"Auto: {crest} from {val('w_crest_min_rotors')} rotors · RDKit up to {val('w_maxconf')}"
+            return f"RDKit ETKDG · up to {val('w_maxconf')}"
         if key == "refine":
             return f"{combo('w_method').split(' (')[0]} · {combo('w_solvent')} · lowest {val('w_refine_top')}"
         if key == "rank":

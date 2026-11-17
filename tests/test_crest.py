@@ -373,3 +373,61 @@ def test_real_crest_gfnff_ethanol(_scratch):
     assert cs.energies_kcal[0] / KCAL == pytest.approx(-1.2203, abs=2e-3)       # GFN-FF energy in Eh
     assert [a.GetSymbol() for a in cs.mol.GetAtoms()] == [a.GetSymbol() for a in _ethanol().GetAtoms()]
     assert not any(_scratch.iterdir())
+
+
+# ----------------------------------------------------------------------------- CONF-AUTO: "auto" and the merged pool
+def test_auto_runs_crest_for_flexible_neutral_molecules_only(fake_crest):
+    """The search "auto": CREST for a neutral molecule with >= 9 rotatable bonds, RDKit for an ion (the acid is
+    deprotonated at pH 7) and for a small molecule; summary.csv says which search each one got."""
+    from quantabench.chem.inputs import from_smiles
+    from quantabench.chem.pipeline import run_molecule
+
+    cfg = _crest_cfg(conformer_search="auto")
+    lines: list[str] = []
+    flex = run_molecule(from_smiles("CCCCCCCCCCCCO", id="dodecanol"), cfg, log=lines.append)
+    assert flex.status == "ok", flex.error
+    assert flex.conformer_search == "crest" and flex.forcefield == "CREST/gfnff"
+    assert flex.summary_row()["conformer_search"] == "crest"
+    assert "  conformer search auto: CREST (neutral, 10 rotatable bonds >= 9)" in lines
+    acid = run_molecule(from_smiles("OC(=O)CCCCCCCCCCC", id="lauric"), cfg, log=lines.append)
+    assert acid.status == "ok" and acid.conformer_search == "rdkit" and acid.charge == -1
+    assert "  conformer search auto: RDKit (anion)" in lines
+    small = run_molecule(from_smiles("CCO", id="ethanol"), cfg)
+    assert small.conformer_search == "rdkit" and small.forcefield == "MMFF94s"
+    assert len(fake_crest["calls"]()) == 1                                 # CREST ran once: the dodecanol
+
+
+def test_the_merged_pool_refines_both_sources(fake_crest, monkeypatch):
+    """crest_with_rdkit: CREST's pool plus RDKit's, every conformer refined. The refinement 'mmff' keeps CREST's only
+    (it ranks by the pool's own energies); here the merge is forced on to check the wiring with the always-installed
+    MMFF94s."""
+    from quantabench.chem import search_rule
+    from quantabench.chem.inputs import from_smiles
+    from quantabench.chem.pipeline import run_molecule
+
+    cfg = _crest_cfg(conformer_search="auto", crest_with_rdkit=True, refine_top=3, max_conformers=10)
+    only = run_molecule(from_smiles("CCCCCCCCCCCCO", id="dodecanol"), cfg)
+    assert only.status == "ok" and only.conformer_search == "crest"
+    assert any(n.startswith("CREST's pool only: the refinement 'mmff'") for n in only.notes)
+    monkeypatch.setattr(search_rule, "merged", lambda cfg, method="": bool(cfg.crest_with_rdkit))
+    lines: list[str] = []
+    both = run_molecule(from_smiles("CCCCCCCCCCCCO", id="dodecanol"), cfg, log=lines.append)
+    assert both.status == "ok", both.error
+    assert both.conformer_search == "crest+rdkit" and both.forcefield == "CREST/gfnff + MMFF94s"
+    assert both.summary_row()["conformer_search"] == "crest+rdkit"
+    assert any(ln.startswith("  conformer pools merged: CREST's lowest 2 and RDKit's lowest") for ln in lines)
+    assert both.n_embedded > 3                                             # CREST's 3 frames + RDKit's
+
+
+@pytest.mark.skipif(not __import__("quantabench.chem.engines", fromlist=["x"]).available("tblite-gfn2")[0],
+                    reason="needs tblite")
+def test_the_merged_pool_with_a_real_refinement(fake_crest):
+    from quantabench.chem.inputs import from_smiles
+    from quantabench.chem.pipeline import run_molecule
+
+    cfg = _crest_cfg(method="tblite-gfn2", conformer_search="auto", crest_with_rdkit=True, refine_top=2,
+                     max_conformers=6, rank_method="refine", fmax=0.2, max_steps=40)
+    res = run_molecule(from_smiles("CCCCCCCCCCCCO", id="dodecanol"), cfg)
+    assert res.status == "ok", res.error
+    assert res.conformer_search == "crest+rdkit" and res.method == "tblite-gfn2"
+    assert res.timings.get("refine", 0) > 0

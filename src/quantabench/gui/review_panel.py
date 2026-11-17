@@ -89,6 +89,10 @@ def apply_changes(win, changes: dict) -> list[str]:
             ok = _set_combo(win.w_crest_method, value)
         elif key == "crest_quick":
             win.w_crest_quick.setChecked(bool(value))
+        elif key == "crest_min_rotors":
+            win.w_crest_min_rotors.setValue(int(value))
+        elif key == "crest_with_rdkit":
+            win.w_crest_with_rdkit.setChecked(bool(value))
         elif key == "max_conformers":
             win.w_maxconf.setValue(int(value))
         elif key == "refine_top":

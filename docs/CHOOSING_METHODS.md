@@ -159,6 +159,18 @@ were measured.
 - Refinement and RDKit: the PFAS pipeline timings (PERF-1); AIMNet2 is about 10x faster on a GPU than the CPU
   estimate shown.
 
+## Flexible molecules: which conformer search
+
+- Up to 8 rotatable bonds, RDKit's ETKDGv3 + MMFF94s search converges: in the conformer checks the tranche's
+  conformer was the best known for 55 of 68 such molecules.
+- From 9 it does not. For **neutral** molecules CREST (GFN-FF, quick) found the lower conformer for most of them, in
+  the gas phase and in ALPB water. For **ions** it was worse.
+- So the conformer search **"auto"** (`--conformers auto`) runs CREST for neutral molecules with 9 or more rotatable
+  bonds and RDKit for the rest, and the review flags flexible neutral molecules under the RDKit search
+  ("search.flexible-neutrals").
+- `--crest-with-rdkit` adds RDKit's pool to CREST's: RDKit still held a lower conformer for some of them.
+- The numbers are in docs/VALIDATION.md, "Conformer checks and the CREST test".
+
 ## The presets
 
 Each preset is a complete set of pipeline settings for the batch in the phase you chose. A preset only uses
@@ -169,7 +181,7 @@ basis sets cover every element.
 |---|---|---|
 | Fast screen | RDKit (30), the lowest 10 refined with AIMNet2 (or GFN2-xTB), no DFT | RDKit (30), the lowest 10 with GFN2-xTB/ALPB, no DFT; the conformer choice of polar molecules and ions is rough |
 | Recommended | RDKit (50), the lowest 20 with AIMNet2 (or GFN2-xTB), ranked by the rank step (AIMNet2 or g-xTB), no DFT: neutral dipoles hardly depend on the conformer | RDKit (50, a 15 kcal/mol force-field window), the lowest 20 with GFN2-xTB/ALPB, ranked with g-xTB + GFN1-xTB CPCM, no DFT. Without a rank engine here: ωB97X-D/def2-SVP(D) in PCM on the lowest 8, as before RANK-2 |
-| Careful | CREST at GFN-FF (or 200 RDKit conformers), the lowest 30 refined and ranked, ωB97X-D/def2-TZVP (def2-SVPD for anions) on the lowest 3 | CREST at GFN-FF in ALPB water (or 200 RDKit conformers), the lowest 30, ranked with g-xTB + GFN1-xTB CPCM, then ωB97X-D/def2-SVPD in PCM checks the rank step's lowest 8 (without a rank engine: the lowest 12) |
+| Careful | Conformer search "auto": CREST at GFN-FF with RDKit's pool added for the neutral molecules with 9 or more rotatable bonds, RDKit for the rest (or 200 RDKit conformers without CREST); the lowest 30 refined and ranked, ωB97X-D/def2-TZVP (def2-SVPD for anions) on the lowest 3 | The same search, CREST in ALPB water (or 200 RDKit conformers), the lowest 30, ranked with g-xTB + GFN1-xTB CPCM, then ωB97X-D/def2-SVPD in PCM checks the rank step's lowest 8 (without a rank engine: the lowest 12) |
 
 Every preset sets `--rank auto` and its 30 kJ/mol window.
 
