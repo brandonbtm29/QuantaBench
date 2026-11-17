@@ -159,14 +159,56 @@ class _Relay(QObject):
             self._on_failed(msg)
 
 
+class _Runner(QObject):
+    """Runs a worker in its thread, then moves it (and itself) back to the GUI thread, so both are destroyed there
+    (``start``). Only the thread an object lives in may move it, so this happens at the end of ``run``, in the worker's
+    thread. (A closure connected to ``QThread.started`` would run in the GUI thread, where the QThread object lives.)"""
+
+    def __init__(self, worker: QObject, home):
+        super().__init__()
+        self._worker, self._home = worker, home
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self._worker.run()
+        finally:
+            self._worker.moveToThread(self._home)
+            self.moveToThread(self._home)
+
+
+class _Keeper(QObject):
+    """Holds a worker's Python wrapper until its thread has ended, and lets go of it in the GUI thread (a slot of an
+    object that lives there)."""
+
+    def __init__(self, owner: QObject, alive: set, worker: QObject):
+        super().__init__(owner)
+        self._alive, self._worker = alive, worker
+
+    @Slot()
+    def release(self) -> None:
+        self._alive.discard(self._worker)
+        self._worker = None
+        self.deleteLater()
+
+
 def start(worker: QObject, owner: QObject, on_done=None, on_failed=None) -> QThread:
     """Move ``worker`` to a new QThread owned by ``owner`` and start it. Cleans up when done.
 
     ``on_done``/``on_failed`` may be any callables (closures, lambdas): they are routed through a relay
-    in the GUI thread. Connect worker signals directly only to bound methods of GUI-thread QObjects."""
+    in the GUI thread. Connect worker signals directly only to bound methods of GUI-thread QObjects.
+
+    The worker comes back to the GUI thread when its ``run`` returns, and is destroyed there (FIX-3). Destroyed in its
+    own thread (``deleteLater`` runs when that thread ends), its ``~QObject`` held one of Qt's signal-slot locks while
+    PySide waited for the GIL to drop the Python callables connected to it, and the GUI thread, holding the GIL, waited
+    for the same lock inside a layout's ``QObject::connect``: a deadlock. CI caught it with native stacks (a project
+    reopened: ``Notes.set_notes`` -> ``setVisible`` -> ``QLayout::activate`` -> ``QObject::connect``)."""
     thread = QThread(owner)
     worker.moveToThread(thread)
-    thread.started.connect(worker.run)
+    runner = _Runner(worker, owner.thread())
+    runner.moveToThread(thread)
+    thread.started.connect(runner.run)                    # a slot of an object in the new thread: runs there
+    worker._runner = runner
     if on_done is not None or on_failed is not None:
         relay = _Relay(owner, on_done, on_failed)
         if on_done is not None:
@@ -178,12 +220,15 @@ def start(worker: QObject, owner: QObject, on_done=None, on_failed=None) -> QThr
     for sig in ("finished", "failed", "done"):
         if hasattr(worker, sig):
             getattr(worker, sig).connect(thread.quit)
-    thread.finished.connect(worker.deleteLater)
+    thread.finished.connect(worker.deleteLater)            # the worker lives in the GUI thread again: deleted there
+    thread.finished.connect(runner.deleteLater)
     thread.finished.connect(thread.deleteLater)
     worker._thread = thread
-    # Python must hold the worker until its thread ends, or the wrapper is garbage-collected mid-run
+    # Python must hold the worker until its thread ends, or the wrapper is garbage-collected mid-run; it lets go in
+    # the GUI thread (_Keeper)
     alive = owner.__dict__.setdefault("_live_workers", set())
     alive.add(worker)
-    thread.finished.connect(lambda: alive.discard(worker))
+    keeper = _Keeper(owner, alive, worker)
+    thread.finished.connect(keeper.release)
     thread.start()
     return thread
