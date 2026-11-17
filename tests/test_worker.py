@@ -583,7 +583,8 @@ def test_partial_merge_and_per_share_errors(make_worker, qb_settings, monkeypatc
     assert grid.missing == ["TFE", "acetone"]
     assert [s.source for s in shares] == ["partial", "", "synced"] and "no copy" in shares[1].error
     gate.set()
-    assert c.wait(j1, poll=0.1, timeout=120)["state"] == "done"
+    end = c.wait(j1, poll=0.1, timeout=120)
+    assert end["state"] == "done", c.status(j1, tail=50)
 
 
 def test_archive_manifest_sync_temp_files_and_failed_streams(make_worker, tmp_path, monkeypatch):

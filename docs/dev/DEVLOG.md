@@ -253,3 +253,18 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Auto weighs speed by waiting jobs:** score = the `grid build --weights auto` weight / (1 + jobs running or queued).
   A fast machine with three jobs ahead loses to a free one a third as fast. Ties go to this computer.
 
+## 2026-11-16: FIX-4 the run lock at the end of a run (branch `fix/run-lock-release`)
+- **Found from main's Windows CI after #18:** a worker job ended "failed" right after its last molecule. The job's
+  error was not in the output, so the likely causes were checked one by one. The job table's checkpoint cannot raise
+  (#16). The release of `jobs.lock` can: it is the last thing `run_resumable` does, and every status poll reads that
+  file. On Windows a file that is open cannot be deleted.
+- **Shown before fixing:** a scratch script on NOVA released the lock 3,000 times while a thread read it; 1,592
+  releases raised `PermissionError`. The CI test itself passed 40 times on NOVA: the poll has to land in the moment
+  of the removal, which a slow CI runner (and its antivirus) makes likelier.
+- **Retry, then empty the file:** a reader holds the lock for microseconds, so trying again for up to 2 s is plenty.
+  If it still fails, rewriting it as `{}` (a write is allowed while others read) makes it name no process, so neither
+  this process nor another one sees a live lock. Leaving the old content would make another process on the same
+  machine refuse the folder for as long as the worker runs.
+- The retry runs under `_held_guard`, so no other run in this process can take the lock between the release and the
+  removal and lose its own lock file to it.
+
