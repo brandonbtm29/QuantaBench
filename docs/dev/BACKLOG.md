@@ -8,6 +8,31 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
+## FIX-3: The CI hang inside Qt · in-PR 2026-11-16 (branch `fix/ci-hang-dump`; the cause: open)
+The hang seen since Nov 13 (Linux, before UI-8) now has two stacks, both from a project load in the tests' `_wait`
+loop: a worker's `done` → `MainWindow._on_loaded` → `_after_load` → `_on_molecule_selected` → `_show_info` →
+`collapsible.Notes.set_notes` → `self.setVisible(...)`, inside Qt.
+- Windows CI of #15: `test_project.py::test_save_and_reopen_a_built_project`.
+- macOS CI of #18: `test_project.py::test_resume_a_half_finished_project`.
+Not reproduced: 65 runs of those tests on Linux (xvfb) passed. pytest-timeout (`--timeout=300`) never fired, so the
+main thread holds the GIL inside Qt; the other Python threads (the machine monitor's, the sensors') were idle.
+**Found (the watchdog's first catch, #17's Linux run) and fixed in the branch: a deadlock.**
+- The GUI thread holds the GIL: `Notes.set_notes` → `QWidgetPrivate::setVisible` → `QLayout::activate` →
+  `QObject::connect` → `QBasicMutex::lockInternal`.
+- A worker's thread, ending, ran its `deleteLater`: `QObject::~QObject`, holding a signal-slot lock, called into PySide,
+  which waits for the GIL to drop the Python callables connected to the worker.
+- Fix: `gui.workers.start` runs the worker through a `_Runner` in the new thread. When `run` returns, the runner moves
+  the worker and itself back to the GUI thread, so both are destroyed there; `_Keeper` releases the Python wrapper
+  there too. Test: `tests/test_gui_workers.py` (where the worker is when it reports and where it is destroyed; 60
+  workers ending while widgets are shown and hidden).
+Done in the branch: `tests/hang_watchdog.py`, a separate process started by `tests/conftest.py` when
+`QB_HANG_WATCHDOG=1` (CI). After 200 s it runs `py-spy dump --native` on the test process (every thread, native
+frames, which thread holds the GIL; `sudo -n` on Linux and macOS; on macOS py-spy's Python frames plus `sample`), and
+at 420 s it kills the process.
+Tests: `tests/test_hang_watchdog.py` (a process stuck in the regex engine, holding the GIL).
+Next: the watchdog stays in CI for whatever hangs next. Other QObjects created in Python and destroyed in a non-GUI
+thread would deadlock the same way: `gui.workers.start` is the only place that moves one to another thread today.
+
 ## FIX-2: Flaky CI tests · done 2026-11-15 (PR #13)
 - macOS (PR #11's first run): `tests/test_telemetry.py::test_the_load_sampler_records_sensors_or_skips_them`,
   KeyError `cpu_temp_c`. `LoadSampler.run` checked `_halt` before the sensor read and appended the sample anyway;
@@ -23,7 +48,10 @@ Follow-up: when it shows up, fix the hanging test itself (a modal dialog at wind
   Linux (xvfb) did not hang. Next: a layout loop of the word-wrapped labels in the Molecules dock's Details is the
   suspect (the Nov 13 Linux hang, before UI-8, was in the same tests).
 - 2026-11-16: the flaky `test_worker.py::test_archive_manifest_sync_temp_files_and_failed_streams` (Windows, a
-  `jobs.sqlite-wal` left behind) is fixed in `JobManager._checkpoint` (it retries until a status poll lets go).
+  `jobs.sqlite-wal` left behind). First try (#16): `JobManager._checkpoint` retries until a status poll lets go; it
+  failed again on #21's Windows run. The cause: a poll that came after the checkpoint and before "done" opened the
+  table read-only, which recreates `-wal` and cannot remove it. Fixed (#21): from the final counts on, `Job.finishing`
+  makes polls report the stored counts without opening the table.
 
 ## UI-8: Collapsible sections and pop-out panels · done 2026-11-15 (PR #12)
 Brandon (2026-11-14): "At the moment it's kind of crowded. I think more collapsible menus / pop outs would be helpful";

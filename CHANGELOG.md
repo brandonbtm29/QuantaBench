@@ -2,6 +2,17 @@
 
 ## 0.3.0.dev (unreleased)
 
+### CI: native stacks of a hung test, FIX-3 (2026-11-16)
+- **The CI hang is found and fixed: a deadlock between a worker thread and the GUI thread.** It was seen on Linux, Windows and macOS, about 1 in 10 CI runs, while a project or run folder loaded. It could freeze the app the same way.
+  - A worker object (`gui.workers.start`) was destroyed in its own thread when that thread ended. Its `~QObject` held one of Qt's signal-slot locks while PySide waited for Python's GIL to drop the Python callables connected to it.
+  - Meanwhile the GUI thread held the GIL while it showed a widget (the molecule's notes), and the layout's `QObject::connect` waited for the same lock.
+  - The watchdog below caught it with native stacks on its first hang (#17's Linux run).
+  - **The fix:** a worker now moves itself back to the GUI thread when its `run` returns, and is destroyed there. Its Python wrapper is also released there.
+- **Why pytest-timeout never fired.** That thread holds Python's GIL, and pytest-timeout's thread needs the GIL to dump and exit. So the Windows job ran into its 30 min limit.
+- **A watchdog process now watches the tests in CI** (`tests/hang_watchdog.py`, `QB_HANG_WATCHDOG=1`). It has its own interpreter:
+  - a test still running after 200 s gets every thread's native and Python frames dumped into the log with `py-spy dump --native`, including whether the thread holds the GIL (macOS, where py-spy has no native mode: py-spy's Python frames and the system's `sample`);
+  - at 420 s the watchdog kills the process, so the job fails in 7 minutes instead of 30.
+
 ### `grid build --molecule-timeout` (2026-11-16)
 - `grid build` takes `--molecule-timeout S`, like `build`, and every machine's share runs with it.
 - Before this, the option was `build`'s only. A grid run took the client's settings value (1,800 s by default) on every machine, which is too short for CREST on the largest flexible molecules.
