@@ -20,7 +20,8 @@ Suspects: a layout loop of the Molecules dock's word-wrapped labels; a deadlock 
 in Qt) and a thread waiting for the GIL while it holds a Qt lock.
 Done in the branch: `tests/hang_watchdog.py`, a separate process started by `tests/conftest.py` when
 `QB_HANG_WATCHDOG=1` (CI). After 200 s it runs `py-spy dump --native` on the test process (every thread, native
-frames, which thread holds the GIL; `sudo -n` on Linux and macOS), and at 420 s it kills the process.
+frames, which thread holds the GIL; `sudo -n` on Linux and macOS; on macOS py-spy's Python frames plus `sample`), and
+at 420 s it kills the process.
 Tests: `tests/test_hang_watchdog.py` (a process stuck in the regex engine, holding the GIL).
 Next: the next hang's native frames name the Qt call; fix it from there. If it is a threads-and-GIL deadlock, the
 cure is in how the workers hand results to the GUI thread (no Python objects in cross-thread signals).

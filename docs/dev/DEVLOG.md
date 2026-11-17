@@ -188,4 +188,4 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **`sudo -n` on Linux and macOS.** On Linux, Yama's ptrace_scope 1 lets a process read only its descendants, and the watchdog is pytest's child. On macOS, reading another process needs root. GitHub's runners allow passwordless sudo; Windows needs neither.
 - **The test hangs a process for real.** It uses catastrophic backtracking in `re` (C code that never releases the GIL), then checks the dump and the kill.
 - `test_lanes.lane_processes` skips the watchdog, as it skips multiprocessing's resource tracker.
-
+- **macOS: `sample`, not `py-spy --native`.** py-spy has no native mode on macOS ("not supported on your platform", the first CI run). There the watchdog runs py-spy for the Python frames and the GIL, then macOS's own `sample <pid> 2` for every thread's native call graph, both with `sudo -n`.

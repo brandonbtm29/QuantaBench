@@ -6,7 +6,7 @@
 - **The hang is in Qt's own code.** It was seen on Windows (#15) and macOS (#18): `test_project.py`'s reopen and resume tests stop in `Notes.set_notes` → `setVisible`, inside Qt, during a project load. The faulthandler stack ends there, so the frames below are missing.
 - **Why pytest-timeout never fired.** That thread holds Python's GIL, and pytest-timeout's thread needs the GIL to dump and exit. So the Windows job ran into its 30 min limit.
 - **A watchdog process now watches the tests in CI** (`tests/hang_watchdog.py`, `QB_HANG_WATCHDOG=1`). It has its own interpreter:
-  - a test still running after 200 s gets every thread's native and Python frames dumped into the log with `py-spy dump --native`, including whether the thread holds the GIL;
+  - a test still running after 200 s gets every thread's native and Python frames dumped into the log with `py-spy dump --native`, including whether the thread holds the GIL (macOS, where py-spy has no native mode: py-spy's Python frames and the system's `sample`);
   - at 420 s the watchdog kills the process, so the job fails in 7 minutes instead of 30.
 
 ### `grid build --molecule-timeout` (2026-11-16)

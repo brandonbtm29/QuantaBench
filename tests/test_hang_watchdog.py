@@ -31,7 +31,7 @@ def test_the_watchdog_kills_a_process_stuck_in_c_and_says_why():
         target.wait(timeout=60)                                   # killed by the watchdog, not by the test
         assert time.time() - t < 30
         err = dog.communicate(timeout=30)[1]
-        assert "test_stuck has run" in err and "py-spy dump --native" in err and "killing pid" in err
+        assert "test_stuck has run" in err and "stacks of pid" in err and "killing pid" in err
         if shutil.which("py-spy"):
             assert "py-spy is not installed" not in err
     finally:
@@ -56,9 +56,10 @@ def test_a_test_that_ends_in_time_is_left_alone():
                 p.kill()
 
 
-@pytest.mark.skipif(not shutil.which("py-spy") or sys.platform == "win32", reason="needs py-spy (CI installs it)")
+@pytest.mark.skipif(not shutil.which("py-spy"), reason="needs py-spy (CI installs it)")
 def test_the_dump_has_the_native_frames():
-    """The point of it: frames below the Python call (here the regex engine's C function)."""
+    """The point of it: frames below the Python call (here the regex engine's C function). macOS: py-spy's Python
+    frames and ``sample``'s native call graph."""
     target, dog = _run(dump_after=1, kill_after=8)
     try:
         dog.stdin.write("start tests/test_x.py::test_native\n")
@@ -67,7 +68,9 @@ def test_the_dump_has_the_native_frames():
         err = dog.communicate(timeout=30)[1]
         if "Permission" in err or "sudo" in err.lower() and "password" in err.lower():
             pytest.skip("py-spy cannot read the process here (no root, ptrace_scope)")
-        assert "Thread" in err and ("sre" in err.lower() or "match" in err)
+        assert "Thread" in err and "match" in err                              # py-spy: the threads, the Python frame
+        if sys.platform == "darwin":
+            assert "Call graph" in err                                          # sample: the native frames
     finally:
         for p in (target, dog):
             if p.poll() is None:
