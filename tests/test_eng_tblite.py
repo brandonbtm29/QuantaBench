@@ -156,14 +156,28 @@ def test_solvation_models(tb):
     assert gbsa.solvation_label == "ALPB(ethanol)" and any("used ALPB" in n for n in gbsa.notes)
 
 
-def test_failures_raise_clear_runtime_errors(tb):
+def test_failures_raise_clear_runtime_errors(tb, monkeypatch):
     atoms = molecule("H2O")
-    with pytest.raises(RuntimeError, match="not converged"):
+    monkeypatch.setattr(et, "RETRY_MAX_ITERATIONS", 1)          # the gentle last try gets no more cycles either
+    with pytest.raises(RuntimeError, match="not converged.*also with mixer damping 0.2 and 1 cycles"):
         et.TBLiteCalculator(atoms.numbers, max_iterations=1).singlepoint(atoms.positions)
     with pytest.raises(RuntimeError, match="unpaired"):
         et.TBLiteCalculator(atoms.numbers, multiplicity=2).singlepoint(atoms.positions)
     with pytest.raises(RuntimeError, match="close"):
         et.TBLiteCalculator(atoms.numbers).singlepoint(np.zeros((3, 3)))
+
+
+def test_an_scf_that_fails_gets_a_gentler_last_try(tb):
+    """FAIL-1: an SCF that does not converge (here: 1 cycle allowed) is tried once more from atomic densities with
+    mixer damping 0.2 and up to 1000 cycles; the energy is the converged one, ``n_damped`` counts it, and the
+    calculator goes back to its own settings (the next single point fails the first way again)."""
+    atoms = molecule("H2O")
+    ref = float(et.TBLiteCalculator(atoms.numbers).singlepoint(atoms.positions).get("energy"))
+    calc = et.TBLiteCalculator(atoms.numbers, max_iterations=1)
+    e = float(calc.singlepoint(atoms.positions).get("energy"))
+    assert e == pytest.approx(ref, abs=1e-8) and calc.n_damped == 1 and calc.n_singlepoints == 1
+    calc.singlepoint(atoms.positions + 0.01)                   # restart fails, fresh guess fails, the gentle try works
+    assert calc.n_damped == 2
 
 
 def test_cation_doublet(tb):

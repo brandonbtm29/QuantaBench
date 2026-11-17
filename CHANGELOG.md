@@ -2,6 +2,19 @@
 
 ## 0.3.0.dev (unreleased)
 
+### The failed molecules of the QSAR tranches, FAIL-1 (2026-11-16)
+Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, for three causes. Each one is fixed here:
+- **"Bad Conformer Id"** (5 glycosides, both phases: digitoxin, digoxin, gitoxin, glycyrrhizin, maltopentaose).
+  - With RDKit 2026.09's small-ring torsions, ETKDG found no conformer within the 450 s embedding limit.
+  - RDKit's timeout then returned the id -1, which QuantaBench took for a conformer.
+  - Now -1 is dropped. An ETKDG start that finds no first conformer in 60 s gives way to the next one (without small-ring torsions, then random coordinates), with a note. Digitoxin now embeds 50 conformers (its whole MMFF build took 40 s on NOVA).
+- **"crashed the process 2 times"** (6 molecules in water, all at the rank step).
+  - tblite 0.8.0's ddX CPCM solver corrupts the heap at some geometries, which killed the lane: 0xC0000374 on Windows, glibc's abort on Linux.
+  - The rank step's GFN1-xTB CPCM terms now run in a helper process. A crash there costs that conformer's rank energy (noted), not the molecule.
+- **"SCF not converged in 250 cycles"** (tblite GFN2-xTB: 3 molecules in gas, 2 in water; 1423-20-7 in both phases).
+  - A failed SCF now gets a last try from atomic densities, with mixer damping 0.2 and up to 1,000 cycles. 1423-20-7 does not converge in 1,000 cycles at tblite's default damping (0.4), but converges at 0.2. The damping changes the path to the solution, not the converged energy. A note counts these single points.
+  - A conformer whose optimization still fails is dropped with a note. The molecule fails only if every conformer does.
+
 ### CI: native stacks of a hung test, FIX-3 (2026-11-16)
 - **The CI hang is found and fixed: a deadlock between a worker thread and the GUI thread.** It was seen on Linux, Windows and macOS, about 1 in 10 CI runs, while a project or run folder loaded. It could freeze the app the same way.
   - A worker object (`gui.workers.start`) was destroyed in its own thread when that thread ended. Its `~QObject` held one of Qt's signal-slot locks while PySide waited for Python's GIL to drop the Python callables connected to it.

@@ -274,15 +274,26 @@ def _tblite_version() -> str:
 class CpcmTerm:
     """The GFN1-xTB CPCM solvation term of one molecule's conformers (tblite, ddX): one gas-phase and one CPCM
     calculator, each SCF restarted from the previous conformer's wavefunction. That is about 30 % faster than fresh
-    SCFs and changes ΔG_solv by about 1e-6 kJ/mol (the SCF convergence); the ddX CPCM SCF is most of the cost."""
+    SCFs and changes ΔG_solv by about 1e-6 kJ/mol (the SCF convergence); the ddX CPCM SCF is most of the cost.
 
-    def __init__(self, numbers, charge: int, multiplicity: int, solvent: str, cache: SinglePointCache | None = None):
-        from . import solvents
+    The terms are computed in a helper process (``chem.cpcm_worker``, FAIL-1): tblite's ddX solver crashes the
+    process at some geometries, and there it costs only that conformer's term. ``in_process=True`` (or
+    ``QUANTABENCH_CPCM_IN_PROCESS=1``) computes here; the helper itself does."""
+
+    _count = 0
+
+    def __init__(self, numbers, charge: int, multiplicity: int, solvent: str, cache: SinglePointCache | None = None,
+                 threads: int = 1, in_process: bool | None = None):
+        from . import cpcm_worker, solvents
 
         self.numbers, self.charge, self.multiplicity, self.solvent = list(numbers), int(charge), int(multiplicity), solvent
         self.eps = solvents.for_engine(solvent, "cpcm")
         self.cache = cache
         self.version = _tblite_version()
+        self.threads = max(1, int(threads or 1))
+        self.in_process = cpcm_worker.in_process() if in_process is None else bool(in_process)
+        CpcmTerm._count += 1
+        self.token = f"{os.getpid()}-{id(self)}-{CpcmTerm._count}"
         self._calcs: dict[str, object] = {}
 
     def _calc(self, model: str):
@@ -294,25 +305,37 @@ class CpcmTerm:
                                                              solvation_model=model or "alpb")
         return self._calcs[model]
 
+    def _compute(self, positions_A) -> tuple[float, float]:
+        if not self.in_process:
+            from . import cpcm_worker
+
+            try:
+                return cpcm_worker.helper(self.threads).term(self.token, self.numbers, positions_A, self.charge,
+                                                             self.multiplicity, self.solvent)
+            except OSError:          # no helper process here (it could not start): compute in this process
+                self.in_process = True
+        return tuple(float(self._calc(model).singlepoint(np.asarray(positions_A, float)).get("energy"))
+                     for model in ("", "cpcm"))
+
     def __call__(self, positions_A) -> tuple[float, float]:
         """(E(GFN1-xTB gas), E(GFN1-xTB CPCM)) in Eh at one geometry; ΔG_solv is the difference."""
-        out = []
-        for model in ("", "cpcm"):
-            key = cache_key("tblite-gfn1" + (f"-cpcm-{self.eps:g}" if model else "-gas"), self.version, self.numbers,
-                            positions_A, self.charge, self.multiplicity, self.solvent if model else "")
-            e = self.cache.get(key) if self.cache is not None else None
-            if e is None:
-                e = float(self._calc(model).singlepoint(np.asarray(positions_A, float)).get("energy"))
-                if self.cache is not None:
-                    self.cache.put(key, e, "tblite-gfn1-" + (model or "gas"))
-            out.append(e)
-        return out[0], out[1]
+        keys = [cache_key("tblite-gfn1" + (f"-cpcm-{self.eps:g}" if model else "-gas"), self.version, self.numbers,
+                          positions_A, self.charge, self.multiplicity, self.solvent if model else "")
+                for model in ("", "cpcm")]
+        got = [self.cache.get(k) if self.cache is not None else None for k in keys]
+        if any(e is None for e in got):
+            got = list(self._compute(positions_A))
+            if self.cache is not None:
+                for k, e, model in zip(keys, got, ("gas", "cpcm")):
+                    self.cache.put(k, e, "tblite-gfn1-" + model)
+        return float(got[0]), float(got[1])
 
 
 def cpcm_term_eh(numbers, positions_A, charge: int, multiplicity: int, solvent: str,
-                 cache: SinglePointCache | None = None) -> tuple[float, float]:
+                 cache: SinglePointCache | None = None, threads: int = 1,
+                 in_process: bool | None = None) -> tuple[float, float]:
     """(E(GFN1-xTB gas), E(GFN1-xTB CPCM)) in Eh at one geometry (``CpcmTerm`` for one conformer)."""
-    return CpcmTerm(numbers, charge, multiplicity, solvent, cache)(positions_A)
+    return CpcmTerm(numbers, charge, multiplicity, solvent, cache, threads=threads, in_process=in_process)(positions_A)
 
 
 @dataclass
@@ -353,7 +376,7 @@ def compute(level: str, mol, conformers, *, charge: int = 0, multiplicity: int =
     if with_cpcm(level):
         out.engines["tblite"] = f"tblite {_tblite_version()} GFN1-xTB CPCM (ddX, {solvent})"
     gxtb_prog = calc = None
-    cpcm = CpcmTerm(numbers, charge, multiplicity, solvent, cache) if with_cpcm(level) else None
+    cpcm = CpcmTerm(numbers, charge, multiplicity, solvent, cache, threads=threads) if with_cpcm(level) else None
     if gas == "gxtb":
         from . import eng_gxtb
 

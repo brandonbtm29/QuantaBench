@@ -193,3 +193,16 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **The test hangs a process for real.** It uses catastrophic backtracking in `re` (C code that never releases the GIL), then checks the dump and the kill.
 - `test_lanes.lane_processes` skips the watchdog, as it skips multiprocessing's resource tracker.
 - **macOS: `sample`, not `py-spy --native`.** py-spy has no native mode on macOS ("not supported on your platform", the first CI run). There the watchdog runs py-spy for the Python frames and the GIL, then macOS's own `sample <pid> 2` for every thread's native call graph, both with `sudo -n`.
+
+## 2026-11-16: FAIL-1 the failed molecules of the QSAR tranches (branch `fix/failed-molecules`)
+- **"Bad Conformer Id" was RDKit's timeout id.**
+  - `EmbedMultipleConfs` stopped by `params.timeout` before its first conformer returns `[-1]`.
+  - The embedding's timing call took the whole 450 s (a quarter of the 1,800 s limit). It came back with `[-1]` and that was used as a conformer.
+  - The glycosides fail only with RDKit 2026.09's small-ring torsions: without them ETKDG embeds one in about a second, and with them none in minutes, with or without random coordinates.
+- **The water crashes were a tblite bug at specific geometries.**
+  - They are not about threads or lanes. With 2 threads per lane the refined geometries differ in the last digits, and the crash did not happen.
+  - 2447-54-3's GFN2-xTB/ALPB minimum crashes a fresh Python process in one GFN1-xTB (or GFN2-xTB) CPCM single point, on Windows and on Linux. A crash cannot be caught in the process, so the terms moved to a helper process.
+  - A helper per call to `compute` would cost a Python start per molecule. One kept per process costs about 0.2 s once.
+  - Lanes are daemonic `multiprocessing` processes, which may not start their own: the helper is a `subprocess`. A killed lane takes it along, since the lane kill takes the process tree.
+- **SCF: damping rather than temperature.** For 1423-20-7, 1,000 cycles at tblite's default damping do not converge, and damping 0.2 does. A higher electronic temperature would change the energy; the damping only changes the path. The geometry is from an optimization step of a molecule without force-field parameters.
+
