@@ -176,3 +176,9 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Only a chosen spec is kept.** A run that used the machine's setting resumes with the setting as it is now. Someone who changed the setting in between wants the new one.
 - **A choice is never overwritten by a setting.** A resume on the MacBook with its own setting leaves NOVA's `--lanes` in the record, so a later resume on NOVA gets it back.
 - The column is added with `ALTER TABLE` when a table is opened for writing (as `accepted` was). Read-only opens of older tables return no record. The schema version stays 5: an older QuantaBench ignores the extra column.
+
+## 2026-11-16: `grid build --molecule-timeout` (branch `fix/grid-molecule-timeout`)
+- Found while preparing the CREST rebuild of the 1,674 flexible neutrals. `run_tranche.py` passes the CREST options to `grid build`, which stopped at `--molecule-timeout` as an unknown argument.
+- The option moved from `build`'s parser into `add_build_science_args`, which `build`, `grid build` and `review` share. `config_from_args` already read it. A worker takes `molecule_timeout_s` from the job's config (it is not a resource field), so every share gets the client's value.
+- **The flaky worker test on Windows (seen on #15 and #20).** The worker folds the WAL into jobs.sqlite when a job ends. SQLite deletes `-wal` only when the last connection closes, and on Windows not while another handle is open. A `GET /v1/jobs/<id>` poll that read the counts at that moment kept it. `_checkpoint` now opens and closes the store again, every 0.2 s for up to 3 s, until the file is gone. The new test holds a second connection for 0.4 s; it fails with the old single attempt.
+

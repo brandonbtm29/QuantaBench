@@ -1562,14 +1562,22 @@ class JobManager:
             self._log(f"Job {job.id}: could not finish its run folder ({type(exc).__name__}: {exc})")
 
     @staticmethod
-    def _checkpoint(run_dir: Path) -> None:
+    def _checkpoint(run_dir: Path, attempts: int = 15, wait_s: float = 0.2) -> None:
         """Fold the WAL into jobs.sqlite: a status poll whose read-only connection overlapped the run's last
         commit keeps -wal/-shm alive, and the synced or archived folder is cleaner as one file. Only the
-        worker, the run folder's writer, does this."""
+        worker, the run folder's writer, does this. The last connection to close removes the -wal file; while a
+        poll's read-only connection is open (on Windows the file cannot be deleted then), the close leaves it, so
+        this tries again for up to ``attempts`` x ``wait_s`` seconds."""
         from ..chem import jobs as jobs_mod
 
-        with contextlib.suppress(Exception):
-            jobs_mod.JobStore(run_dir, create=False).close()
+        wal = Path(run_dir) / f"{jobs_mod.DB_NAME}-wal"
+        for i in range(max(1, attempts)):
+            with contextlib.suppress(Exception):
+                jobs_mod.JobStore(run_dir, create=False).close()
+            if not wal.exists():
+                return
+            if i + 1 < attempts:
+                time.sleep(wait_s)
 
     def _write_job_file(self, job: Job, tables: dict | None = None) -> None:
         data = {"job": job.to_record(), "environment": self.environment}
