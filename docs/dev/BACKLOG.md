@@ -48,7 +48,7 @@ Follow-ups (ready):
 - The full run: rebuild the list's ~1,674 flexible neutral molecules with `--conformers auto --crest-with-rdkit` per
   phase (needs-Brandon: about 110-300 h per phase on half the MacBook; NOVA needs CREST in WSL).
 
-## FAIL-1: The failed molecules of the QSAR tranches · done 2026-11-16 (PR #20; the reruns needs-Brandon)
+## FAIL-1: The failed molecules of the QSAR tranches · done 2026-11-16 (PR #20; rerun 2026-11-17: 14 of 15 build)
 b01-b15 (13,206 molecules): 8 failed in gas and 13 in water (`Runs\failed-molecules-2026-11-16\report.md`).
 Done in the branch:
 - `conformers.embed`:
@@ -73,6 +73,12 @@ Done in the branch:
 Follow-ups:
 - Report the ddX crash upstream (tblite 0.8.0, CPCM, with 2447-54-3's geometry).
 - Rerun the 15 molecules (21 molecule-phases) with `--retry-failed` once this is merged (the report lists the commands).
+  - Done 2026-11-17 on main 79213ea: 14 of the 15 build in both phases, and the tranches are paired again.
+  - Gitoxin (4562-36-1) failed again in both phases: "conformer embedding ran out of time (450 s)". Its first
+    conformer took 9 s with small-ring torsions, so 39 of 50 were asked for in the 441 s left. RDKit's timeout
+    stopped that batch before its first conformer, and no time was left for another way. Fixed in
+    `fix/embed-batch-stopped`: the batch gets `EMBED_BATCH_SHARE` (80 %) of the time left. A stopped batch
+    keeps the timed conformer, and the rest are embedded without small-ring torsions (about 0.5 s each).
 - 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
   about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
 

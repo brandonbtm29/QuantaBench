@@ -289,3 +289,16 @@ Newest entries at the bottom. One entry per working session or nightly run.
   `taskkill /F /T` kills a stuck process that started the watchdog. So the kill most likely failed because the process
   was already exiting. psutil's kill plus a "still there" log will tell next time.
 
+## 2026-11-17: a conformer batch stopped by the time limit (branch `fix/embed-batch-stopped`)
+- **Reproduced in the cloud** with gitoxin's SMILES and the run's limits (`embed(mol, 50, timeout_s=450)`): the first
+  conformer took 8.9 s, the note said 39 of 50, and 451 s later "ran out of time". Without small-ring torsions one
+  conformer takes 0.5 s; with them a batch can stall on a few hard seeds.
+- **Why a share of the time and not a second try at the end:** RDKit's timeout stops a whole
+  `EmbedMultipleConfs` call and keeps at most one conformer. The only way to have time for a top-up is to give the
+  batch less than all of it.
+  - 80 % leaves enough time for the fast way, and changes nothing for a batch that finishes in time.
+  - The timed conformer is copied before the batch, because the batch call clears the molecule's conformers.
+  - The top-up uses `clearConfs = False`, so what is there stays.
+- Molecules that never hit the limit get the same conformers: `test_a_limit_that_is_not_reached_changes_nothing`
+  still passes.
+
