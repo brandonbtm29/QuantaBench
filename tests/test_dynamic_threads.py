@@ -180,7 +180,7 @@ def simulate(sizes, budget, base, dynamic, *, seconds_per_cost=1e-4, speedup=0.6
 
 
 def test_simulated_narrow_lanes_with_a_dominant_molecule():
-    """NOVA's 11 x 2 CREST plan and the 20-PFAS sizes (atoms with H): the 65-atom molecule on 2 threads sets the end
+    """the workstation's 11 x 2 CREST plan and the 20-PFAS sizes (atoms with H): the 65-atom molecule on 2 threads sets the end
     of the batch; widened, the batch ends clearly earlier."""
     sizes = [49, 54, 56, 65, 50, 46, 37, 46, 39, 59, 8, 20, 18, 24, 25, 30, 30, 29, 31, 44]
     fixed = simulate(sizes, 22, 2, False)

@@ -1020,7 +1020,7 @@ class JobManager:
         while name in taken or (self.output_dir / name).exists():
             name, n = f"{base}-{n}", n + 1
         # abspath, not resolve(): on Windows, resolve() while another thread creates folders here did not always
-        # return the same form, which made this check fail at random (BTM NOVA, 2 of 4 runs)
+        # return the same form, which made this check fail at random (the Windows workstation, 2 of 4 runs)
         root = Path(os.path.abspath(self.output_dir))
         run_dir = Path(os.path.abspath(root / name))
         if run_dir.parent != root:                                   # cannot happen with a checked label

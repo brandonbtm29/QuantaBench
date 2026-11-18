@@ -149,7 +149,7 @@ In a water run, not every step sees the water. The review lists it for the run's
 ## Cost
 
 The review estimates the time of each method on this machine from QuantaBench's measured timings, scaled by
-molecule size; trust it to about a factor of 2. Lane-hours are on one 4-thread lane of BTM NOVA, where most timings
+molecule size; trust it to about a factor of 2. Lane-hours are on one 4-thread lane of the Windows workstation, where most timings
 were measured.
 
 - DFT: ωB97X-D/def2-SVP in PCM takes about 5 min for 495 basis functions, growing as nbf^2.9 (4-6 min for 30 heavy

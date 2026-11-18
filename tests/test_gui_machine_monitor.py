@@ -25,14 +25,14 @@ def _wait(app, cond, timeout=15.0):
     return cond()
 
 
-def nova_samples(n=120, hot=False):
+def tower_samples(n=120, hot=False):
     from quantabench import sensors
 
     now = time.time()
     out = []
     for i in range(n):
         out.append(sensors.Sample(
-            t=now - (n - i) * 2, machine="nova-test", source="psutil + Windows performance counters + "
+            t=now - (n - i) * 2, machine="tower-test", source="psutil + Windows performance counters + "
             "LibreHardwareMonitor", cpu_percent=90.0 + (i % 5), cpu_clock_mhz=4620.0, cpu_clock_min_mhz=3850.0,
             cpu_clock_max_mhz=5490.0, cpu_base_mhz=4701.0, cpu_temp_c=(93.0 if hot else 61.0) + (i % 3),
             cpu_power_w=88.0, gpu_percent=9.0, gpu_temp_c=82.0, gpu_mem_used_mb=2048.0, gpu_mem_total_mb=16304.0,
@@ -100,12 +100,12 @@ def test_strip_shows_this_computer_and_workers(isolated_settings):
                           "old-box": WorkerError("http://x/v1/sensors: HTTP 404: no such endpoint", 404),
                           "gone-box": WorkerError("cannot reach http://x: timed out")})
     poller.poll_once()
-    mon = FakeMonitor(nova_samples(hot=True))
+    mon = FakeMonitor(tower_samples(hot=True))
     strip = mm.MachineMonitorStrip(None, monitor=mon, poller=poller, interval_s=1.0)
     strip.resize(440, 300)
     strip.refresh()
     here = strip.here
-    assert here.name == "nova-test" and here.here
+    assert here.name == "tower-test" and here.here
     cpu = here.lines["cpu"].text()
     assert "<b>CPU</b> 94 %" in cpu and "4.62 GHz avg, 5.49 max" in cpu and "88 W" in cpu
     assert mm.HOT_COLOR in cpu and "95 °C" in cpu                       # 95 °C >= 90: red
@@ -127,7 +127,7 @@ def test_strip_shows_this_computer_and_workers(isolated_settings):
     assert "unreachable" in strip.remote["gone-box"].title.text()
     # folding: the body hides and the header keeps one line per machine
     strip.toggle.setChecked(False)
-    assert strip.body.isHidden() and "nova-test: CPU 94 % 95 °C, GPU 9 %" in strip.summary.text()
+    assert strip.body.isHidden() and "tower-test: CPU 94 % 95 °C, GPU 9 %" in strip.summary.text()
     assert "mac-test: CPU 64 %" in strip.summary.text()
     strip.toggle.setChecked(True)
     assert strip.summary.text() == "" and strip.body.isVisible()
@@ -164,7 +164,7 @@ def test_strip_without_a_sample_yet_and_with_html_in_names(isolated_settings):
     block = strip.remote["<img src=x>"]
     assert "&lt;img src=x&gt;" in block.title.text() and "<img" not in block.title.text()
     assert "<script>" not in block.toolTip() and "&lt;b&gt;why" in block.title.text()
-    mon.samples = nova_samples(3)
+    mon.samples = tower_samples(3)
     strip.refresh()
     assert not strip.here.lines["cpu"].isHidden() and "4.62 GHz" in strip.here.lines["cpu"].text()
     strip.stop()

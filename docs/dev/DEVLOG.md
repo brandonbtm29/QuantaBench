@@ -18,8 +18,8 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - Planning: `docs/UI_PLAN.md` (task-oriented workspaces, job model) and `docs/dev/BACKLOG.md`.
 - Next: UI-1 app shell.
 
-## 2026-10-27: first native Windows run on BTM NOVA
-- Pushed 0.2.0.dev0 to GitHub from BTM NOVA (fast-forward from a git bundle; the cloud session has no
+## 2026-10-27: first native Windows run on the Windows workstation
+- Pushed 0.2.0.dev0 to GitHub from the Windows workstation (fast-forward from a git bundle; the cloud session has no
   push access to the repo yet).
 - Native Windows test run (Python 3.12.10, CPU PyTorch 2.14.1, Radeon RX 9060 XT OpenGL 4.6):
   - pyvistaqt 0.13 crashed (access violation in `initializeGL`) on the first 3D viewer → pinned
@@ -34,7 +34,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
   - Full suite natively on Windows: 177 passed.
 - Smart App Control no longer blocks RDKit. ROCm PyTorch still to install (HW-1).
 
-## 2026-10-28: ROCm PyTorch on BTM NOVA
+## 2026-10-28: ROCm PyTorch on the Windows workstation
 - Installed AMD's ROCm 7.2.1 SDK + PyTorch 2.9.1 (Windows): `torch.cuda.is_available()` True, RX 9060 XT,
   6.1 TFLOP/s fp32 matmul. The ROCm SDK calls `offload-arch.exe` with an unquoted path, which the space in
   "GitHub Projects" splits (harmless warning so far).
@@ -62,7 +62,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
 
 ## 2026-11-04: cross-platform and two-machine plan
 - New `docs/PLATFORMS.md`: platform matrix for Windows 11 / WSL2-Linux / macOS (Apple Silicon), roles for
-  BTM NOVA (GPU, always on) and the MacBook (CPU QM, native CREST), a phased worker design over Tailscale +
+  the Windows workstation (GPU, always on) and the MacBook (CPU QM, native CREST), a phased worker design over Tailscale +
   SyncThing (M0 to M4), and the fork/upstream plan (FORK-1 to FORK-9). ROADMAP gained a platform track
   (P1 to P3); BACKLOG gained PLAT-1/2, DIST-1 to DIST-4, FORK-1, FORK-2, FORK-5, FORK-7 to FORK-9
   (FORK-3 = GPU-1, FORK-4 = GPU-2, FORK-6 needs no work). CI runs on macos-14 (non-blocking for now).
@@ -76,19 +76,19 @@ Newest entries at the bottom. One entry per working session or nightly run.
   longer import torch, one `--weights` rule set for `build --chunk-weights` and `grid build`
   (`plan.parse_weights`), shared CLI argument groups, float64 AIMNet2 energies in batched refinement,
   `resources.linalg`/`dxtb_gpu` settings (also carried to lanes and workers), Machines dock.
-- Measured on BTM NOVA: lanes MMFF 43.4 -> 11.7 s (24 PFAS), GFN1-xTB 172 -> 49.9 s (12 PFAS, 6 x 2);
+- Measured on the Windows workstation: lanes MMFF 43.4 -> 11.7 s (24 PFAS), GFN1-xTB 172 -> 49.9 s (12 PFAS, 6 x 2);
   AIMNet2 on the RX 9060 XT through the Warp-free path, 8 PFOA conformers 5.7 s vs 59.8 s on the CPU;
   dxtb on the GPU with routed Cholesky matches the CPU but is 5-8x slower (host syncs in dxtb's overlap
   integrals), so it stays on the CPU by default.
 - Found a stock aimnet 0.2 bug: `AdaptiveNeighborList` shrinks after small molecules and waits for an
   overflow error nvalchemiops 0.5 never raises, so larger molecules later in the same process lost
-  neighbors (PFOA 3.2 eV, PFOS 7.6 eV off on NOVA's CPU). Fixed by `aimnet_torch.guard_neighbor_lists`.
+  neighbors (PFOA 3.2 eV, PFOS 7.6 eV off on the workstation's CPU). Fixed by `aimnet_torch.guard_neighbor_lists`.
   Earlier multi-molecule AIMNet2 CPU runs should be redone. Upstream issue/PR drafted, not posted.
 - Forks: `brandonbtm29/dxtb` (tad-mctc 0.11 + tad-libcint 0.4; CI green on Linux, Windows, macOS) and
   `brandonbtm29/tblite` (Windows wheels, release `qb-v0.8.0-win1`). Upstream PR texts drafted, not posted.
-- Left for Brandon: first MacBook install and a NOVA + MacBook `grid build` over Tailscale; disable the
+- Left for Brandon: first MacBook install and a workstation + MacBook `grid build` over Tailscale; disable the
   upstream workflows that run in the tblite fork; approve the upstream PRs.
-- Integration on NOVA (2026-11-05, after two review-fix rounds): 587 passed, 41 skipped, 2 xfailed, 2 xpassed
+- Integration on the workstation (2026-11-05, after two review-fix rounds): 587 passed, 41 skipped, 2 xfailed, 2 xpassed
   in the `.venv` (ROCm torch, PyPI dxtb, no tad-libcint or tblite). Found there: AMD's Windows ROCm runtime
   hangs at process exit after GPU use (pytest printed its summary, then spun a core); fixed with a hard exit
   at QuantaBench's entry points (FORK-11). Also two host-dependent tests and a third Windows-flaky LAMMPS run.
@@ -116,7 +116,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
   finds the 150° minimum; and the water HF Hessian's frequencies match Psi4's to 1.5 cm-1. No Psi4 run here.
 
 ## 2026-11-13: SCRATCH-1 scratch cleanup and Psi4 memory (branch `fix/scratch-cleanup`)
-- NOVA's `%TEMP%\QuantaBench` held 479 GB after b03's ESP pass: 59 `psi4_<id>_*` folders, each with a 13-21 GB `psi.<pid>.97`.
+- The workstation's `%TEMP%\QuantaBench` held 479 GB after b03's ESP pass: 59 `psi4_<id>_*` folders, each with a 13-21 GB `psi.<pid>.97`.
   - That file is DiskDFJK's three-index integrals: the output shows `Memory [MiB]: 2574`, `Algorithm: Disk`, and "-281 MiB Core".
   - The 4 GB per job was too little for 784 basis functions and 4,901 auxiliary.
   - The lane was killed at the time limit, so `work_dir` never ran its cleanup, and its except branch kept failed folders whole anyway.
@@ -125,7 +125,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
 
 ## 2026-11-13: conformer checks pilot; `conformers compare` reads grid shares (afternoon task, branch `afternoon/2026-11-13-compare-grid-shares`)
 - The pilot (10 tranche molecules) compared the tranches' conformers with a 200-embedding rebuild and with Spartan's MMFF search. Results are in `Runs\conformer-checks-2026-11-13\report.md`, not here.
-- Pointed at a tranche's gas phase folder, `conformers compare` would have missed 4 of the 10: the MacBook ran them, and its shares (78 to 547 molecules of a tranche's ~1,000) are in the grid folder's `parts/brandons-macbook-pro[-<job id>]/<run folder>` (downloaded) and synced into `Runs\`. The pilot worked around it by copying the molecule folders; `read_sources` now follows `grid.json`.
+- Pointed at a tranche's gas phase folder, `conformers compare` would have missed 4 of the 10: the MacBook ran them, and its shares (78 to 547 molecules of a tranche's ~1,000) are in the grid folder's `parts/bench-mac[-<job id>]/<run folder>` (downloaded) and synced into `Runs\`. The pilot worked around it by copying the molecule folders; `read_sources` now follows `grid.json`.
 
 ## 2026-11-13: DESC-3 feature builder (branch `feat/feature-builder`)
 - Brandon's question was whether ratios of α, μ and V, made dimensionless, would predict σ better. In his QSAR study (results in `Runs\qsar-2026-11-13\report.md`, not here), the groups of `chem.liquid` plus the *reduced target* σ* = σ·v_m^⅔/kT were what helped: the target more than the features.
@@ -142,11 +142,11 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - The σ study of the afternoon ran as a script; the dialog makes its best setup (the liquid groups and σ*, k-fold and leave-class-out) a few clicks on any table. Its numbers stay in `Runs\qsar-2026-11-13\`, not here.
 - Ridge needs no scikit-learn: with the SVD of the standardized features, the leave-one-out residual of every α on the grid is closed form (residual / (1 − leverage), the intercept's 1/n included). It picks the same α as scikit-learn's RidgeCV to 1e-15 on a test set. scikit-learn stays optional (CI runs without it; those tests skip).
 - Predictions come back as a joined CSV rather than formula columns: a random forest has no formula, and a file in the project's `models/` keeps the out-of-fold predictions that the 1:1 plot needs, stored relative to the project like any join.
-- The evening's machines: the MacBook took the large (> 35 heavy atoms) and iodine parts of b03's ESP pass, one molecule at a time; NOVA kept the small ones.
+- The evening's machines: the MacBook took the large (> 35 heavy atoms) and iodine parts of b03's ESP pass, one molecule at a time; the workstation kept the small ones.
 
 ## 2026-11-14: RESUME-1, a resume keeps the run's options (branch `fix/resume-run-options`)
-- b03's ESP pass is done on both machines. NOVA: small part, 795 ok and 54 failed. MacBook: large 56/56 and iodine 25/25 (def2-SVP).
-  - NOVA's resumed segment ran at 2 threads and 4 GB per Psi4 job. The first segment had run at 4 threads and 6 GB.
+- b03's ESP pass is done on both machines. The workstation: small part, 795 ok and 54 failed. MacBook: large 56/56 and iodine 25/25 (def2-SVP).
+  - The workstation's resumed segment ran at 2 threads and 4 GB per Psi4 job. The first segment had run at 4 threads and 6 GB.
   - Its log shows why: `build --resume` restored only the science fields. `qm_memory_gb`, `qm_keep_cubes` and `molecule_timeout_s` are not science (they change no number), so they came from the settings.
   - Treating them as science would make a changed value refuse the resume. Instead they are run options: kept unless given again, and never a mismatch.
 - The 54 failures (53 time-outs at 1,800 s, 1 SCF failure) split 29 in the first segment and 24 + 1 in the resumed one.
@@ -167,14 +167,14 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **The run folder is made when a job starts, not when it is queued.** `prepare_run` returns a callable for it, so a queued job that is cancelled leaves no empty folder, and the folder's timestamp is the start.
 - **The queue follows the worker through `attach`, connected before the thread starts.** A signal emitted before the connection would be lost: the queue's per-job log and counts come from the same `log`, `progress` and `molecule_done` signals as the window's.
 - **Tasks are `BuildConfig` changes on top of the recipe.** Optimize and single point are one structure (`max_conformers=1`, `refine_top=1`, rank `refine`); single point adds `max_steps=0`, which is ASE's energy and forces at the start geometry. The pipeline MMFF-relaxes every embedded or seeded structure, so the single point is at that geometry: a follow-up for a geometry used unchanged.
-- **Recipes use the "gfn2" alias**, the first installed of dxtb, tblite and the xtb program, so one recipe works on NOVA (tblite) and on the MacBook alike. A user recipe stores every recipe field, not the difference from the defaults, so a later change of a default does not change a saved recipe.
+- **Recipes use the "gfn2" alias**, the first installed of dxtb, tblite and the xtb program, so one recipe works on the workstation (tblite) and on the MacBook alike. A user recipe stores every recipe field, not the difference from the defaults, so a later change of a default does not change a saved recipe.
 - **The workspace state version is now 3:** a new dock is not in an older saved state, and `restoreState` leaves it wherever it was. The saved arrangements are reset once.
 - **A cancelled job is "cancelled" only if a molecule was left undone.** macOS CI runs a batch in several lanes, and the molecules in flight finish after a cancel. There, all 7 of the test's molecules finished, so the job ends "done".
 
 ## 2026-11-16: RESUME-2 a resume keeps the run's `--lanes` (branch `fix/resume-lanes`)
-- **Unlike the run options, a lane spec is machine-specific.** A GPU lane on NOVA (`gpu:1x4,cpu:5x2`) means nothing on the MacBook, and a thread count fits one CPU. So the record names the machine, and only a resume there reuses it. Elsewhere the machine's own setting applies, as before.
+- **Unlike the run options, a lane spec is machine-specific.** A GPU lane on the workstation (`gpu:1x4,cpu:5x2`) means nothing on the MacBook, and a thread count fits one CPU. So the record names the machine, and only a resume there reuses it. Elsewhere the machine's own setting applies, as before.
 - **Only a chosen spec is kept.** A run that used the machine's setting resumes with the setting as it is now. Someone who changed the setting in between wants the new one.
-- **A choice is never overwritten by a setting.** A resume on the MacBook with its own setting leaves NOVA's `--lanes` in the record, so a later resume on NOVA gets it back.
+- **A choice is never overwritten by a setting.** A resume on the MacBook with its own setting leaves the workstation's `--lanes` in the record, so a later resume on the workstation gets it back.
 - The column is added with `ALTER TABLE` when a table is opened for writing (as `accepted` was). Read-only opens of older tables return no record. The schema version stays 5: an older QuantaBench ignores the extra column.
 
 ## 2026-11-16: `grid build --molecule-timeout` (branch `fix/grid-molecule-timeout`)
@@ -258,8 +258,8 @@ Newest entries at the bottom. One entry per working session or nightly run.
   error was not in the output, so the likely causes were checked one by one. The job table's checkpoint cannot raise
   (#16). The release of `jobs.lock` can: it is the last thing `run_resumable` does, and every status poll reads that
   file. On Windows a file that is open cannot be deleted.
-- **Shown before fixing:** a scratch script on NOVA released the lock 3,000 times while a thread read it; 1,592
-  releases raised `PermissionError`. The CI test itself passed 40 times on NOVA: the poll has to land in the moment
+- **Shown before fixing:** a scratch script on the workstation released the lock 3,000 times while a thread read it; 1,592
+  releases raised `PermissionError`. The CI test itself passed 40 times on the workstation: the poll has to land in the moment
   of the removal, which a slow CI runner (and its antivirus) makes likelier.
 - **Retry, then empty the file:** a reader holds the lock for microseconds, so trying again for up to 2 s is plenty.
   If it still fails, rewriting it as `{}` (a write is allowed while others read) makes it name no process, so neither
@@ -285,7 +285,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
   wrappers, so they are freed by reference counting in the GUI thread.
 - **Why the job hung after the abort:** CRT `abort` → process exit → DLL detach → VTK's
   `vtkMatplotlibMathTextUtilities` destructor → `PyGILState_Ensure`. The GIL belonged to a thread that process exit
-  had already ended, so this can never finish. A scratch check on NOVA (`scratch/wd_inside.py`) showed that the old
+  had already ended, so this can never finish. A scratch check on the workstation (`scratch/wd_inside.py`) showed that the old
   `taskkill /F /T` kills a stuck process that started the watchdog. So the kill most likely failed because the process
   was already exiting. psutil's kill plus a "still there" log will tell next time.
 

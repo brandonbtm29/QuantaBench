@@ -41,7 +41,7 @@ def report(physical=12, logical=24, ram=64.0, perf=0):
                                     torch_backend="cpu", gpus=[], performance_cores=perf)
 
 
-NOVA = dict(physical=12, logical=24, ram=64.0)
+WORKSTATION = dict(physical=12, logical=24, ram=64.0)
 M3_MAX = dict(physical=14, logical=14, ram=36.0, perf=10)
 
 
@@ -83,28 +83,28 @@ def test_defaults_and_budgets():
 def test_priority_and_free_threads_round_trip_per_machine(isolated_settings, monkeypatch):
     """Like the CREST path and the lanes: each machine keeps its own value in the shared file, and the defaults of
     every machine (resources.priority, resources.free_threads) are never written."""
-    monkeypatch.setattr(sm, "_this_machine", lambda: "BTM-NOVA")
+    monkeypatch.setattr(sm, "_this_machine", lambda: "BENCH-PC")
     s = sm.load()
     s.set_priority_for("background")
     s.set_free_threads_for(4)
-    s.set_priority_for("normal", "Brandons-MacBook-Pro")
+    s.set_priority_for("normal", "Bench-Mac")
     sm.save(s)
     raw = json.loads((sm.settings_dir() / sm.SETTINGS_FILE).read_text(encoding="utf-8"))["resources"]
     assert raw["priority"] == "low" and raw["free_threads"] == 1                  # the shared keys: untouched
-    assert raw["machine_priority"] == {"btm-nova": "background", "brandons-macbook-pro": "normal"}
-    assert raw["machine_free_threads"] == {"btm-nova": 4}
+    assert raw["machine_priority"] == {"bench-pc": "background", "bench-mac": "normal"}
+    assert raw["machine_free_threads"] == {"bench-pc": 4}
     again = sm.load()
     assert again.priority_for() == "background" and again.free_threads_for() == 4
     assert again.priority_for(scope=True) == ("background", "this machine")
-    assert again.priority_for("brandons_macbook_pro") == "normal"                 # names as in machine_lanes
-    assert again.free_threads_for("brandons-macbook-pro", scope=True) == (1, "all machines")
+    assert again.priority_for("bench_mac") == "normal"                 # names as in machine_lanes
+    assert again.free_threads_for("bench-mac", scope=True) == (1, "all machines")
     assert again.priority_for("linux-box", scope=True) == ("low", "all machines")
     cfg = pipeline.BuildConfig.from_settings(again)
     assert (cfg.priority, cfg.free_threads) == ("background", 4)
     # the default of every machine is not stored for a machine; "default" goes back to it
     again.set_priority_for("low")
     again.set_free_threads_for("default")
-    assert "btm-nova" not in again.resources.machine_priority and again.resources.machine_free_threads == {}
+    assert "bench-pc" not in again.resources.machine_priority and again.resources.machine_free_threads == {}
     with pytest.raises(ValueError):
         again.set_priority_for("turbo")
     with pytest.raises(ValueError):
@@ -112,47 +112,47 @@ def test_priority_and_free_threads_round_trip_per_machine(isolated_settings, mon
 
 
 def test_save_keeps_another_machines_priority(isolated_settings, monkeypatch):
-    """A GUI left open on NOVA does not write back its old copy of the Mac's entries."""
-    monkeypatch.setattr(sm, "_this_machine", lambda: "btm-nova")
-    nova = sm.load()                                     # NOVA's GUI opens the file
-    monkeypatch.setattr(sm, "_this_machine", lambda: "brandons-macbook-pro")
+    """A GUI left open on the workstation does not write back its old copy of the Mac's entries."""
+    monkeypatch.setattr(sm, "_this_machine", lambda: "bench-pc")
+    tower = sm.load()                                     # the workstation's GUI opens the file
+    monkeypatch.setattr(sm, "_this_machine", lambda: "bench-mac")
     mac = sm.load()
     mac.set_priority_for("background")
     mac.set_free_threads_for(3)
     sm.save(mac)                                         # the Mac saves its own
-    monkeypatch.setattr(sm, "_this_machine", lambda: "btm-nova")
-    nova.set_priority_for("normal")
-    sm.save(nova)                                        # NOVA saves later
+    monkeypatch.setattr(sm, "_this_machine", lambda: "bench-pc")
+    tower.set_priority_for("normal")
+    sm.save(tower)                                        # the workstation saves later
     again = sm.load()
-    assert again.resources.machine_priority == {"brandons-macbook-pro": "background", "btm-nova": "normal"}
-    assert again.resources.machine_free_threads == {"brandons-macbook-pro": 3}
+    assert again.resources.machine_priority == {"bench-mac": "background", "bench-pc": "normal"}
+    assert again.resources.machine_free_threads == {"bench-mac": 3}
 
 
 def test_bad_priority_values_fall_back(isolated_settings):
     (sm.settings_dir()).mkdir(parents=True, exist_ok=True)
     (sm.settings_dir() / sm.SETTINGS_FILE).write_text(json.dumps({"resources": {
         "priority": "turbo", "free_threads": "many",
-        "machine_priority": {"nova": "warp", "mac": 3, "box": "Background"},
-        "machine_free_threads": {"nova": -3, "mac": "2", "box": 5}}}), encoding="utf-8")
+        "machine_priority": {"tower": "warp", "mac": 3, "box": "Background"},
+        "machine_free_threads": {"tower": -3, "mac": "2", "box": 5}}}), encoding="utf-8")
     s = sm.load()
-    assert s.priority_for("nova") == "low" and s.priority_for("mac") == "low" and s.priority_for("box") == "background"
-    assert s.free_threads_for("nova") == 1 and s.free_threads_for("mac") == 1 and s.free_threads_for("box") == 5
+    assert s.priority_for("tower") == "low" and s.priority_for("mac") == "low" and s.priority_for("box") == "background"
+    assert s.free_threads_for("tower") == 1 and s.free_threads_for("mac") == 1 and s.free_threads_for("box") == 5
 
 
 def test_settings_cli_sets_this_machine_and_others(isolated_settings, monkeypatch, capsys):
     from quantabench import cli
 
-    monkeypatch.setattr(sm, "_this_machine", lambda: "btm-nova")
+    monkeypatch.setattr(sm, "_this_machine", lambda: "bench-pc")
     assert cli.main(["settings", "--priority", "background", "--free-threads", "2"]) == 0
     out = capsys.readouterr().out
     assert "priority background (set for this machine); free threads 2 (set for this machine)" in out
-    assert cli.main(["settings", "--priority", "normal", "--machine", "Brandons-MacBook-Pro"]) == 0
+    assert cli.main(["settings", "--priority", "normal", "--machine", "Bench-Mac"]) == 0
     s = sm.load()
-    assert s.resources.machine_priority == {"btm-nova": "background", "brandons-macbook-pro": "normal"}
-    assert s.resources.machine_free_threads == {"btm-nova": 2} and s.resources.priority == "low"
+    assert s.resources.machine_priority == {"bench-pc": "background", "bench-mac": "normal"}
+    assert s.resources.machine_free_threads == {"bench-pc": 2} and s.resources.priority == "low"
     assert cli.main(["settings", "--priority", "default", "--free-threads", "default"]) == 0
     s = sm.load()
-    assert s.resources.machine_priority == {"brandons-macbook-pro": "normal"} and not s.resources.machine_free_threads
+    assert s.resources.machine_priority == {"bench-mac": "normal"} and not s.resources.machine_free_threads
     capsys.readouterr()
     assert cli.main(["settings", "--free-threads", "-1"]) == 2
     assert "0 or more" in capsys.readouterr().err
@@ -160,11 +160,11 @@ def test_settings_cli_sets_this_machine_and_others(isolated_settings, monkeypatc
 
 # ----------------------------------------------------------------------------- lane plan, free threads
 def test_lane_plans_keep_todays_layout_by_default(monkeypatch):
-    """The default (1 free thread) is today's plan: NOVA 11 x 2 = 22 of 24 for CREST, the M3 Max 3 x 4."""
+    """The default (1 free thread) is today's plan: the workstation 11 x 2 = 22 of 24 for CREST, the M3 Max 3 x 4."""
     machine(monkeypatch, 24, 12)
-    assert L.plan_auto(crest_cfg(), report(**NOVA))[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
-    assert L.plan_auto(crest_cfg(free_threads=2), report(**NOVA))[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
-    assert "left free" not in L.plan_auto(crest_cfg(), report(**NOVA))[1]
+    assert L.plan_auto(crest_cfg(), report(**WORKSTATION))[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
+    assert L.plan_auto(crest_cfg(free_threads=2), report(**WORKSTATION))[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
+    assert "left free" not in L.plan_auto(crest_cfg(), report(**WORKSTATION))[1]
     assert L.parse_lanes("1", crest_cfg()) == [Lane("main", "auto", 23)]
     machine(monkeypatch, 14, 14)
     mac = report(**M3_MAX)
@@ -175,22 +175,22 @@ def test_lane_plans_keep_todays_layout_by_default(monkeypatch):
 
 def test_lane_plans_leave_the_free_threads(monkeypatch):
     machine(monkeypatch, 24, 12)
-    nova = report(**NOVA)
-    lanes, reason = L.plan_auto(crest_cfg(free_threads=4), nova)
+    tower = report(**WORKSTATION)
+    lanes, reason = L.plan_auto(crest_cfg(free_threads=4), tower)
     assert lanes == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 11)] and "4 of 24 threads left free" in reason
-    lanes, reason = L.plan_auto(crest_cfg(priority="background"), nova)       # 25 % of 24 = 6 free: 9 x 2
+    lanes, reason = L.plan_auto(crest_cfg(priority="background"), tower)       # 25 % of 24 = 6 free: 9 x 2
     assert lanes == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 10)]
     assert "6 of 24 threads left free (background)" in reason
     # an explicit thread count is used as given, as before (the free threads are for the automatic budget)
-    assert sum(x.threads for x in L.plan_auto(crest_cfg(threads=24, free_threads=4), nova)[0]) == 24
-    assert L.plan_auto(crest_cfg(threads=12, free_threads=4), nova)[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
+    assert sum(x.threads for x in L.plan_auto(crest_cfg(threads=24, free_threads=4), tower)[0]) == 24
+    assert L.plan_auto(crest_cfg(threads=12, free_threads=4), tower)[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
     # MMFF: one lane per physical core, within the budget
-    assert len(L.plan_auto(pipeline.BuildConfig(method="mmff", free_threads=16), nova)[0]) == 8
+    assert len(L.plan_auto(pipeline.BuildConfig(method="mmff", free_threads=16), tower)[0]) == 8
     # threads 0 = the budget for "1" and "N" too; an explicit list is used as given
     assert L.parse_lanes("1", crest_cfg(free_threads=8)) == [Lane("main", "auto", 16)]
     assert L.parse_lanes("4", crest_cfg(free_threads=8)) == [Lane(f"cpu{i}", "cpu", 4) for i in range(1, 5)]
-    assert sum(x.threads for x in L.parse_lanes("6x4", crest_cfg(free_threads=8), nova)) == 24
-    assert "= 18 threads of 18" in L.plan_text("auto", crest_cfg(priority="background"), nova, 0)
+    assert sum(x.threads for x in L.parse_lanes("6x4", crest_cfg(free_threads=8), tower)) == 24
+    assert "= 18 threads of 18" in L.plan_text("auto", crest_cfg(priority="background"), tower, 0)
     machine(monkeypatch, 14, 14)
     mac = report(**M3_MAX)
     assert L.plan_auto(crest_cfg(priority="background"), mac)[0] == [Lane("cpu1", "cpu", 4), Lane("cpu2", "cpu", 4)]
@@ -275,11 +275,11 @@ def test_popen_args_on_linux_and_macos():
 def test_wsl_wrapper_gets_nice_and_ionice():
     """Windows priorities do not reach the Linux VM: wsl.exe gets the class, the wrapper nice and ionice."""
     info = external.ProgramInfo("crest", "wsl:/home/b/micromamba/envs/qb-tools/bin/crest", "settings")
-    cmd = [info.command()[0], "--cd", "/mnt/c/Users/Brand/job", *info.command()[1:], "in.xyz", "-T", "4"]
+    cmd = [info.command()[0], "--cd", "/mnt/c/Users/me/job", *info.command()[1:], "in.xyz", "-T", "4"]
     prio = P.child_options("low", system="win32", via_wsl=True)
     argv, kw = external.popen_args(cmd, via_wsl=True, prio=prio, system="win32")
     assert kw == {"creationflags": external.CREATE_NO_WINDOW | P.BELOW_NORMAL_PRIORITY_CLASS}
-    assert argv[:6] == ["wsl.exe", "--cd", "/mnt/c/Users/Brand/job", "-e", "sh", "-c"]
+    assert argv[:6] == ["wsl.exe", "--cd", "/mnt/c/Users/me/job", "-e", "sh", "-c"]
     wrapper = argv[6]
     assert wrapper.startswith(external.WSL_WRAPPER[:-len(P.EXEC_TAIL)]) and "echo $$ > .qb_pid" in wrapper
     assert "ionice -c 2 -n 7 -p $$" in wrapper and 'exec nice -n 10 "$0" "$@"' in wrapper
@@ -434,7 +434,7 @@ def test_thread_lowered_lowers_only_the_build_thread(tmp_path):
 
 # ----------------------------------------------------------------------------- worker, telemetry, CLI
 def test_workers_use_their_own_priority_unless_the_client_sets_one(isolated_settings, monkeypatch):
-    monkeypatch.setattr(sm, "_this_machine", lambda: "btm-nova")
+    monkeypatch.setattr(sm, "_this_machine", lambda: "bench-pc")
     s = sm.load()
     s.set_priority_for("background")
     s.set_free_threads_for(3)
@@ -501,12 +501,12 @@ def test_build_cli_takes_priority_and_free_threads(tmp_path, monkeypatch, capsys
 def test_doctor_reports_this_machines_priority(isolated_settings, monkeypatch, capsys):
     from quantabench import cli
 
-    monkeypatch.setattr(sm, "_this_machine", lambda: "btm-nova")
+    monkeypatch.setattr(sm, "_this_machine", lambda: "bench-pc")
     s = sm.load()
     s.set_priority_for("background")
     sm.save(s)
     info = cli.priority_info(sm.load(), 24)
-    assert info == {"machine": "btm-nova", "priority": "background", "priority_scope": "this machine",
+    assert info == {"machine": "bench-pc", "priority": "background", "priority_scope": "this machine",
                     "free_threads": 1, "free_threads_scope": "all machines", "free_threads_effective": 6,
                     "auto_thread_budget": 18}
     line = cli.priority_lines(sm.load(), None, 24)
@@ -535,7 +535,7 @@ def test_settings_dialog_run_priority_and_leave_free(isolated_settings, monkeypa
 
     from quantabench.gui.settings_dialog import SettingsDialog
 
-    monkeypatch.setattr(sm, "_this_machine", lambda: "btm-nova")
+    monkeypatch.setattr(sm, "_this_machine", lambda: "bench-pc")
     machine(monkeypatch, 24, 12)
     app = QApplication.instance() or QApplication([])
     dlg = SettingsDialog(sm.Settings(), None)
@@ -548,8 +548,8 @@ def test_settings_dialog_run_priority_and_leave_free(isolated_settings, monkeypa
     assert "6 of 24 threads left free" in dlg.lane_plan.text()
     dlg.free_threads.setValue(3)
     s = dlg.result_settings()
-    assert s.resources.machine_priority == {"btm-nova": "background"}
-    assert s.resources.machine_free_threads == {"btm-nova": 3}
+    assert s.resources.machine_priority == {"bench-pc": "background"}
+    assert s.resources.machine_free_threads == {"bench-pc": 3}
     assert (s.resources.priority, s.resources.free_threads) == ("low", 1)    # the shared defaults: untouched
     dlg.reject()
     dlg.deleteLater()

@@ -3,7 +3,7 @@
 Three layers, each usable on its own (plan: docs/PLATFORMS.md, sections 2-3):
 
 ``dist.lanes``    one machine, several **lanes**: worker processes that each own a device and a thread
-                  budget (e.g. 1 GPU lane + 5 CPU lanes of 2 threads on BTM NOVA). ``jobs.run_resumable``
+                  budget (e.g. 1 GPU lane + 5 CPU lanes of 2 threads on the Windows workstation). ``jobs.run_resumable``
                   pulls molecules into free lanes, so a fast lane simply takes more of them.
 ``dist.profile``  what a machine can do: hardware, engines, external programs and measured throughput.
                   Saved as ``machines/<name>.json`` in the (synced) settings folder, so every machine

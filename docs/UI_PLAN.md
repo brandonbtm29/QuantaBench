@@ -132,7 +132,7 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
     (machine, state, molecule, log; Cancel goes there). Its results come back through the synced output folder,
     else the worker's archive, into the Molecules list.
 - **Resources per job:** CPU threads, GPU on/off/device, memory cap, and the machine: this one, a
-  worker such as BTM NOVA or the MacBook, or auto (DIST-3 in the backlog, PLATFORMS.md). Jobs run in a queue shown in the
+  worker such as the Windows workstation or the MacBook, or auto (DIST-3 in the backlog, PLATFORMS.md). Jobs run in a queue shown in the
   job monitor and can be resumed.
 - **The review before submitting (ADV-1, in the app since 2026-11-09).** Brandon (2026-11-09): "a review checking what
   types of atoms and groups are present in the molecules about to be submitted, and which makes recommendations of

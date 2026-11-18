@@ -236,11 +236,11 @@ PFHpA (375-85-9, 23 atoms) at the same geometry:
 
 - The time grows as nbf^2.5. The 63 molecules have a median of 365 basis functions (6-31G*) and a maximum of
   647.
-- On NOVA (3 lanes x 4 threads, taking a lane as 2-4x a cloud job), the P1, P2a, P2b, P2c and P2d set takes
+- On the workstation (3 lanes x 4 threads, taking a lane as 2-4x a cloud job), the P1, P2a, P2b, P2c and P2d set takes
   about 9-19 h (P2b's diffuse basis about 4.5 h of that), or half that with the MacBook taking `--part 2/2`.
   P1E takes about 4-9 h, and `qb` and `qbwater` about 2.5 h each.
 - The 4,700-PFAS list has 3,708 SMILES-defined molecules of at most 60 heavy atoms, with a median of 26 heavy
-  atoms and about 400 basis functions. On NOVA alone, the full protocol takes about 5-10 days in the gas phase
+  atoms and about 400 basis functions. On the workstation alone, the full protocol takes about 5-10 days in the gas phase
   (def2-SVP) and 9-17 days in PCM water.
 - In PCM, three quarters of the water cost is the finite-field polarizability: six more PCM SCFs. Computing α
   in the gas phase (analytic) or not at all brings the water protocol close to the gas one.
@@ -251,7 +251,7 @@ PFHpA (375-85-9, 23 atoms) at the same geometry:
 - One free-atom SCF of the MBIS step failed (triflic acid, def2-SVP), and the Psi4 process then hung after
   writing its result. The driver now cleans up and `run_driver` stops such a process.
 
-## The runs (`scratch/val2/` on NOVA, not in the repository)
+## The runs (`scratch/val2/` on the workstation, not in the repository)
 
 - `val2_import.py`: the import above, plus `spartan_conformers_wb97xd.csv`, `essential76_summary.csv` and the
   CompTox inputs `val2_inputs_63.csv` and `val2_inputs_all.csv`.
@@ -268,7 +268,7 @@ PFHpA (375-85-9, 23 atoms) at the same geometry:
   - It is resumable and shares a list between machines (`--part K/N`).
   - Psi4 runs in local scratch; only small files go to SyncThing.
   - The report compares each level with Spartan and with P1, and fits t = a·nbf^b per protocol.
-- `run_val2_nova.ps1` and `run_val2_mac.sh`: the stages `fixed`, `fixedE`, `qb` and `qbwater` (QuantaBench's own
+- `run_val2_<windows machine>.ps1` and `run_val2_mac.sh`: the stages `fixed`, `fixedE`, `qb` and `qbwater` (QuantaBench's own
   geometries: RDKit -> AIMNet2 -> `--qm wb97x-d/6-31g* --qm-top 3 --cubes`, and the candidate default GFN2-xTB/ALPB
   -> `--qm wb97x-d/def2-svp` in PCM water), then `validate`.
 
@@ -285,7 +285,7 @@ quantabench-cli import C3A_P1.spartan C3A_P1_All_Conformers_Top30.spartan C3A_P1
     --conformers all --table c3_long.csv --sdf c3_conformers.sdf
 quantabench-cli conformers compare --a c3_long.csv c3_conformers.sdf \
     --include "*_DFT_Top5.spartan" "*_All_Conformers_Top30.spartan" \
-    --b Runs/validation-2026-11-06/water/<NOVA share> Runs/<MacBook share> \
+    --b Runs/validation-2026-11-06/water/<workstation share> Runs/<MacBook share> \
     --a-name Spartan --b-name QuantaBench --rescore gas,water --relax water --workers 2 --out cmp_c3_water
 # two QuantaBench runs (RDKit vs CREST) the same way
 quantabench-cli conformers compare --a Runs/<rdkit water run> --b Runs/<crest water run> --a-name RDKit \
@@ -386,7 +386,7 @@ Computed in the cloud on 2 cores. The C3 common level took about 2 h (2,066 conf
 optimizations); the Essential 76 one about 50 min (1,237).
 
 **C3A/C3B ions in water (61).**
-- Spartan's side: the DFT_Top5 and All_Conformers_Top30 documents, taken from an import that NOVA's
+- Spartan's side: the DFT_Top5 and All_Conformers_Top30 documents, taken from an import that the workstation's
   `scratch/cc/extract_c3.py` makes. That gives 1,765 conformers (median 33 per ion). The 5 DFT conformers are not
   all among the Top30: they come from the Top5 search.
 - QuantaBench's side: the Nov 6 water run, 235 conformers (at most 5 per ion).
@@ -450,7 +450,7 @@ The question: Spartan's B3LYP has no dispersion correction. Does dispersion-corr
 lowest conformer or with Spartan's? If ωB97X-D and B3LYP-D3(BJ) side with GFN2 and plain B3LYP with Spartan, the
 missing dispersion explains the disagreement and GFN2's ranking is defensible.
 
-**Setup** (BTM NOVA; scripts in `scratch/dft_test/`, not in the repository):
+**Setup** (the Windows workstation; scripts in `scratch/dft_test/`, not in the repository):
 - **Ions:** the 10 with the largest water-dipole errors (`Runs/crest-2026-11-06/molecules.csv`, 30-54 heavy atoms).
 - **Pool per ion,** by each source's own ranking:
   - S1-S3: Spartan's B3LYP/6-311+G** C-PCM lowest (DFT_Top5 single points at MMFF geometries);
@@ -544,7 +544,7 @@ missing dispersion explains the disagreement and GFN2's ranking is defensible.
 - Re-rank a diverse pool, not GFN2's lowest few: folded and extended conformers from RDKit and CREST, about 6-10 per
   ion. Use `--qm wb97x-d/def2-svp --qm-top N --solvent water` on a pool built for it.
 - B3LYP-D3(BJ)/def2-SVP ranks like ωB97X-D (2.6 kJ/mol) and costs about 30 % less.
-- One single point takes 4-6 min (30 heavy atoms) to 12-27 min (54) on a 4-thread NOVA lane; time grows as nbf^2.9.
+- One single point takes 4-6 min (30 heavy atoms) to 12-27 min (54) on a 4-thread lane on the workstation; time grows as nbf^2.9.
 - The QM stage's `qm_*` descriptors come from its lowest conformer, but the xTB descriptors stay at GFN2's lowest.
   The QSAR run needs the descriptors of the DFT-lowest conformer.
 
@@ -560,7 +560,7 @@ missing dispersion explains the disagreement and GFN2's ranking is defensible.
 
 The question: DFT re-ranking of every QSAR ion's pool would cost about 400 lane-hours. Is there a cheap method that
 ranks conformers as ωB97X-D/def2-SVP in PCM does, or is there none? Every candidate is a single point at the
-reference's own geometry, so only the energy model differs. Scripts: `scratch/rank1/` on NOVA (not in the
+reference's own geometry, so only the energy model differs. Scripts: `scratch/rank1/` on the workstation (not in the
 repository); the full tables and `report.md` are in the run folder.
 
 **Benchmark sets:**
@@ -676,7 +676,7 @@ than either agrees with ωB97X-D/def2-SVP. Against def2-SVP, r2SCAN-3c has ρ 0.
   extended pick (VAL-3) gets stronger.
 - GFN2-xTB's verdict does not change: 0 of 5 against r2SCAN-3c, and its O···F error is the same (−20 ± 3 kJ/mol per
   contact in the gas phase, Rg held fixed).
-- Cost on a 4-thread NOVA lane: ωB97X-D/def2-SVPD took 740-850 s for the 37-atom ion (about 3x def2-SVP), and
+- Cost on a 4-thread lane on the workstation: ωB97X-D/def2-SVPD took 740-850 s for the 37-atom ion (about 3x def2-SVP), and
   r2SCAN-3c took 2x def2-SVP.
 - This does not settle which DFT level is closer to the truth. Single points at a triple-zeta diffuse hybrid (for
   example ωB97X-D/def2-TZVPD) or DLPNO-CCSD(T) on 29811-19-6, 61119-62-8 and 75032-81-4 would. That is roughly 40-60
@@ -774,7 +774,7 @@ The question: RANK-1 found three things. GFN2-xTB ranks PFAS anions' conformers 
 rankers to use are g-xTB gas + a GFN1-xTB CPCM ΔG_solv for ions and AIMNet2 for neutrals. And a def2-SVP reference
 favours compact anion conformers. Are these fluorine effects or general ones? Brandon's handbook molecules (cohorts
 4A, 4B, 5A, 6A) and a matched PFAS control went through one protocol. A difference between the groups then comes
-from the chemistry, not from the pools, geometries or reference. Scripts: `scratch/rank1b/` on NOVA (not in the
+from the chemistry, not from the pools, geometries or reference. Scripts: `scratch/rank1b/` on the workstation (not in the
 repository); the selection, pools, tables and `report.md` are in the run folder.
 
 **Sets** (fixed with seed 20261108 before any candidate was scored; `selection/selection.csv`, `selection.json`):
@@ -832,10 +832,10 @@ Medians (ranges); rotatable bonds are RDKit's strict count.
   - Neutrals have a gas pool and a water pool; ions a water pool.
 - **Reference:** r2SCAN-3c single points (Psi4 1.9.1, gCP from mctc-gcp, RANK-1's settings), in the gas phase on
   the gas pools and in IEF-PCM water on the water pools: 873 single points.
-  - Two water ones failed for PCM-cavity reasons, the same on NOVA and the MacBook, and are left out. One SCF did not
+  - Two water ones failed for PCM-cavity reasons, the same on the workstation and the MacBook, and are left out. One SCF did not
     converge (65530-83-8). One converged to a collapsed PCM solution, −39 Eh of polarization and 344 D
     (56236-41-0). `collect_dft.py` rejects any single point with |PCM polarization| > 0.5 Eh.
-  - NOVA and the MacBook agree to 1e-8 Eh on the same job, gas and PCM.
+  - The workstation and the MacBook agree to 1e-8 Eh on the same job, gas and PCM.
 - **Candidates** (RANK-1's `cands.py`, at the same geometries):
   - GFN2-xTB gas, ALPB, CPCM; GFN1-xTB gas, ALPB, CPCM; GFN-FF gas, ALPB;
   - g-xTB gas (v2.0.1), AIMNet2 gas, and the composites "gas energy + ΔG_solv of another method";
@@ -852,12 +852,12 @@ Medians (ranges); rotatable bonds are RDKit's strict count.
   - **Error against Rg:** each conformer's error (candidate minus reference, both centred on the molecule's mean),
     regressed on its Rg (centred the same way); ± a bootstrap over molecules. Positive: the candidate puts extended
     conformers too high, so it favours compact ones.
-- **Cost:** 1,079 Psi4 single points, about 31 lane-hours (4 threads each). They ran in 4.4 h of wall time on NOVA
+- **Cost:** 1,079 Psi4 single points, about 31 lane-hours (4 threads each). They ran in 4.4 h of wall time on the workstation
   (5 lanes, BelowNormal) and the MacBook (2 lanes at nice 15) together, from the two ends of one job list, kept apart
   by claim files in the synced folder.
   - r2SCAN-3c, the 873 pool points and the 52 holdout ones: 3.6 + 0.5 h.
   - ωB97X-D check: 0.2 + 0.2 h.
-  - A MacBook lane was about 3-4 times as fast as a NOVA lane (the same job: 24 s against 70-88 s).
+  - A MacBook lane was about 3-4 times as fast as a workstation lane (the same job: 24 s against 70-88 s).
 
 **Neutrals** (within 4 kJ/mol / mean regret in kJ/mol / median ρ). Gas: r2SCAN-3c gas on the gas pools. Water:
 r2SCAN-3c/PCM on the ALPB pools; gas-phase candidates rank the water pools as they are.
@@ -1021,8 +1021,8 @@ Regret / random's, same columns:
 ## RANK-2 integration check: the rank step reproduces the benchmark (2026-11-11)
 
 The question: does the pipeline's rank step (`chem/rank.py`, `pipeline._rank_step`) pick the conformers the RANK-1b
-benchmark scripts picked, and what does it cost inside a real `build`? Scripts: `scratch/rank2/` on NOVA (not in the
-repository); NOVA's `.venv` with the branch's `src` on `PYTHONPATH`, g-xTB v2.0.1 (the Windows build RANK-1 used,
+benchmark scripts picked, and what does it cost inside a real `build`? Scripts: `scratch/rank2/` on the workstation (not in the
+repository); the workstation's `.venv` with the branch's `src` on `PYTHONPATH`, g-xTB v2.0.1 (the Windows build RANK-1 used,
 SHA-256 `c2af5f3d…e926cff6`), idle priority, 1-thread workers, at most 4 at a time.
 
 **The picks.** RANK-1b's pools (`Runs/rank1b-2026-11-08/pools/pools.json`: 68 water pools, 60 gas pools, 873
@@ -1081,8 +1081,8 @@ molecules; the review's cost model takes them as its anchor (`advisor.RANK_SP_S`
 
 The question: which cheap liquid density and polarizability can stand in for a measured density and for the
 minimal-basis xTB polarizability in a parachor-type surface-tension model, PFAS included (b02 found the quantum
-parachor failing on both counts)? Scripts: `scratch/desc2/` and `scratch/batches/analyze_b02_v2.py` on NOVA (not in
-the repository); NOVA's `.venv` with the branch's `chem/estimates.py`, idle priority, at most 8 threads.
+parachor failing on both counts)? Scripts: `scratch/desc2/` and `scratch/batches/analyze_b02_v2.py` on the workstation (not in
+the repository); the workstation's `.venv` with the branch's `chem/estimates.py`, idle priority, at most 8 threads.
 
 **Data.** The PubChem/HSDB records of `Runs/pubchem-2026-11-05` (the QSAR cohorts' pull). Per molecule: the median of
 its plain pure-liquid density records at 10-40 °C, moved to 25 °C at −0.001 g/cm³ per K (CHRIS strings that mix

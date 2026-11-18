@@ -78,8 +78,8 @@ def test_the_job_spec():
     with pytest.raises(ValueError, match="cannot run"):
         scan.config()
     assert any("Scan" in p for p in scan.problems())
-    remote = replace(spec, run_on="brandons-macbook-pro")         # DIST-3: a worker, or "auto"
-    assert remote.problems() == [] and remote.summary().endswith("· on brandons-macbook-pro")
+    remote = replace(spec, run_on="bench-mac")         # DIST-3: a worker, or "auto"
+    assert remote.problems() == [] and remote.summary().endswith("· on bench-mac")
     assert replace(spec, run_on="auto").summary().endswith("· on the fastest free machine")
     assert replace(spec, run_on="").problems()
     assert "charge -1" in replace(spec, charge=-1).summary()

@@ -5,16 +5,16 @@ Status key: done, next, later. Version numbers are targets, not promises.
 ## Platform and multi-machine track (runs alongside the releases)
 
 QuantaBench targets Windows 11, WSL2, Linux and macOS (Apple Silicon) equally, and should let
-Brandon's MacBook and BTM NOVA work on one project together. The details, the platform matrix and
+Brandon's MacBook and the Windows workstation work on one project together. The details, the platform matrix and
 the fork/upstream plan are in [PLATFORMS.md](PLATFORMS.md).
 
-Status 2026-11-06: P1 and P2 are built. NOVA and the MacBook have run grids together (Nov 5), the MacBook has
+Status 2026-11-06: P1 and P2 are built. The workstation and the MacBook have run grids together (Nov 5), the MacBook has
 passed the full suite (916 tests; LAMMPS needs MPICH there), and a grid now shares work between machines.
 
 - **P1 (with 0.3):**
   - macOS in CI (PLAT-2) and the first run on the MacBook (PLAT-1)
   - two machines by hand: `--chunk` + SyncThing + `merge` (M0, works today)
-  - GPU engines on both NOVA (ROCm) and the Mac (MPS): AIMNet2 without Warp (FORK-3), device-split
+  - GPU engines on both the workstation (ROCm) and the Mac (MPS): AIMNet2 without Warp (FORK-3), device-split
     dxtb linear algebra (FORK-4)
   - GFN2 through dxtb on Windows and macOS (FORK-1)
 - **P2 (with 0.4):**
@@ -90,7 +90,7 @@ Still open for 0.2:
   - the 3D viewer frame rate for a 20k-atom slab (measured only on software OpenGL: ~0.4 s/frame);
   - LAMMPS `in.smd` with the GPU package (`neigh no`, `compute group/group` untested on GPU);
   - `doctor --bench` numbers for the docs.
-- [ ] **Confirm on the first Windows CI run and on BTM NOVA** what could only be checked by reading the
+- [ ] **Confirm on the first Windows CI run and on the Windows workstation** what could only be checked by reading the
       code here: the Windows CI job with Mesa's llvmpipe OpenGL (`pyvista/setup-headless-display-action`,
       on-screen QtInteractor tests), and the Windows-vs-WSL2 run lock (`jobs._platform_id`) with a GUI
       batch on `C:` and a `build --resume` from WSL on `/mnt/c`.
@@ -175,4 +175,4 @@ external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENG
 - Results database with substructure search (like Spartan's SSPD, built from your own runs).
 - Plugin entry points for third-party engines and builders.
 - Remote execution on a lab server through Tailscale, with the GUI on a laptop (now planned as
-  DIST-2/DIST-3 for BTM NOVA + MacBook; a lab server would be one more worker).
+  DIST-2/DIST-3 for the Windows workstation + MacBook; a lab server would be one more worker).

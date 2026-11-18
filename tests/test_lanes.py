@@ -27,7 +27,7 @@ PFAS = [("PFBA", "OC(=O)C(F)(F)C(F)(F)C(F)(F)F"), ("PFPeA", "OC(=O)C(F)(F)C(F)(F
 
 def cfg(tmp_path, **kw):
     # rank_method refine: these tests are not about the rank step, whose auto level depends on what is installed
-    # (AIMNet2 on NOVA adds a rank stage and a model load)
+    # (AIMNet2 on the workstation adds a rank stage and a model load)
     base = dict(method="mmff", rank_method="refine", max_conformers=2, refine_top=1, xtb_properties=False, threads=2, gpu="off",
                 output_dir=str(tmp_path / "runs"), formats=("xyz", "sdf"))
     base.update(kw)
@@ -162,47 +162,47 @@ def test_auto_never_oversubscribes(monkeypatch, hw, threads, method, extra):
 
 
 def test_auto_plans(cores, monkeypatch):
-    nova = report(gpus=1)
+    tower = report(gpus=1)
     monkeypatch.setattr(L, "gpu_linalg_available", lambda: True)    # independent of this machine's torch
-    mmff = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12), nova)[0]
+    mmff = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12), tower)[0]
     assert mmff == [Lane(f"cpu{i}", "cpu", 1) for i in range(1, 13)]             # lanes = physical cores
-    cpu_xtb = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12, gpu="off"), nova)[0]
+    cpu_xtb = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12, gpu="off"), tower)[0]
     assert cpu_xtb == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
     # tblite (no torch, CPU only): 1-thread lanes like MMFF
     assert L.workload(pipeline.BuildConfig(method="tblite-gfn2"))[1] == "native"
-    tb, reason = L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=12), nova)
+    tb, reason = L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=12), tower)
     assert tb == [Lane(f"cpu{i}", "cpu", 1) for i in range(1, 13)] and "1 thread each" in reason
-    tb24, reason = L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=24), nova)   # SMT: 12 x 2
+    tb24, reason = L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=24), tower)   # SMT: 12 x 2
     assert tb24 == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 13)] and "SMT" in reason
     # a GPU-capable engine gets one GPU lane + CPU lanes on the rest
-    gpu_ml, reason = L.plan_auto(pipeline.BuildConfig(method="aimnet2", threads=0), nova)
+    gpu_ml, reason = L.plan_auto(pipeline.BuildConfig(method="aimnet2", threads=0), tower)
     assert gpu_ml[0] == Lane("gpu0", "cuda:0", 4) and {x.threads for x in gpu_ml[1:]} == {2}
     assert len(gpu_ml) == 5 and "GPU lane" in reason        # 4 GPU-lane threads + 4 x 2 on the other 8 cores
     # dxtb never mixes a float32 GPU lane with float64 CPU lanes: CPU lanes, or with dxtb GPU = on one GPU lane
-    gpu_xtb, reason = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), nova)
+    gpu_xtb, reason = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), tower)
     assert gpu_xtb == cpu_xtb and "one precision per run" in reason
-    on, reason = L.plan_auto(pipeline.BuildConfig(method="gfn2-xtb", threads=12, dxtb_gpu="on"), nova)
+    on, reason = L.plan_auto(pipeline.BuildConfig(method="gfn2-xtb", threads=12, dxtb_gpu="on"), tower)
     assert on == [Lane("main", "auto", 12)] and "same precision" in reason
-    pm_xtb = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), nova, parallel_molecules=3)[0]
+    pm_xtb = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), tower, parallel_molecules=3)[0]
     assert {x.device for x in pm_xtb} == {"cpu"}
     monkeypatch.setattr(L, "gpu_linalg_available", lambda: False)    # AMD's Windows ROCm wheels: no MAGMA
-    no_linalg, reason = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), nova)
+    no_linalg, reason = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), tower)
     assert no_linalg == cpu_xtb and "linear algebra" in reason
-    external = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12, conformer_search="crest"), nova)[0]
+    external = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12, conformer_search="crest"), tower)[0]
     assert external == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
     # Psi4 needs memory per job: 8 GB of RAM leaves room for one 4 GB job, so auto stays at one lane
     qm, reason = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12, qm_method="b3lyp/def2-svp"),
                              report(ram=8.0))
     assert qm == [Lane("main", "auto", 12)] and "memory" in reason
     # settings.resources.parallel_molecules fixes the number of lanes
-    pm = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12), nova, parallel_molecules=3)[0]
+    pm = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12), tower, parallel_molecules=3)[0]
     assert pm == [Lane(f"cpu{i}", "cpu", 4) for i in (1, 2, 3)]
     from quantabench import settings as sm
 
     s = sm.Settings()
     s.resources.parallel_molecules = 4
     sm.save(s)
-    assert len(L.parse_lanes("auto", pipeline.BuildConfig(method="mmff", threads=12), nova)) == 4
+    assert len(L.parse_lanes("auto", pipeline.BuildConfig(method="mmff", threads=12), tower)) == 4
     # the settings dialog's text never raises and does not import torch for the GPU
     assert L.plan_text("gpu:1x4", pipeline.BuildConfig(threads=12)).startswith("Not usable here")
     assert "6 CPU lanes" in L.plan_text("6", pipeline.BuildConfig(threads=12))
@@ -235,8 +235,8 @@ def test_crest_auto_plan_on_apple_silicon(monkeypatch):
 
 
 def test_crest_auto_plan_elsewhere_keeps_the_two_thread_rule(monkeypatch):
-    """A 12-core/24-thread x86 machine (NOVA) knows no performance cores: CREST keeps 2-thread lanes on all
-    threads (23 threads: 11 x 2). On NOVA's WSL the layout mattered little (1 x 23 756 s, 4 x 5 769 s)."""
+    """A 12-core/24-thread x86 machine (the workstation) knows no performance cores: CREST keeps 2-thread lanes on all
+    threads (23 threads: 11 x 2). On the workstation's WSL the layout mattered little (1 x 23 756 s, 4 x 5 769 s)."""
     monkeypatch.setattr(resources, "logical_cores", lambda: 24)
     lanes, reason = L.plan_auto(crest_cfg(), report())
     assert lanes == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
@@ -691,7 +691,7 @@ def test_lane_past_the_time_limit_is_killed_and_restarted(tmp_path, monkeypatch)
     assert again == []
     monkeypatch.delenv(L.TEST_DELAY_ENV)
     # a roomier limit for the redo: a lane's first molecule may import torch (D4 polarizability, DESC-2), which takes
-    # longer than 2 s on a machine that has it (NOVA)
+    # longer than 2 s on a machine that has it (the workstation)
     roomy = cfg(tmp_path, molecule_timeout_s=120.0)
     redone, _ = jobs.run_resumable(None, roomy, out, retry_failed=True, lanes=L.parse_lanes("2", roomy))
     assert sorted(r.status for r in redone) == ["ok"] * 3
@@ -699,20 +699,20 @@ def test_lane_past_the_time_limit_is_killed_and_restarted(tmp_path, monkeypatch)
 
 
 def test_qm_memory_sizes_the_lanes_and_they_share_the_threads(monkeypatch):
-    """--qm-memory: as many QM lanes as the memory holds, sharing the thread budget (Psi4 scales with threads; NOVA,
+    """--qm-memory: as many QM lanes as the memory holds, sharing the thread budget (Psi4 scales with threads; the workstation,
     32 GB: 5 x 2 threads with 4 GB per job left 9 of 19 threads idle on 2026-11-13)."""
-    nova32 = report(ram=31.2)
+    tower32 = report(ram=31.2)
     monkeypatch.setattr(resources, "logical_cores", lambda: 24)
     base = {"method": "tblite-gfn2", "threads": 19, "qm_method": "wb97x-d/6-31g*"}
-    four, _ = L.plan_auto(pipeline.BuildConfig(**base), nova32)
-    six, reason = L.plan_auto(pipeline.BuildConfig(**base, qm_memory_gb=6.0), nova32)
-    big, why = L.plan_auto(pipeline.BuildConfig(**base, qm_memory_gb=16.0), nova32)
+    four, _ = L.plan_auto(pipeline.BuildConfig(**base), tower32)
+    six, reason = L.plan_auto(pipeline.BuildConfig(**base, qm_memory_gb=6.0), tower32)
+    big, why = L.plan_auto(pipeline.BuildConfig(**base, qm_memory_gb=16.0), tower32)
     assert len(four) == 5 and all(x.threads == 3 for x in four)               # 19 // 5
     assert six == [Lane(f"cpu{i}", "cpu", 6) for i in (1, 2, 3)] and "6 GB per QM job): 6 threads each" in reason
     assert big == [Lane("main", "auto", 19)] and "one lane only" in why
     # without a QM stage the memory setting changes nothing
-    assert L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=19, qm_memory_gb=16.0), nova32)[0] == \
-        L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=19), nova32)[0]
+    assert L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=19, qm_memory_gb=16.0), tower32)[0] == \
+        L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=19), tower32)[0]
 
 
 def test_a_killed_lane_leaves_no_scratch_behind(tmp_path, monkeypatch):
@@ -808,22 +808,22 @@ def test_auto_gpu_lane_only_where_the_benchmark_says_it_is_faster(monkeypatch):
     lanes, reason = L.plan_auto(aimnet, mac, profile=mac_bench)
     assert all(x.device == "cpu" for x in lanes) and len(lanes) == 7, lanes      # 7 x 2 on the 14 cores
     assert "no GPU lane: benchmark aimnet2@mps 2,978/h vs @cpu 6,387/h" in reason, reason
-    # NOVA: AIMNet2 about 10x faster on the RX 9060 XT -> its GPU lane
+    # the workstation: AIMNet2 about 10x faster on the RX 9060 XT -> its GPU lane
     monkeypatch.setattr(resources, "logical_cores", lambda: 24)
-    nova = report(gpus=1)
-    nova_bench = profile_mod.MachineProfile(name="nova", throughput={"aimnet2@cpu": 4100.0,
+    tower = report(gpus=1)
+    tower_bench = profile_mod.MachineProfile(name="tower", throughput={"aimnet2@cpu": 4100.0,
                                                                      "aimnet2@cuda:0": 41000.0})
-    lanes, reason = L.plan_auto(aimnet, nova, profile=nova_bench)
+    lanes, reason = L.plan_auto(aimnet, tower, profile=tower_bench)
     assert lanes[0] == Lane("gpu0", "cuda:0", 4) and all(x.device == "cpu" for x in lanes[1:])
     assert "(benchmark aimnet2@cuda:0 41,000/h vs @cpu 4,100/h)" in reason, reason
     # no benchmark (or only one of the two devices): today's GPU lane, and the reason says why
-    for prof in (None, profile_mod.MachineProfile(name="nova", throughput={"aimnet2@cpu": 4100.0})):
-        lanes, reason = L.plan_auto(aimnet, nova, profile=prof)
+    for prof in (None, profile_mod.MachineProfile(name="tower", throughput={"aimnet2@cpu": 4100.0})):
+        lanes, reason = L.plan_auto(aimnet, tower, profile=prof)
         assert lanes[0].device == "cuda:0" and "GPU lane by default" in reason, reason
     # water keys are not gas-phase keys: AIMNet2 has no water model, so its runs (and keys) are gas phase
-    water = profile_mod.MachineProfile(name="nova", throughput={"aimnet2+water@cpu": 9.0,
+    water = profile_mod.MachineProfile(name="tower", throughput={"aimnet2+water@cpu": 9.0,
                                                                 "aimnet2+water@cuda:0": 1.0})
-    lanes, reason = L.plan_auto(pipeline.BuildConfig(method="aimnet2", threads=0, solvent="water"), nova,
+    lanes, reason = L.plan_auto(pipeline.BuildConfig(method="aimnet2", threads=0, solvent="water"), tower,
                                 profile=water)
     assert lanes[0].device == "cuda:0" and "no benchmark aimnet2@cuda:0 and aimnet2@cpu" in reason, reason
 

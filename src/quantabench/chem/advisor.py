@@ -882,7 +882,7 @@ def _rank_step_verdict(family: str, cls: str, water: bool) -> Verdict | None:
 # ======================================================================================= cost model
 #: Measured anchors (QuantaBench, docs/VALIDATION.md, ENGINES.md, PLATFORMS.md, BACKLOG PERF-1); everything else is
 #: scaled from them by size, so an estimate is good to a factor of about 2.
-DFT_SP_S = 300.0          # ωB97X-D/def2-SVP IEF-PCM single point, 495 basis functions, one 4-thread NOVA lane
+DFT_SP_S = 300.0          # ωB97X-D/def2-SVP IEF-PCM single point, 495 basis functions, one 4-thread Ryzen 9 7900X lane
 DFT_NBF0 = 495.0
 DFT_POWER = 2.9           # time grows as nbf^2.9 (the DFT conformer test)
 BASIS_FACTOR = {"def2-svp": 1.0, "def2-svpd": 3.0, "def2-tzvp": 7.0, "6-31g*": 1.25, "6-31+g*": 2.0,
@@ -924,7 +924,7 @@ def _crest_seconds(m: _Mol, cfg, model) -> float:
     return base * CREST_LEVEL_FACTOR.get(level, 1.0) * (1.0 if cfg.crest_quick else CREST_FULL_FACTOR)
 
 
-#: one rank-step single point of a 25-atom molecule on one thread, seconds (NOVA, RANK-2 integration check, 20-50
+#: one rank-step single point of a 25-atom molecule on one thread, seconds (Ryzen 9 7900X, RANK-2 integration check, 20-50
 #: atoms): a g-xTB run (the program's start is most of it), the GFN1-xTB gas + CPCM pair (tblite, ddX), an AIMNet2
 #: energy on the CPU (its model load, seconds once per process, is not counted)
 RANK_SP_S = {"gxtb": 0.1, "cpcm": 0.4, "aimnet2": 0.01}
@@ -1004,7 +1004,7 @@ def estimate_cost(mols: list[tuple[str, _Mol]], cfg, resolve: _Resolver) -> Cost
         except Exception:  # noqa: BLE001
             model = None
     if cfg.qm_method:
-        notes.append("QM: ωB97X-D/def2-SVP in PCM at 5 min for 495 basis functions on a 4-thread NOVA lane, "
+        notes.append("QM: ωB97X-D/def2-SVP in PCM at 5 min for 495 basis functions on a 4-thread Ryzen 9 7900X lane, "
                      "growing as nbf^2.9 (the DFT conformer test); other levels scaled by their measured cost")
     per, by_stage = [], Counter()
     slowest, slowest_id = 0.0, ""
@@ -1538,13 +1538,13 @@ def _cost_findings(ctx: _Ctx, cost: CostEstimate) -> list[Finding]:
                 f"The QM stage takes more than an hour each for {len(slow)} molecule(s) ({cfg.qm_top} single point(s) "
                 f"at {cfg.qm_method}).", slow,
                 why="One ωB97X-D/def2-SVP single point in PCM took 4-6 min for 30 heavy atoms and 12-27 min for 54 on a "
-                    "4-thread NOVA lane, growing as nbf^2.9; a diffuse basis costs about 3x.",
+                    "4-thread Ryzen 9 7900X lane, growing as nbf^2.9; a diffuse basis costs about 3x.",
                 guide=("dft", "basis-sets"), evidence=EVIDENCE_DFT_TEST))
     if ctx.mols:
         out.append(ctx.finding("info", "cost", "cost.total",
                                f"Estimated time: {cost.text()}; the slowest molecule {cost.slowest_id} "
                                f"{_duration(cost.slowest_s)}.", [],
-                               why="Measured timings on BTM NOVA scaled by molecule size; good to a factor of about 2. "
+                               why="Measured timings on a Ryzen 9 7900X workstation scaled by molecule size; good to a factor of about 2. "
                                    + " ".join(cost.notes), evidence="docs/VALIDATION.md, ENGINES.md, PLATFORMS.md"))
     return out
 

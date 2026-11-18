@@ -91,7 +91,7 @@ def test_missing_program_gives_install_hint(monkeypatch):
 
 
 def test_wsl_paths_and_command():
-    assert external.to_wsl_path(r"C:\Users\Brand\GitHub Projects\x") == "/mnt/c/Users/Brand/GitHub Projects/x"
+    assert external.to_wsl_path(r"C:\Users\me\GitHub Projects\x") == "/mnt/c/Users/me/GitHub Projects/x"
     assert external.to_wsl_path("/home/u/x") == "/home/u/x"
     info = external.ProgramInfo("crest", "wsl:crest", "settings")
     assert info.via_wsl and info.command() == ["wsl.exe", "-e", "sh", "-c", external.WSL_WRAPPER, "crest"]

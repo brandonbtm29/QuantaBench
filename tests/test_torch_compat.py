@@ -19,7 +19,7 @@ from quantabench.chem import torch_compat as tc
 torch = pytest.importorskip("torch")
 from torch.overrides import TorchFunctionMode  # noqa: E402
 
-NOVA_BROKEN = ("cholesky", "cholesky_solve")      # what AMD's Windows ROCm 7.2.1 wheel lacks (probed)
+ROCM_WIN_BROKEN = ("cholesky", "cholesky_solve")      # what AMD's Windows ROCm 7.2.1 wheel lacks (probed)
 BOHR = 0.529177210903
 HARTREE = 27.211386245988
 
@@ -37,7 +37,7 @@ def _dense(names):
 class BrokenLinalg(TorchFunctionMode):
     """Dense ops raise outside routed regions, as on a GPU without MAGMA."""
 
-    def __init__(self, names=NOVA_BROKEN):
+    def __init__(self, names=ROCM_WIN_BROKEN):
         super().__init__()
         self.funcs = _dense(names)
         self.raised = 0
@@ -213,9 +213,9 @@ def test_probe_cpu_ok_and_cached():
 
 
 def test_probe_flags_a_broken_device():
-    with BrokenLinalg(NOVA_BROKEN):
+    with BrokenLinalg(ROCM_WIN_BROKEN):
         sup = tc.probe("cpu", refresh=True)
-    assert sup.routed_ops == set(NOVA_BROKEN)
+    assert sup.routed_ops == set(ROCM_WIN_BROKEN)
     assert "MAGMA" in sup.failed["cholesky"]
     assert tc.probe("cpu") is sup                     # cached until refreshed
     with BrokenLinalg(tc.ALL_OPS):
@@ -244,7 +244,7 @@ def _dxtb_eighb(a, b):
     return storch.eighb(a=a, b=b, is_posdef=True, factor=1e-12, broadening_method="lorn")
 
 
-@pytest.mark.parametrize("ops", [tc.ALL_OPS, frozenset(NOVA_BROKEN)], ids=["all", "nova"])
+@pytest.mark.parametrize("ops", [tc.ALL_OPS, frozenset(ROCM_WIN_BROKEN)], ids=["all", "rocm-windows"])
 def test_eighb_routed_cpu_to_cpu_is_identical(ops):
     pytest.importorskip("tad_mctc")
     a, b = _gen_problem(n=7, batch=(3,), pad=2)
@@ -265,7 +265,7 @@ def test_eighb_float32_upcast_and_dtype_restored():
     assert torch.allclose(w32.double(), w64, atol=1e-6)
 
 
-@pytest.mark.parametrize("ops", [tc.ALL_OPS, frozenset(NOVA_BROKEN)], ids=["all", "nova"])
+@pytest.mark.parametrize("ops", [tc.ALL_OPS, frozenset(ROCM_WIN_BROKEN)], ids=["all", "rocm-windows"])
 def test_eighb_gradients_through_routing_match_finite_differences(ops):
     """First and second derivatives (forces, Hessians) through the CPU-routed eigensolver."""
     pytest.importorskip("tad_mctc")
@@ -344,7 +344,7 @@ def test_dxtb_forced_routing_identical_to_stock(monkeypatch):
 
 
 def test_broken_device_stock_fails_routing_works(monkeypatch):
-    """The NOVA case: cholesky and cholesky_solve raise on the device, eigh and solve work."""
+    """The workstation case: cholesky and cholesky_solve raise on the device, eigh and solve work."""
     _dxtb()
     from quantabench.chem import engines
 
@@ -352,14 +352,14 @@ def test_broken_device_stock_fails_routing_works(monkeypatch):
     e0, f0, _ = _ef(atoms)
     calc = engines.DxtbCalculator(atoms.numbers, "gfn1-xtb", 0, 1, "cpu")   # float64, built first
     monkeypatch.setattr(tc, "device_type", lambda _dev: "cuda")             # the CPU poses as a GPU
-    with BrokenLinalg(NOVA_BROKEN) as broken:
+    with BrokenLinalg(ROCM_WIN_BROKEN) as broken:
         monkeypatch.setenv(tc.ENV_VAR, "device")                            # stock dxtb
         with pytest.raises(RuntimeError, match="MAGMA"):
             _ef(atoms, calc=calc)
         monkeypatch.setenv(tc.ENV_VAR, "auto")                              # probe -> route
         e1, f1, calc = _ef(atoms, calc=calc)
     assert broken.raised >= 2
-    assert calc.linalg_routed == set(NOVA_BROKEN)
+    assert calc.linalg_routed == set(ROCM_WIN_BROKEN)
     stats = tc.routing_stats()
     assert stats["eighb_ortho"] >= 5 and stats["eeq"] == 1 and "eighb" not in stats   # eigh stayed on the device
     assert abs(e1 - e0) < 1e-10 and np.abs(f1 - f0).max() < 1e-10

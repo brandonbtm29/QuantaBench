@@ -435,9 +435,9 @@ def test_machine_watch_paused_away_back(tmp_path):
     clock = [0.0]
     a = Share(machine="mac", url="http://100.1.1.1:1", n=6, job_id="a" * 12, state="running",
               ids=[f"m{k}" for k in range(6)], counts={"ok": 1, "running": 1, "pending": 4})
-    b = Share(machine="nova", url="http://100.1.1.2:1", n=6, job_id="b" * 12, state="running",
+    b = Share(machine="tower", url="http://100.1.1.2:1", n=6, job_id="b" * 12, state="running",
               ids=[f"n{k}" for k in range(6)], counts={"ok": 1, "pending": 5})
-    grid = _grid(tmp_path, [a, b], {"mac": 1.0, "nova": 1.0})
+    grid = _grid(tmp_path, [a, b], {"mac": 1.0, "tower": 1.0})
     calls: list = []
     snap = {"m0": "ok", "m1": "running", "m2": "pending", "m3": "pending", "m4": "pending", "m5": "pending"}
 
@@ -458,14 +458,14 @@ def test_machine_watch_paused_away_back(tmp_path):
 
     w = MachineWatch(grid, release, submit, lambda s: dict(snap) if s.machine == "mac" else None, sync,
                      log=calls.append, clock=lambda: clock[0], away_after_s=120, away_running_after_s=600)
-    # paused: its 4 unstarted molecules go to nova
+    # paused: its 4 unstarted molecules go to tower
     w.ok(a, {"state": "running", "machine_paused": True})
     w.ok(b, {"state": "running"})
     w.step()
-    assert ("release", "mac", 4) in calls and ("submit", "nova", ("m2", "m3", "m4", "m5"), "paused") in calls
-    assert a.n == 2 and a.ids == ["m0", "m1"] and grid.moves[-1] == {"from": "mac", "to": "nova", "n": 4,
+    assert ("release", "mac", 4) in calls and ("submit", "tower", ("m2", "m3", "m4", "m5"), "paused") in calls
+    assert a.n == 2 and a.ids == ["m0", "m1"] and grid.moves[-1] == {"from": "mac", "to": "tower", "n": 4,
                                                                       "why": "paused"}
-    # resumed, then the lid closes: no answer for 2 minutes -> away; its unstarted molecules go to nova
+    # resumed, then the lid closes: no answer for 2 minutes -> away; its unstarted molecules go to tower
     a.ids, a.n = [f"m{k}" for k in range(6)], 6
     grid.shares = [a, b]
     calls.clear()
@@ -478,10 +478,10 @@ def test_machine_watch_paused_away_back(tmp_path):
     w.step()
     assert "mac" in w.away and a.away_since
     sub = [c for c in calls if isinstance(c, tuple) and c[0] == "submit"]
-    assert sub == [("submit", "nova", ("m2", "m3", "m4", "m5"), "away")] and a.reassigned == ["m2", "m3", "m4", "m5"]
+    assert sub == [("submit", "tower", ("m2", "m3", "m4", "m5"), "away")] and a.reassigned == ["m2", "m3", "m4", "m5"]
     assert not w.settled(a)                              # m1 was running there: wait for the longer grace
     clock[0] = 700.0
-    w.ok(b, {"state": "running"})                        # nova keeps answering (follow polls every few seconds)
+    w.ok(b, {"state": "running"})                        # tower keeps answering (follow polls every few seconds)
     w.step()
     assert a.reassigned[-1] == "m1" and w.settled(a)     # in-progress ones too; nothing left to wait for
     # back: the client tells it which ones moved; m2 had been finished there too (merged once)
@@ -627,32 +627,32 @@ def test_grid_away_machine_reassigned_deduped_and_wait_finishes(make_worker, qb_
 def test_weights_equal_measured_auto_and_exclude(tmp_path, qb_settings, monkeypatch):
     from quantabench.dist import profile
 
-    profs = [profile.MachineProfile(name="nova", logical_cores=24, physical_cores=12,
+    profs = [profile.MachineProfile(name="tower", logical_cores=24, physical_cores=12,
                                     throughput={"mmff@cpu": 3000.0}),
              profile.MachineProfile(name="mac", logical_cores=14, physical_cores=14, throughput={"mmff@cpu": 1000.0})]
     monkeypatch.setattr(profile, "load_profiles", lambda *a, **k: list(profs))
-    names = ["nova", "mac"]
-    assert client_mod.resolve_weights("equal", names, "mmff", {}) == {"nova": 1.0, "mac": 1.0}
-    assert client_mod.resolve_weights("benchmark", names, "mmff", {}) == {"nova": 3000.0, "mac": 1000.0}
+    names = ["tower", "mac"]
+    assert client_mod.resolve_weights("equal", names, "mmff", {}) == {"tower": 1.0, "mac": 1.0}
+    assert client_mod.resolve_weights("benchmark", names, "mmff", {}) == {"tower": 3000.0, "mac": 1000.0}
     # measured: the last grid of the same protocol wins over the benchmark
     cfg = client_mod.config_for_workers(cfg_of())
     g = tmp_path / "out" / "2026-11-11_120000_grid_x"
     g.mkdir(parents=True)
-    (g / "grid.json").write_text(json.dumps({"id": g.name, "client": "nova", "config": cfg,
+    (g / "grid.json").write_text(json.dumps({"id": g.name, "client": "tower", "config": cfg,
                                              "rates": {"local": 400.0, "mac": 800.0}}), encoding="utf-8")
-    monkeypatch.setattr(profile, "machine_name", lambda: "nova")
+    monkeypatch.setattr(profile, "machine_name", lambda: "tower")
     got = client_mod.resolve_weights("measured", names, "mmff", {}, config=cfg, output_dir=tmp_path / "out")
-    assert got == {"nova": 400.0, "mac": 800.0}
+    assert got == {"tower": 400.0, "mac": 800.0}
     other = {**cfg, "max_conformers": 50}                     # another protocol: the benchmark
     assert client_mod.resolve_weights("measured", names, "mmff", {}, config=other,
-                                      output_dir=tmp_path / "out") == {"nova": 3000.0, "mac": 1000.0}
+                                      output_dir=tmp_path / "out") == {"tower": 3000.0, "mac": 1000.0}
     # auto: each machine's split setting; manual on the scale where 1 is the mean of the Auto machines
     settings_mod.update_machine("mac", split="manual", weight=2.0)
     got = client_mod.resolve_weights("auto", names, "mmff", {})
-    assert got == {"nova": 1.0, "mac": 2.0}
+    assert got == {"tower": 1.0, "mac": 2.0}
     settings_mod.update_machine("mac", split="off")
     assert client_mod.resolve_weights("auto", names, "mmff", {})["mac"] == 0.0
-    settings_mod.update_machine("nova", split="off")
+    settings_mod.update_machine("tower", split="off")
     with pytest.raises(client_mod.GridError, match="split is off"):
         client_mod.resolve_weights("auto", names, "mmff", {})
 
@@ -674,15 +674,15 @@ def test_grid_exclude_and_split_off_leave_machines_out(make_worker, qb_settings,
 # ------------------------------------------------------------------------------------- settings
 def test_settings_merge_keeps_every_machines_change(isolated_settings):
     a = settings_mod.load()                      # the GUI on one machine, open for a while
-    settings_mod.update_machine("nova", priority="background", free_threads=6, lanes="auto")
+    settings_mod.update_machine("tower", priority="background", free_threads=6, lanes="auto")
     settings_mod.update_machine("mac", split="manual", weight=2.5, pause_on_battery=True)
     a.build.max_conformers = 77                  # a's own change of a shared setting
     settings_mod.save(a)
     s = settings_mod.load()
-    assert s.priority_for("nova") == "background" and s.free_threads_for("nova") == 6 and s.lanes_for("nova") == "auto"
+    assert s.priority_for("tower") == "background" and s.free_threads_for("tower") == 6 and s.lanes_for("tower") == "auto"
     c = s.machine_control_for("mac")
     assert (c["split"], c["weight"], c["pause_on_battery"]) == ("manual", 2.5, True)
-    assert s.build.max_conformers == 77 and "resources.machine_priority" in s.dist.machine_updated["nova"]
+    assert s.build.max_conformers == 77 and "resources.machine_priority" in s.dist.machine_updated["tower"]
     # another process changed a shared value meanwhile: a save that did not touch it keeps it
     b = settings_mod.load()
     other = settings_mod.load()
@@ -696,7 +696,7 @@ def test_settings_merge_keeps_every_machines_change(isolated_settings):
 
 def test_saving_unchanged_settings_does_not_write(isolated_settings):
     path = settings_mod.settings_dir() / settings_mod.SETTINGS_FILE
-    settings_mod.update_machine("nova", priority="low")
+    settings_mod.update_machine("tower", priority="low")
     before = path.stat().st_mtime_ns
     time.sleep(0.02)
     s = settings_mod.load()
@@ -706,16 +706,16 @@ def test_saving_unchanged_settings_does_not_write(isolated_settings):
 
 def test_conflict_copy_with_a_newer_entry_is_merged_back(isolated_settings):
     folder = settings_mod.settings_dir()
-    settings_mod.update_machine("nova", priority="low")
+    settings_mod.update_machine("tower", priority="low")
     main = json.loads((folder / settings_mod.SETTINGS_FILE).read_text(encoding="utf-8"))
-    # the Mac changed its own lanes at the same time; SyncThing kept NOVA's file and renamed the Mac's
+    # the Mac changed its own lanes at the same time; SyncThing kept the workstation's file and renamed the Mac's
     theirs = json.loads(json.dumps(main))
     theirs["dist"]["machine_lanes"] = {"mac": "6x2"}
     theirs["dist"]["machine_updated"]["mac"] = {"dist.machine_lanes": "2999-01-01T00:00:00+00:00"}
-    theirs["resources"]["machine_priority"] = {"nova": "normal"}         # older for nova: not taken
+    theirs["resources"]["machine_priority"] = {"tower": "normal"}         # older for tower: not taken
     (folder / "settings.sync-conflict-20261111-101500-ABCDEFG.json").write_text(json.dumps(theirs), encoding="utf-8")
     s = settings_mod.load()
-    assert s.lanes_for("mac") == "6x2" and s.priority_for("nova") == "low"
+    assert s.lanes_for("mac") == "6x2" and s.priority_for("tower") == "low"
     assert s.recovered_conflicts and "mac dist.machine_lanes" in s.recovered_conflicts[0]
     settings_mod.save(s)
     disk = json.loads((folder / settings_mod.SETTINGS_FILE).read_text(encoding="utf-8"))
@@ -728,25 +728,25 @@ def test_machines_set_cli_and_max_cpu(isolated_settings, capsys, monkeypatch):
     from quantabench.dist import profile
 
     monkeypatch.setattr(profile, "load_profile", lambda name: profile.MachineProfile(name=name, logical_cores=24)
-                        if name == "btm-nova" else None)
-    assert cli.main(["machines", "set", "btm-nova", "--priority", "background", "--free-threads", "6",
+                        if name == "bench-pc" else None)
+    assert cli.main(["machines", "set", "bench-pc", "--priority", "background", "--free-threads", "6",
                      "--lanes", "auto"]) == 0
     s = settings_mod.load()
-    assert (s.priority_for("btm-nova"), s.free_threads_for("btm-nova"), s.lanes_for("btm-nova")) == \
+    assert (s.priority_for("bench-pc"), s.free_threads_for("bench-pc"), s.lanes_for("bench-pc")) == \
         ("background", 6, "auto")
-    assert cli.main(["machines", "set", "btm-nova", "--max-cpu", "50"]) == 0
-    assert settings_mod.load().free_threads_for("btm-nova") == 12
+    assert cli.main(["machines", "set", "bench-pc", "--max-cpu", "50"]) == 0
+    assert settings_mod.load().free_threads_for("bench-pc") == 12
     assert control.free_threads_for_max_cpu(100, 24) == 0 and control.free_threads_for_max_cpu(1, 24) == 23
-    assert cli.main(["machines", "set", "btm-nova", "--weight", "2", "--pause-on-battery"]) == 0
-    c = settings_mod.load().machine_control_for("btm-nova")
+    assert cli.main(["machines", "set", "bench-pc", "--weight", "2", "--pause-on-battery"]) == 0
+    c = settings_mod.load().machine_control_for("bench-pc")
     assert (c["split"], c["weight"], c["pause_on_battery"]) == ("manual", 2.0, True)
-    assert cli.main(["machines", "set", "btm-nova", "--lanes", "gpu:x"]) == 2
+    assert cli.main(["machines", "set", "bench-pc", "--lanes", "gpu:x"]) == 2
     assert cli.main(["machines", "set", "elsewhere", "--max-cpu", "50"]) == 2       # no thread count known
-    assert cli.main(["machines", "set", "btm-nova", "--priority", "default", "--free-threads", "default"]) == 0
+    assert cli.main(["machines", "set", "bench-pc", "--priority", "default", "--free-threads", "default"]) == 0
     s = settings_mod.load()
-    assert s.priority_for("btm-nova", scope=True)[1] == "all machines"
+    assert s.priority_for("bench-pc", scope=True)[1] == "all machines"
     capsys.readouterr()
-    assert cli.main(["machines", "set", "btm-nova"]) == 0
+    assert cli.main(["machines", "set", "bench-pc"]) == 0
     assert "split manual weight 2" in capsys.readouterr().out
 
 

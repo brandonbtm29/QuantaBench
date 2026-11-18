@@ -2,7 +2,7 @@
 
 Why
 ---
-- AMD's Windows ROCm PyTorch (2.9.1+rocm7.2.1, BTM NOVA's RX 9060 XT is ``cuda:0``) is built without
+- AMD's Windows ROCm PyTorch (2.9.1+rocm7.2.1, the Windows workstation's RX 9060 XT is ``cuda:0``) is built without
   MAGMA. Probed op by op on that GPU (float32 and float64): ``torch.linalg.cholesky``,
   ``torch.cholesky_solve`` and ``torch.linalg.lstsq`` raise ("requires compiling PyTorch with MAGMA");
   ``eigh``, ``solve``, ``solve_triangular``, ``inv``, ``lu_factor``, ``qr`` and ``svd`` work. dxtb needs a
@@ -41,7 +41,7 @@ there, and copies the result back in the caller's dtype: the dtype cast happens 
 copy, so no float64 tensor ever reaches the device (MPS). The autograd graph of the routed part lives on
 the CPU, so its backward (and the double backward of a Hessian) runs there too.
 
-The diagonalization is split at the narrowest point the device needs: on NOVA only the Cholesky
+The diagonalization is split at the narrowest point the device needs: on the workstation only the Cholesky
 factorization of the overlap and the inverse of its factor run on the CPU, while the reduction
 ``C = L^-1 H L^-T``, the eigensolver and the back-transformation stay on the GPU, where batched ``eigh``
 is 10-20x faster than this wheel's CPU LAPACK. When ``eigh`` is routed too (MPS, or ``cpu`` policy),
@@ -52,13 +52,13 @@ Policy (``QUANTABENCH_LINALG`` overrides ``set_policy``; ``apply_settings`` sets
 - ``auto`` (default): CPU devices are never routed; ``mps`` routes everything; any other device is
   probed once per process (``probe``: float64 support, then a tiny batched cholesky / cholesky_solve /
   eigh / solve in float32 and float64, compared with the CPU) and the ops that raise or disagree are
-  routed. NOVA: ``cholesky`` and ``cholesky_solve``.
+  routed. The workstation: ``cholesky`` and ``cholesky_solve``.
 - ``cpu``: route every op, on every device (including the CPU itself: used by tests).
 - ``device``: never route (stock dxtb).
 
 Which device dxtb runs on (``QUANTABENCH_DXTB_GPU`` overrides ``set_dxtb_gpu``)
 ------------------------------------------------------------------------------
-Routing makes dxtb *run* on NOVA's GPU, but it is 5-8x slower there than on the CPU at every size and
+Routing makes dxtb *run* on the workstation's GPU, but it is 5-8x slower there than on the CPU at every size and
 batch size measured (``DXTB_GPU_BENCHMARK``). So ``dxtb_device`` (used by every dxtb entry point)
 keeps dxtb on the CPU when offered a GPU that needs routing ('auto'); 'on' uses the GPU anyway (with
 routing), 'off' always the CPU.
@@ -274,7 +274,7 @@ DXTB_GPU_MODES = ("auto", "on", "off")
 _dxtb_gpu = "auto"
 
 DXTB_GPU_BENCHMARK = """\
-BTM NOVA (RX 9060 XT 16 GB, Windows 11, torch 2.9.1+rocm7.2.1, dxtb 0.4; CPU: Ryzen 9 7900X, 12 threads
+The Windows workstation (RX 9060 XT 16 GB, Windows 11, torch 2.9.1+rocm7.2.1, dxtb 0.4; CPU: Ryzen 9 7900X, 12 threads
 of the same wheel's slow CPU BLAS), GFN1-xTB energy + autograd forces, warm, seconds per evaluation
 (cholesky/cholesky_solve routed to the CPU; routing eigh and solve as well changes nothing):
 
@@ -320,7 +320,7 @@ def dxtb_device(device) -> tuple[str, str]:
 
     'auto' keeps a GPU only when it has the dense linear algebra and float64 dxtb needs (CUDA with
     cuSOLVER, ROCm builds with MAGMA). On GPUs that need routing (AMD's Windows ROCm wheel, Apple MPS)
-    dxtb runs on the CPU: measured 5-8x slower on NOVA's GPU at every size and batch size tried
+    dxtb runs on the CPU: measured 5-8x slower on the workstation's GPU at every size and batch size tried
     (``DXTB_GPU_BENCHMARK``); MPS is unmeasured and assumed similar. 'on' uses the GPU with routing
     (``linalg_routing``), 'off' always uses the CPU."""
     req = str(device)
@@ -339,7 +339,7 @@ def dxtb_device(device) -> tuple[str, str]:
         return req, ""
     return "cpu", (f"dxtb ran on the CPU instead of {req}: {', '.join(sorted(support.routed_ops))} not available "
                    f"there, and with them on the CPU dxtb 0.4 measured 5-8x slower on such a GPU than on the CPU "
-                   f"(BTM NOVA; {DXTB_GPU_ENV}=on uses the GPU anyway)")
+                   f"(the Windows workstation; {DXTB_GPU_ENV}=on uses the GPU anyway)")
 
 
 # ============================================================================ routing context

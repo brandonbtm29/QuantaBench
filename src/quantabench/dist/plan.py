@@ -14,13 +14,13 @@ Changing a positive weight does move molecules: the bins after it shift.
 ``parse_weights(spec, method, profiles)`` turns a ``--chunk-weights`` value into ``Weights``:
 
     "3,1"                                   positional: chunk 1 gets 3 parts, chunk 2 gets 1
-    "btm-nova=3,brandons-macbook-pro=1"     named: a mapping, in any order; the chunks are the machines
-                                            sorted by name (chunk 1 = brandons-macbook-pro here), so every
+    "bench-pc=3,bench-mac=1"                named: a mapping, in any order; the chunks are the machines
+                                            sorted by name (chunk 1 = bench-mac here), so every
                                             machine builds the same bins however the names were typed
     "auto"                                  every machine in the registry (WSL profiles only when named),
                                             sorted by name, weighted by its measured throughput for
                                             ``method`` (``dist.profile``)
-    "btm-nova=auto,brandons-macbook-pro=2"  mixed: "auto" per machine
+    "bench-pc=auto,bench-mac=2"             mixed: "auto" per machine
 
 A machine without a benchmark for the method is estimated from its core count (``ESTIMATE_PER_CORE``), and
 the notes say so. ``explain(weights, n)`` prints the shares; ``resolve_chunk`` combines a weights spec with
@@ -44,7 +44,7 @@ from pathlib import Path
 # Rough benchmark-set molecules/hour per physical core (``profile.benchmark`` protocol), used only when a
 # machine has no measurement for the method, so that a measured and an unmeasured machine can be compared.
 # Only the ratios between machines matter, and per-core rates vary a lot: measured 2026-11, MMFF gave 9,700/h
-# per core on a 2-core cloud Xeon and 2,200 on BTM NOVA (12 cores); GFN1-xTB (dxtb, CPU) gave 250 and 24
+# per core on a 2-core cloud Xeon and 2,200 on the Windows workstation (12 cores); GFN1-xTB (dxtb, CPU) gave 250 and 24
 # (AMD's Windows ROCm torch has a slow CPU BLAS). A real benchmark is always better than these.
 ESTIMATE_PER_CORE: dict[str, float] = {
     "mmff": 3000.0,
@@ -240,7 +240,7 @@ def parse_weights(spec: str, method: str = "", profiles: Sequence | None = None)
     named = ["=" in x for x in parts]
     if any(named) and not all(named):
         raise ValueError(f"--chunk-weights {spec!r}: use either all positional weights (3,1) or all named "
-                         "ones (btm-nova=3,brandons-macbook-pro=1)")
+                         "ones (bench-pc=3,bench-mac=1)")
     if not any(named):
         w = Weights(named=False)
         for k, x in enumerate(parts, 1):
