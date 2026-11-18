@@ -462,7 +462,7 @@ KEEP_FAILED_MAX_BYTES = 8 * 1024 * 1024
 SCRATCH_FILE_RE = re.compile(r"^psi\.\d+\.\w+$|^timer\.dat$")
 #: a left-behind folder's logs stay this many days (``quantabench-cli scratch --clean --older-than``)
 SCRATCH_KEEP_DAYS = 3.0
-#: a folder without an owner record (QuantaBench before 0.3.0.dev4) counts as left behind after this long unchanged
+#: a folder without an owner record (made before 2026-11-13, SCRATCH-1) counts as left behind after this long unchanged
 UNOWNED_GRACE_H = 12.0
 
 

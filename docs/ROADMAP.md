@@ -11,8 +11,8 @@ the fork/upstream plan are in [PLATFORMS.md](PLATFORMS.md).
 Status 2026-11-18: P1 and P2 are built, and P3's "Run on" routing is in the job dialog. The workstation and the
 MacBook ran the PFAS QSAR set together in 15 staged batches (13,206 molecules, gas and water, Nov 11-14), with
 machine control (budgets, pause and resume, work moving off a paused machine). CREST runs on the workstation through
-WSL. A CREST rebuild of the set's flexible neutral molecules is half done (BACKLOG: CREST-RUN-1). Nothing is tagged
-yet (REL-1).
+WSL. A CREST rebuild of the set's flexible neutral molecules is half done (BACKLOG: CREST-RUN-1). 0.3.0 is tagged
+(`v0.3.0`, 2026-11-18).
 
 - **P1 (with 0.3):**
   - macOS in CI (PLAT-2) and the first run on the MacBook (PLAT-1)
@@ -117,7 +117,7 @@ Known science limits to keep in mind: GFN1/GFN2-xTB place C=O and carboxylate st
 (PFOA anion 2013 vs ~1690 cm⁻¹); the SMD model is vacuum, rigid-adsorbate and non-polarizable, so its
 work is a gas-phase lower bound, not an aqueous free energy.
 
-## 0.3: Spartan parity for properties (in progress)
+## 0.3: Spartan parity for properties (0.3.0 tagged 2026-11-18; the open items below carry over)
 
 The original QuantaBench plan (CREST conformers, GFN2/GFN-FF, MOPAC PM6/PM7, Psi4 DFT with density and
 ESP cubes, PyQtGraph spectra, cclib, a conda environment) landed here on 2026-11-01, on top of a shared

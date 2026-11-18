@@ -296,10 +296,20 @@ You can do the same from Settings > Folders in the app.
 
 ## Platforms
 
-Windows 11 (native), WSL2, Linux and macOS (Apple Silicon) are all targets. macOS is being brought up
-now, and several machines (for example a MacBook and a GPU workstation over Tailscale) will be able to
-share one project's work. See [docs/PLATFORMS.md](docs/PLATFORMS.md) for what runs where, the
+Windows 11 (native), WSL2, Linux and macOS (Apple Silicon) are all supported, and the test suite runs on all
+three operating systems in CI. Several machines (for example a MacBook and a GPU workstation over Tailscale)
+can share one project's work. See [docs/PLATFORMS.md](docs/PLATFORMS.md) for what runs where, the
 multi-machine plan, and the packages that need upstream fixes or forks.
+
+## Releases
+
+Releases are git tags (`v0.3.0` is the first); there are no packaged installers yet. A tag marks a commit
+whose tests passed on Windows, Linux and macOS and that ran real batches, with its changes in
+[CHANGELOG.md](CHANGELOG.md). The install scripts and Help > Check for updates follow `main`, which moves
+ahead of the last tag. To stay on a release, check out its tag (`git checkout v0.3.0`) and run the install
+command again: the fork packages it installs are pinned to their own tags. Updates refuse to run on a checked-out
+tag, so switch back to `main` (`git checkout main`) to update. Machines that share work must run the same
+version.
 
 ## Built on
 

@@ -75,7 +75,7 @@ with its deadline and resume, the budget setter, and the time window for one mac
 process is left at nice -10); it passes on a rerun. Seen on #17 and #25. Find the race or make the test wait for
 the priority change.
 
-## REL-1: Tag 0.3.0 · needs-Brandon
+## REL-1: Tag 0.3.0 · done 2026-11-18 (Brandon: "complete item 8"; tag `v0.3.0`)
 0.1, 0.2 and 0.3 are all unreleased and nothing is tagged. After TELEM-1 and this status update: set the version,
 date the CHANGELOG's sections, tag, and say in the README what a release means for a project with a fork-based
 install. Brandon decides when.
