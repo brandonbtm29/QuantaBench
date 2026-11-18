@@ -15,9 +15,11 @@ clock, CPU power, GPU temperature and utilization of its load samples, and ``thr
 throttling when at least ``THROTTLE_MIN_SAMPLES`` samples under load ran below ``THROTTLE_CLOCK_FRACTION`` of the
 run's typical clock under the same load, at ``THROTTLE_TEMP_C`` or hotter.
 
-The fit (``fit_cost_model``): CREST time = A x atoms^p x threads^-q on the ``conformers`` rows of CREST runs that
-ended ok, per machine and CREST level (``threads.crest_level``: method and --quick), by least squares on the logs.
-It is saved (``save_fit``, ``threads.cost_model_path``) only with at least ``MIN_MOLECULES`` molecules over at
+The fit (``fit_cost_model``): CREST time = A x atoms^p x (1 + rotors)^r x threads^-q on the ``conformers`` rows of
+CREST runs that ended ok, per machine and CREST level (``threads.crest_level``: method and --quick), by least
+squares on the logs. The rotor term (rotors: ``telemetry_attempts.n_rotatable``) is fitted when every row has a
+rotor count and there are at least ``MIN_ROTOR_VALUES`` different counts, and kept when r comes out positive;
+otherwise r is 0 and the fit is the atoms-only one (``atoms_scatter`` is that one's scatter either way). It is saved (``save_fit``, ``threads.cost_model_path``) only with at least ``MIN_MOLECULES`` molecules over at
 least ``MIN_WIDTHS`` thread widths, and only when p and q are in the ranges ``threads.usable`` accepts; runs use it
 from then on (``threads.load_cost_model``) instead of the built-in COST_POWER and SPEEDUP_POWER.
 """
@@ -41,6 +43,8 @@ from pathlib import Path
 
 MIN_MOLECULES = 30
 MIN_WIDTHS = 2
+#: fewest different rotatable-bond counts for the rotor term of the fit
+MIN_ROTOR_VALUES = 3
 #: SyncThing's temporary folders, and hidden folders, are not searched
 SKIP_PREFIXES = (".", "~syncthing~")
 
@@ -448,9 +452,14 @@ class Fit:
     scatter: float | None = None
     builtin_scatter: float | None = None
     power_only: float | None = None    # p fitted with q fixed at the built-in (shown when one width is all there is)
+    rot_power: float = 0.0             # r of (1 + rotors)^r; 0 when the rows have no rotor counts or r was not > 0
+    rot_power_se: float | None = None
+    atoms_scatter: float | None = None  # the atoms-only fit's scatter (equal to ``scatter`` when r is 0)
+    rot_note: str = ""                 # why there is no rotor term
 
     def entry(self) -> dict:
         return {"power": self.power, "speedup_power": self.speedup_power, "scale_s": self.scale_s,
+                "rot_power": self.rot_power, "rot_power_se": self.rot_power_se, "atoms_scatter": self.atoms_scatter,
                 "power_se": self.power_se, "speedup_power_se": self.speedup_power_se, "scatter": self.scatter,
                 "builtin_scatter": self.builtin_scatter, "n_molecules": self.n_molecules, "n_samples": self.n_samples,
                 "widths": self.widths, "size_range": list(self.sizes), "runs": self.runs,
@@ -458,8 +467,9 @@ class Fit:
 
 
 def crest_samples(rows: list[dict]) -> dict[tuple[str, str], list[dict]]:
-    """{(machine, CREST level): [{"mol", "run", "size", "threads", "seconds"}]} from the CREST searches that ended
-    ok (the conformers stage of a CREST run whose conformers came from CREST)."""
+    """{(machine, CREST level): [{"mol", "run", "size", "rotors", "threads", "seconds"}]} from the CREST searches
+    that ended ok (the conformers stage of a CREST run whose conformers came from CREST). ``rotors``: the
+    attempt's ``n_rotatable``, None when the row has none."""
     out: dict[tuple[str, str], list[dict]] = {}
     for r in rows:
         if not _is_crest(r) or r.get("outcome") != "ok":
@@ -468,15 +478,18 @@ def crest_samples(rows: list[dict]) -> dict[tuple[str, str], list[dict]]:
         if not size or not w or not t or t <= 0 or size <= 0:
             continue
         level = r.get("crest_level") or str(r.get("engine") or "")[len("crest "):].split(" (")[0]
+        rot = r.get("n_rotatable")
         out.setdefault((r.get("machine") or "?", level), []).append(
-            {"mol": r.get("mol_id"), "run": r.get("run_id"), "size": float(size), "threads": int(w), "seconds": float(t)})
+            {"mol": r.get("mol_id"), "run": r.get("run_id"), "size": float(size),
+             "rotors": None if rot is None else int(rot), "threads": int(w), "seconds": float(t)})
     return out
 
 
 def fit_cost_model(samples: list[dict], machine: str = "", level: str = "", min_molecules: int = MIN_MOLECULES,
                    min_widths: int = MIN_WIDTHS) -> Fit:
-    """Least squares on log t = log A + p log size - q log threads. ``ok`` only with ``min_molecules`` molecules over
-    ``min_widths`` thread widths and constants that ``threads.usable`` accepts; ``why`` says what is missing."""
+    """Least squares on log t = log A + p log size + r log(1 + rotors) - q log threads (r: see the module
+    docstring). ``ok`` only with ``min_molecules`` molecules over ``min_widths`` thread widths and constants that
+    ``threads.usable`` accepts; ``why`` says what is missing."""
     import numpy as np
 
     from . import threads as threads_mod
@@ -515,12 +528,31 @@ def fit_cost_model(samples: list[dict], machine: str = "", level: str = "", min_
         fit.why = "sizes and thread widths are not independent (every size ran on one width)"
         return fit
     resid = ln_t - x @ coef
-    dof = max(1, len(ln_t) - 3)
+    fit.atoms_scatter = float(math.exp(math.sqrt(float(np.mean(resid ** 2)))))
+    rot = [s.get("rotors") for s in samples]
+    if any(r is None for r in rot):
+        fit.rot_note = "no rotor counts in some rows (runs from before the telemetry features)"
+    elif len(set(rot)) < MIN_ROTOR_VALUES:
+        fit.rot_note = f"fewer than {MIN_ROTOR_VALUES} different rotatable-bond counts"
+    else:
+        x_r = np.column_stack([np.ones_like(ln_n), ln_n, np.log1p(np.array(rot, dtype=float)), -ln_w])
+        coef_r, _res, rank_r, _sv = np.linalg.lstsq(x_r, ln_t, rcond=None)
+        if rank_r < 4:
+            fit.rot_note = "rotatable bonds not independent of size and threads"
+        elif coef_r[2] <= 0:
+            fit.rot_note = f"the rotor term came out {coef_r[2]:+.2f}, not positive: atoms alone"
+        else:
+            x, coef = x_r, coef_r
+            resid = ln_t - x @ coef
+    dof = max(1, len(ln_t) - x.shape[1])
     sigma2 = float(resid @ resid) / dof
     with contextlib.suppress(np.linalg.LinAlgError):
         cov = sigma2 * np.linalg.inv(x.T @ x)
-        fit.power_se, fit.speedup_power_se = float(math.sqrt(cov[1, 1])), float(math.sqrt(cov[2, 2]))
-    fit.scale_s, fit.power, fit.speedup_power = float(math.exp(coef[0])), float(coef[1]), float(coef[2])
+        fit.power_se, fit.speedup_power_se = float(math.sqrt(cov[1, 1])), float(math.sqrt(cov[-1, -1]))
+        if x.shape[1] == 4:
+            fit.rot_power_se = float(math.sqrt(cov[2, 2]))
+    fit.scale_s, fit.power, fit.speedup_power = float(math.exp(coef[0])), float(coef[1]), float(coef[-1])
+    fit.rot_power = float(coef[2]) if x.shape[1] == 4 else 0.0
     fit.scatter = float(math.exp(math.sqrt(float(np.mean(resid ** 2)))))
     ok, why = threads_mod.usable(fit.entry())
     fit.ok, fit.why = ok, ("" if ok else f"not used: {why}")
@@ -564,8 +596,14 @@ def fit_lines(fit: Fit) -> list[str]:
             f"{fit.runs} run(s); threads {', '.join(map(str, fit.widths)) or '-'}; atoms {fit.sizes[0]:g}-{fit.sizes[1]:g}")
     lines = [head]
     if fit.power is not None:
+        rot = (f"(1 + rotors)^{fit.rot_power:.2f} (+-{_g(fit.rot_power_se, '.2f')}) x " if fit.rot_power else "")
         lines.append(f"  fit:      time = {fit.scale_s:.3g} s x atoms^{fit.power:.2f} (+-{_g(fit.power_se, '.2f')}) x "
-                     f"threads^-{fit.speedup_power:.2f} (+-{_g(fit.speedup_power_se, '.2f')}); scatter x{fit.scatter:.2f}")
+                     f"{rot}threads^-{fit.speedup_power:.2f} (+-{_g(fit.speedup_power_se, '.2f')}); "
+                     f"scatter x{fit.scatter:.2f}")
+        if fit.rot_power and fit.atoms_scatter:
+            lines.append(f"  atoms alone: scatter x{fit.atoms_scatter:.2f}")
+        elif fit.rot_note:
+            lines.append(f"  no rotor term: {fit.rot_note}")
     elif fit.power_only is not None:
         lines.append(f"  p alone (q fixed at {threads_mod.SPEEDUP_POWER:g}): atoms^{fit.power_only:.2f}")
     lines.append(f"  built-in: atoms^{threads_mod.COST_POWER:g}, (threads/lane)^{threads_mod.SPEEDUP_POWER:g}"
@@ -583,7 +621,7 @@ def register_cli(subparsers) -> None:
         description="Finds jobs.sqlite under the folders (default: the output folder in the settings), grid parts "
                     "included, writes one CSV row per molecule attempt and stage with the run's machine and settings, "
                     "and prints a summary per machine, stage and engine. --fit refits CREST time = A x atoms^p x "
-                    "threads^-q per machine and CREST level and saves it to <settings>/machines/cost-models/"
+                    "(1 + rotatable bonds)^r x threads^-q per machine and CREST level and saves it to <settings>/machines/cost-models/"
                     "<machine>.json, which the dynamic CREST threads then use (docs/ENGINES.md, CREST).")
     p.add_argument("paths", nargs="*", metavar="PATH", help="run folders, or folders that contain them")
     p.add_argument("-o", "--out", help="the CSV to write (default: timings.csv in the first folder)")

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (after 0.3.0)
+
+### CREST lanes of 4 threads or more, and rotatable bonds in the CREST cost model (SCHED-2, 2026-11-18)
+- **Before:** `--conformers crest` on a machine with no known performance cores (the workstation) got 2-thread lanes on all threads (11 x 2), and the CREST cost model knew atom counts only.
+  - In the CREST rebuild of Nov 17-18 (7 x 2 lanes through WSL, 90-minute limit), 37 of the 88 molecules with 17-19 rotatable bonds ran out of time; 59 of the workstation's 230 lane-hours went to molecules that then ran out of time. The MacBook's 4-thread lanes had none.
+- **Now:**
+  - The lanes: `--conformers crest` there plans lanes of at least 4 threads on all threads, the threads left over one per lane (23 threads: 3 x 5 + 2 x 4; a 15-thread budget: 3 x 5). `--conformers auto` and the other external programs keep 2-thread lanes; Apple Silicon keeps 3 x 4.
+  - The fit: `quantabench-cli timings --fit` fits CREST time = A x atoms^p x (1 + rotatable bonds)^r x threads^-q when the timing rows have rotor counts, and prints the atoms-only scatter next to it. On the rebuild's 738 searches the rotor term took the scatter from x2.91 to x2.76.
+  - The runs: a saved fit's rotor term goes into the dynamic CREST threads, the predicted seconds in the timing rows and the review's estimate, and a CREST run with such a fit hands out its most expensive molecules (atoms and rotatable bonds) first.
+  - The built-in model keeps atoms^4 with no rotor term: the rebuild had no molecule under 9 rotatable bonds.
+  - Old cost-model files load as before (no rotor term).
+
 ## 0.3.0 (2026-11-18)
 
 The first tagged release (`v0.3.0`). It holds everything below, back to 0.1.0, none of which was tagged before.

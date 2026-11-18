@@ -188,8 +188,10 @@ def test_auto_plans(cores, monkeypatch):
     monkeypatch.setattr(L, "gpu_linalg_available", lambda: False)    # AMD's Windows ROCm wheels: no MAGMA
     no_linalg, reason = L.plan_auto(pipeline.BuildConfig(method="gfn1-xtb", threads=12), tower)
     assert no_linalg == cpu_xtb and "linear algebra" in reason
-    external = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12, conformer_search="crest"), tower)[0]
-    assert external == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
+    external = L.plan_auto(pipeline.BuildConfig(method="xtb-gfn2", threads=12), tower)[0]
+    assert external == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]                # external programs: 2 threads
+    crest = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12, conformer_search="crest"), tower)[0]
+    assert crest == [Lane(f"cpu{i}", "cpu", 4) for i in range(1, 4)]                    # CREST: at least 4 (SCHED-2)
     # Psi4 needs memory per job: 8 GB of RAM leaves room for one 4 GB job, so auto stays at one lane
     qm, reason = L.plan_auto(pipeline.BuildConfig(method="mmff", threads=12, qm_method="b3lyp/def2-svp"),
                              report(ram=8.0))
@@ -234,14 +236,24 @@ def test_crest_auto_plan_on_apple_silicon(monkeypatch):
     assert len(L.plan_auto(crest_cfg(), mac, parallel_molecules=6)[0]) == 6
 
 
-def test_crest_auto_plan_elsewhere_keeps_the_two_thread_rule(monkeypatch):
-    """A 12-core/24-thread x86 machine (the workstation) knows no performance cores: CREST keeps 2-thread lanes on all
-    threads (23 threads: 11 x 2). On the workstation's WSL the layout mattered little (1 x 23 756 s, 4 x 5 769 s)."""
+def test_crest_plan_elsewhere_has_lanes_of_four_threads_or_more(monkeypatch):
+    """A 12-core/24-thread x86 machine (the workstation) knows no performance cores. CREST for every molecule gets lanes
+    of at least 4 threads on all threads, the threads left over one per lane (SCHED-2: in the CREST rebuild its
+    7 x 2 lanes ran out of time on 37 of 88 molecules with 17-19 rotatable bonds). 23 threads: 3 x 5 + 2 x 4."""
     monkeypatch.setattr(resources, "logical_cores", lambda: 24)
     lanes, reason = L.plan_auto(crest_cfg(), report())
+    assert [x.threads for x in lanes] == [5, 5, 5, 4, 4] and sum(x.threads for x in lanes) == 23
+    assert reason.startswith("CREST: lanes of at least 4 threads on all threads")
+    assert L.plan_auto(crest_cfg(threads=15), report())[0] == [Lane(f"cpu{i}", "cpu", 5) for i in (1, 2, 3)]
+    assert L.plan_auto(crest_cfg(threads=12), report())[0] == [Lane(f"cpu{i}", "cpu", 4) for i in (1, 2, 3)]
+    # docs/ENGINES.md's table: 18 (background), 20 (4 free) and 22 (2 free) threads
+    for threads, widths in ((18, [5, 5, 4, 4]), (20, [4] * 5), (22, [5, 5, 4, 4, 4])):
+        assert [x.threads for x in L.plan_auto(crest_cfg(threads=threads), report())[0]] == widths
+    assert L.plan_auto(crest_cfg(threads=6), report())[0] == [Lane("main", "auto", 6)]      # room for one lane
+    # conformers "auto" (CREST for the flexible neutral molecules only) keeps the 2-thread rule
+    lanes, reason = L.plan_auto(crest_cfg(conformer_search="auto"), report())
     assert lanes == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
     assert reason.startswith("CREST: 2-thread lanes on all threads")
-    assert L.plan_auto(crest_cfg(threads=12), report())[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
 
 
 def test_crest_auto_plan_from_this_machines_cores(monkeypatch):
@@ -268,8 +280,8 @@ def test_crest_auto_plan_from_this_machines_cores(monkeypatch):
     assert resources.performance_cores() == 0
     monkeypatch.setattr(resources, "logical_cores", lambda: 24)
     monkeypatch.setattr(resources, "physical_cores", lambda: 12)
-    lanes, reason = L.plan_auto(crest_cfg())       # this machine's RAM may cap the 11 lanes
-    assert {x.threads for x in lanes} == {2} and reason.startswith("CREST: 2-thread lanes on all threads")
+    lanes, reason = L.plan_auto(crest_cfg())       # this machine's RAM may cap the 5 lanes
+    assert {x.threads for x in lanes} <= {4, 5} and reason.startswith("CREST: lanes of at least 4 threads")
 
 
 def test_dispatch_order_is_largest_first():

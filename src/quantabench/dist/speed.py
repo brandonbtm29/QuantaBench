@@ -141,6 +141,21 @@ def molecule_size(inp) -> float:
         return DEFAULT_SIZE
 
 
+def molecule_rotors(inp) -> int:
+    """Rotatable bonds of a ``MoleculeInput`` as the CREST cost model counts them: RDKit's (strict) rotatable bonds
+    with explicit hydrogens, the count ``chem.telemetry`` records of the prepared structure (O-H and N-H rotors
+    included, methyl and CF3 rotors not). 0 for a molecule that cannot be read."""
+    try:
+        from rdkit import Chem, rdBase
+        from rdkit.Chem import rdMolDescriptors
+
+        with rdBase.BlockLogs():
+            mol = inp.to_mol()
+            return int(rdMolDescriptors.CalcNumRotatableBonds(Chem.AddHs(mol)))
+    except Exception:  # noqa: BLE001 - its lane reports a molecule that cannot be read
+        return 0
+
+
 def bench_size(bench_set: str = "pfas") -> float:
     """Mean size of a benchmark set (``profile.BENCH_SETS``), to turn molecules/hour into s per size unit."""
     from ..chem.inputs import MoleculeInput
