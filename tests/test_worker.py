@@ -107,8 +107,8 @@ def test_bind_rules(monkeypatch):
     # `tailscale ip -4` (faked): the 100.x address is taken, anything else is ignored
     monkeypatch.setattr(worker_mod, "tailscale_executable", lambda: "tailscale")
     monkeypatch.setattr(worker_mod.subprocess, "run", lambda *a, **k: type(
-        "P", (), {"stdout": "192.168.1.4\n100.90.226.110\n", "stderr": "", "returncode": 0})())
-    assert worker_mod.resolve_bind("tailscale") == "100.90.226.110"
+        "P", (), {"stdout": "192.168.1.4\n100.64.0.10\n", "stderr": "", "returncode": 0})())
+    assert worker_mod.resolve_bind("tailscale") == "100.64.0.10"
     # the CLI refuses before it generates a token or opens a socket
     assert cli.main(["worker", "--bind", ANY4, "--port", "0"]) == 2
 
@@ -322,7 +322,7 @@ def test_grid_build_two_workers(make_worker, qb_settings, capsys):
 
 
 def test_grid_build_with_local_share(make_worker, qb_settings, capsys):
-    # the NOVA case: a worker on this very machine, writing into the same output folder, plus "local"
+    # the workstation case: a worker on this very machine, writing into the same output folder, plus "local"
     here = profile.machine_name()
     client_out = Path(qb_settings.output_dir)
     w = make_worker(here, output=client_out)
@@ -330,9 +330,9 @@ def test_grid_build_with_local_share(make_worker, qb_settings, capsys):
     # method 'auto' could differ per machine: refused before anything is submitted
     assert cli.main(["grid", "build", *mols, "--machines", f"local,{here}", "--worker", f"{here}={w.url}"]) == 2
     assert "explicitly" in capsys.readouterr().err
-    assert cli.main(["grid", "build", *mols, *FAST, "--machines", "local,nova", "--worker",
+    assert cli.main(["grid", "build", *mols, *FAST, "--machines", "local,tower", "--worker",
                      f"{here}={w.url}"]) == 2
-    assert "Unknown machine 'nova'" in capsys.readouterr().err
+    assert "Unknown machine 'tower'" in capsys.readouterr().err
     items = inputs([i for i, _ in MOLS[:3]])
     cfg = pipeline.BuildConfig(method="mmff", max_conformers=2, refine_top=1, xtb_properties=False,
                                formats=("xyz",), output_dir=qb_settings.output_dir)
@@ -366,12 +366,12 @@ def _closed_port() -> int:
 def test_route_check_needs_tailscale_on_this_machine():
     check = client_mod.check_route
     check("127.0.0.1", "127.0.0.1")
-    check("100.90.226.110", "100.101.7.8")                       # tailnet to tailnet
+    check("100.64.0.10", "100.101.7.8")                       # tailnet to tailnet
     check("fd7a:115c:a1e0::1", "fd7a:115c:a1e0::2")
-    check("::ffff:100.90.226.110", "::ffff:100.64.0.9")
+    check("::ffff:100.64.0.10", "::ffff:100.64.0.9")
     for allow in (False, True):    # Tailscale down here: the packets leave through the default route
         with pytest.raises(WorkerError, match="Tailscale is not connected on this machine"):
-            check("100.90.226.110", "192.168.1.20", allow_any_host=allow)
+            check("100.64.0.10", "192.168.1.20", allow_any_host=allow)
     with pytest.raises(WorkerError, match="not a Tailscale"):
         check("192.168.1.5", "192.168.1.20")
     check("192.168.1.5", "192.168.1.20", allow_any_host=True)

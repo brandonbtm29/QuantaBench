@@ -484,12 +484,12 @@ def test_a_phase_folder_includes_the_other_machines_shares(tmp_path):
 
     runs = tmp_path / "Runs"
     phase = runs / "batch_x" / "gas"
-    local, grid = phase / "x_gas_nova", phase / "x_grid_gas"
+    local, grid = phase / "x_gas_tower", phase / "x_grid_gas"
     shutil.copytree(one, local)
     shutil.copytree(two, grid / "parts" / "mac" / "x_gas_mac")             # a downloaded archive
     shutil.copytree(three, runs / "x_gas_laptop")                           # a synced copy in the output folder
     (grid / "summary.csv").write_text("id,status\n", encoding="utf-8")
-    shares = [{"machine": "local", "run_folder": "x_gas_nova", "n": 1},
+    shares = [{"machine": "local", "run_folder": "x_gas_tower", "n": 1},
               {"machine": "mac", "run_folder": "x_gas_mac", "n": 1},
               {"machine": "laptop", "run_folder": "x_gas_laptop", "n": 1},
               {"machine": "pc", "run_folder": "x_gas_pc", "n": 4},          # not here
@@ -500,7 +500,7 @@ def test_a_phase_folder_includes_the_other_machines_shares(tmp_path):
     got = cc.read_sources([phase], log=logs.append)
     assert sorted(s.label for s in got) == ["555-55-5", "777-77-7", "999-99-9"]
     assert any("pc's share (4 molecules, x_gas_pc) is not here" in x for x in logs), logs
-    assert sum("x_gas_nova: QuantaBench run, 1 molecule(s)" in x for x in logs) == 1      # once, not per share
+    assert sum("x_gas_tower: QuantaBench run, 1 molecule(s)" in x for x in logs) == 1      # once, not per share
     # the grid folder alone stands for every share too
     assert sorted(s.label for s in cc.read_sources([grid])) == ["555-55-5", "777-77-7", "999-99-9"]
     # a machine's own run folder is still just that

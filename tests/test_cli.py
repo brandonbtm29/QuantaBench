@@ -132,27 +132,27 @@ def test_console_streams_never_fail_on_unencodable_characters():
 def test_settings_engine_path_is_per_machine(capsys, monkeypatch):
     from quantabench import settings as sm
 
-    monkeypatch.setattr(sm, "_this_machine", lambda: "Brandons-MacBook-Pro")
+    monkeypatch.setattr(sm, "_this_machine", lambda: "Bench-Mac")
     assert cli.main(["settings", "--engine-path", "crest=~/qb/crest-macos-arm64/bin/crest"]) == 0
     assert cli.main(["settings", "--engine-path", "crest=wsl:/home/b/envs/qb-tools/bin/crest",
-                     "--machine", "BTM-NOVA"]) == 0
-    assert "crest on btm-nova: wsl:" in capsys.readouterr().out
+                     "--machine", "BENCH-PC"]) == 0
+    assert "crest on bench-pc: wsl:" in capsys.readouterr().out
     s = sm.load()
     assert s.engines.paths == {}
     assert s.engine_paths_for()["crest"] == ("~/qb/crest-macos-arm64/bin/crest", "this machine")
-    assert s.engine_paths_for("btm-nova")["crest"][0] == "wsl:/home/b/envs/qb-tools/bin/crest"
+    assert s.engine_paths_for("bench-pc")["crest"][0] == "wsl:/home/b/envs/qb-tools/bin/crest"
     assert cli.main(["settings", "--engine-path", "crest="]) == 0          # automatic again on this machine
     assert "crest" not in sm.load().engine_paths_for()
     assert cli.main(["settings", "--engine-path", "nonsense=/x"]) == 2
     # --machine with no name is this machine, before or after --engine-path
     capsys.readouterr()
     assert cli.main(["settings", "--engine-path", "crest=/opt/crest/bin/crest", "--machine"]) == 0
-    assert "crest on brandons-macbook-pro: /opt/crest/bin/crest" in capsys.readouterr().out
+    assert "crest on bench-mac: /opt/crest/bin/crest" in capsys.readouterr().out
     assert cli.main(["settings", "--machine", "--engine-path", "xtb=/opt/xtb/bin/xtb"]) == 0
     s = sm.load()
     assert s.engine_paths_for()["crest"] == ("/opt/crest/bin/crest", "this machine")
     assert s.engine_paths_for()["xtb"] == ("/opt/xtb/bin/xtb", "this machine")
-    assert s.engine_paths_for("btm-nova")["crest"][0] == "wsl:/home/b/envs/qb-tools/bin/crest"     # untouched
+    assert s.engine_paths_for("bench-pc")["crest"][0] == "wsl:/home/b/envs/qb-tools/bin/crest"     # untouched
     with pytest.raises(SystemExit):
         cli.main(["settings", "--help"])
     assert "--machine [NAME]" in " ".join(capsys.readouterr().out.split())

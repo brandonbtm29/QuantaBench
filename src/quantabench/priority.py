@@ -1,6 +1,6 @@
 """Run priority and free threads: runs that keep the PC responsive (PRIO-1).
 
-A 5-lane x 4-thread CREST run on BTM NOVA (Ryzen 9 7900X, 24 threads) at below-normal CPU priority still made
+A 5-lane x 4-thread CREST run on the Windows workstation (Ryzen 9 7900X, 24 threads) at below-normal CPU priority still made
 the desktop hard to use, even deleting files: CPU priority alone does not stop a run's disk I/O (Psi4's scratch
 files) from crowding out the user's. Two settings per machine (``Settings.priority_for``,
 ``Settings.free_threads_for``; docs/ENGINES.md "Run priority and free threads"):

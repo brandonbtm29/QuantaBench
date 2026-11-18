@@ -13,7 +13,7 @@ from quantabench.dist import profile
 from quantabench.dist.profile import MachineProfile
 
 
-def full_profile(name="btm-nova", updated="2026-11-04T21:00:00+00:00") -> MachineProfile:
+def full_profile(name="bench-pc", updated="2026-11-04T21:00:00+00:00") -> MachineProfile:
     return MachineProfile(
         name=name, os="Windows 11", arch="AMD64", python="3.12.10", quantabench_version="0.3.0.dev0",
         cpu="AMD Ryzen 9 7900X 12-Core Processor", physical_cores=12, logical_cores=24, ram_gb=63.2,
@@ -52,39 +52,39 @@ def test_throughput_for():
 def test_registry_tolerates_stale_partial_and_corrupt_files():
     d = profile.registry_dir()
     assert profile.load_profiles() == []                                  # no folder yet
-    profile.save_profile(full_profile("btm-nova", "2026-11-04T21:00:00+00:00"))
-    profile.save_profile(full_profile("brandons-macbook-pro", "2026-09-01T08:00:00+00:00"))   # stale
+    profile.save_profile(full_profile("bench-pc", "2026-11-04T21:00:00+00:00"))
+    profile.save_profile(full_profile("bench-mac", "2026-09-01T08:00:00+00:00"))   # stale
     (d / "garbage.json").write_text("{not json", encoding="utf-8")
     (d / "list.json").write_text("[1, 2]", encoding="utf-8")
     (d / "half.json").write_text('{"name": "half", "throughput": {"mmff@cpu": 10}, "updated": 5}', encoding="utf-8")
     (d / "nameless.json").write_text('{"physical_cores": 4}', encoding="utf-8")       # name from the file
-    (d / "btm-nova.json.tmp").write_text("{", encoding="utf-8")                        # interrupted write
-    newer = full_profile("btm-nova", "2026-11-05T01:00:00+00:00")
+    (d / "bench-pc.json.tmp").write_text("{", encoding="utf-8")                        # interrupted write
+    newer = full_profile("bench-pc", "2026-11-05T01:00:00+00:00")
     newer.cpu = "newer copy"
-    conflict = d / "btm-nova.sync-conflict-20261105-010000-ABCDEFG.json"             # SyncThing conflict
+    conflict = d / "bench-pc.sync-conflict-20261105-010000-ABCDEFG.json"             # SyncThing conflict
     conflict.write_text(json.dumps(newer.to_dict()), encoding="utf-8")
     profiles = profile.load_profiles()
     names = [p.name for p in profiles]
-    assert names[:2] == ["btm-nova", "brandons-macbook-pro"] and sorted(names) == sorted(
-        ["btm-nova", "brandons-macbook-pro", "half", "nameless"])
+    assert names[:2] == ["bench-pc", "bench-mac"] and sorted(names) == sorted(
+        ["bench-pc", "bench-mac", "half", "nameless"])
     assert profiles[0].cpu == "newer copy"                                # newest file of a machine wins
     half = next(p for p in profiles if p.name == "half")
     assert half.throughput == {"mmff@cpu": 10.0} and half.updated == "" and profile.profile_age_s(half) is None
     assert next(p for p in profiles if p.name == "nameless").physical_cores == 4
-    assert profile.load_profile("brandons-macbook-pro").programs["xtb"] == "6.7.1"
+    assert profile.load_profile("bench-mac").programs["xtb"] == "6.7.1"
 
 
 def test_machine_name(monkeypatch):
     # the hostname path (Windows, Linux); on a Mac the Bonjour name comes first (test below), so leave it out here
     monkeypatch.setattr(profile, "_macos_local_hostname", lambda: "")
-    monkeypatch.setattr(profile.socket, "gethostname", lambda: "BTM-NOVA.tail1234.ts.net")
+    monkeypatch.setattr(profile.socket, "gethostname", lambda: "BENCH-PC.tail1234.ts.net")
     monkeypatch.setattr(resources, "is_wsl", lambda: False)
-    assert profile.machine_name() == "btm-nova"
+    assert profile.machine_name() == "bench-pc"
     monkeypatch.setattr(resources, "is_wsl", lambda: True)                # WSL2 shares the Windows hostname
-    assert profile.machine_name() == "btm-nova-wsl"
-    monkeypatch.setattr(profile.socket, "gethostname", lambda: "Brandons-MacBook-Pro.local")
+    assert profile.machine_name() == "bench-pc-wsl"
+    monkeypatch.setattr(profile.socket, "gethostname", lambda: "Bench-Mac.local")
     monkeypatch.setattr(resources, "is_wsl", lambda: False)
-    assert profile.machine_name() == "brandons-macbook-pro"
+    assert profile.machine_name() == "bench-mac"
 
 
 def test_local_profile_keeps_measurements_and_takes_the_worker_address():
@@ -157,7 +157,7 @@ def test_benchmark_is_cancellable_and_rejects_fallbacks(monkeypatch):
     details = {}
     assert profile.benchmark(["gfn1-xtb"], ["cuda:0"], details=details) == {}          # ran on the CPU instead
     assert details["gfn1-xtb@cuda:0"]["error"].startswith("fell back to cpu")
-    # where QuantaBench keeps dxtb on the CPU (MPS, NOVA's ROCm wheel) the GPU is not timed at all
+    # where QuantaBench keeps dxtb on the CPU (MPS, the workstation's ROCm wheel) the GPU is not timed at all
     monkeypatch.setattr(torch_compat, "dxtb_device", lambda dev: ("cpu", "dxtb ran on the CPU instead of mps"))
     details = {}
     assert profile.benchmark(["gfn1-xtb"], ["mps"], details=details) == {}
@@ -238,7 +238,7 @@ def test_machine_names_are_folder_safe_and_short():
     assert len(name) <= profile.MAX_MACHINE_NAME and name.startswith("sjc22-bt149-")
     assert name != profile.safe_machine_name(long[:-1] + "b")                 # still unique
     assert worker.check_label(name + "-wsl") and worker.check_label(name)
-    assert profile.safe_machine_name("BTM NOVA") == "btm-nova"
+    assert profile.safe_machine_name("Bench PC") == "bench-pc"
     assert profile.safe_machine_name("Brandon's MacBook Pro") == "brandon-s-macbook-pro"
     assert profile.safe_machine_name("---") == "localhost"
 
@@ -315,17 +315,17 @@ def test_machines_cli_passes_bench_set_and_solvent(monkeypatch):
 
 
 def test_machine_name_on_macos_is_the_bonjour_name(monkeypatch):
-    """On a Mac socket.gethostname() follows the network (on Tailscale: "Brandons-MBP.tail...ts.net"), which put
+    """On a Mac socket.gethostname() follows the network (on Tailscale: "Bench-MBP.tail...ts.net"), which put
     one Mac in the registry under two names; the LocalHostName from System Settings is stable."""
     import socket
     import sys
 
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(socket, "gethostname", lambda: "Brandons-MBP.tail70150b.ts.net")
-    monkeypatch.setattr(profile, "_macos_local_hostname", lambda: "Brandons-MacBook-Pro")
-    assert profile.machine_name() == "brandons-macbook-pro"
+    monkeypatch.setattr(socket, "gethostname", lambda: "Bench-MBP.tail1234.ts.net")
+    monkeypatch.setattr(profile, "_macos_local_hostname", lambda: "Bench-Mac")
+    assert profile.machine_name() == "bench-mac"
     monkeypatch.setattr(profile, "_macos_local_hostname", lambda: "")          # scutil missing: the hostname
-    assert profile.machine_name() == "brandons-mbp"
+    assert profile.machine_name() == "bench-mbp"
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(profile, "_macos_local_hostname", lambda: "never-used")
-    assert profile.machine_name() == "brandons-mbp"
+    assert profile.machine_name() == "bench-mbp"

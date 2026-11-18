@@ -31,7 +31,7 @@ cd ~/GitHub\ Projects/QuantaBench && git pull --ff-only && bash scripts/install_
 Start QuantaBench from **~/Applications/QuantaBench.app** (Launchpad, Spotlight; drag it to the Dock),
 or double-click `QuantaBench.command` in the repository folder.
 
-### Windows 11 (BTM NOVA)
+### Windows 11 (the Windows workstation)
 
 In PowerShell, for the existing checkout:
 
@@ -48,7 +48,7 @@ mkdir "$HOME\GitHub Projects" -Force | Out-Null; cd "$HOME\GitHub Projects"; git
 Start QuantaBench from the **Start Menu** ("QuantaBench"), or double-click `QuantaBench.bat`. Neither
 opens a console window.
 
-On BTM NOVA, `.venv` currently holds AMD's ROCm PyTorch. The script asks before it replaces it. Answering
+On the Windows workstation, `.venv` currently holds AMD's ROCm PyTorch. The script asks before it replaces it. Answering
 `y` installs PyPI's CPU build, which is much faster for CPU work (MMFF, dxtb, xtb). Add `-Gpu rocm` to keep a
 separate GPU environment, `.venv-rocm`, with AMD's wheels and its own Start Menu entry, "QuantaBench (AMD
 GPU)": AIMNet2 runs about 10x faster there on the RX 9060 XT. Which one should be the default is backlog
@@ -298,7 +298,7 @@ allow the Python environment, or use WSL2/Linux.
   at once with `os._exit` when they touched a ROCm GPU on Windows; after `git pull`, run
   `pip install -e .` once so the launchers pick this up. `QUANTABENCH_HARD_EXIT=0` turns it off.
 - AMD's wheel has a much slower CPU math library than PyPI's CPU build (52 vs 881 GFLOP/s matmul on
-  NOVA). So keep the CPU build in `.venv` for CPU work (MMFF, dxtb, xtb) and the ROCm build in
+  the workstation). So keep the CPU build in `.venv` for CPU work (MMFF, dxtb, xtb) and the ROCm build in
   `.venv-rocm` for AIMNet2 on the GPU: `scripts\install_windows.ps1 -Gpu rocm` sets up both (backlog
   PERF-1 tracks which should be the default).
 

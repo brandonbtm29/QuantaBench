@@ -85,7 +85,7 @@ XLSX_MISSING = ("Excel export needs openpyxl: pip install openpyxl (or the excel
 def set_clipboard_text(text: str, tries: int = 6) -> bool:
     """``QClipboard.setText``, retried. On Windows another program (clipboard history, a clipboard manager) can hold
     the clipboard for a moment; Qt's write then fails ("OleSetClipboard: ... OpenClipboard Failed") and the old
-    content stays. Seen on BTM NOVA about one write in ten when two come quickly. At most ~0.6 s in all."""
+    content stays. Seen on the Windows workstation about one write in ten when two come quickly. At most ~0.6 s in all."""
     clip = QApplication.clipboard()
     for i in range(tries):
         clip.setText(text)

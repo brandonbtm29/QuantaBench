@@ -81,7 +81,7 @@ analytic Hessian where both run (TFA 3.1 vs 3.1 s, PFBA anion 7.4 vs 7.1 s). The
 (the neutral upper envelope; for GFN2 nao is still counted with the GFN1 basis, which over-counts H). Over
 the budget the analytic Hessian becomes finite differences (also with ``hessian="analytic"``, since the
 frequencies agree to ~1 cm-1), finite differences that do not fit skip the frequencies with a note, and
-dipole derivatives that do not fit skip the IR intensities with a note. With a 5 GB lane (NOVA or the
+dipole derivatives that do not fit skip the IR intensities with a note. With a 5 GB lane (the workstation or the
 MacBook with 6-7 lanes) the GFN1 analytic Hessian is kept up to about the C5 PFCA anion (16 atoms) and neutral
 organics of ~20 atoms; larger molecules take finite differences, so the frequencies of the 14,000-molecule
 runs stay at the memory of their refinement.

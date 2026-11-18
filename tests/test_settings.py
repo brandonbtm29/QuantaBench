@@ -75,37 +75,37 @@ def test_surface_settings_roundtrip_and_reach_the_build_config(isolated_settings
 
 
 def test_engine_paths_per_machine(isolated_settings, monkeypatch):
-    """One shared settings file: NOVA keeps its wsl: CREST, the Mac its own build, other machines the default."""
-    monkeypatch.setattr(sm, "_this_machine", lambda: "Brandons-MacBook-Pro")
+    """One shared settings file: the workstation keeps its wsl: CREST, the Mac its own build, other machines the default."""
+    monkeypatch.setattr(sm, "_this_machine", lambda: "Bench-Mac")
     s = sm.Settings()
     s.engines.paths = {"xtb": "~/bin/xtb"}                       # every machine
-    s.set_engine_path_for("crest", "wsl:/home/b/micromamba/envs/qb-tools/bin/crest", "BTM-NOVA")
+    s.set_engine_path_for("crest", "wsl:/home/b/micromamba/envs/qb-tools/bin/crest", "BENCH-PC")
     s.set_engine_path_for("crest", "~/qb-programs/crest-macos-arm64/bin/crest")   # this machine
     s.set_engine_path_for("xtb", "~/bin/xtb")                    # same as the default: not stored again
-    assert s.engines.machine_paths == {"btm-nova": {"crest": "wsl:/home/b/micromamba/envs/qb-tools/bin/crest"},
-                                       "brandons-macbook-pro": {"crest": "~/qb-programs/crest-macos-arm64/bin/crest"}}
+    assert s.engines.machine_paths == {"bench-pc": {"crest": "wsl:/home/b/micromamba/envs/qb-tools/bin/crest"},
+                                       "bench-mac": {"crest": "~/qb-programs/crest-macos-arm64/bin/crest"}}
     assert s.engine_paths_for() == {"xtb": ("~/bin/xtb", "all machines"),
                                     "crest": ("~/qb-programs/crest-macos-arm64/bin/crest", "this machine")}
-    assert s.engine_paths_for("btm_nova")["crest"][0].startswith("wsl:")       # machine names as in machine_lanes
+    assert s.engine_paths_for("bench_pc")["crest"][0].startswith("wsl:")       # machine names as in machine_lanes
     assert s.engine_paths_for("linux-box") == {"xtb": ("~/bin/xtb", "all machines")}
-    s.set_engine_path_for("xtb", "", "BTM-NOVA")                 # "" = automatic on NOVA despite the default
-    assert "xtb" not in s.engine_paths_for("btm-nova")
+    s.set_engine_path_for("xtb", "", "BENCH-PC")                 # "" = automatic on the workstation despite the default
+    assert "xtb" not in s.engine_paths_for("bench-pc")
     sm.save(s)
     again = sm.load()                                             # survives the JSON round trip
     assert again.engines.machine_paths == s.engines.machine_paths
-    assert again.engine_paths_for("btm-nova") == s.engine_paths_for("btm-nova")
+    assert again.engine_paths_for("bench-pc") == s.engine_paths_for("bench-pc")
     s.set_engine_path_for("crest", "")                            # back to automatic: the entry goes away
-    assert "brandons-macbook-pro" not in s.engines.machine_paths
+    assert "bench-mac" not in s.engines.machine_paths
 
 
 def test_bad_machine_paths_are_dropped(isolated_settings):
     folder = isolated_settings / "settings"
     folder.mkdir(parents=True)
     (folder / sm.SETTINGS_FILE).write_text(json.dumps({"engines": {
-        "machine_paths": {"nova": {"crest": "wsl:crest", "bad": 3}, "mac": "not a table"},
+        "machine_paths": {"tower": {"crest": "wsl:crest", "bad": 3}, "mac": "not a table"},
         "paths": {"xtb": {"nested": "no"}, "crest": "/opt/crest"}}}))
     s = sm.load()
-    assert s.engines.machine_paths == {"nova": {"crest": "wsl:crest"}}
+    assert s.engines.machine_paths == {"tower": {"crest": "wsl:crest"}}
     assert s.engines.paths == {"crest": "/opt/crest"}
 
 
@@ -113,36 +113,36 @@ def test_save_keeps_the_other_machines_entries(isolated_settings):
     """The settings file is shared: a GUI that loaded it hours ago (and saves at every Run) must not write back
     its old copy of another machine's CREST path or lanes, nor bring back an entry another machine removed."""
     s0 = sm.load()
-    s0.set_lanes_for("auto", "btm-nova")
+    s0.set_lanes_for("auto", "bench-pc")
     s0.set_lanes_for("4", "old-laptop")
     sm.save(s0)
-    nova = sm.load()                                    # NOVA's GUI, open all day
+    tower = sm.load()                                    # the workstation's GUI, open all day
     mac = sm.load()                                     # meanwhile on the Mac:
-    mac.set_engine_path_for("crest", "~/qb/crest-macos-arm64/bin/crest", "brandons-macbook-pro")
-    mac.set_lanes_for("5", "brandons-macbook-pro")
+    mac.set_engine_path_for("crest", "~/qb/crest-macos-arm64/bin/crest", "bench-mac")
+    mac.set_lanes_for("5", "bench-mac")
     del mac.dist.machine_lanes["old-laptop"]
     sm.save(mac)
-    nova.set_lanes_for("12", "btm-nova")                # NOVA changes its own lanes and saves its stale copy
-    nova.resources.threads = 20
-    sm.save(nova)
+    tower.set_lanes_for("12", "bench-pc")                # the workstation changes its own lanes and saves its stale copy
+    tower.resources.threads = 20
+    sm.save(tower)
     again = sm.load()
-    assert again.engines.machine_paths == {"brandons-macbook-pro": {"crest": "~/qb/crest-macos-arm64/bin/crest"}}
-    assert again.dist.machine_lanes == {"btm-nova": "12", "brandons-macbook-pro": "5"}
+    assert again.engines.machine_paths == {"bench-mac": {"crest": "~/qb/crest-macos-arm64/bin/crest"}}
+    assert again.dist.machine_lanes == {"bench-pc": "12", "bench-mac": "5"}
     assert again.resources.threads == 20                # everything else: the saving process's values
-    assert nova.engines.machine_paths == again.engines.machine_paths   # and its copy is current again
-    nova.set_engine_path_for("crest", "", "brandons-macbook-pro")      # removing another machine's entry works
-    sm.save(nova)
-    assert "brandons-macbook-pro" not in sm.load().engines.machine_paths
+    assert tower.engines.machine_paths == again.engines.machine_paths   # and its copy is current again
+    tower.set_engine_path_for("crest", "", "bench-mac")      # removing another machine's entry works
+    sm.save(tower)
+    assert "bench-mac" not in sm.load().engines.machine_paths
 
 
 def test_settings_made_in_code_are_written_as_they_are(isolated_settings):
     s = sm.load()
-    s.set_lanes_for("auto", "btm-nova")
+    s.set_lanes_for("auto", "bench-pc")
     sm.save(s)
     fresh = sm.Settings()                               # not from load(): no merge
-    fresh.set_lanes_for("2", "brandons-macbook-pro")
+    fresh.set_lanes_for("2", "bench-mac")
     sm.save(fresh)
-    assert sm.load().dist.machine_lanes == {"brandons-macbook-pro": "2"}
+    assert sm.load().dist.machine_lanes == {"bench-mac": "2"}
 
 
 def test_undoing_monkeypatch_never_exposes_the_real_settings_folder(monkeypatch):

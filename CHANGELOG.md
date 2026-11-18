@@ -11,6 +11,16 @@
   - The rest are embedded without small-ring torsions in the remaining time, about half a second each for a glycoside, and a note says so.
   - Molecules whose batch finishes in time get the same conformers as before.
 
+### No machine names, addresses or personal paths in the repository (2026-11-17)
+- Docs, comments, messages and tests no longer name the maintainer's computers, a Tailscale network or address, or a personal folder. This follows the rule for every public repo in the maintainer's `GitHub Projects` folder.
+  - The Windows workstation (Ryzen 9 7900X, Radeon RX 9060 XT) is "the workstation" in prose, and `bench-pc` in examples.
+  - The MacBook keeps "the MacBook" or "the Mac", and is `bench-mac` in examples.
+  - Test machines are `tower`, `bench-pc` and `bench-mac`. They sort like the old names, so plans that order machines by name split the same way.
+  - The example Tailscale address is `100.64.0.10`, and the example network name is `tail1234`.
+  - Paths use `%USERPROFILE%`, `$HOME`, `<you>` or `me`.
+- The method guide's and the advisor's timings now say what they were measured on: a Ryzen 9 7900X lane.
+- Earlier commits still contain the old names; the history is not rewritten.
+
 ### Tests: garbage collected only in the main thread; a worker and its runner hold no cycle, FIX-5 (2026-11-16)
 - **Main's Windows CI after #21 aborted** in `test_gui_declutter.py` ("Fatal Python error: Aborted"). The native stack: the GUI thread was deleting a Qt object (a posted DeferredDelete), and inside `~QObject` a pure virtual function was called. A sensors thread was busy allocating at that moment.
   - #22's Windows CI then crashed the same way with a corrupted heap (0xc0000374), in `test_gui_table.py`.
@@ -23,7 +33,7 @@
 
 ### A finished run is no longer failed by a status poll at its last moment, FIX-4 (2026-11-16)
 - **On Windows, a run could end "failed" just after its last molecule.** The end of a run removes its lock file, `jobs.lock`, and status polls read that file (a worker's job status, the GUI, `status`). Windows cannot delete a file while anyone has it open, so a poll at that moment made the removal raise, and a worker marked the whole job failed.
-  - Most likely what failed one CI run (main after #18, Windows, `test_worker.py::test_partial_merge_and_per_share_errors`; the job's error was not printed). In a scratch test on NOVA with a thread reading the lock without pause, 1,592 of 3,000 lock releases failed.
+  - Most likely what failed one CI run (main after #18, Windows, `test_worker.py::test_partial_merge_and_per_share_errors`; the job's error was not printed). In a scratch test on the workstation with a thread reading the lock without pause, 1,592 of 3,000 lock releases failed.
   - **The fix:** the removal is tried again for up to 2 s; a reader holds the file for microseconds. Should it still fail, the run does not fail for it: the lock file is emptied, so it no longer names a live process, and the next run takes it over without a word.
 
 ### Run a job on a worker from the job dialog, UI-5 / DIST-3 (2026-11-16)
@@ -78,7 +88,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
 - **"Bad Conformer Id"** (5 glycosides, both phases: digitoxin, digoxin, gitoxin, glycyrrhizin, maltopentaose).
   - With RDKit 2026.09's small-ring torsions, ETKDG found no conformer within the 450 s embedding limit.
   - RDKit's timeout then returned the id -1, which QuantaBench took for a conformer.
-  - Now -1 is dropped. An ETKDG start that finds no first conformer in 60 s gives way to the next one (without small-ring torsions, then random coordinates), with a note. Digitoxin now embeds 50 conformers (its whole MMFF build took 40 s on NOVA).
+  - Now -1 is dropped. An ETKDG start that finds no first conformer in 60 s gives way to the next one (without small-ring torsions, then random coordinates), with a note. Digitoxin now embeds 50 conformers (its whole MMFF build took 40 s on the workstation).
 - **"crashed the process 2 times"** (6 molecules in water, all at the rank step).
   - tblite 0.8.0's ddX CPCM solver corrupts the heap at some geometries, which killed the lane: 0xC0000374 on Windows, glibc's abort on Linux.
   - The rank step's GFN1-xTB CPCM terms now run in a helper process. A crash there costs that conformer's rank energy (noted), not the molecule.
@@ -197,7 +207,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
   - The log now gives each run folder's molecule count.
 
 ### Scratch never piles up; Psi4 memory per run, SCRATCH-1 (2026-11-13)
-- **What happened.** In b03's ESP pass, lanes killed at the 30-minute per-molecule limit could not delete their Psi4 job folders. By morning NOVA's `%TEMP%\QuantaBench` held 59 of them with 479 GB of DF integrals (`psi.<pid>.97`, 13-21 GB each).
+- **What happened.** In b03's ESP pass, lanes killed at the 30-minute per-molecule limit could not delete their Psi4 job folders. By morning the workstation's `%TEMP%\QuantaBench` held 59 of them with 479 GB of DF integrals (`psi.<pid>.97`, 13-21 GB each).
 - **A failed job's folder** keeps its inputs and logs for inspection. Psi4's scratch files and anything over 8 MB are deleted, and the error says how much was freed.
 - **Owner records.** Every scratch folder now holds an owner record (`.qb_owner.json`: pid, start time, host). `external.sweep_scratch` cleans the folders of processes that have ended:
   - their bulky files go at once;
@@ -210,8 +220,8 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
   - A log line says what was freed: `Scratch of lane cpu3 (302-27-2): 15.1 GB freed in 1 left-behind scratch folder(s) ...`.
 - **`quantabench-cli scratch`** shows the scratch folder (running, left behind, without an owner record) and `--clean [--dry-run] [--older-than DAYS]` cleans it. Settings > Engines > Keep job folders also turns the sweep off. The Psi4 driver calls `psi4.core.clean()` after a failure as well.
 - **`--qm-memory GB`** (`BuildConfig.qm_memory_gb`, a resource, not a science field) sets each Psi4 job's memory for a run, over Settings > Engines > QM memory.
-  - The auto lane plan fits the QM lanes to the RAM. Lanes capped by memory now share the thread budget: NOVA with 4 GB per job ran 5 lanes × 2 threads of 19, and now runs 5 × 3.
-  - Too little memory makes DF-SCF keep its integrals on disk (DiskDFJK), many times slower: NOVA timed out on 55 of 65 large molecules.
+  - The auto lane plan fits the QM lanes to the RAM. Lanes capped by memory now share the thread budget: the workstation with 4 GB per job ran 5 lanes × 2 threads of 19, and now runs 5 × 3.
+  - Too little memory makes DF-SCF keep its integrals on disk (DiskDFJK), many times slower: the workstation timed out on 55 of 65 large molecules.
   - The driver now says so before the SCF, with the size: naux · nbf(nbf+1)/2 · 8 bytes, 12.1 GB for 784/4,901 basis functions.
   - `qm["df"]` records `nbf`, `naux`, `tensor_gb` and `algorithm`, and a warning notes a disk-based run.
 - **Tests:** `QUANTABENCH_SCRATCH_DIR` points the scratch root elsewhere when the settings name none. The test suite sets it, so a test's run never sweeps the real scratch folder.
@@ -421,7 +431,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
   ωB97X-D/def2-SVPD. New findings for g-xTB + CPCM, AIMNet2 + CPCM, g-xTB and a narrow rank window.
 - Checked: RANK-1b's 136 pools and RANK-1's 8 holdout ions through the rank code path give the benchmark's picks in
   196 of 196 molecule-levels, with relative energies equal to 2e-9 kJ/mol (docs/VALIDATION.md, "RANK-2 integration
-  check"). In real builds on NOVA the step changed the pick in 6 of 8 PFAS and other ions in water and 6 of 10
+  check"). In real builds on the workstation the step changed the pick in 6 of 8 PFAS and other ions in water and 6 of 10
   neutrals in the gas phase.
 - `grid build --rank auto` warns that a machine without the rank engines falls back to another level.
 - The methods guide's g-xTB and conformer-ranking entries, docs/METHODS.md, docs/ENGINES.md ("The rank step",
@@ -461,7 +471,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
 - Both are stored per machine in the shared settings (`resources.machine_priority`,
   `resources.machine_free_threads`), like the CREST path and the lanes; QuantaBench 0.3.0.dev3 and older drops
   them when it saves the settings.
-- Checked on NOVA: programs at `low` and `background` and their children get the priority class and the I/O
+- Checked on the workstation: programs at `low` and `background` and their children get the priority class and the I/O
   priority. docs/ENGINES.md, "Run priority and free threads".
 - `quantabench-cli lanes` without a spec shows this machine's lane spec (`Settings.lanes_for`), not the shared
   default.
@@ -587,7 +597,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
   search ends; refinement and properties stay on the lane's threads. The threads in use never exceed the plan's.
   The log shows each loan ("54950-05-9: CREST with 8 threads (borrowed 4 from idle lanes)").
 - The rule was chosen with a batch simulation on the measured CREST times: no change for the Mac's 3 x 4 on the
-  20 PFAS or for large batches, NOVA's 11 x 2 on the 20 PFAS 1,244 -> 819 s. On the Mac (GFN-FF gas): the 20 PFAS
+  20 PFAS or for large batches, the workstation's 11 x 2 on the 20 PFAS 1,244 -> 819 s. On the Mac (GFN-FF gas): the 20 PFAS
   842 s with nothing widened; two large PFAS 585 and 555 s instead of 1,309 and 1,096 s (CREST's sampling is
   part of that).
 - On by default. `build --no-dynamic-threads`, Settings > Compute "Dynamic CREST threads"
@@ -626,7 +636,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
 - **CREST lanes on Apple Silicon** (`dist/lanes.py`, `resources.py`): `--lanes auto` for a CREST run gives
   4 threads per lane, one lane per 4 performance cores (`sysctl hw.perflevel0.physicalcpu`; the physical cores
   when that cannot be read). The M3 Max gets 3 x 4 instead of 6 x 2. On that machine 3 x 4 took 773 s and 6 x 2
-  3,108 s for 20 PFAS with GFN-FF in the gas phase. Other machines keep 2-thread lanes on all threads (NOVA:
+  3,108 s for 20 PFAS with GFN-FF in the gas phase. Other machines keep 2-thread lanes on all threads (the workstation:
   11 x 2). `doctor` shows the performance cores ("14 cores (10 performance)").
 - **Largest molecules first** (`dist/lanes.py`): parallel runs hand out the largest molecules first (atoms
   with hydrogens), as grid shares already did. A batch no longer ends with one large molecule on 2 threads while
@@ -734,7 +744,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
     optimized", crest-lab/crest#412) counts as failed;
   - `doctor` and the build log name a CREST linked to Accelerate on macOS.
 - **Engine paths per machine** (`engines.machine_paths`, like `dist.machine_lanes`): the shared settings file can
-  hold NOVA's `wsl:` CREST and the Mac's own. Settings > Engines saves for this machine only;
+  hold the workstation's `wsl:` CREST and the Mac's own. Settings > Engines saves for this machine only;
   `quantabench-cli settings --engine-path crest=PATH [--machine NAME]` sets it from a script. Older versions drop
   `machine_paths` when they save the settings: update every machine sharing the file first.
 - **Saving keeps the other machines' entries** (`settings.save`): the per-machine tables (`engines.machine_paths`,
@@ -804,7 +814,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
 ### macOS: first full test run on the MacBook (2026-11-06)
 - **Spectra panel under NumPy 2.** Selecting a mode passed a `numpy.bool` to Qt (`marker.setVisible(f > 0)`),
   which PySide6 refuses with NumPy 2 ("'numpy.bool' object cannot be interpreted as an integer"): every mode
-  selection raised, so the info line stayed empty and no mode could be selected or animated. NOVA's NumPy 1.26
+  selection raised, so the info line stayed empty and no mode could be selected or animated. The workstation's NumPy 1.26
   hid it. A new test needs no cclib, so the core CI install runs it.
 - **GUI tests run on macOS.** They were skipped wherever `$DISPLAY` was unset, which on a Mac is always: CI's
   macOS job and the MacBook never ran one. `conftest.HAS_DISPLAY` counts Windows and macOS as having a display.
@@ -974,8 +984,8 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
   - splits by cohort and class, and the applicability domain.
 
 ### macOS: one machine name (MacBook, 2026-11-05)
-- On a Mac the hostname follows the network (on Tailscale it became `Brandons-MBP.tail....ts.net`), so the MacBook
-  appeared in the registry as both `brandons-macbook-pro` and `brandons-mbp`. Machine names on macOS now come from
+- On a Mac the hostname follows the network (on Tailscale it became `Bench-MBP.tail....ts.net`), so the MacBook
+  appeared in the registry as both `bench-mac` and `bench-mbp`. Machine names on macOS now come from
   the Bonjour name in System Settings (`scutil --get LocalHostName`).
 
 ### Spartan import: no more hangs in bond perception (full re-import, 2026-11-05)
@@ -1066,7 +1076,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
   when the embedding ran out of time and with how many conformers.
 - **`lanes auto` prefers the faster device.** A GPU lane is planned only where this machine's benchmark says
   the GPU is the faster lane (`<method>@<gpu>` beats `<method>@cpu`): the MacBook gets CPU lanes only for
-  AIMNet2 (6,387/h CPU vs 2,978/h MPS), NOVA keeps its GPU lane. The reason gives the numbers, or says there is no
+  AIMNet2 (6,387/h CPU vs 2,978/h MPS), the workstation keeps its GPU lane. The reason gives the numbers, or says there is no
   benchmark (then the GPU lane as before).
 - **Benchmarks in water, and a mixed benchmark set.** `machines --bench M --solvent water` records
   `M+water@<device>`, never mixed with gas-phase keys; methods without a water model (and runs that fell back to
@@ -1129,7 +1139,7 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
   CLI runs were not affected. If you closed the GUI since the Machines dock arrived, check Settings and the
   Pipeline values once.
 
-### Windows: non-ASCII names (stress sample on NOVA, 2026-11-05)
+### Windows: non-ASCII names (stress sample on the workstation, 2026-11-05)
 - XYZ, extXYZ and LAMMPS files are written as UTF-8 on every OS: on Windows a molecule named "β-..." failed its
   export (ASE opened the file in cp1252).
 - Molecule ids (folder and file names) spell Greek letters out (β-Tocopherol -> `beta-Tocopherol`), drop accents
@@ -1256,10 +1266,10 @@ organometallics, ions from -5 to +2, up to 157 heavy atoms), run through MMFF, G
 ### Splitting work across cores, GPUs and machines; forks for Windows and macOS (2026-11-05)
 - **Lanes** (`dist.lanes`, `build --lanes auto | N | gpu:1x4,cpu:5x2`, Settings > Compute > Parallel
   lanes): a batch runs in parallel worker processes that share this machine's threads and GPU; the parent
-  stays the only `jobs.sqlite` writer, a crashed lane is restarted. NOVA: MMFF 3.7x, GFN1-xTB 3.45x.
+  stays the only `jobs.sqlite` writer, a crashed lane is restarted. The workstation: MMFF 3.7x, GFN1-xTB 3.45x.
 - **Machine registry and weighted chunks** (`dist.profile`, `dist.plan`): `quantabench-cli machines
   [--refresh] [--bench]` writes each machine's hardware, engines and measured molecules/hour to
-  `<settings>/machines/`; `build --chunk 1/2 --chunk-weights auto` (or `3,1`, `btm-nova=3,...`) splits a
+  `<settings>/machines/`; `build --chunk 1/2 --chunk-weights auto` (or `3,1`, `bench-pc=3,...`) splits a
   list in proportion. The weights are stored with the run.
 - **Workers over Tailscale** (`dist.worker`, `dist.client`): `quantabench-cli worker` (token, Tailscale
   address only) and `grid build|status|cancel|merge`, which splits a list across machines, follows them and

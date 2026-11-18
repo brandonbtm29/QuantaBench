@@ -109,7 +109,7 @@ def test_long_queue_is_cheap():
 
 
 # ------------------------------------------------------------------------------------- estimates
-def lanes_nova():
+def lanes_tower():
     return [Lane("gpu0", "cuda:0", 4)] + [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 5)]
 
 
@@ -123,7 +123,7 @@ class Clock:
 
 def test_policy_estimates_measured_seeded_unknown():
     clock = Clock()
-    pol = speed.SpeedPolicy(lanes_nova(), {"gpu0": 0.01, "cpu1": 0.1}, clock=clock)
+    pol = speed.SpeedPolicy(lanes_tower(), {"gpu0": 0.01, "cpu1": 0.1}, clock=clock)
     assert pol.source("gpu0") == "benchmark" and pol.source("cpu3") == "benchmark"   # one seed per class
     assert pol.estimate("cpu3") == pytest.approx(0.1)
     # before anything finished: the smallest factor under which no running molecule is overdue
@@ -156,8 +156,8 @@ def test_policy_estimates_measured_seeded_unknown():
 
 def test_policy_without_seeds_holds_back_once_measured():
     clock = Clock()
-    pol = speed.SpeedPolicy(lanes_nova(), None, clock=clock)
-    states = {x.name: speed.READY for x in lanes_nova()}
+    pol = speed.SpeedPolicy(lanes_tower(), None, clock=clock)
+    states = {x.name: speed.READY for x in lanes_tower()}
     assert pol.allow("cpu1", [20.0] * 3, states)            # unknown: take it
     for name, dt in (("gpu0", 1.0), ("cpu1", 10.0)):
         pol.started(name, 20.0)
@@ -175,9 +175,9 @@ def test_policy_without_seeds_holds_back_once_measured():
 
 
 def test_registry_seeds(tmp_path):
-    p = profile_mod.MachineProfile(name="btm-nova", throughput={"aimnet2@cuda:0": 7200.0, "aimnet2@cpu": 720.0,
+    p = profile_mod.MachineProfile(name="bench-pc", throughput={"aimnet2@cuda:0": 7200.0, "aimnet2@cpu": 720.0,
                                                                 "mmff@cpu": 36000.0})
-    lanes = lanes_nova()
+    lanes = lanes_tower()
     seeds = speed.registry_seeds(lanes, "aimnet2", profile=p)
     unit = speed.bench_size()
     assert 10 < unit < 30                                       # PFAS anions, atoms with H
@@ -261,21 +261,21 @@ def simulate(n, lanes, per_atom, sizes, *, policy, seeds=None, startup=None, noi
 
 
 GPU_S_PER_ATOM = 0.25        # ~5 s per 20-atom PFAS on the GPU lane, 50 s on a CPU lane
-NOVA_STARTUP = {"gpu0": 6.0, **{f"cpu{i}": 4.0 for i in range(1, 5)}}
+WORKSTATION_STARTUP = {"gpu0": 6.0, **{f"cpu{i}": 4.0 for i in range(1, 5)}}
 
 
-def nova_run(n, *, policy, seeds=True, bench_ratio=10.0, rng_seed=0, noise=0.1, gpu_only=False, uniform=False,
+def tower_run(n, *, policy, seeds=True, bench_ratio=10.0, rng_seed=0, noise=0.1, gpu_only=False, uniform=False,
              **kw):
     """1 GPU lane + 4 CPU lanes, the GPU 10x faster per atom; molecules of 10-40 atoms (C2-C10 PFAS-like) or
     all of 20; lanes ready after 4-6 s. The benchmark seeds are 5x faster than the build (a shorter protocol)
     with ``bench_ratio`` between the devices."""
     rng = random.Random(1000 + rng_seed)
     sizes = [20] * n if uniform else [rng.randint(10, 40) for _ in range(n)]
-    lanes = lanes_nova()[:1] if gpu_only else lanes_nova()
+    lanes = lanes_tower()[:1] if gpu_only else lanes_tower()
     per_atom = {"gpu0": GPU_S_PER_ATOM, **{f"cpu{i}": 10 * GPU_S_PER_ATOM for i in range(1, 5)}}
     bench = {"gpu0": GPU_S_PER_ATOM / 5, **{f"cpu{i}": bench_ratio * GPU_S_PER_ATOM / 5 for i in range(1, 5)}}
     return simulate(n, lanes, per_atom, sizes, policy=policy, seeds=bench if seeds else None,
-                    startup=NOVA_STARTUP, noise=noise, rng_seed=rng_seed, **kw)
+                    startup=WORKSTATION_STARTUP, noise=noise, rng_seed=rng_seed, **kw)
 
 
 @pytest.mark.parametrize("n", [8, 50, 500])
@@ -283,9 +283,9 @@ def test_simulated_makespans_gpu_ten_times_faster(n):
     """GPU 10x faster, 10 % scatter per molecule, speeds seeded from the benchmark: with the policy the batch
     never ends later than without it, nor later than on the GPU lane alone (5 sets of molecule sizes)."""
     for rng_seed in range(5):
-        on, count, _ = nova_run(n, policy=True, rng_seed=rng_seed)
-        off, _, _ = nova_run(n, policy=False, rng_seed=rng_seed)
-        alone, _, _ = nova_run(n, policy=False, rng_seed=rng_seed, gpu_only=True)
+        on, count, _ = tower_run(n, policy=True, rng_seed=rng_seed)
+        off, _, _ = tower_run(n, policy=False, rng_seed=rng_seed)
+        alone, _, _ = tower_run(n, policy=False, rng_seed=rng_seed, gpu_only=True)
         assert on <= off + 1e-6 and on <= alone + 1e-6, (n, rng_seed, on, off, alone, count)
         if n == 8:
             assert count["gpu0"] >= 7
@@ -297,7 +297,7 @@ def test_simulated_makespans_report():
     """The numbers behind the backlog entry (20-atom molecules, exact times, benchmark-seeded)."""
     rows = {}
     for n in (8, 50, 500):
-        rows[n] = tuple(round(nova_run(n, policy=p, noise=0.0, uniform=True, gpu_only=g)[0], 1)
+        rows[n] = tuple(round(tower_run(n, policy=p, noise=0.0, uniform=True, gpu_only=g)[0], 1)
                         for p, g in ((True, False), (False, False), (False, True)))
     print("\nmakespan in s (policy, no policy, GPU lane alone):", rows)
     for on, off, alone in rows.values():
@@ -311,9 +311,9 @@ def test_simulated_estimate_errors_cost_little(n):
     (it trusts the estimates) but not on average, and never much."""
     ratios = []
     for rng_seed in range(10):
-        on, _, _ = nova_run(n, policy=True, bench_ratio=9.0, noise=0.2, rng_seed=rng_seed)
-        off, _, _ = nova_run(n, policy=False, noise=0.2, rng_seed=rng_seed)
-        alone, _, _ = nova_run(n, policy=False, noise=0.2, rng_seed=rng_seed, gpu_only=True)
+        on, _, _ = tower_run(n, policy=True, bench_ratio=9.0, noise=0.2, rng_seed=rng_seed)
+        off, _, _ = tower_run(n, policy=False, noise=0.2, rng_seed=rng_seed)
+        alone, _, _ = tower_run(n, policy=False, noise=0.2, rng_seed=rng_seed, gpu_only=True)
         ratios.append((on / off, on / min(off, alone)))
     assert sum(r for r, _ in ratios) / len(ratios) <= 1.0
     assert max(r for _, r in ratios) <= 1.3, ratios
@@ -324,8 +324,8 @@ def test_simulated_without_benchmark_never_slower(n):
     """No benchmark in the registry: speeds are unknown until measured, so the first molecules go out as
     today; from then on the policy only helps."""
     for rng_seed in range(3):
-        on, _, _ = nova_run(n, policy=True, seeds=False, rng_seed=rng_seed)
-        off, _, _ = nova_run(n, policy=False, seeds=False, rng_seed=rng_seed)
+        on, _, _ = tower_run(n, policy=True, seeds=False, rng_seed=rng_seed)
+        off, _, _ = tower_run(n, policy=False, seeds=False, rng_seed=rng_seed)
         assert on <= off + 1e-6, (n, rng_seed, on, off)
 
 
@@ -341,7 +341,7 @@ def test_simulated_equal_lanes_are_unchanged():
 def test_simulated_fast_lane_dies_slow_lanes_finish():
     """The GPU lane dies at 20 s with molecules held back for it: the CPU lanes take them at once and the
     run ends."""
-    makespan, count, starts = nova_run(8, policy=True, noise=0.0, uniform=True, down_at=("gpu0", 20.0))
+    makespan, count, starts = tower_run(8, policy=True, noise=0.0, uniform=True, down_at=("gpu0", 20.0))
     cpu_starts = sorted(t for name, ts in starts.items() if name != "gpu0" for t in ts)
     assert cpu_starts[0] == pytest.approx(20.0)                  # nothing before, at once after
     assert sum(count.values()) == 8 + 1 and count["gpu0"] == 3   # its third molecule went back to the queue
@@ -351,7 +351,7 @@ def test_simulated_fast_lane_dies_slow_lanes_finish():
 def test_simulated_fast_lane_stalls_slow_lanes_take_over():
     """The GPU lane's 2nd molecule hangs for 1000 s: the CPU lanes take the held molecules after about one
     CPU molecule's time, not after the hang."""
-    makespan, count, starts = nova_run(8, policy=True, noise=0.0, uniform=True, stall=("gpu0", 1, 1000.0))
+    makespan, count, starts = tower_run(8, policy=True, noise=0.0, uniform=True, stall=("gpu0", 1, 1000.0))
     cpu_starts = sorted(t for name, ts in starts.items() if name != "gpu0" for t in ts)
     t_cpu = 10 * GPU_S_PER_ATOM * 20
     assert cpu_starts and cpu_starts[0] < 6.0 + 5.0 + t_cpu + 1.0
@@ -369,10 +369,10 @@ def test_cli_build_flag():
 
 
 def test_registry_seeds_in_water_and_with_the_mixed_set():
-    p = profile_mod.MachineProfile(name="btm-nova", throughput={"tblite-gfn2@cpu": 7200.0,
+    p = profile_mod.MachineProfile(name="bench-pc", throughput={"tblite-gfn2@cpu": 7200.0,
                                                                 "tblite-gfn2+water@cpu": 720.0},
                                    benchmarks={"tblite-gfn2+water@cpu": {"set": "mixed-10"}})
-    lanes = lanes_nova()
+    lanes = lanes_tower()
     pfas, mixed = speed.bench_size("pfas"), speed.bench_size("mixed")
     assert mixed > pfas and speed.bench_size() == pfas
     gas = speed.registry_seeds(lanes, "tblite-gfn2", profile=p)
@@ -380,5 +380,5 @@ def test_registry_seeds_in_water_and_with_the_mixed_set():
     assert gas["cpu1"] == pytest.approx(0.5 / pfas) and water["cpu1"] == pytest.approx(5.0 / mixed)
     assert gas["gpu0"] is None and water["gpu0"] is None
     # AIMNet2 has no water model: a run in water uses (and only uses) its gas-phase keys
-    q = profile_mod.MachineProfile(name="btm-nova", throughput={"aimnet2@cpu": 720.0, "aimnet2+water@cpu": 1.0})
+    q = profile_mod.MachineProfile(name="bench-pc", throughput={"aimnet2@cpu": 720.0, "aimnet2+water@cpu": 1.0})
     assert speed.registry_seeds(lanes, "aimnet2", profile=q, solvent="water")["cpu1"] == pytest.approx(5.0 / pfas)

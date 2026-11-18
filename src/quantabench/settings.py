@@ -89,7 +89,7 @@ class EngineSettings:
     Linux program inside WSL on Windows (e.g. ``wsl:crest``).
 
     The settings file is shared by every machine (synced folder), but a program's path usually belongs to one
-    machine (NOVA's ``wsl:/home/.../crest``, the Mac's own build): ``machine_paths`` holds each machine's paths
+    machine (the workstation's ``wsl:/home/.../crest``, the Mac's own build): ``machine_paths`` holds each machine's paths
     (keyed by ``machine_key`` of its name, like ``dist.machine_lanes``), and ``paths`` is the default for every
     machine. Use ``Settings.engine_paths_for`` / ``set_engine_path_for``."""
     paths: dict[str, str] = field(default_factory=dict)  # {"xtb": ..., "crest": ..., "mopac": ..., "psi4_python": ...}
@@ -661,7 +661,7 @@ def _stamp(s: Settings, machine: str, field_name: str) -> str:
 def _recover_conflicts(s: Settings, folder: Path) -> list[str]:
     """Merge into ``s`` the per-machine entries of SyncThing conflict copies that were set later than ``s``'s
     (``dist.machine_updated``): the change of the machine that lost the conflict is kept, not dropped. Returns one
-    line per recovered entry ("btm-nova resources.machine_priority from settings.sync-conflict-...json")."""
+    line per recovered entry ("bench-pc resources.machine_priority from settings.sync-conflict-...json")."""
     out: list[str] = []
     for copy_path in conflict_copies(folder):
         try:

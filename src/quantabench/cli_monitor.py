@@ -3,9 +3,9 @@
     quantabench-cli monitor                      # every 2 s until Ctrl+C
     quantabench-cli monitor --interval 1 --count 10
     quantabench-cli monitor --json --count 1     # one sample as JSON
-    quantabench-cli monitor --worker btm-nova    # a worker's sensors (its /v1/sensors), over Tailscale
+    quantabench-cli monitor --worker bench-pc    # a worker's sensors (its /v1/sensors), over Tailscale
     quantabench-cli monitor --set lhm_url=http://127.0.0.1:8086     # this machine's sensor settings
-    quantabench-cli monitor --set enabled=false --machine brandons-macbook-pro
+    quantabench-cli monitor --set enabled=false --machine bench-mac
 
 ``register`` adds the command to the parser of ``quantabench.cli``. ``doctor`` shows the same sources with what is
 missing and how to enable it (``sensors.doctor_lines``).

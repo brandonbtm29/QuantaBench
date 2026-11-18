@@ -30,18 +30,18 @@ def test_machines_dock_lists_registry_and_checks_workers(tmp_path, monkeypatch):
     from quantabench.gui.main_window import MainWindow
 
     here = profile.machine_name()
-    assert here not in ("nova-test", "mac-test")
-    profs = [profile.MachineProfile(name="nova-test", os="Windows 11", cpu="Ryzen 9 7900X", physical_cores=12,
+    assert here not in ("tower-test", "mac-test")
+    profs = [profile.MachineProfile(name="tower-test", os="Windows 11", cpu="Ryzen 9 7900X", physical_cores=12,
                                     logical_cores=24, ram_gb=32, gpus=[{"name": "RX 9060 XT"}],
                                     throughput={"mmff@cpu": 9000.0, "aimnet2@cuda:0": 4000.0},
                                     address="http://100.101.1.2:8765"),
              profile.MachineProfile(name=here, physical_cores=4, logical_cores=8)]
     monkeypatch.setattr(profile, "load_profiles", lambda *a, **k: list(profs))
-    nova = client.WorkerRef(name="nova-test", url="http://100.101.1.2:8765", source="registry",
+    tower = client.WorkerRef(name="tower-test", url="http://100.101.1.2:8765", source="registry",
                             info={"queue": {"running": ["j1"], "queued": ["j2"]},
                                   "quantabench_version": "0.0.0-other"})
     mac = client.WorkerRef(name="mac-test", url="http://100.101.1.3:8765", source="settings", error="timed out")
-    monkeypatch.setattr(client, "discover", lambda *a, **k: {"nova-test": nova, "mac-test": mac})
+    monkeypatch.setattr(client, "discover", lambda *a, **k: {"tower-test": tower, "mac-test": mac})
 
     app = _app()
     w = MainWindow(sm.Settings(output_dir=str(tmp_path)))
@@ -57,15 +57,15 @@ def test_machines_dock_lists_registry_and_checks_workers(tmp_path, monkeypatch):
 
     got = rows()
     assert got[f"{here}  (this computer)"][1] == "this computer"
-    assert got["nova-test"][1] == "worker (not checked)"
+    assert got["tower-test"][1] == "worker (not checked)"
     hw, tp = COL["Hardware"], COL["Throughput (molecules/h)"]
-    assert "RX 9060 XT" in got["nova-test"][hw] and got["nova-test"][tp].startswith("mmff@cpu 9,000")
+    assert "RX 9060 XT" in got["tower-test"][hw] and got["tower-test"][tp].startswith("mmff@cpu 9,000")
     assert "Parallel lanes" in panel.here.text()
 
     panel.check_workers()
     assert _wait(app, lambda: not panel._busy)
     got = rows()
-    assert got["nova-test"][1].startswith("busy, 1 queued, version 0.0.0-other")
+    assert got["tower-test"][1].startswith("busy, 1 queued, version 0.0.0-other")
     assert got["mac-test"][1] == "unreachable"             # known from settings only: listed after the check
     w.close()
     assert _wait(app, lambda: w.closed)
@@ -198,13 +198,13 @@ def test_machines_dock_split_share_pause_and_budget(tmp_path, monkeypatch):
     from quantabench.gui.main_window import MainWindow
 
     here = profile.machine_name()
-    profs = [profile.MachineProfile(name="nova-test", logical_cores=24, throughput={"mmff@cpu": 3000.0},
+    profs = [profile.MachineProfile(name="tower-test", logical_cores=24, throughput={"mmff@cpu": 3000.0},
                                     address="http://100.101.1.2:8765"),
              profile.MachineProfile(name=here, logical_cores=8, throughput={"mmff@cpu": 1000.0})]
     monkeypatch.setattr(profile, "load_profiles", lambda *a, **k: list(profs))
-    nova = client.WorkerRef(name="nova-test", url="http://100.101.1.2:8765", source="registry",
+    tower = client.WorkerRef(name="tower-test", url="http://100.101.1.2:8765", source="registry",
                             info={"queue": {"running": [], "queued": []}, "profile": profs[0].to_dict()})
-    monkeypatch.setattr(client, "discover", lambda *a, **k: {"nova-test": nova})
+    monkeypatch.setattr(client, "discover", lambda *a, **k: {"tower-test": tower})
     paused_calls = []
 
     def fake_pause(self, paused=True, mode="drain", by=""):
@@ -222,18 +222,18 @@ def test_machines_dock_split_share_pause_and_budget(tmp_path, monkeypatch):
     assert _wait(app, lambda: not panel._busy)
     t = panel.table
     row = {panel._names[r]: r for r in range(t.rowCount())}
-    assert set(row) == {here, "nova-test"}
+    assert set(row) == {here, "tower-test"}
     shares = {n: int(t.item(row[n], COL["Share"]).text().split()[0]) for n in row}
-    assert sum(shares.values()) == 40 and shares["nova-test"] > shares[here]          # 3:1 measured speed
-    # Off: nova gets nothing; Manual weight: its own number
-    split = t.cellWidget(row["nova-test"], COL["Split"])
+    assert sum(shares.values()) == 40 and shares["tower-test"] > shares[here]          # 3:1 measured speed
+    # Off: tower gets nothing; Manual weight: its own number
+    split = t.cellWidget(row["tower-test"], COL["Split"])
     split.combo.setCurrentIndex(2)
-    assert sm.load().machine_control_for("nova-test")["split"] == "off"
-    assert panel.shares.get("nova-test") is None and panel.shares[here] == 40
-    split = t.cellWidget(row["nova-test"], COL["Split"])
+    assert sm.load().machine_control_for("tower-test")["split"] == "off"
+    assert panel.shares.get("tower-test") is None and panel.shares[here] == 40
+    split = t.cellWidget(row["tower-test"], COL["Split"])
     split.weight.setValue(3.0)
     split.combo.setCurrentIndex(1)
-    c = sm.load().machine_control_for("nova-test")
+    c = sm.load().machine_control_for("tower-test")
     assert c["split"] == "manual" and c["weight"] == 3.0
     # pause this computer: its pause file (its worker, a grid's local share and this window's batch follow it)
     t.cellWidget(row[here], COL["Run"]).click()
@@ -243,12 +243,12 @@ def test_machines_dock_split_share_pause_and_budget(tmp_path, monkeypatch):
     t.cellWidget(row[here], COL["Run"]).click()
     assert not control.read_pause()["paused"]
     # pause a worker: through its worker, off the GUI thread
-    panel.pause("nova-test", True, "now")
+    panel.pause("tower-test", True, "now")
     assert _wait(app, lambda: paused_calls) and paused_calls[0] == ("http://100.101.1.2:8765", True, "now")
     assert _wait(app, lambda: not panel._busy)
     # the selected machine's budget: saved for it only
-    panel.select("nova-test")
-    assert panel.budget_box.isEnabled() and panel.budget_machine.text() == "nova-test"
+    panel.select("tower-test")
+    assert panel.budget_box.isEnabled() and panel.budget_machine.text() == "tower-test"
     panel.priority.setCurrentText("background")
     panel.max_cpu.setValue(50)
     assert panel.free_threads.value() == 12
@@ -256,11 +256,11 @@ def test_machines_dock_split_share_pause_and_budget(tmp_path, monkeypatch):
     panel.pause_on_battery.setChecked(True)
     panel.apply_budget()
     got = sm.load()
-    assert (got.priority_for("nova-test"), got.free_threads_for("nova-test"), got.lanes_for("nova-test")) == \
+    assert (got.priority_for("tower-test"), got.free_threads_for("tower-test"), got.lanes_for("tower-test")) == \
         ("background", 12, "auto")
-    assert got.machine_control_for("nova-test")["pause_on_battery"] is True
+    assert got.machine_control_for("tower-test")["pause_on_battery"] is True
     assert got.priority_for(here, scope=True)[1] == "all machines"             # this computer's untouched
-    assert w.s.lanes_for("nova-test") == "auto"            # the window's own settings see it too
+    assert w.s.lanes_for("tower-test") == "auto"            # the window's own settings see it too
     panel.lanes.setText("gpu:x")
     panel.apply_budget()
     assert panel.note.text().startswith("Lanes 'gpu:x'")

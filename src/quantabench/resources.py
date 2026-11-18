@@ -291,7 +291,7 @@ HARD_EXIT_ENV = "QUANTABENCH_HARD_EXIT"     # "1" always, "0" never, unset: only
 def needs_hard_exit() -> bool:
     """Whether this process should leave with ``os._exit`` instead of a normal interpreter shutdown.
 
-    AMD's Windows ROCm runtime (torch 2.9.1+rocm7.2.1 on BTM NOVA) can hang forever in its exit-time
+    AMD's Windows ROCm runtime (torch 2.9.1+rocm7.2.1 on the Windows workstation) can hang forever in its exit-time
     teardown once a process has used the GPU: ``main()`` returns, output is complete, and the process
     then spins one core until it is killed. So when this process initialized a ROCm device on Windows,
     entry points flush and exit at once. Torch is never imported here."""

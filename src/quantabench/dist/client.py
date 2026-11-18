@@ -105,7 +105,7 @@ class _NoRedirect(urlrequest.HTTPRedirectHandler):
 
 
 def normalize_url(url: str) -> str:
-    """'100.90.226.110' / 'btm-nova:8765' / 'http://host:8765/' -> 'http://host:port'."""
+    """'100.64.0.10' / 'bench-pc:8765' / 'http://host:8765/' -> 'http://host:port'."""
     text = (url or "").strip()
     if "://" not in text:
         text = "http://" + text
@@ -663,7 +663,7 @@ def resolve_weights(spec: str | None, names: Sequence[str], method: str, refs: d
     """``{target: weight}`` for ``grid build --weights``, with ``plan.parse_weights`` rules:
 
     - ``"3,1"``: one weight per machine, in ``--machines`` order;
-    - ``"btm-nova=3,local=1"``: named (every machine once; "local" or this machine's name for this one);
+    - ``"bench-pc=3,local=1"``: named (every machine once; "local" or this machine's name for this one);
     - ``"equal"``: 1 each;
     - ``"measured"``: each machine's molecules/hour in the newest grid of the same protocol (``config``: method,
       conformer search, conformers, refine-top, frequencies, QM, rank; ``control.learned_rates``), else its

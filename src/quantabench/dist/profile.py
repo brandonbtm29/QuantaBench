@@ -93,7 +93,7 @@ class MachineProfile:
     engines: dict[str, bool] = field(default_factory=dict)
     programs: dict[str, str] = field(default_factory=dict)   # program -> version ("" = missing)
     throughput: dict[str, float] = field(default_factory=dict)  # "<method>@<device>" -> molecules/hour
-    address: str = ""                                     # worker URL, e.g. http://100.90.226.110:8765
+    address: str = ""                                     # worker URL, e.g. http://100.64.0.10:8765
     updated: str = ""                                     # ISO-8601 UTC
     # -- added by the profile builder
     commit: str = ""                                      # git commit of the checkout QuantaBench runs from
@@ -162,7 +162,7 @@ def _now() -> str:
 
 
 def machine_name() -> str:
-    """Lowercase short hostname, like a Tailscale MagicDNS name ("BTM-NOVA" -> "btm-nova"). WSL2 takes the
+    """Lowercase short hostname, like a Tailscale MagicDNS name ("BENCH-PC" -> "bench-pc"). WSL2 takes the
     Windows computer name as its hostname, so a WSL instance gets "-wsl" appended: it has its own engines and
     programs, and must not overwrite the Windows profile of the same computer."""
     from .. import resources
@@ -175,9 +175,9 @@ def machine_name() -> str:
 
 @functools.lru_cache(maxsize=1)
 def _macos_local_hostname() -> str:
-    """macOS: the Bonjour name set in System Settings > General > Sharing ("Brandons-MacBook-Pro"), "" if unknown.
+    """macOS: the Bonjour name set in System Settings > General > Sharing ("Bench-Mac"), "" if unknown.
     ``socket.gethostname()`` on a Mac follows the network (reverse DNS: on Tailscale it became
-    "Brandons-MBP.tail....ts.net"), so one Mac showed up under two names in the registry."""
+    "Bench-MBP.tail....ts.net"), so one Mac showed up under two names in the registry."""
     import subprocess
 
     try:

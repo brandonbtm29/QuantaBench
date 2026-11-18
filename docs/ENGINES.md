@@ -77,7 +77,7 @@ after it. Why: GFN2-xTB ranks polar molecules poorly and PFAS ions no better tha
     aimnet2+cpcm energy (HelperCrashed: ...)"), and the molecule goes on.
   - The helper takes about 0.2 s to start on Linux and runs at the run's priority.
   - `QUANTABENCH_CPCM_IN_PROCESS=1` computes the terms in the process instead, as before FAIL-1.
-- **Cost** (NOVA, 1-thread lanes at idle priority, RANK-2 integration check): g-xTB about 0.1 s per single point for
+- **Cost** (the workstation, 1-thread lanes at idle priority, RANK-2 integration check): g-xTB about 0.1 s per single point for
   20-40 atoms, the program's start included; the GFN1-xTB gas + CPCM pair 0.2-1.2 s (the ddX CPCM SCF is most of it;
   one calculator per molecule restarts from the previous conformer's wavefunction); AIMNet2 0.01 s, after 5-8 s to
   load its model once per process. For PFAS and other ions in water with up to 20 refined conformers that was 14 s
@@ -115,7 +115,7 @@ testing purposes" whose parameters are still being optimized. QuantaBench uses i
 
   | Platform | Asset | Archive SHA-256 | Executable SHA-256 | Status |
   |---|---|---|---|---|
-  | Windows x86-64 | `xtb-6.7.1-gxtb-140526-windows-x86_64.zip` | `fa6d6491…ca41830` | `c2af5f3d…e926cff6` | runs (NOVA; RANK-1's build) |
+  | Windows x86-64 | `xtb-6.7.1-gxtb-140526-windows-x86_64.zip` | `fa6d6491…ca41830` | `c2af5f3d…e926cff6` | runs (the workstation; RANK-1's build) |
   | Linux x86-64 | `xtb-6.7.1-gxtb-140526-linux-x86_64.tar.xz` | `cdfb8116…6d9e5c` | `1b4e30b6…f8121cd26` | runs (statically linked; the cloud test VM) |
   | macOS arm64 | `xtb-6.7.1-gxtb-140526-macos-arm64.tar.gz` | `035a37f2…1e098af` | `874673d1…a7979bf` | runs once `lib/libgcc_s.1.1.dylib` is added (below) |
   | macOS x86-64 | `xtb-6.7.1-gxtb-140526-macos-x86_64.tar.gz` | `3f5f7ee8…e3b62` | `e0616f9b…593e62e` | not run (no Intel Mac) |
@@ -320,12 +320,12 @@ not tried again in the run; `--retry-failed` (with a higher limit, or 0) redoes 
 - **aimnet neighbor-list bug (fixed in QuantaBench, 2026-11-05).** aimnet 0.2's adaptive neighbor list
   shrinks after a small molecule and only grows again on an overflow error that nvalchemiops 0.5 never
   raises. In one process, a larger molecule evaluated after a small one silently lost neighbors (with the
-  real weights on NOVA's CPU: PFOA 3.2 eV and PFOS 7.6 eV off). `aimnet_torch.guard_neighbor_lists` makes
+  real weights on the workstation's CPU: PFOA 3.2 eV and PFOS 7.6 eV off). `aimnet_torch.guard_neighbor_lists` makes
   every stock calculator QuantaBench builds check and grow its lists. **Multi-molecule AIMNet2 runs on
   the CPU made before this fix should be re-run.** (The Warp-free GPU path does not use these lists.)
 - **dxtb.** `chem/torch_compat.py` runs the dense linear algebra a GPU build lacks (Cholesky and solve
   on AMD's Windows ROCm wheel; everything, in float64, on MPS) on the CPU inside a dxtb call. Results
-  match the CPU, but dxtb 0.4 is 5-8x slower on NOVA's GPU than on its CPU (host synchronizations in its
+  match the CPU, but dxtb 0.4 is 5-8x slower on the workstation's GPU than on its CPU (host synchronizations in its
   overlap integrals), so `dxtb_device()` keeps dxtb on the CPU unless Settings > Compute > "dxtb on the
   GPU" (or `QUANTABENCH_DXTB_GPU`) is `on`. `QUANTABENCH_LINALG=auto|cpu|device` chooses what is routed.
 
@@ -337,7 +337,7 @@ environment variables, PATH, the running Python environment, and conda/mamba env
 places (`~/miniforge3/envs/*`, `~/mambaforge`, `~/miniconda3`, `~/micromamba`, ...).
 
 **Paths per machine.** The settings file is shared by every machine (SyncThing), but a program's path
-usually belongs to one: NOVA runs CREST as `wsl:/home/<you>/micromamba/envs/qb-tools/bin/crest`, the Mac
+usually belongs to one: the workstation runs CREST as `wsl:/home/<you>/micromamba/envs/qb-tools/bin/crest`, the Mac
 its own build. Settings > Engines and `quantabench-cli settings --engine-path crest=PATH` therefore store
 the path for this machine only (`engines.machine_paths`, keyed by the machine name as `dist.machine_lanes`
 is); `--machine NAME` sets another machine's (`--machine` with no name is this machine), and `crest=` (empty)
@@ -345,7 +345,7 @@ goes back to finding it automatically there. `engines.paths` stays the default o
 `wsl:` path off Windows, is skipped there). `doctor` names the source: "settings (this machine)" or
 "settings". A machine's entry wins over the environment variable, as `engines.paths` always did; to try
 another binary for one run, pass `QUANTABENCH_CREST` on a machine without an entry. Saving merges the
-per-machine tables with the file as it is then, so a GUI left open on NOVA does not undo the Mac's entry. A QuantaBench from
+per-machine tables with the file as it is then, so a GUI left open on the workstation does not undo the Mac's entry. A QuantaBench from
 before this change (0.3.0.dev3 and older) does not know `engines.machine_paths` and drops it when it saves the settings (its GUI saves them at
 every Run and on closing): update every machine that shares the file before setting per-machine paths.
 
@@ -493,8 +493,8 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
 
 - **Install.**
   - Linux/WSL: `conda install -c conda-forge crest "xtb>=6.7.1"` in one environment (`envs/tools.yml`).
-  - Windows: install it inside WSL2 and set NOVA's CREST path to
-    `wsl:/home/<you>/miniforge3/envs/qb-tools/bin/crest` (Settings > Engines on NOVA, or
+  - Windows: install it inside WSL2 and set the workstation's CREST path to
+    `wsl:/home/<you>/miniforge3/envs/qb-tools/bin/crest` (Settings > Engines on the workstation, or
     `quantabench-cli settings --engine-path crest=wsl:/home/...` there: this machine only, see Finding
     programs; `--machine NAME` sets another machine's, `--machine` alone this one's). The full path is needed
     because WSL starts it without conda's PATH.
@@ -543,15 +543,15 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   PFHxA and PFOA⁻ every mode runs: single point, `--opt`, iMTD-GC with `--gfn2`, `--gfnff` and `--alpb water`,
   `--quick`, `--gfn2//gfnff` (legacy, conda-forge's xtb 6.7.1), `--cregen`, `--protonate`, `--deprotonate`,
   `--tautomerize`, `--thermo`, `--entropy` and QCG with 3 waters. Energies match conda-forge's linux-64 3.0.2
-  (NOVA's WSL build) to 1e-8 to 2e-5 Eh, and `--thermo` on the same frequencies is identical. That Linux
+  (the workstation's WSL build) to 1e-8 to 2e-5 Eh, and `--thermo` on the same frequencies is identical. That Linux
   build itself stops in `--opt` and QCG with the libgfortran 16 format error; QuantaBench's runs use neither.
   The Mac is 5-9x faster than 2 Linux cores in iMTD-GC (12 threads), but slower in legacy mode and
   `--tautomerize`.
 - **The 20-molecule benchmark again, with the fork build** (2026-11-06, `Runs/crest-2026-11-06/mac-fixed`; the
   first run's flags `--method tblite-gfn2 --window 6 --refine-top 5 --no-protonate`, `--lanes auto` = 6 lanes x 2
-  threads; against NOVA's WSL, conda-forge's linux-64 3.0.2 with 11 lanes x 2 threads):
+  threads; against the workstation's WSL, conda-forge's linux-64 3.0.2 with 11 lanes x 2 threads):
 
-  | GFN-FF | Mac, fork build | NOVA, WSL |
+  | GFN-FF | Mac, fork build | The workstation, WSL |
   |---|---|---|
   | gas: molecules with CREST conformers | 20/20 (conda-forge's Mac build: 2/20) | 20/20 |
   | gas: wall; CREST stage summed; slowest molecule | 3,108 s; 8,961 s; 3,079 s | 1,247 s; 5,038 s; 1,195 s |
@@ -560,17 +560,17 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   - The searches agree as well as two CREST runs do: the same lowest conformer for 15 of 20 molecules in the gas
     phase (`conformers compare`, common level GFN2-xTB opt; the other 5 are sampling, missed both ways), best
     refined energies within 0.1 kcal/mol for 12 of 20 (median difference -0.005 kcal/mol). In water the large
-    anions differ by -5 to +12 kcal/mol (Mac minus NOVA; sampling, lower on either side).
+    anions differ by -5 to +12 kcal/mol (Mac minus the workstation; sampling, lower on either side).
   - Wall time on the Mac is set by its slowest molecule on 2 threads (54950-05-9, 54 heavy atoms: 51 min in the
-    gas phase) while the other lanes are idle. CREST per molecule took about 1.8x NOVA's time summed over the 20.
+    gas phase) while the other lanes are idle. CREST per molecule took about 1.8x the workstation's time summed over the 20.
   - Water dipoles of CREST's lowest conformer against Spartan's (B3LYP/6-311+G** C-PCM at Spartan's lowest;
-    the 10 ions with the largest errors of the 2026-11-06 validation): MAE 8.6 D (Mac) and 7.3 D (NOVA), against
+    the 10 ions with the largest errors of the 2026-11-06 validation): MAE 8.6 D (Mac) and 7.3 D (the workstation), against
     13.0 D with RDKit's conformers. Neither run has Spartan's lowest conformer of any of the 10: GFN2/ALPB at
     Spartan's geometry is 0.40 D from Spartan's dipole, so the conformer is 95 % of the gap. For 7 of the 10
     GFN2/ALPB itself puts Spartan's conformer above CREST's (the energy model ranks, not the search: VAL-3).
   - GFN2 on the Mac (CREST `--gfn2`, 6 lanes x 2 threads, 3 h limit per molecule; finished 2026-11-07): gas 16/20 in
     20,034 s, water 15/20 in 21,603 s. All 9 failures are the time limit, on the largest molecules (92340-26-6,
-    54950-05-9, 67940-02-7, 61119-62-8, and 57589-85-2 in water). NOVA's 30 min limit had stopped all 10 ions in
+    54950-05-9, 67940-02-7, 61119-62-8, and 57589-85-2 in water). The workstation's 30 min limit had stopped all 10 ions in
     water. Their dipoles and conformers are not compared yet.
   - Lane timing, GFN-FF gas, same 20 molecules (2026-11-07, M3 Max: 10 performance + 4 efficiency cores):
 
@@ -578,7 +578,7 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     |---|---|---|---|---|
     | wall | 1,727 s | **773 s** | 1,457 s | 3,108 s |
 
-    3 x 4 is 4.0x faster than the auto plan of the time and faster than NOVA's WSL run (1,247 s, 11 x 2). Two
+    3 x 4 is 4.0x faster than the auto plan of the time and faster than the workstation's WSL run (1,247 s, 11 x 2). Two
     threads per lane leave the largest molecule as the last one running, on 2 threads; 12 threads on one molecule
     scale poorly. One run each, so the ranking is clear but the exact factors are not.
   - Re-timed with the new auto plan (3 x 4, largest first; 2026-11-07 afternoon, `crest-gfnff-auto-new`):
@@ -590,7 +590,7 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   - Apple Silicon: 4 threads per lane, one lane per 4 performance cores, rounded half up (at least 1). The
     performance cores are `sysctl hw.perflevel0.physicalcpu`, or the physical cores when that cannot be read.
     The M3 Max (10 performance + 4 efficiency cores) gets 3 x 4. `doctor` shows "14 cores (10 performance)".
-  - Other machines keep 2-thread lanes on all threads: NOVA (24 threads, 23 used) gets 11 x 2. There the layout
+  - Other machines keep 2-thread lanes on all threads: the workstation (24 threads, 23 used) gets 11 x 2. There the layout
     mattered little: 4 large ions took 756 s as 1 x 23 and 769 s as 4 x 5.
   - Lanes are planned once per run, not per stage. The refinement and properties after CREST (tblite, xtb)
     run in the same lanes, with the same threads. Only the CREST call itself can run wider (next bullet).
@@ -615,11 +615,11 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   - Cost model, fitted to the Mac's five GFN-FF gas runs of the 20 PFAS (2, 4 and 13 threads): CREST time grows
     as atoms^3.9 (atoms with hydrogens; GFN2: atoms^4.5, from the molecules that finished), with a scatter of
     x1.8 per molecule (sampling and flexibility). Speedup per molecule: 2 -> 4 threads 1.86x, 4 -> 13 threads
-    1.74x. NOVA (WSL), 54950-05-9: 2 -> 5 threads 1.67x, 5 -> 23 threads 1.89x. The rule uses atoms^4 and a
+    1.74x. The workstation (WSL), 54950-05-9: 2 -> 5 threads 1.67x, 5 -> 23 threads 1.89x. The rule uses atoms^4 and a
     speedup of (threads / lane threads)^0.6.
   - Simulated (a discrete-event model of the batch, with the measured CREST and refinement times):
 
-    | Batch | Mac, 3 x 4 | NOVA, 11 x 2 |
+    | Batch | Mac, 3 x 4 | The workstation, 11 x 2 |
     |---|---|---|
     | 20 PFAS, GFN-FF gas | 942 s, unchanged | 1,244 -> 819 s |
     | 20 PFAS, GFN2 gas (3 h limits extrapolated) | unchanged | not simulated |
@@ -647,12 +647,12 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     (their thread count would be chosen in the middle of a molecule).
   - A machine's own constants (since 2026-11-08): `quantabench-cli timings --fit` refits the cost model on the
     CREST searches its runs recorded (next section). When a fit is saved, the rule uses that machine's exponents
-    instead of atoms^4 and ^0.6, and the log says so ("cost model: fit btm-nova gfnff quick (...)").
+    instead of atoms^4 and ^0.6, and the log says so ("cost model: fit bench-pc gfnff quick (...)").
 - **Run priority and free threads** apply to every lane and to the CREST threads they borrow (next section).
 
 ## Run priority and free threads
 
-A 5-lane x 4-thread run on NOVA (20 of 24 threads, below-normal CPU priority) made the PC hard to use, even for
+A 5-lane x 4-thread run on the workstation (20 of 24 threads, below-normal CPU priority) made the PC hard to use, even for
 deleting files. CPU priority alone did not help: its disk I/O (Psi4's scratch files) ran at normal I/O priority.
 Since 2026-11-09 (PRIO-1, `quantabench/priority.py`) two settings decide how a run shares the machine:
 
@@ -685,7 +685,7 @@ value without privileges). So `grid build --priority normal` on a worker started
 - in the GUI, a run in one process (one molecule, or a batch with lanes = 1) works on the BuildWorker's thread,
   and only that thread is lowered (`priority.thread_lowered`);
 - every program `external.run_program` starts (xtb, CREST, MOPAC, Psi4, also through WSL) is started at the
-  priority, and what it starts inherits it (CREST's xtb, Psi4's threads). Checked on NOVA on 2026-11-09 for the
+  priority, and what it starts inherits it (CREST's xtb, Psi4's threads). Checked on the workstation on 2026-11-09 for the
   program and its child.
 
 | | Windows | Linux, and inside WSL | macOS |
@@ -699,7 +699,7 @@ value without privileges). So `grid build --priority normal` on a worker started
 
 Limits:
 - **WSL.** Inside WSL the run is niced against other Linux processes. To Windows, the Linux VM is one process
-  (vmmem), whose priority a normal user cannot even read (access denied on NOVA), let alone lower. So a CREST run through WSL still competes
+  (vmmem), whose priority a normal user cannot even read (access denied on the workstation), let alone lower. So a CREST run through WSL still competes
   with Windows programs at normal priority. Fewer threads help there: free threads, or `background`, which leaves
   25 % of the threads free.
 - **The GUI's in-process work.** On Windows and macOS only the build thread is lowered. Threads an engine started
@@ -714,7 +714,7 @@ Limits:
 
 **Per machine, from anywhere (DIST-7).** The Machines dock's *Processing budget* box and `quantabench-cli machines set
 NAME --priority background --free-threads 6 --lanes auto` (or `--max-cpu 50`, which sets the free threads from the
-machine's thread count: 12 of 24 on NOVA) store another machine's values the same way, with a fresh read and write
+machine's thread count: 12 of 24 on the workstation) store another machine's values the same way, with a fresh read and write
 of the settings file. A worker reads its machine's values at job start and re-reads them every 15 s while a job
 runs. A changed **run priority** is applied to the job's running lanes and the programs they started at once
 (`priority.apply_to_pids`): lowering works everywhere, raising only on Windows (on macOS and Linux it applies from the
@@ -730,7 +730,7 @@ count or lane spec (`--lanes 5x4`) is used as given, as before.
 
 The default, 1, is the old "all threads but one": every plan stays as it was.
 
-| Plan (`--lanes auto`) | NOVA, 24 threads: default | NOVA: `background` (6 free) | M3 Max, 14 threads: default | M3 Max: `background` (4 free) |
+| Plan (`--lanes auto`) | The workstation, 24 threads: default | The workstation: `background` (6 free) | M3 Max, 14 threads: default | M3 Max: `background` (4 free) |
 |---|---|---|---|---|
 | thread budget (one process) | 23 | 18 | 13 | 10 |
 | CREST (`--conformers crest`) | 11 x 2 = 22 | 9 x 2 = 18 | 3 x 4 = 12 | 2 x 4 = 8 |
@@ -738,7 +738,7 @@ The default, 1, is the old "all threads but one": every plan stays as it was.
 | MMFF, tblite | 12 x 1 | 12 x 1 | 13 x 1 | 10 x 1 |
 | dxtb, AIMNet2 on the CPU | 6 x 2 | 6 x 2 | 6 x 2 | 5 x 2 |
 
-`--free-threads 4` on NOVA gives CREST 10 x 2 = 20; 2 free threads leave both machines' CREST plans as they are
+`--free-threads 4` on the workstation gives CREST 10 x 2 = 20; 2 free threads leave both machines' CREST plans as they are
 (11 x 2 and 3 x 4).
 
 ## Run timings (`quantabench-cli timings`)
@@ -821,12 +821,12 @@ cheap (`quantabench/sensors.py`, MON-1). The same numbers appear in three places
 | **Linux** | psutil | psutil `cpu_freq(percpu=True)` (cpufreq); base from `base_frequency` | psutil `sensors_temperatures` (k10temp `Tctl`, zenpower `Tdie`, coretemp `Package id 0`); RAPL `energy_uj` (root only on most systems) | amdgpu sysfs (`gpu_busy_percent`, hwmon `temp1`, `power1_average`, `freq1`, `mem_info_vram_*`); `nvidia-smi` |
 | **WSL2** | psutil (the VM's view) | not visible in the VM | on the Windows side: LibreHardwareMonitor's web server at the configured URL, when WSL can reach it | `nvidia-smi`; AMD GPUs only from Windows |
 
-psutil's `cpu_freq()` gives only the nominal clock on Windows (4701 MHz on NOVA, idle or busy) and macOS (4056 on
+psutil's `cpu_freq()` gives only the nominal clock on Windows (4701 MHz on the workstation, idle or busy) and macOS (4056 on
 the M3 Max), so it is not used there. `sensors.read()` never raises and returns within about a second; a source that
 fails is retried after 30 s and its reason goes to the sample (`missing`), which `doctor`, the strip's tooltip and
 `monitor`'s header show.
 
-**LibreHardwareMonitor on Windows** (the one source of temperatures and power there; Brandon's NOVA runs it). It
+**LibreHardwareMonitor on Windows** (the one source of temperatures and power there; the workstation runs it). It
 has to be running, with its web server on:
 
 1. Options > Remote Web Server > **Run** (LibreHardwareMonitor 0.9.5 or later; default port 8085). Check it at
@@ -838,8 +838,8 @@ has to be running, with its web server on:
    (`http://user:password@127.0.0.1:8085`); `monitor` and `doctor` print the URL without the password.
 
 QuantaBench reads `/data.json` (about 80 KB, a few ms) at each sample, never through a proxy, with a 0.6 s timeout.
-The WMI namespace (`root\LibreHardwareMonitor`) is not used: it is absent on NOVA (2026-11-09; only an empty
-`root\OpenHardwareMonitor` exists there) and slower. Fans: LHM reports 0 RPM for every header of NOVA's ASUS B650E
+The WMI namespace (`root\LibreHardwareMonitor`) is not used: it is absent on the workstation (2026-11-09; only an empty
+`root\OpenHardwareMonitor` exists there) and slower. Fans: LHM reports 0 RPM for every header of the workstation's ASUS B650E
 (its NCT6701D chip), so the fan reading is left out there rather than shown as 0.
 
 **macmon on macOS** (`brew install macmon`; MIT, no sudo, uses the same private IOReport interface as Activity
@@ -876,7 +876,7 @@ Clients that do not know the `sensors` key ignore it.
   ([workflow](https://github.com/brandonbtm29/tblite/blob/qb/windows-wheels/.github/workflows/qb-windows-wheels.yml))
   with MSYS2's MinGW-w64 gfortran, OpenMP and ddX (CPCM). The only change to upstream is in a build file
   (`config/meson.build` also links the GFortran runtime on Windows). delvewheel bundles the GCC runtime
-  and reference BLAS/LAPACK DLLs, the same BLAS as the PyPI Linux wheel. On BTM NOVA they reproduce
+  and reference BLAS/LAPACK DLLs, the same BLAS as the PyPI Linux wheel. On the Windows workstation they reproduce
   the Linux wheel's water energies (GFN2, GFN1, ALPB, GBSA, CPCM) to 1e-14 Eh, and
   `tests/test_eng_tblite.py` passes. This is not an official tblite release: drop it once upstream
   ships Windows wheels. conda-forge's `tblite-python` works too, but only if QuantaBench runs in that
@@ -937,7 +937,7 @@ quantabench-cli build "OC(=O)C(F)(F)C(F)(F)C(F)(F)F PFBA" --method xtb-gfn2 --so
   - `--lanes` is stored with the run too: the spec, whether it was chosen (`--lanes`) or the machine's setting, and the machine (RESUME-2). A resume on the machine that chose it, without `--lanes`, uses it again ("Lanes kept from the run: --lanes auto"); another machine uses its own setting and says so, and the run keeps its choice for a later resume where it was made. `status` prints the stored spec. Lane specs stay per machine on purpose: a GPU lane or a thread count does not carry over.
 - **Memory and density fitting.** DF-SCF keeps its three-index integrals, naux · nbf(nbf+1)/2 · 8 bytes, in memory only when they fit (`MemDFJK`). Otherwise they go to disk (`DiskDFJK`): many times slower, and as large in scratch.
   - Example, ωB97X-D/6-31G*: 784 basis functions and 4,901 auxiliary for b03's 302-27-2 (45 heavy atoms) give 12.1 GB; its DiskDFJK file was 15 GB.
-  - With 4 GB per job, 55 of 65 large molecules (median 40 heavy atoms) on NOVA hit the 30-minute limit (2026-11-13).
+  - With 4 GB per job, 55 of 65 large molecules (median 40 heavy atoms) on the workstation hit the 30-minute limit (2026-11-13).
   - The driver says before the SCF when the integrals will not fit ("DF-SCF: ... give the QM stage more memory"). `qm["df"]` records `nbf`, `naux`, `tensor_gb` and `algorithm` (disk or memory).
   - Rough sizes with 6-31G*: under 20 heavy atoms, below 1 GB; about 35, 4-5 GB; about 60, 12-20 GB.
   - For a set with large molecules, run the large ones separately with a larger `--qm-memory` (fewer lanes, more threads each).

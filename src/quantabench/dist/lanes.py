@@ -86,7 +86,7 @@ How a parallel run works (``run_parallel``):
   daemonic (ended when the parent exits), and a lane whose parent was killed outright ends at its next
   read or write of the pipe, so at most after its current molecule.
 
-``auto`` heuristic (``plan_auto``). Measured 2026-11-05 on BTM NOVA (Ryzen 9 7900X 12C/24T, Windows 11,
+``auto`` heuristic (``plan_auto``). Measured 2026-11-05 on the Windows workstation (Ryzen 9 7900X 12C/24T, Windows 11,
 AMD's ROCm torch 2.9.1, 12 threads, other jobs sharing the machine) on PFAS: C2-C8 carboxylic and sulfonic
 acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times include 3-5 s of lane start-up:
 
@@ -107,7 +107,7 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
   shared out (2 threads each on an SMT machine given all its threads). The full-run protocol (GFN2, ALPB
   water, 50 conformers, top 5, frequencies), 49 molecules in the full table's cohort mix, 2026-11-05:
   MacBook (M3 Max, 10 P + 4 E cores, no SMT): 6 x 2 181 s, 7 x 2 171 s, 10 x 1 151 s, 14 x 1 141 s (a second
-  thread inside a molecule bought nothing: summed lane-seconds 891 at 6 x 2, 864 at 10 x 1). NOVA (Ryzen 9
+  thread inside a molecule bought nothing: summed lane-seconds 891 at 6 x 2, 864 at 10 x 1). The workstation (Ryzen 9
   7900X, 12 C / 24 T, the fork's reference-BLAS wheel, one core busy with another job): 6 x 2 427 s,
   12 x 1 363 s, 24 x 1 331 s, 12 x 2 318 s. Energies agree across layouts to 1e-9 eV.
 * in-process torch engines on the CPU (dxtb GFN1/GFN2, AIMNet2): 2-thread lanes on the physical cores (as
@@ -120,7 +120,7 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
   threads on 10 performance + 4 efficiency cores). GFN-FF gas phase, 20 PFAS, M3 Max, 2026-11-07: 1 x 12
   1,727 s, 3 x 4 773 s, 5 x 2 1,457 s, 6 x 2 (the 2-thread rule) 3,108 s. With 2 threads per lane the batch
   waits for its largest molecule (54 heavy atoms) on 2 threads while the other lanes are idle; one molecule on
-  12 threads scales poorly. Elsewhere CREST keeps the 2-thread rule above: on NOVA (WSL CREST) the layout
+  12 threads scales poorly. Elsewhere CREST keeps the 2-thread rule above: on the workstation (WSL CREST) the layout
   mattered little (4 large ions: 1 x 23 756 s, 4 x 5 769 s). Lanes are planned per run, not per stage: the
   refinement and properties after CREST (tblite, xtb, ...) run in the same lanes with the same threads; only the
   CREST call itself can run wider (dynamic threads, above).
@@ -130,12 +130,12 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
   water) says the GPU is the faster lane: ``<method>@<gpu>`` beats ``<method>@cpu``. Both are timed one
   molecule at a time in one process with the same threads, so this compares one lane with one lane; a GPU
   lane slower than a CPU lane only takes threads from the CPU lanes. The MacBook (AIMNet2: 6,387/h on the
-  14-core CPU, 2,978/h on MPS) gets CPU lanes only; NOVA (AIMNet2 about 10x faster on the RX 9060 XT) gets
+  14-core CPU, 2,978/h on MPS) gets CPU lanes only; the workstation (AIMNet2 about 10x faster on the RX 9060 XT) gets
   its GPU lane. Without both numbers the GPU lane is planned as before, and the reason says so
   (``gpu_benchmark_verdict``). Not for dxtb (GFN1/GFN2):
   it computes in float32 on a GPU and float64 on the CPU, and a GPU lane next to CPU lanes would mix both in
   one table, molecule by molecule as timing decides. ``auto`` gives dxtb CPU lanes only, or with dxtb GPU =
-  on (``BuildConfig.dxtb_gpu``) one lane on the GPU. It was not faster either: on NOVA's ROCm wheels (no
+  on (``BuildConfig.dxtb_gpu``) one lane on the GPU. It was not faster either: on the workstation's ROCm wheels (no
   MAGMA, ``gpu_linalg_available``) 1 GPU + 4 x 2 CPU lanes took 77.4 s for the 12 PFAS against 49.9 s for
   6 x 2 CPU lanes.
 * lanes are capped by memory (0.75 x RAM over a per-lane working set; Psi4 adds its memory per job) and

@@ -278,7 +278,7 @@ error by about 0.4 mN/m once a volume term is in the model, and the density matt
 
 ### b02 v2: the surface tension with the estimates
 
-`Runs/2026-11-11_b02-st100/analysis/report_v2.md` (script `scratch/batches/analyze_b02_v2.py` on NOVA): the 80
+`Runs/2026-11-11_b02-st100/analysis/report_v2.md` (script `scratch/batches/analyze_b02_v2.py` on the workstation): the 80
 training molecules of b02, 5-fold and leave-class-out cross-validation, the 20 holdout molecules predicted once at
 the end. Mean absolute errors in mN/m (σ from 16 to 58 mN/m):
 

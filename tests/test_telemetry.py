@@ -34,7 +34,7 @@ POSIX = os.name != "nt"
 
 def cfg(tmp_path, **kw):
     # rank_method refine: these tests are not about the rank step, whose auto level depends on what is installed
-    # (AIMNet2 on NOVA adds a rank stage and a model load)
+    # (AIMNet2 on the workstation adds a rank stage and a model load)
     base = dict(method="mmff", rank_method="refine", max_conformers=2, refine_top=1, xtb_properties=False, threads=1, gpu="off",
                 output_dir=str(tmp_path / "runs"), formats=("xyz",))
     base.update(kw)
@@ -493,7 +493,7 @@ def v4_run_folder(tmp_path, c, mols):
     con.execute("DROP TABLE telemetry_load")
     con.execute(V4_LOAD)
     con.execute("CREATE INDEX telemetry_load_run ON telemetry_load(run_id)")
-    con.execute("INSERT INTO telemetry_runs (run_id, machine, started) VALUES ('old', 'nova', '2026-11-08T00:00:00')")
+    con.execute("INSERT INTO telemetry_runs (run_id, machine, started) VALUES ('old', 'tower', '2026-11-08T00:00:00')")
     con.execute("INSERT INTO telemetry_load (run_id, t_unix, cpu_percent, mem_percent) VALUES ('old', 1.0, 97.0, 40.0)")
     con.execute("PRAGMA user_version=4")
     con.commit()
