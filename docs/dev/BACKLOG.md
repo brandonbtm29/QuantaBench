@@ -8,6 +8,78 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
+## CREST-RUN-1: CREST rebuild of the flexible neutral molecules · started 2026-11-17; paused 2026-11-18 (needs-Brandon to resume)
+Brandon (2026-11-17): run CREST for the flexible neutral molecules, gas then water, without the 173 with 20 or more
+rotatable bonds. 1,501 molecules with 9 to 19 rotatable bonds, `--conformers crest --crest-method gfnff
+--crest-fallback rdkit --molecule-timeout 5400`, refine top 20, `--freq`, `--rank auto`, background priority; the
+workstation around the clock and the MacBook from 2 to 8 am, both at a 66 % budget. Scripts in `scratch/batches/`
+on the workstation (not in the repository).
+- **State at the pause (gas phase):** 776 of 1,501 done. The workstation: 400 ok, 39 failed, all at the time limit
+  (32 in the CREST search, 5 in refine, 2 in frequencies). The MacBook: 337 ok, none failed. 22 molecules got RDKit
+  conformers because CREST failed (the fallback). Water has not started.
+- **Median CREST search of the molecules that finished, by strict rotatable bonds** (the workstation: 7 lanes x 2
+  threads through WSL; the MacBook: 2 lanes x 4 threads; the two machines did not run the same molecules):
+
+  | rotatable bonds | workstation | MacBook | workstation, out of time |
+  |---|---|---|---|
+  | 9-11 | 319 s | 55 s | 0 of 83 |
+  | 12-14 | 701 s | 176 s | 1 of 174 |
+  | 15-16 | 1,982 s | 547 s | 1 of 94 |
+  | 17-19 | 3,088 s | 1,991 s | 37 of 88 |
+
+  The workstation used 230 lane-hours, 59 of them on molecules that then ran out of time; the MacBook 24.
+- **The MacBook's window** worked on both transitions: a pause with drain at 08:00 moved its unstarted molecules to
+  the workstation (DIST-7), and work sharing gave it molecules again after the resume at 02:00.
+- **To resume** (needs-Brandon): `quantabench-cli worker resume` on the workstation, then the run script (it resumes
+  only unfinished molecules) and the window script. Recommended first: SCHED-2's wider lanes, and TELEM-1 merged, so
+  the rest of the run records full timings for killed attempts.
+- **After the gas phase:** rerun the molecules that ran out of time with wider lanes and a 3 h limit; then water;
+  then a decision on the 173 molecules left out.
+
+## TELEM-1: Timings of killed attempts keep the molecule's features and finished stages · in-PR 2026-11-18 (PR #26)
+Brandon (2026-11-18): "double check and see if we are recording the metadata for failed molecules, so we can continue
+to improve the simulation load and thread allocation." A lane killed by the time limit sent no telemetry, so its
+attempt had no features and only the stage it was killed in. The fix computes the features at dispatch and keeps
+the stages the parent saw begin (`RunTelemetry.stage_seen`). Details in the PR and its CHANGELOG entry.
+
+## SCHED-2: CREST lanes and the cost model by rotatable bonds · ready
+From CREST-RUN-1's timings: rotatable bonds, not atom count, set the cost of a CREST search, and 2 threads per
+search are too few from about 17 rotatable bonds.
+- **Lane plan:** for a batch of flexible molecules, fewer and wider CREST searches on a machine with many threads
+  (for example 3 or 4 searches of 4 to 6 threads in place of 7 of 2); the launch-time rule of `dist/threads.py`
+  should widen by predicted cost, not only when one molecule dominates the batch.
+- **Cost model:** add strict rotatable bonds (and rings) to the CREST cost fit (`timings --fit`), which uses
+  atoms^3.9 today; judge it by makespan and by time-limit failures, as SCHED-1 says. TELEM-1 supplies the features
+  of the killed attempts.
+- **Routing:** in a grid, send the molecules with the highest predicted cost to the machine with the widest lanes
+  first (a first step toward DIST-4).
+- **Time limit:** a per-molecule limit that scales with predicted cost, or a retry pass with a longer limit, so a
+  fixed 90 minutes does not burn lane-hours on searches that cannot finish.
+- Acceptance: a rerun of CREST-RUN-1's time-limit failures finishes, and a simulated replay of its gas phase
+  shows fewer lane-hours lost.
+
+## BATCH-1: The staged-batch scripts as features · ready
+The QSAR runs depend on scripts outside the repository (`scratch/batches/` on the workstation): the tranche runner
+with its deadline and resume, the budget setter, and the time window for one machine. They have no tests.
+- **A time window per machine** in the settings (for example 02:00 to 08:00): the worker pauses with drain at the
+  end of its window and resumes at its start; the Machines dock shows the window. Today a script on the client
+  machine does this over the worker commands.
+- **A deadline and resume for `grid build`:** stop at a given time (cancel the remote shares, stop the local share
+  at its next molecule), and `--resume` for a phase folder that runs only what no part has finished.
+- **Batches as a list:** run gas, then water, then `pair`, for a list of input files, each to its own run folder,
+  with a short report per batch. `--include-paused` already exists in the script: a paused machine still joins.
+- Acceptance: CREST-RUN-1's water phase runs from the CLI without the scratch scripts.
+
+## FIX-6: A flaky macOS test of run priority · ready
+`tests/test_machine_control.py::test_priority_applied_to_running_processes` fails now and then on macOS CI (a
+process is left at nice -10); it passes on a rerun. Seen on #17 and #25. Find the race or make the test wait for
+the priority change.
+
+## REL-1: Tag 0.3.0 · needs-Brandon
+0.1, 0.2 and 0.3 are all unreleased and nothing is tagged. After TELEM-1 and this status update: set the version,
+date the CHANGELOG's sections, tag, and say in the README what a release means for a project with a fork-based
+install. Brandon decides when.
+
 ## CONF-AUTO: CREST for flexible neutral molecules · done 2026-11-16 (PR #17)
 Brandon (2026-11-16), after the CREST gas and water tests: "Let's do it all". That means CREST (GFN-FF, quick) for
 neutral molecules with 9 or more rotatable bonds, not for ions, optionally with the RDKit pool merged in. The evidence
@@ -45,8 +117,8 @@ Follow-ups (ready):
 - The cost model and lane planning of a mixed "auto" batch: plan for the CREST share instead of all-CREST.
 - Ions: a test of CREST in ALPB water for flexible anions (the gas test covered 7 ions; the DFT test suggested
   folded and extended pools in water). Until then "auto" keeps them on RDKit.
-- The full run: rebuild the list's ~1,674 flexible neutral molecules with `--conformers auto --crest-with-rdkit` per
-  phase (needs-Brandon: about 110-300 h per phase on half the MacBook; the workstation needs CREST in WSL).
+- The full run: started 2026-11-17 as CREST-RUN-1 (1,501 molecules with 9 to 19 rotatable bonds; CREST's pool
+  alone, without the RDKit merge).
 
 ## FAIL-1: The failed molecules of the QSAR tranches · done 2026-11-16 (PR #20; rerun 2026-11-17: 14 of 15 build)
 b01-b15 (13,206 molecules): 8 failed in gas and 13 in water (`Runs\failed-molecules-2026-11-16\report.md`).
@@ -82,7 +154,7 @@ Follow-ups:
 - 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
   about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
 
-## FIX-5: Crashes in the GUI tests (Windows CI) · in-PR 2026-11-16 (branch `fix/ci-abort-gc`)
+## FIX-5: Crashes in the GUI tests (Windows CI) · done 2026-11-17 (PR #23)
 Main's Windows CI for 486e332 (#19's merge, with #21) aborted in
 `test_gui_declutter.py::test_table_toolbar_menus_and_popout`, in the first `_wait` after a new window opened.
 - **faulthandler:** "Fatal Python error: Aborted" in the main thread (`_wait` → `processEvents`). Two
@@ -122,7 +194,7 @@ Main's Windows CI for 486e332 (#19's merge, with #21) aborted in
 - **Check:** the full suite with the change (cloud, Linux): 1,714 passed, 40 skipped, 7 min. Watch Windows CI for
   another "Fatal Python error: Aborted".
 
-## FIX-4: A run failed by a status poll at its end (Windows) · in-PR 2026-11-16 (branch `fix/run-lock-release`)
+## FIX-4: A run failed by a status poll at its end (Windows) · done 2026-11-17 (PR #22)
 Main's Windows CI after #18 failed once in `test_worker.py::test_partial_merge_and_per_share_errors`: the job ended
 "failed" instead of "done" after its last molecule (the job's error is not in the test's output).
 - **Likely cause** (the CI log has no job error; the test now prints it): `_RunLock.__exit__` removes `jobs.lock` at the end of every run, and status polls read that file
@@ -642,7 +714,9 @@ Depends on: none (research only; can run any night).
 
 ## SIM-1: Simulate workspace v1 · blocked (needs RES-1 design approved by Brandon)
 
-## FIX-1: Windows CI green · ready
+## FIX-1: Windows CI green · done 2026-11-05
+- 2026-11-05: first green CI on Windows, Linux and macOS (PLAT-2). The failures since then were separate bugs,
+  each with its own item: FIX-2 to FIX-5.
 - Make sure `.github/workflows/ci.yml` passes on `windows-latest` and `ubuntu-latest` with core deps
   (check the first CI runs after 0.2 is pushed; Mesa OpenGL on Windows).
 
@@ -723,7 +797,10 @@ Depends on: none (research only; can run any night).
   paths in Settings > Engines). Check: conda's `Library\bin` discovery, process-tree cancellation
   (`taskkill /T`), paths with spaces ("GitHub Projects"), Psi4's PCMSolver on win-64, GUI Engines tab.
 
-## ENG-2: CREST through WSL · needs-Brandon
+## ENG-2: CREST through WSL · done 2026-11-16 for batch runs (the GUI checks below need-Brandon)
+- 2026-11-16: the workstation's path is set for that machine only, `doctor` shows it, and a 3-molecule gas test
+  built: about 1.8x slower per molecule than the MacBook, conformers as low or lower. Since 2026-11-17 the
+  workstation runs CREST this way in CREST-RUN-1.
 - 2026-11-06: Brandon's decision: Windows runs CREST through WSL (conda-forge linux-64 3.0.2 in the workstation's Ubuntu ran
   the 20-molecule benchmark through QuantaBench). Set the workstation's path for that machine only, so the Mac keeps its own in the
   shared settings file: `quantabench-cli settings --engine-path crest=wsl:/home/<you>/micromamba/envs/qb-tools/bin/crest`
@@ -769,7 +846,7 @@ not try to match Spartan exactly.
 - MOPAC COSMO: energies step as surface segments switch (CF3COO⁻ in water: finite-difference forces off by
   0.3 eV/Å at h = 1 mÅ); consider running MOPAC frequencies in the gas phase automatically.
 
-## VAL-1: Validation tooling against Spartan · in review 2026-11-05 (branch `feat/validate`; the 300-molecule run needs-Brandon)
+## VAL-1: Validation tooling against Spartan · done 2026-11-05 (the 300-molecule run is done; three data questions need-Brandon)
 Done (docs/VALIDATION.md):
 - Spartan wide table: `inchikey`, `canonical_smiles` of the structure as Spartan drew it (formal charges from
   its bond orders), `structure_charge` + `charge_check`, `spartan_solvent` as QuantaBench's name
@@ -1025,7 +1102,7 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
   the version that produced the reference and make the test version-aware. Until then, don't mix MOPAC
   polarizabilities from different versions in one QSAR table.
 
-### PLAT-1: First run on the MacBook · needs-Brandon
+### PLAT-1: First run on the MacBook · done 2026-11-06 (the GUI by hand needs-Brandon)
 - INSTALL.md's macOS steps on the MacBook: `doctor --bench`, full suite, `pytest -m external` with
   `envs/tools.yml` + `envs/psi4.yml`, GUI by hand (HiDPI picking, trackpad pinch/rotate, dark mode).
   Record chip, cores and RAM in PLATFORMS.md section 2, and anything that breaks as new items.
@@ -1033,7 +1110,7 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
   were fixed on `fix/macos-checks`, except LAMMPS, which needs `pip install mpich` on the MacBook, and MOPAC's
   polarizability, WIN-2). AIMNet2 on `mps` checked against the CPU. Left for Brandon: the GUI by hand.
 
-### PLAT-2: macOS in CI · in progress
+### PLAT-2: macOS in CI · done 2026-11-06 (green on all three OSes; MOPAC's polarizability is WIN-2)
 - `macos-14` is in the CI matrix as non-blocking (2026-11-04). Make it green, then required. Add a second
   workflow job: micromamba `envs/tools.yml` + `envs/psi4.yml` on ubuntu-latest and macos-14, then
   `pytest -m external`.
@@ -1072,7 +1149,7 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
 - 2026-11-05: `dist.worker` + `dist.client` (`grid machines|build|status|cancel|merge`), docs/WORKERS.md
   (firewall rule, Task Scheduler and LaunchAgent autostart). Left: the two-machine run over Tailscale.
 
-### DIST-3: Machines dock and "Run on" routing · in-PR 2026-11-16 (dock done; Run on: UI-5b, branch `feat/run-on-worker`)
+### DIST-3: Machines dock and "Run on" routing · done 2026-11-16 (the dock; Run on: UI-5b, PR #18)
 - Machines dock (status, load, engines). The job dialog's resources get "Run on: this machine / <worker> /
   auto"; auto picks by engine availability and throughput.
 - 2026-11-05: minimal Machines dock (registry, worker status on demand, this computer's lane plan). Left:
@@ -1230,7 +1307,7 @@ thread speed is and the temperature of the PC."
   probably in `Archive.carc`); (6) ambiguous structures (an anion under the CAS numbers of its salts): share
   the result with all its labels in the wide table, or leave it out (now); (7) a full-run timing on the workstation.
 
-### QSAR-1: The PFAS QSAR cohorts in staged batches · b01/b02 run 2026-11-11; b03 run 2026-11-11 (evening); structure fixes 2026-11-12; the tranches b04-b08 wait for Brandon's review of b03
+### QSAR-1: The PFAS QSAR cohorts in staged batches · all 15 batches run 2026-11-11 to 14; failed molecules rerun 2026-11-17 (FAIL-1); CREST rebuild: CREST-RUN-1
 Decided 2026-11-11 (Brandon): no single run over all 14,223 molecules (`data_engineering/Cohort */*.sdf`: C4A 9,052,
 C1A 2,492, C5A 930, C1B 409, C4B 376, C3A 341, C2A 331, C2B 193, C3B 80, C6A 19). Batches, each analysed before
 the next. Inputs and selections in `Runs/batches/<batch>/` (input.csv, selection.csv, selection.md, design.json);
@@ -1384,6 +1461,11 @@ scripts in `scratch/batches/` on the workstation (not in the repository).
   3.0 meV (water), more than 1 kcal/mol for 12 / 6 (those moved on to a lower nearby geometry, median largest atom
   shift 0.5 Å); about 2 s per affected molecule. Left: 1121-07-9, 2809-69-0 (gas), 2101-86-2, 3862-12-2 (water),
   -22 to -36 cm-1 (near-free rotors). Now the default of the frequency step (`freq_imag_retries` 3).
+- **All batches done** (2026-11-14): the five tranches of about 2,400 were re-dealt on 2026-11-12 into twelve of
+  about 1,003 (b04-b15), run one or more a night on both machines, 41 to 51 min each for both phases. The merged
+  table has 13,206 molecules; after FAIL-1's rerun (2026-11-17) 13,205 are ok in both phases, and the last one
+  (a glycoside, fixed in PR #25) waits for its rerun. Still in no batch: the multi-fragment records, the
+  elements outside AIMNet2 and the molecules above 60 heavy atoms.
 - Acceptance (unchanged): one merged table for all 14,223 molecules, no manual recombination, and the overlap with
   the Spartan results compared.
 
@@ -1453,7 +1535,7 @@ Still open:
   rewritten with test-like values (pH 0, 1 conformer, 1 K) by another process on the machine; check
   that no test or GUI path writes there when `QUANTABENCH_SETTINGS_DIR` is set.
 
-### QSAR-3: Surface tension model on QuantaBench descriptors · ready (data pull needs-Brandon)
+### QSAR-3: Surface tension model on QuantaBench descriptors · first models 2026-11-13; fluorinated σ data ready (needs-Brandon: the next target)
 Plan: docs/SURFACE_TENSION.md. Two targets, never pooled: pure-liquid σ at 25 °C for compounds that are liquid
 there, and γ_CMC/CMC of PFAS surfactants in water.
 - Data: `build --phases gas,water` on the QSAR cohorts, then on the workstation (PubChem is blocked in the cloud
@@ -1479,6 +1561,14 @@ there, and γ_CMC/CMC of PFAS surfactants in water.
   the screens, keep CHRIS as a check set, keep the 20 → 25 °C correction (docs/SURFACE_TENSION.md, "Which surface
   tension values to train on"). Next: Jasper's coefficients (the `chemicals` package) as a second, independent
   value per molecule; ThermoML.
+- 2026-11-13, on all 15 batches (377 non-fluorinated training liquids, 5-fold CV, MAE in mN/m): ridge on 26
+  descriptors 2.03; with the dimensionless groups and the reduced target σ* (DESC-3) 1.81, and 2.40 leaving a
+  functional class out. The learning curve is flat from about 200 molecules. The DFT ESP descriptors of b03
+  (2026-11-15) did not improve it.
+- **The gap is fluorinated data:** 9 fluorinated liquids have a usable σ, none with more than three fluorine
+  atoms, and most fluorinated molecules of the list lie outside the training set's descriptor domain. Next: an
+  importer for Jasper and ThermoML values of perfluoroalkanes, fluorotelomer alcohols, hydrofluoroethers and
+  short perfluoro acids, then the leave-chain-length-out validation above. The holdout is still unused.
 
 ### QSAR-4: Property models in the Analyze table (Model...) · done 2026-11-14 (PR #10)
 Brandon (2026-11-13 evening): "Could you continue further work on the UI?" The DESC-3 follow-up: the σ model of the

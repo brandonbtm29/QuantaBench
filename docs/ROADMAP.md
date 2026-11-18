@@ -8,8 +8,11 @@ QuantaBench targets Windows 11, WSL2, Linux and macOS (Apple Silicon) equally, a
 Brandon's MacBook and the Windows workstation work on one project together. The details, the platform matrix and
 the fork/upstream plan are in [PLATFORMS.md](PLATFORMS.md).
 
-Status 2026-11-06: P1 and P2 are built. The workstation and the MacBook have run grids together (Nov 5), the MacBook has
-passed the full suite (916 tests; LAMMPS needs MPICH there), and a grid now shares work between machines.
+Status 2026-11-18: P1 and P2 are built, and P3's "Run on" routing is in the job dialog. The workstation and the
+MacBook ran the PFAS QSAR set together in 15 staged batches (13,206 molecules, gas and water, Nov 11-14), with
+machine control (budgets, pause and resume, work moving off a paused machine). CREST runs on the workstation through
+WSL. A CREST rebuild of the set's flexible neutral molecules is half done (BACKLOG: CREST-RUN-1). Nothing is tagged
+yet (REL-1).
 
 - **P1 (with 0.3):**
   - macOS in CI (PLAT-2) and the first run on the MacBook (PLAT-1)
@@ -21,9 +24,12 @@ passed the full suite (916 tests; LAMMPS needs MPICH there), and a grid now shar
   - machine capability reports and throughput-weighted chunks (DIST-1)
   - `quantabench-cli worker` over Tailscale (DIST-2)
   - tblite Windows wheels (FORK-2)
-  - Windows checks of the external engines (ENG-1, ENG-2)
+  - Windows checks of the external engines (ENG-1; CREST through WSL, ENG-2, done)
+  - machine control: budgets, pause and resume, a closing laptop (DIST-7, done)
 - **P3 (with 0.5):**
-  - "Run on" machine routing in the GUI (DIST-3) and per-stage routing (DIST-4)
+  - "Run on" machine routing in the GUI (DIST-3, done) and per-stage routing (DIST-4)
+  - the staged-batch scripts as features: a time window per machine, deadlines, batch lists (BATCH-1), and CREST
+    lanes by rotatable bonds (SCHED-2)
   - installers and terminal-free launchers with an Update button on all three OSes
   - native CREST on Windows (FORK-5), LAMMPS fixes and a Mac GPU build (FORK-8), OpenMM on Metal (FORK-9)
 
@@ -52,7 +58,7 @@ passed the full suite (916 tests; LAMMPS needs MPICH there), and a grid now shar
 - CLI: `doctor`, `build`, `slab`, `settings`.
 - Resource manager (threads, GPU, memory cap) and settings that can live in a synced folder.
 
-## 0.2: Throughput, viewer, first Spartan and MD pieces (in progress)
+## 0.2: Throughput, viewer, first Spartan and MD pieces (mostly done)
 
 Done (merged on main, tested on Linux CPU):
 
@@ -78,8 +84,10 @@ Done (merged on main, tested on Linux CPU):
 
 Still open for 0.2:
 
-- [ ] **Verify on the RX 9060 XT under native Windows (ROCm 7.2.1 PyTorch).** Nothing GPU-specific has
-      run on real hardware yet. To check:
+- [ ] **Verify on the RX 9060 XT under native Windows (ROCm 7.2.1 PyTorch).** AIMNet2 and dxtb were checked on
+      the GPU on 2026-11-05 (GPU-1, GPU-2: AIMNet2 about 10x the CPU; dxtb runs but is slower than the CPU, so it
+      is off by default). Still open from the original list: the viewer's frame rate for a 20k-atom slab and
+      LAMMPS `in.smd` with the GPU package (HW-4). The original list:
   - dxtb on GPU, single and batched (`batch_mode=2` in float32: SCF convergence for every member);
   - AIMNet2 on GPU (weights could not be downloaded in the build container, so the AIMNet2 paths,
     batched and Hessian, are tested only against stand-ins): energies against `AIMNet2ASE` to ~1e-4 eV,
@@ -91,11 +99,13 @@ Still open for 0.2:
   - LAMMPS `in.smd` with the GPU package (`neigh no`, `compute group/group` untested on GPU);
   - `doctor --bench` numbers for the docs.
 - [ ] **Confirm on the first Windows CI run and on the Windows workstation** what could only be checked by reading the
-      code here: the Windows CI job with Mesa's llvmpipe OpenGL (`pyvista/setup-headless-display-action`,
-      on-screen QtInteractor tests), and the Windows-vs-WSL2 run lock (`jobs._platform_id`) with a GUI
-      batch on `C:` and a `build --resume` from WSL on `/mnt/c`.
+      code here. Done: the Windows CI job with Mesa's llvmpipe OpenGL (CI is green on Windows, Linux and macOS
+      since 2026-11-05, FIX-1), and the full suite with the GUI tests on the workstation (HW-3). Still open: the
+      Windows-vs-WSL2 run lock (`jobs._platform_id`) with a GUI batch on `C:` and a `build --resume` from WSL on
+      `/mnt/c`.
 - [ ] Batching across molecules (padding, dxtb `batch_mode=1`, AIMNet2 `mol_idx`).
-- [ ] Parallel CPU stage: a process pool for embedding and MMFF across molecules while the GPU refines.
+- [x] Parallel CPU stage: done as parallel lanes on one machine (2026-11-05: MMFF 3.7x, GFN1-xTB 3.45x on the
+      workstation; tblite gets one lane per physical core).
 - [ ] Validation notebook against the Spartan Essential 76 PFAS results (RMSD, energy ranks,
       descriptors, frequencies).
 - [x] GUI: resume a run folder from the app: File > Open run folder... and Build > Resume run folder
@@ -131,15 +141,29 @@ external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENG
       click a peak to animate its normal mode.
 - [x] **cclib import** of other programs' outputs (GUI and `quantabench-cli import`).
 - [x] Conda environment files for the external programs (`envs/`).
-- [ ] First run of all of the above on native Windows (ENG-1) and CREST through WSL (ENG-2).
+- [ ] First run of all of the above on native Windows (ENG-1: the tests run on the workstation; MOPAC's
+      polarizability differs by build, WIN-2).
+- [x] CREST through WSL on Windows (ENG-2, 2026-11-16), and CREST for flexible neutral molecules:
+      `--conformers auto` (CONF-AUTO).
 - [x] Spartan `.spartan` import (IMPORT-2), validation tooling and the first 300-molecule run (VAL-1).
 - [x] Spartan's van der Waals radii (CPK area/volume to 0.5 %/0.1 %), the corrected solvent-accessible area,
       ESP polar areas; Settings > Surfaces & radii and Settings > Display (kJ/mol).
 - [ ] Validation against the Spartan Essential 76 PFAS ωB97X-D results (VAL-2: data imported, runs planned).
 - [ ] A settings dialog as detailed as Spartan's Preferences (SETTINGS-1: Compute, import filters, Lookups,
       Machines left).
-- [ ] Structure input like Spartan's: import from many formats with an Import Options dialog and ChemDraw
-      clipboard (UI-4), an embedded 2D sketcher (UI-6), a 3D model kit (UI-7). Plan in UI_PLAN.md.
+- [x] Structure input like Spartan's: import from many formats with an Import Options dialog and ChemDraw
+      clipboard (UI-4), an embedded 2D sketcher (UI-6), the 3D model kit's edit model (UI-7). Left: the model
+      kit's build mode in the 3D view, and hand checks on Windows and macOS. Plan in UI_PLAN.md.
+- [x] **Conformer ranking** (RANK-1, RANK-2): a rank step after refinement, g-xTB with a GFN1-xTB CPCM term in
+      water and AIMNet2 in the gas phase, on by default; chosen after benchmarks against DFT (VALIDATION.md).
+- [x] **Run tooling:** run timings in every run folder and `timings` (SCHED-1 step 1), a review of the molecules
+      before a run (ADV-1), a live machine monitor (MON-1), run priority and free threads (PRIO-1), machine
+      control (DIST-7), density and polarizability estimates (DESC-2).
+- [x] **Workspaces and projects:** the app shell with task workspaces (UI-1), project documents (UI-2), the
+      table with plots and formula columns (UI-3), a feature builder (DESC-3) and property models (QSAR-4) in the
+      Analyze table, collapsible and pop-out panels (UI-8), the job dialog with recipes and a job queue (UI-5),
+      and "Run on" a worker (UI-5b).
+- [x] **The PFAS QSAR set in staged batches** (QSAR-1): 15 batches, 13,206 molecules, gas and water.
 - [ ] Orbital isosurfaces (MO cubes), HOMO/LUMO and local ionization potential maps.
 - [ ] NMR shieldings (Psi4 has none: PySCF GIAO, or ORCA through cclib import).
 - [ ] Coordinate scans, constrained optimization, transition states (Sella), NEB.
