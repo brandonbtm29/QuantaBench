@@ -1,3 +1,4 @@
+import math
 import time
 
 import numpy as np
@@ -112,6 +113,36 @@ def test_an_etkdg_start_that_finds_no_conformer_gives_way(monkeypatch):
     assert any("RDKit ETKDG found none; embedded without small-ring torsions" in n for n in notes)
     cs = confs.generate(Chem.AddHs(Chem.MolFromSmiles("OCC(O)CO")), max_conformers=6, timeout_s=0)
     assert cs.n_embedded >= 1                                 # the whole conformer search goes on from there
+
+
+def test_a_batch_stopped_by_the_time_limit_keeps_the_timed_conformer_and_tops_up(monkeypatch):
+    """Gitoxin (2026-11-17): its first conformer took 9 s with small-ring torsions, so 39 of 50 were asked for in the
+    441 s left; RDKit's timeout stopped that batch before its first conformer, nothing was left for another way, and
+    the molecule failed with "ran out of time". Now the batch gets EMBED_BATCH_SHARE of the time left; a stopped batch
+    keeps the timed conformer and the rest is embedded without small-ring torsions."""
+    from rdkit.Chem import AllChem
+
+    real = AllChem.EmbedMultipleConfs
+    calls = []
+
+    def embed(mol, numConfs=1, params=None):
+        calls.append((numConfs, params.useSmallRingTorsions, params.clearConfs, params.timeout))
+        if params.useSmallRingTorsions and numConfs > 1:      # the batch: stopped by RDKit's timeout, nothing found
+            time.sleep(params.timeout)
+            mol.RemoveAllConformers()
+            return [-1]
+        return real(mol, numConfs=numConfs, params=params)
+
+    monkeypatch.setattr(confs.AllChem, "EmbedMultipleConfs", embed)
+    mol = Chem.AddHs(Chem.MolFromSmiles("OCC(O)CO"))
+    notes: list[str] = []
+    ids = confs.embed(mol, 8, seed=3, notes=notes, timeout_s=5.0)
+    assert len(ids) > 1 and mol.GetNumConformers() == len(ids) and all(i >= 0 for i in ids)
+    batch = calls[1]
+    assert batch[:3] == (8, True, True) and batch[3] <= math.ceil(confs.EMBED_BATCH_SHARE * 5.0)
+    assert calls[2][1:3] == (False, False)                   # the top-up: no small-ring torsions, keeps what is there
+    assert any("the time limit stopped RDKit's batch of 8 with small-ring torsions; kept 1 conformer(s)" in n
+               for n in notes), notes
 
 
 def test_no_way_of_embedding_finds_one_is_a_clear_error(monkeypatch):

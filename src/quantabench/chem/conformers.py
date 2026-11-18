@@ -52,6 +52,11 @@ EMBED_TIME_FRACTION = 0.25
 #: (digitoxin, digoxin, glycyrrhizin, maltopentaose: b05-b12, 2026-11-12) in 7.5 minutes; without them it takes
 #: about a second.
 FIRST_CONFORMER_S = 60.0
+#: Share of the time left that the batch after the timed first conformer may use (``embed``). The rest tops up a batch
+#: that RDKit's timeout stopped: RDKit then returns at most one conformer, or none (gitoxin, 2026-11-17: its first
+#: conformer took 9 s with small-ring torsions, the batch of 39 none in the 441 s left, and the molecule failed with
+#: "ran out of time"). The top-up embeds without small-ring torsions, about a second per conformer for glycosides.
+EMBED_BATCH_SHARE = 0.8
 
 
 def embed_time_limit(molecule_timeout_s: float | None = None) -> float:
@@ -109,15 +114,41 @@ def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1, notes: list[s
         params.timeout = max(1, math.ceil(limit)) if limit > 0 else 0
         return [int(i) for i in AllChem.EmbedMultipleConfs(mol, numConfs=count, params=params) if int(i) >= 0]
 
-    def attempt(seed_: int, small_rings: bool, random_coords: bool) -> list[int]:
+    def make_params(seed_: int, small_rings: bool, random_coords: bool):
         params = AllChem.ETKDGv3()
         params.randomSeed = int(seed_)
         params.numThreads = int(threads)
         params.pruneRmsThresh = 0.1
         params.useSmallRingTorsions = small_rings
         params.useRandomCoords = random_coords
+        return params
+
+    def top_up(saved, got: list[int], count: int, seed_: int, small_rings: bool, random_coords: bool) -> list[int]:
+        """After a batch that RDKit's timeout stopped (``got``: what it returned, at most one conformer): keep the
+        timed first conformer when the batch returned none, and embed the rest without small-ring torsions in the
+        time left (1 - EMBED_BATCH_SHARE of it), added to what is there."""
+        if not got:
+            mol.RemoveAllConformers()
+            got = [int(mol.AddConformer(saved, assignId=True))]
+        more: list[int] = []
+        if count > len(got) and left() > 0:
+            params = make_params(seed_ + 1, False, random_coords)
+            params.clearConfs = False
+            try:
+                more = [i for i in run(params, count - len(got)) if i not in got]
+            except RuntimeError:          # out of time, or an RDKit invariant: what is there is the result
+                more = []
+        if notes is not None:
+            notes.append(f"conformer embedding: the time limit stopped RDKit's batch of {count}"
+                         f"{' with small-ring torsions' if small_rings else ''}; kept {len(got)} conformer(s) and "
+                         f"added {len(more)} without small-ring torsions")
+        return got + more
+
+    def attempt(seed_: int, small_rings: bool, random_coords: bool) -> list[int]:
+        params = make_params(seed_, small_rings, random_coords)
         with rdBase.BlockLogs():      # an invariant's C++ stack trace goes to the log; the exception is enough
             count = n
+            saved = None
             # one conformer first: it is timed (to fit the time limit), and an ETKDG start that finds none within
             # FIRST_CONFORMER_S gives way to the next way of embedding instead of using up the time limit
             if not random_coords or (timeout_s > 0 and n > 1):
@@ -139,7 +170,16 @@ def embed(mol: Chem.Mol, n: int, seed: int = 42, threads: int = 1, notes: list[s
                                      f"(one took {per:.1f} s, {timeout_s:.0f} s for the embedding)")
                     if count == 1:
                         return one        # no time for more: the timed conformer is the result
-            ids = run(params, count)
+                if timeout_s > 0 and one:
+                    saved = Chem.Conformer(mol.GetConformer(one[0]))
+            if saved is not None:         # the batch may use EMBED_BATCH_SHARE of the time left; a stopped one is topped up
+                t2 = time.monotonic()
+                cap = EMBED_BATCH_SHARE * left()
+                ids = run(params, count, cap=cap)
+                if len(ids) < min(count, 2) and time.monotonic() - t2 >= 0.95 * cap:
+                    return top_up(saved, ids, count, seed_, small_rings, random_coords)
+            else:
+                ids = run(params, count)
             if not ids and not random_coords:  # hard cases (cages, crowded stereo): random starting coordinates
                 params.useRandomCoords = True
                 ids = run(params, max(1, count // 2))

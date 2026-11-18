@@ -2,6 +2,15 @@
 
 ## 0.3.0.dev (unreleased)
 
+### A conformer batch stopped by the time limit no longer fails the molecule (2026-11-17)
+- **Gitoxin failed with "conformer embedding ran out of time (450 s) without a conformer"**, also after FAIL-1's fixes.
+  - Its first conformer took 9 s with RDKit's small-ring torsions, so QuantaBench asked for 39 of 50 in the 441 s left.
+  - RDKit's timeout stopped that batch before its first conformer. No time was left for another way, and the timed conformer was lost.
+- **Now the batch after the timed conformer may use 80 % of the time left** (`conformers.EMBED_BATCH_SHARE`).
+  - A batch stopped by the time limit keeps the timed conformer (or the one RDKit returned).
+  - The rest are embedded without small-ring torsions in the remaining time, about half a second each for a glycoside, and a note says so.
+  - Molecules whose batch finishes in time get the same conformers as before.
+
 ### No machine names, addresses or personal paths in the repository (2026-11-17)
 - Docs, comments, messages and tests no longer name the maintainer's computers, a Tailscale network or address, or a personal folder. This follows the rule for every public repo in the maintainer's `GitHub Projects` folder.
   - The Windows workstation (Ryzen 9 7900X, Radeon RX 9060 XT) is "the workstation" in prose, and `bench-pc` in examples.
