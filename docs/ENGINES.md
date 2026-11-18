@@ -767,8 +767,12 @@ costs about 0.3 % of a run (below). Old run folders get the tables the next time
     of the molecule's files.
 - **How.** The process that computes a molecule (a lane, or the main process) measures its stages and sends
   the numbers with the result; the parent, already the only writer of the job table, writes them in the same
-  transaction as the result. A lane that dies or is killed gets a partial row: its last stage, from when it
-  began to the death. A program's CPU time comes from `getrusage` on macOS and Linux and from the process
+  transaction as the result. A lane that dies or is killed (the time limit) gets a row from what the parent
+  saw: the molecule's features, read from its input when it was dispatched; and every stage the lane began, each
+  ending when the next began, the last one at the kill with the attempt's outcome. A CREST search that finished
+  before a later stage ran out of time therefore counts as a finished `conformers` stage. The killed stage itself
+  is a lower bound (outcome `timeout`), and the cost fit leaves it out. CPU time and peak memory stay empty for such
+  an attempt (2026-11-18). A program's CPU time comes from `getrusage` on macOS and Linux and from the process
   handle on Windows; it is empty for `wsl:` programs (the work runs in the Linux VM) and when two programs ran
   at once in one process. Recording can never fail a molecule or a run: an error is logged once and the run
   goes on. `QUANTABENCH_TELEMETRY=0` turns it off (only to measure what it costs).

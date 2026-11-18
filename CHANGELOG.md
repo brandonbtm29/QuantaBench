@@ -2,6 +2,16 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Timings of killed attempts keep the molecule's features and the stages that finished (2026-11-18)
+- **Before:** a molecule whose lane was killed by the time limit (or died) got a timing row with only the stage it was killed in.
+  - The molecule's features (atoms, heavy atoms, rotatable bonds, rings, charge, F/O/S/N) were empty: the lane sends them with its result.
+  - The stages it had finished were missing. A molecule that timed out in `refine` after a 90-minute CREST search had no `conformers` row, so the slowest CREST searches never reached the cost fit.
+  - Seen in the CREST rebuild: 26 timed-out molecules on the workstation, all without features.
+- **Now:**
+  - The features come from the input when the molecule is dispatched.
+  - The parent records each stage it sees begin. A killed attempt gets one row per stage: those that finished as `ok` with their wall time, and the last one with the attempt's outcome (`timeout`, `crashed`, `cancelled`).
+  - CPU time and memory stay empty for such an attempt; nothing can read them from a killed process.
+
 ### No machine names, addresses or personal paths in the repository (2026-11-17)
 - Docs, comments, messages and tests no longer name the maintainer's computers, a Tailscale network or address, or a personal folder. This follows the rule for every public repo in the maintainer's `GitHub Projects` folder.
   - The Windows workstation (Ryzen 9 7900X, Radeon RX 9060 XT) is "the workstation" in prose, and `bench-pc` in examples.
