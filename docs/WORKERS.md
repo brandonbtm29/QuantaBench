@@ -19,7 +19,7 @@ Mac: quantabench-cli grid build --file pfas.csv --method gfn2-xtb --machines ben
 
 | Where | What |
 |---|---|
-| `~/SyncThing/QuantaBench/Settings/settings.json` (synced) | `dist.worker_token` (the shared secret), `dist.worker_port`, `dist.worker_bind`, `dist.workers` (name -> URL overrides), `dist.machine_lanes` (each machine's own lane spec, by machine name) and `dist.lanes` (the default for a machine without one); since DIST-7 each machine's split choice and pause-on-battery (`dist.machine_control`), when each per-machine value was set (`dist.machine_updated`) and the away times (`dist.away_after_s`, `away_running_after_s`, `rejoin_wait_s`) |
+| `~/SyncThing/QuantaBench/Settings/settings.json` (synced) | `dist.worker_token` (the shared secret), `dist.worker_port`, `dist.worker_bind`, `dist.workers` (name -> URL overrides), `dist.machine_lanes` (each machine's own lane spec, by machine name) and `dist.lanes` (the default for a machine without one); since DIST-7 each machine's split choice, pause-on-battery and time window (`dist.machine_control`), when each per-machine value was set (`dist.machine_updated`) and the away times (`dist.away_after_s`, `away_running_after_s`, `rejoin_wait_s`) |
 | `~/SyncThing/QuantaBench/Settings/machines/<name>.json` (synced) | each machine's profile; a running worker writes its URL into `address`, which is how `grid` finds it |
 | `~/SyncThing/QuantaBench/Settings/machines/status/<name>.json` (synced) | DIST-7: what that machine's worker last said about itself (paused, last wake, battery); written only by that worker, so the Machines dock can show a closed laptop as paused |
 | `~/SyncThing/QuantaBench/Runs/` (synced) | run folders. Each one has a single writer: the worker that runs it |
@@ -40,7 +40,7 @@ quantabench-cli worker pause [NAME] [--drain|--now]   (no NAME: this machine)   
 quantabench-cli worker resume [NAME]
 quantabench-cli machines set [NAME] [--priority normal|low|background|default] [--free-threads N|default]
                        [--max-cpu PCT] [--lanes SPEC|default] [--split auto|manual|off] [--weight W]
-                       [--[no-]pause-on-battery]
+                       [--[no-]pause-on-battery] [--window HH:MM-HH:MM|none]
 quantabench-cli grid machines [--worker NAME=URL]
 quantabench-cli grid build <same inputs and science options as build> --method M
                        [--machines bench-pc,bench-mac,local]
@@ -177,6 +177,16 @@ button on a machine and the work is redistributed?" Code: `dist/control.py`, `wo
   box) pauses a laptop's worker while it runs on battery (`psutil.sensors_battery`, checked every 30 s) and resumes
   it on power. A pause by hand is never lifted by the power coming back. A desktop has no battery, so it never
   pauses.
+- **A time window:** `machines set NAME --window 02:00-08:00` (or the dock's budget box, "Time window") lets a
+  machine work only in those hours of its own local time; `22:00-06:00` wraps midnight, `none` removes it.
+  - Its worker pauses itself with drain when the window closes (reason `window`, checked every 30 s), so a grid
+    moves its unstarted molecules to the other machines as for any pause. When the window opens it resumes, and work
+    sharing gives it molecules again.
+  - It acts only when the window opens or closes. A pause by hand inside the window stays, and a resume by hand
+    outside it holds until the window next closes. A worker that starts outside its window starts paused.
+  - It replaces the scheduled script that did this for the MacBook in the CREST rebuild (2 to 8 am, Nov 17-18).
+  - It pauses the machine, not one job: its worker and the local share of a `grid build` started on it follow the
+    same pause file.
 
 ### A machine that stops answering (the lid closes)
 

@@ -261,6 +261,15 @@ def test_machines_dock_split_share_pause_and_budget(tmp_path, monkeypatch):
     assert got.machine_control_for("tower-test")["pause_on_battery"] is True
     assert got.priority_for(here, scope=True)[1] == "all machines"             # this computer's untouched
     assert w.s.lanes_for("tower-test") == "auto"            # the window's own settings see it too
+    panel.window_edit.setText("02:00-08:00")
+    panel.apply_budget()
+    assert sm.load().machine_control_for("tower-test")["window"] == "02:00-08:00"
+    assert "time window 02:00-08:00" in panel.note.text()
+    panel.window_edit.setText("2 to 8")
+    panel.apply_budget()
+    assert panel.note.text().startswith("time window '2 to 8'")
+    assert sm.load().machine_control_for("tower-test")["window"] == "02:00-08:00"     # not saved
+    panel.window_edit.setText("")
     panel.lanes.setText("gpu:x")
     panel.apply_budget()
     assert panel.note.text().startswith("Lanes 'gpu:x'")

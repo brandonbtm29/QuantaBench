@@ -17,6 +17,12 @@ Where each piece of state lives, and who writes it (one writer per file, so Sync
                                                               wake, battery): written only by that machine's worker,
                                                               so the dock can show a sleeping laptop as paused
 
+A **time window** (``machine_control`` "window", e.g. "02:00-08:00" in the machine's local time) limits a machine to
+those hours (Brandon, 2026-11-17: "The macbook is free to run at night from the 2 am to 8 am time frame"). Its worker
+pauses itself (drain, reason "window") when the window closes and resumes when it opens again (``in_window``,
+``JobManager._check_window``). It acts only when the window opens or closes: a pause by hand inside the window is not
+lifted, and a resume by hand outside it holds until the window next closes.
+
 ``ClockWatch`` notices that the machine slept: the wall clock jumps against the time the watcher expected to have
 slept (``time.monotonic`` stops during sleep on macOS and Linux). ``battery`` reads ``psutil.sensors_battery``.
 """
@@ -28,6 +34,7 @@ import json
 import math
 import os
 import sys
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -36,7 +43,11 @@ from pathlib import Path
 PAUSE_FILE = "pause.json"
 STATUS_DIR = "status"                 # <settings>/machines/status/<name>.json (not a profile: a sub-folder)
 PAUSE_MODES = ("drain", "now")
-PAUSE_REASONS = ("user", "battery")
+PAUSE_REASONS = ("user", "battery", "window")
+#: "HH:MM-HH:MM" (24 h, local time); an end before the start wraps past midnight ("22:00-06:00")
+WINDOW_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
+#: words that mean "no window": the machine may work at any hour
+NO_WINDOW = ("", "none", "always", "off")
 #: a gap this much longer than the watcher's own sleep means the machine slept (or was frozen)
 WAKE_GAP_S = 30.0
 CLOCK_INTERVAL_S = 5.0
@@ -106,6 +117,46 @@ def write_pause(folder: str | Path | None, paused: bool, mode: str = "drain", by
              "reason": reason if reason in PAUSE_REASONS else "user"}
     _atomic_write(pause_path(folder), json.dumps(state, indent=1) + "\n")
     return state
+
+
+# ------------------------------------------------------------------------------------------ time window
+def parse_window(text: str | None) -> tuple[int, int] | None:
+    """A time window "HH:MM-HH:MM" as (start, end) minutes after local midnight; None for no window ("", "none",
+    "always", "off"). An end before the start wraps past midnight. Raises ``ValueError`` for anything else, and for a
+    window that starts and ends at the same minute (it would never open, or never close)."""
+    raw = str(text or "").strip()
+    if raw.lower() in NO_WINDOW:
+        return None
+    m = WINDOW_RE.match(raw)
+    if m is None:
+        raise ValueError(f"time window {raw!r}: write it as HH:MM-HH:MM in this machine's local time, e.g. 02:00-08:00 "
+                         "(or 'none')")
+    h1, m1, h2, m2 = (int(x) for x in m.groups())
+    if not (0 <= h1 <= 23 and 0 <= h2 <= 24 and 0 <= m1 <= 59 and 0 <= m2 <= 59) or (h2 == 24 and m2):
+        raise ValueError(f"time window {raw!r}: hours 00-23 (24:00 for midnight at the end), minutes 00-59")
+    start, end = h1 * 60 + m1, (h2 * 60 + m2) % (24 * 60)
+    if start == end:
+        raise ValueError(f"time window {raw!r}: it starts and ends at the same time (use 'none' for every hour)")
+    return start, end
+
+
+def window_text(window: tuple[int, int] | None) -> str:
+    """"02:00-08:00" for (120, 480); "" for no window."""
+    if window is None:
+        return ""
+    (a, b) = window
+    return f"{a // 60:02d}:{a % 60:02d}-{b // 60:02d}:{b % 60:02d}"
+
+
+def in_window(window: tuple[int, int] | None, now: datetime | None = None) -> bool:
+    """True when ``now`` (default: the local time now) falls inside ``window`` (start included, end not); always
+    True without a window."""
+    if window is None:
+        return True
+    t = now if now is not None else datetime.now()
+    minute = t.hour * 60 + t.minute
+    start, end = window
+    return start <= minute < end if start < end else (minute >= start or minute < end)
 
 
 def pause_gate(folder: str | Path | None = None) -> dict:
@@ -308,7 +359,8 @@ def machine_lines(s, machine: str, logical: int | None = None) -> list[str]:
     c = s.machine_control_for(machine)
     split = {"auto": "auto (measured speed)", "manual": f"manual weight {c['weight']:g}", "off": "off"}[c["split"]]
     lines = [f"split {split}; run priority {level} ({wp}); free threads {free} ({wf}); lanes {s.lanes_for(machine)}"
-             + ("" if c["pause_on_battery"] else "; works on battery too (pause_on_battery off)")]
+             + ("" if c["pause_on_battery"] else "; works on battery too (pause_on_battery off)")
+             + (f"; works only {c['window']} (its time window)" if c["window"] else "")]
     if logical:
         from .. import priority
 
@@ -356,6 +408,12 @@ def _cli_set(args) -> int:
         values.setdefault("split", "manual")
     if args.pause_on_battery is not None:
         values["pause_on_battery"] = bool(args.pause_on_battery)
+    if args.window is not None:
+        try:
+            values["window"] = window_text(parse_window(args.window)) or None
+        except ValueError as exc:
+            print(f"--window: {exc}", file=sys.stderr)
+            return 2
     if not values:
         s = settings_mod.load()
         print(f"{machine}:")
@@ -371,7 +429,8 @@ def _cli_set(args) -> int:
     for line in machine_lines(s, machine, logical):
         print(f"  {line}")
     print("  A running worker there picks these up within about 15 s once the settings have synced: the priority "
-          "at once (lowered live), the lanes and free threads with its next job.")
+          "at once (lowered live), the lanes and free threads with its next job"
+          + (", the time window at once (it pauses with drain outside it)." if "window" in values else "."))
     return 0
 
 
@@ -396,6 +455,9 @@ def add_machines_set(machines_parser) -> None:
     p.add_argument("--pause-on-battery", action=argparse_bool(), default=None,
                    help="its worker pauses itself while the machine runs on battery and resumes on power (the "
                         "default; --no-pause-on-battery lets a laptop work on battery)")
+    p.add_argument("--window", metavar="HH:MM-HH:MM",
+                   help="the hours it may work, in its local time (e.g. 02:00-08:00; 22:00-06:00 wraps midnight), or "
+                        "'none': its worker pauses with drain when the window closes and resumes when it opens")
     p.set_defaults(func=_cli_set)
 
 

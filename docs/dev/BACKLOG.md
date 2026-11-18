@@ -58,7 +58,7 @@ search are too few from about 17 rotatable bonds.
 - Acceptance: a rerun of CREST-RUN-1's time-limit failures finishes, and a simulated replay of its gas phase
   shows fewer lane-hours lost.
 
-## BATCH-1: The staged-batch scripts as features · ready
+## BATCH-1: The staged-batch scripts as features · in progress (time window: PR, 2026-11-18)
 The QSAR runs depend on scripts outside the repository (`scratch/batches/` on the workstation): the tranche runner
 with its deadline and resume, the budget setter, and the time window for one machine. They have no tests.
 - **A time window per machine** in the settings (for example 02:00 to 08:00): the worker pauses with drain at the
@@ -69,6 +69,10 @@ with its deadline and resume, the budget setter, and the time window for one mac
 - **Batches as a list:** run gas, then water, then `pair`, for a list of input files, each to its own run folder,
   with a short report per batch. `--include-paused` already exists in the script: a paused machine still joins.
 - Acceptance: CREST-RUN-1's water phase runs from the CLI without the scratch scripts.
+- 2026-11-18 (branch `feat/machine-window`): the time window is done. `machine_control` "window", `machines set
+  --window`, the dock's "Time window"; the worker pauses with drain when it closes and resumes when it opens, only at
+  the edges (`dist.control.parse_window`, `in_window`; `JobManager._check_window`). Left: the deadline and resume for
+  `grid build`, and batch lists.
 
 ## FIX-6: A flaky macOS test of run priority · ready
 `tests/test_machine_control.py::test_priority_applied_to_running_processes` fails now and then on macOS CI (a

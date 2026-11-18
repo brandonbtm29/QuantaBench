@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (after 0.3.0)
+
+### A time window per machine (BATCH-1, 2026-11-18)
+- `quantabench-cli machines set NAME --window 02:00-08:00`, or the Machines dock's "Time window": the hours a machine
+  may work, in its own local time (`22:00-06:00` wraps midnight; `none` removes it).
+- Its worker pauses itself with drain when the window closes and resumes when it opens. A grid moves the unstarted
+  molecules of the paused machine to the others, and work sharing gives it molecules again after the resume.
+- Only the window's edges act: a pause by hand inside the window stays, and a resume by hand outside it holds until
+  the window next closes. A worker that starts outside its window starts paused; removing the window lifts its
+  pause.
+- Brandon (2026-11-17): "The macbook is free to run at night from the 2 am to 8 am time frame." Until now a script on
+  the workstation paused and resumed the MacBook's worker for the CREST rebuild.
+
 ## 0.3.0 (2026-11-18)
 
 The first tagged release (`v0.3.0`). It holds everything below, back to 0.1.0, none of which was tagged before.
