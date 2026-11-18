@@ -438,9 +438,11 @@ def test_a_lane_killed_during_crest_leaves_a_partial_row(tmp_path, fake_crest, m
     assert [(a["attempt"], a["outcome"], a["last_stage"]) for a in tries] == [(1, "crashed", "conformers"),
                                                                                (2, "crashed", "conformers")]
     for attempt in (1, 2):
-        [s] = stages_of(run_dir, "PFHpA", attempt)
+        *before, s = stages_of(run_dir, "PFHpA", attempt)        # the stages the parent saw, the last one killed
+        assert [b["stage"] for b in before] == ["prepare"] and before[0]["outcome"] == "ok"
         assert s["stage"] == "conformers" and s["outcome"] == "crashed" and s["wall_s"] >= 0
         assert s["threads_given"] == tries[attempt - 1]["crest_threads"] and s["cpu_s"] is None
+        assert (tries[attempt - 1]["n_atoms"], tries[attempt - 1]["n_F"]) == (23, 13)   # the input's features
 
 
 def test_a_lane_past_the_time_limit_records_a_timeout(tmp_path, fake_crest, monkeypatch):
@@ -451,8 +453,11 @@ def test_a_lane_past_the_time_limit_records_a_timeout(tmp_path, fake_crest, monk
     assert all(r.status == "failed" and r.error.startswith("time limit") for r in results)
     for a in rows(run_dir, "telemetry_attempts"):
         assert a["outcome"] == "timeout" and a["last_stage"] == "conformers" and a["wall_s"] >= 2.0
-        [s] = stages_of(run_dir, a["mol_id"])
+        assert a["n_heavy"] is not None and a["n_rotatable"] is not None       # the input's features, at dispatch
+        *before, s = stages_of(run_dir, a["mol_id"])
         assert s["outcome"] == "timeout" and s["stage"] == "conformers"
+        assert all(b["outcome"] == "ok" and b["wall_s"] >= 0 for b in before)   # the stages before it, finished
+        assert sum(x["wall_s"] for x in [*before, s]) <= a["wall_s"] + 0.5
 
 
 def test_a_time_limit_in_one_process_records_a_timeout(tmp_path, fake_crest, monkeypatch):

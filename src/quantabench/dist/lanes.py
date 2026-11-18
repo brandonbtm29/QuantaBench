@@ -1302,6 +1302,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             if w.busy is not None and w.busy[1] == mol_id:
                 if stage != w.stage:
                     w.stage_since = time.time()
+                    tm.stage_seen(mol_id, stage, w.stage_since)    # its stages, should the lane be killed or die
                 w.stage = stage
                 if dyn is not None:
                     if stage == "conformers":

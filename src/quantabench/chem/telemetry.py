@@ -529,6 +529,9 @@ class NullTelemetry:
     def requeued(self, *_a, **_k) -> None:
         pass
 
+    def stage_seen(self, *_a, **_k) -> None:
+        pass
+
     def end_attempt(self, *_a, **_k) -> None:
         pass
 
@@ -551,6 +554,7 @@ class RunTelemetry:
         self.sampler = sampler
         self.open: dict[str, dict] = {}            # mol_id -> its attempt row, until it ends
         self.ready_at: dict[str, float] = {}       # a molecule back in the queue (a crashed lane): since when
+        self.seen: dict[str, list[tuple[str, float]]] = {}   # mol_id -> (stage, time.time()) the parent saw begin
         self.recorded = 0
         self.failed = False
         self.closed = False
@@ -658,6 +662,15 @@ class RunTelemetry:
                  "lane_device": lane_device, "lane_threads": int(lane_threads or 1), "pid": pid or os.getpid(),
                  "dispatch_k": k, "ready_unix": ready, "dispatched_unix": now, "queue_wait_s": max(0.0, now - ready),
                  "outcome": "running", "size": size}
+            if inp is not None:
+                # the input's features now, so that an attempt whose lane is killed or dies still has them (the
+                # process that runs the molecule sends its own, of the prepared structure, with its result)
+                with contextlib.suppress(Exception):   # a structure RDKit cannot read: its lane reports it
+                    from rdkit import rdBase
+
+                    with rdBase.BlockLogs():
+                        mol = getattr(inp, "mol", None) or inp.to_mol()
+                    a.update(molecule_features(mol))
             if width:
                 base = int(lane_threads or 1)
                 a["crest_threads"] = int(width)
@@ -673,6 +686,16 @@ class RunTelemetry:
         except Exception as exc:  # noqa: BLE001
             self._fail(exc, f"the start of {mol_id}")
 
+    def stage_seen(self, mol_id: str, stage: str, at: float | None = None) -> None:
+        """The parent saw ``mol_id``'s attempt begin ``stage`` (a lane's stage message). Kept until the attempt ends:
+        an attempt whose lane is killed (the time limit) or dies sends no telemetry of its own, and this history then
+        gives its stages, with the wall time of each one that finished."""
+        if mol_id not in self.open or not stage or stage in ("start", "queued"):
+            return
+        seen = self.seen.setdefault(mol_id, [])
+        if not seen or seen[-1][0] != stage:
+            seen.append((stage, time.time() if at is None else float(at)))
+
     def end_attempt(self, mol_id: str, res=None, *, outcome: str | None = None, error: str = "", stage: str = "",
                     stage_since: float | None = None) -> None:
         """``mol_id``'s attempt ended (call just before the store's commit for it: ``record`` or ``record_crash``).
@@ -680,6 +703,7 @@ class RunTelemetry:
         or was killed) the row says ``outcome`` and the last ``stage`` the parent saw, since ``stage_since``.
         A second call for the same attempt does nothing."""
         a = self.open.pop(mol_id, None)
+        seen = self.seen.pop(mol_id, [])
         if a is None:
             return
         try:
@@ -688,7 +712,19 @@ class RunTelemetry:
             tel = tel if isinstance(tel, dict) else {}
             outcome = outcome or (outcome_of(res) if res is not None else "failed")
             stages = [dict(s) for s in tel.get("stages") or [] if isinstance(s, dict)]
-            if not stages and stage and stage not in ("start", "queued"):
+            if not stages and seen:
+                # no telemetry from the attempt's process (killed by the time limit, died, stopped): its stages as
+                # the parent saw them begin; each one ended when the next began, the last one now, with ``outcome``
+                if stage and stage not in ("start", "queued") and seen[-1][0] != stage:
+                    seen.append((stage, stage_since or now))
+                for i, (name, t_start) in enumerate(seen):
+                    last = i == len(seen) - 1
+                    t_end = now if last else seen[i + 1][1]
+                    stages.append({"stage": name, "t_start": t_start, "t_end": t_end,
+                                   "wall_s": max(0.0, t_end - t_start), "threads": a["lane_threads"],
+                                   "program_threads": a.get("crest_threads") if name == CREST_STAGE else None,
+                                   "outcome": outcome if last else "ok"})
+            elif not stages and stage and stage not in ("start", "queued"):
                 t_start = stage_since or a["dispatched_unix"]
                 stages = [{"stage": stage, "t_start": t_start, "t_end": now, "wall_s": max(0.0, now - t_start),
                            "threads": a["lane_threads"],

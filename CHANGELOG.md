@@ -2,6 +2,16 @@
 
 ## 0.3.0.dev (unreleased)
 
+### Timings of killed attempts keep the molecule's features and the stages that finished (2026-11-18)
+- **Before:** a molecule whose lane was killed by the time limit (or died) got a timing row with only the stage it was killed in.
+  - The molecule's features (atoms, heavy atoms, rotatable bonds, rings, charge, F/O/S/N) were empty: the lane sends them with its result.
+  - The stages it had finished were missing. A molecule that timed out in `refine` after a 90-minute CREST search had no `conformers` row, so the slowest CREST searches never reached the cost fit.
+  - Seen in the CREST rebuild: 26 timed-out molecules on the workstation, all without features.
+- **Now:**
+  - The features come from the input when the molecule is dispatched.
+  - The parent records each stage it sees begin. A killed attempt gets one row per stage: those that finished as `ok` with their wall time, and the last one with the attempt's outcome (`timeout`, `crashed`, `cancelled`).
+  - CPU time and memory stay empty for such an attempt; nothing can read them from a killed process.
+
 ### A conformer batch stopped by the time limit no longer fails the molecule (2026-11-17)
 - **Gitoxin failed with "conformer embedding ran out of time (450 s) without a conformer"**, also after FAIL-1's fixes.
   - Its first conformer took 9 s with RDKit's small-ring torsions, so QuantaBench asked for 39 of 50 in the 441 s left.

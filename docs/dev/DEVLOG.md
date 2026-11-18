@@ -302,3 +302,17 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - Molecules that never hit the limit get the same conformers: `test_a_limit_that_is_not_reached_changes_nothing`
   still passes.
 
+## 2026-11-18: telemetry of killed attempts (branch `fix/telemetry-killed-attempts`)
+- **Found in the CREST rebuild's job table:** the workstation's first share had 366 ok and 26 timeout attempts.
+  - Every ok attempt had its features, CPU time and 8 stage rows.
+  - Every timeout had none of the features and a single stage row. Two of them timed out in `refine` and one in
+    `frequencies`, so their CREST searches (over an hour each) were not recorded at all.
+- **Why:** features and stage timings come from the lane's process with its result, and a killed lane sends
+  nothing.
+  - The parent already knows the input: the features are computed at dispatch, with the same function as the lane.
+  - The parent sees every stage begin (the lane's stage messages): `RunTelemetry.stage_seen` keeps that history
+    until the attempt ends, and a killed attempt's stages are built from it.
+  - An attempt that ends normally still uses the lane's own stage rows (CPU, memory, conformers in and out).
+- **For the cost model:** CREST stages that finished in an attempt killed later now count. The killed stage
+  (outcome `timeout`, wall = the limit) is censored data, kept out of the fit as before; a censored fit could use
+  it later.
