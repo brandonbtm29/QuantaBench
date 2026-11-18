@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.3.0.dev (unreleased)
+## 0.3.0 (2026-11-18)
+
+The first tagged release (`v0.3.0`). It holds everything below, back to 0.1.0, none of which was tagged before.
+In short: the geometry builder (0.1); the linked 2D/3D viewer, resumable batches, frequencies and the LAMMPS
+steered-MD bridge (0.2); and for 0.3, external engines (xtb, tblite, MOPAC, CREST, Psi4), implicit solvent,
+density and ESP surfaces, Spartan's radii, the rank step, `--conformers auto`, run timings, the review before a
+run, machine control across computers, task workspaces, projects, the Analyze table with features, models and
+plots, and the job dialog with "Run on". It ran the PFAS QSAR set (13,206 molecules, gas and water) in 15 staged
+batches. The 0.3 items still open (orbital surfaces, NMR, scans, VAL-2, the rest of the settings) carry over.
+
 
 ### Timings of killed attempts keep the molecule's features and the stages that finished (2026-11-18)
 - **Before:** a molecule whose lane was killed by the time limit (or died) got a timing row with only the stage it was killed in.
@@ -1326,7 +1335,7 @@ organometallics, ions from -5 to +2, up to 157 heavy atoms), run through MMFF, G
 - `envs/` conda files for the external programs; `docs/ENGINES.md`.
 - `pyqtgraph` is a core dependency; `tblite` joins the `xtb` extra (not on Windows); new `interop` extra.
 
-## 0.2.0 (unreleased)
+## 0.2.0 (not tagged; part of 0.3.0)
 
 ### Fixed on native Windows (2026-10-27)
 - Pin `pyvistaqt<0.13`: its new framebuffer OpenGL widget crashes on AMD/Windows; 0.12 works.
@@ -1407,7 +1416,7 @@ Review fixes (science, GUI, robustness):
 - Tests no longer overwrite the real GUI window layout (`QUANTABENCH_WINDOW_STATE`); CI installs Mesa
   OpenGL on Windows and has job and per-test timeouts.
 
-## 0.1.0 (unreleased)
+## 0.1.0 (not tagged; part of 0.3.0)
 
 First public scaffold.
 
