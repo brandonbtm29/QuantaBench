@@ -49,6 +49,11 @@ quantabench-cli grid build <same inputs and science options as build> --method M
 quantabench-cli grid status [GRID_ID]          (no id: recent grid runs)
 quantabench-cli grid cancel GRID_ID
 quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
+quantabench-cli batch run <same inputs and science options as grid build> --method M [--phases gas,water]
+                       [--run-dir DIR] [--deadline HH:MM|ISO|none] [--machines auto|local|NAME,...]
+                       [--include-paused] [--max-attempts 4] [--no-pair]          BATCH-1
+quantabench-cli batch run --list batches.txt [--root DIR] ...   (one input file per line, one batch each)
+quantabench-cli batch status RUN_DIR
 ```
 
 - **`--method` must be explicit.** `auto` picks the engine per machine (AIMNet2 on the workstation's GPU, something
@@ -138,6 +143,35 @@ quantabench-cli grid merge GRID_ID [--partial] (after a build without --wait)
   (docs/ENGINES.md, Run timings). `quantabench-cli timings <grid folder>` reads the downloaded parts
   (`parts/<machine>/...`), and `timings` on the output folder reads the synced ones; a run found in both is
   read once.
+
+## Batches: phases, a deadline and resume (BATCH-1)
+
+`batch run` runs one molecule list as phases (`--phases gas,water`) on the machines that answer, into one run folder,
+and stops at a deadline. Running the same command again resumes it: only molecules without a result run. It is what
+the QSAR tranches and the CREST rebuild ran through scripts on the workstation until 2026-11-18
+(`src/quantabench/dist/batch.py` has the details).
+
+- **Attempts.** Each phase (`<run dir>/gas`, `<run dir>/water`, ...) runs as attempts. An attempt is a
+  `grid build --wait` over the molecules no run folder of the phase has finished. One that merges ends the phase,
+  unless a machine went away with molecules: the next attempt runs those (at most `--max-attempts`, default 4).
+- **Machines.** Before each attempt the workers are asked. `auto` takes every worker that answers, is not holding,
+  and runs this machine's version and commit, plus this machine. A machine named in `--machines` that is not ready
+  stops the batch (exit 4). `--include-paused` keeps a paused machine in the grid: its unstarted molecules move at
+  once and it gets work again after its resume, so a machine with a time window (`machines set --window`) still
+  joins a phase that starts outside its hours.
+- **Deadline.** At `--deadline` (`07:00` = the next 07:00) the remote shares are cancelled (each stops after its
+  current molecule), the local share stops at its next molecule, and the batch ends with exit 5.
+- **Snapshots.** What the other machines finished in their synced run folders is copied into the phase folder
+  (`partial_<run folder>`) after an attempt that did not merge and before the next one. The shares come from every
+  unmerged `grid.json` of the phase, so even an attempt that was killed counts.
+- **At the end:** the gas phase is paired with the others (`paired.csv`), and `report.md` lists each attempt:
+  machines, molecules, minutes, what was left. `log.txt` has the batch's own lines; each attempt's grid output is in
+  `grid_<phase>_rN.log`. `batch status RUN_DIR` prints the phases.
+- **Exit codes:** 0 done; 5 stopped at the deadline or by Ctrl+C (resumable); 4 a named machine not ready; 1 an
+  attempt failed or a phase used up its attempts (resumable); 2 bad input.
+- **Taking over a script's run.** The phase folders have the same layout as `run_tranche.py`'s, so `batch run
+  --run-dir <its run root>` with the same inputs and options continues it. Its earlier attempts count toward
+  `--max-attempts`; give a higher number.
 
 ## Pausing a machine, a closing laptop (DIST-7)
 

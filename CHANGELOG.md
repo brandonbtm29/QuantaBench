@@ -2,6 +2,14 @@
 
 ## Unreleased (after 0.3.0)
 
+### Staged batches from the CLI: phases, attempts, a deadline and resume (BATCH-1, 2026-11-18)
+- `quantabench-cli batch run` runs a molecule list as phases (`--phases gas,water`) on the machines that answer, into one run folder, and `batch status` shows where it stands. Running the same command again resumes: only molecules without a result run.
+- Each phase runs as attempts (a `grid build --wait` each, at most `--max-attempts`); a machine that went away with molecules leaves them to the next attempt.
+- `--deadline 07:00` cancels the remote shares and stops the local share at its next molecule (exit 5, resumable).
+- What other machines finished in their synced run folders is copied into the phase folder from every unmerged `grid.json`, so a killed attempt still counts. On Nov 18 a killed attempt of the script left 337 finished molecules uncounted.
+- `--include-paused` keeps a paused machine (a time window) in the grid; `--list` runs several input files one after the other; the end pairs the phases (`paired.csv`) and writes `report.md`.
+- Until now these were `run_tranche.py` and `qb_grid.py`, scratch scripts on the workstation with no tests.
+
 ### A time window per machine (BATCH-1, 2026-11-18)
 - `quantabench-cli machines set NAME --window 02:00-08:00`, or the Machines dock's "Time window": the hours a machine
   may work, in its own local time (`22:00-06:00` wraps midnight; `none` removes it).
