@@ -644,9 +644,10 @@ class RunTelemetry:
 
     def dispatched(self, mol_id: str, inp=None, *, lane=None, lane_name: str = "main", lane_device: str = "",
                    lane_threads: int = 1, width: int | None = None, size: float | None = None, k: int | None = None,
-                   predicted_s: float | None = None, pid: int | None = None) -> None:
+                   predicted_s: float | None = None, pid: int | None = None, rotors: int | None = None) -> None:
         """``mol_id`` goes to a lane now (call just before ``store.mark_running``, whose commit takes the row).
-        ``width``: the threads its CREST call may use (CREST runs only)."""
+        ``width``: the threads its CREST call may use (CREST runs only). ``rotors``: its rotatable bonds as the
+        cost model counts them (``speed.molecule_rotors``; counted here when the model needs them)."""
         try:
             if lane is not None:
                 lane_name, lane_device, lane_threads = lane.name, lane.device, lane.threads
@@ -677,10 +678,12 @@ class RunTelemetry:
                 a["threads_borrowed"] = max(0, int(width) - base)
                 m = self.cost_model
                 if m is not None and size is not None:
+                    from ..dist import speed
                     from ..dist import threads as threads_mod
 
-                    a["predicted_cost"] = m.cost(size) / threads_mod.speedup(width, base, m.speedup_power)
-                    a["predicted_s"] = m.seconds(size, width) if m.scale_s else predicted_s
+                    rot = rotors if rotors is not None or not m.rot_power or inp is None else speed.molecule_rotors(inp)
+                    a["predicted_cost"] = m.cost(size, rot or 0) / threads_mod.speedup(width, base, m.speedup_power)
+                    a["predicted_s"] = m.seconds(size, width, rot or 0) if m.scale_s else predicted_s
             self.open[mol_id] = a
             _insert(self.store.conn, "telemetry_attempts", a)
         except Exception as exc:  # noqa: BLE001

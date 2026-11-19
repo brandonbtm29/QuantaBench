@@ -917,7 +917,7 @@ def _qm_seconds(m: _Mol, level: str) -> float:
 def _crest_seconds(m: _Mol, cfg, model) -> float:
     level = str(cfg.crest_method or "gfn2").lower()
     if model is not None and getattr(model, "scale_s", None):
-        s = model.seconds(m.atoms, LANE_THREADS)
+        s = model.seconds(m.atoms, LANE_THREADS, m.rot)     # m.rot: strict, heavy atoms; the fit's count adds O-H
         if s is not None:
             return float(s) * (1.0 if cfg.crest_quick else CREST_FULL_FACTOR)
     base = CREST_GFN2_QUICK_S * (max(m.atoms, 4) / CREST_ATOMS0) ** 4.0 * (LANE_THREADS / 2) ** -0.6

@@ -590,12 +590,21 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   - Apple Silicon: 4 threads per lane, one lane per 4 performance cores, rounded half up (at least 1). The
     performance cores are `sysctl hw.perflevel0.physicalcpu`, or the physical cores when that cannot be read.
     The M3 Max (10 performance + 4 efficiency cores) gets 3 x 4. `doctor` shows "14 cores (10 performance)".
-  - Other machines keep 2-thread lanes on all threads: the workstation (24 threads, 23 used) gets 11 x 2. There the layout
-    mattered little: 4 large ions took 756 s as 1 x 23 and 769 s as 4 x 5.
+  - Other machines (no known performance cores), since 2026-11-18 (SCHED-2): a run with `--conformers crest` gets
+    lanes of at least 4 threads on all threads, the threads left over given one per lane. The workstation (24
+    threads, 23 used) gets 3 x 5 + 2 x 4; its 66 % budget of 15 threads gets 3 x 5. Until then these were 2-thread
+    lanes (11 x 2), because a test of 4 large ions had shown little difference (756 s as 1 x 23, 769 s as 4 x 5). The
+    CREST rebuild of Nov 17-18 showed otherwise: on 7 x 2 lanes, 37 of the 88 molecules with 17-19 rotatable bonds
+    ran out of the 90-minute limit, and 59 of the workstation's 230 lane-hours went to molecules that then ran out
+    of time; the MacBook's 4-thread lanes had no time-limit failures. A run with `--conformers auto` keeps 2-thread
+    lanes: CREST runs only for its flexible neutral molecules, the rest gain nothing from more threads, and dynamic
+    threads widen a CREST search that would set the end of the batch.
   - Lanes are planned once per run, not per stage. The refinement and properties after CREST (tblite, xtb)
     run in the same lanes, with the same threads. Only the CREST call itself can run wider (next bullet).
   - Every parallel run starts its largest molecules first (atoms with hydrogens), so no lane is left alone
-    with a large molecule at the end. Molecules that crashed a lane still go last.
+    with a large molecule at the end. A CREST run whose machine has a fitted cost model with a rotor term (below)
+    starts them in order of predicted cost instead, so the flexible molecules go first. Molecules that crashed a
+    lane still go last.
 - **Dynamic CREST threads (since 2026-11-07, on by default).** A CREST search may also use the threads of idle
   lanes (`dist/threads.py`). Turn it off with `build --no-dynamic-threads` or Settings > Compute "Dynamic CREST
   threads".
@@ -648,6 +657,18 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
   - A machine's own constants (since 2026-11-08): `quantabench-cli timings --fit` refits the cost model on the
     CREST searches its runs recorded (next section). When a fit is saved, the rule uses that machine's exponents
     instead of atoms^4 and ^0.6, and the log says so ("cost model: fit bench-pc gfnff quick (...)").
+  - Rotatable bonds (since 2026-11-18, SCHED-2): the fit also has a term (1 + rotatable bonds)^r when the runs
+    recorded rotor counts. In the CREST rebuild (738 GFN-FF `--quick` searches that finished, 25-108 atoms, 9-34
+    rotatable bonds, one thread width per machine) atoms and rotatable bonds explained the time about equally:
+    the scatter per molecule was x2.91 with atoms alone and x2.76 with the rotor term (pooled over both machines,
+    with the speedup fixed at ^0.6: atoms^2.4 x (1 + rotors)^2.3). The two are correlated (r = 0.74), so the split
+    between them differs by machine (the MacBook atoms^3.3 x (1 + rotors)^1.2, the workstation atoms^1.5 x (1 +
+    rotors)^2.9). Rotatable bonds, not size, picked the searches that ran out of time on the workstation: by
+    strict rotatable bonds from 0 of 83 (9-11) to 37 of 88 (17-19), by heavy atoms 5-14 % in every bin. The
+    built-in model keeps atoms^4 with no rotor term: the rebuild had no molecule under 9 rotatable bonds, so the
+    term is not known for rigid molecules. The
+    rotor count is RDKit's rotatable bonds of the structure with explicit hydrogens (O-H and N-H rotors count,
+    methyl and CF3 rotors do not), as the timing rows record it.
 - **Run priority and free threads** apply to every lane and to the CREST threads they borrow (next section).
 
 ## Run priority and free threads
@@ -733,13 +754,15 @@ The default, 1, is the old "all threads but one": every plan stays as it was.
 | Plan (`--lanes auto`) | The workstation, 24 threads: default | The workstation: `background` (6 free) | M3 Max, 14 threads: default | M3 Max: `background` (4 free) |
 |---|---|---|---|---|
 | thread budget (one process) | 23 | 18 | 13 | 10 |
-| CREST (`--conformers crest`) | 11 x 2 = 22 | 9 x 2 = 18 | 3 x 4 = 12 | 2 x 4 = 8 |
+| CREST (`--conformers crest`) | 3 x 5 + 2 x 4 = 23 | 2 x 5 + 2 x 4 = 18 | 3 x 4 = 12 | 2 x 4 = 8 |
+| CREST for some (`--conformers auto`) | 11 x 2 = 22 | 9 x 2 = 18 | 3 x 4 = 12 | 2 x 4 = 8 |
 | xtb program, MOPAC, Psi4 | 11 x 2 = 22 | 9 x 2 = 18 | 6 x 2 = 12 | 5 x 2 = 10 |
 | MMFF, tblite | 12 x 1 | 12 x 1 | 13 x 1 | 10 x 1 |
 | dxtb, AIMNet2 on the CPU | 6 x 2 | 6 x 2 | 6 x 2 | 5 x 2 |
 
-`--free-threads 4` on the workstation gives CREST 10 x 2 = 20; 2 free threads leave both machines' CREST plans as they are
-(11 x 2 and 3 x 4).
+`--free-threads 4` on the workstation gives CREST 5 x 4 = 20 (`auto`: 10 x 2); 2 free threads give it 2 x 5 + 3 x 4 = 22
+and leave the M3 Max's 3 x 4 as it is. Until 2026-11-18 the workstation's CREST row was 11 x 2 = 22 and 9 x 2 = 18
+(SCHED-2).
 
 ## Run timings (`quantabench-cli timings`)
 
@@ -785,9 +808,11 @@ costs about 0.3 % of a run (below). Old run folders get the tables the next time
   twice (a worker's synced folder and its downloaded copy) is read once. On screen: one line per machine,
   stage and engine with the molecules, the median seconds, the median s/atom^p (p = 4 for CREST, 1 for the
   rest; `--power` changes the CREST one) and the CPU efficiency (CPU s / (wall s x threads given)).
-- **`timings --fit`** fits CREST time = A x atoms^p x threads^-q to the CREST searches that ended ok, per machine
-  and CREST level (method and `--quick`; gas and solvent runs are pooled), and prints it next to the built-in
-  atoms^4 and ^0.6 with the scatter of both on the same data. It saves the fit to
+- **`timings --fit`** fits CREST time = A x atoms^p x (1 + rotatable bonds)^r x threads^-q to the CREST searches
+  that ended ok, per machine and CREST level (method and `--quick`; gas and solvent runs are pooled), and prints it
+  next to the built-in atoms^4 and ^0.6 with the scatter of both on the same data. The rotor term is fitted when
+  every search has a rotor count (runs since TELEM-1 record them) with at least 3 different values, and kept
+  when r comes out positive (r in 0-6); the atoms-only scatter is printed next to it. It saves the fit to
   `<settings>/machines/cost-models/<machine>.json` only with at least 30 molecules over at least 2 thread
   widths (`--min-molecules`, `--min-widths`) and with p in 1-8 and q in 0-1.2; otherwise it says what is
   missing (a run with fixed lanes has one width: dynamic threads or runs with other lane plans add more).

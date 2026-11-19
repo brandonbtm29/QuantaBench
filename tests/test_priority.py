@@ -160,10 +160,14 @@ def test_settings_cli_sets_this_machine_and_others(isolated_settings, monkeypatc
 
 # ----------------------------------------------------------------------------- lane plan, free threads
 def test_lane_plans_keep_todays_layout_by_default(monkeypatch):
-    """The default (1 free thread) is today's plan: the workstation 11 x 2 = 22 of 24 for CREST, the M3 Max 3 x 4."""
+    """The default (1 free thread): the workstation 3 x 5 + 2 x 4 = 23 of 24 for CREST (11 x 2 = 22 before SCHED-2,
+    and still for conformers "auto"), the M3 Max 3 x 4."""
     machine(monkeypatch, 24, 12)
-    assert L.plan_auto(crest_cfg(), report(**WORKSTATION))[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
-    assert L.plan_auto(crest_cfg(free_threads=2), report(**WORKSTATION))[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
+    widths = lambda cfg, rep: [x.threads for x in L.plan_auto(cfg, rep)[0]]  # noqa: E731
+    assert widths(crest_cfg(), report(**WORKSTATION)) == [5, 5, 5, 4, 4]
+    assert widths(crest_cfg(free_threads=2), report(**WORKSTATION)) == [5, 5, 4, 4, 4]
+    assert L.plan_auto(crest_cfg(conformer_search="auto"), report(**WORKSTATION))[0] == [
+        Lane(f"cpu{i}", "cpu", 2) for i in range(1, 12)]
     assert "left free" not in L.plan_auto(crest_cfg(), report(**WORKSTATION))[1]
     assert L.parse_lanes("1", crest_cfg()) == [Lane("main", "auto", 23)]
     machine(monkeypatch, 14, 14)
@@ -177,13 +181,15 @@ def test_lane_plans_leave_the_free_threads(monkeypatch):
     machine(monkeypatch, 24, 12)
     tower = report(**WORKSTATION)
     lanes, reason = L.plan_auto(crest_cfg(free_threads=4), tower)
-    assert lanes == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 11)] and "4 of 24 threads left free" in reason
-    lanes, reason = L.plan_auto(crest_cfg(priority="background"), tower)       # 25 % of 24 = 6 free: 9 x 2
-    assert lanes == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 10)]
+    assert lanes == [Lane(f"cpu{i}", "cpu", 4) for i in range(1, 6)] and "4 of 24 threads left free" in reason
+    lanes, reason = L.plan_auto(crest_cfg(priority="background"), tower)       # 25 % of 24 = 6 free: 2 x 5 + 2 x 4
+    assert [x.threads for x in lanes] == [5, 5, 4, 4]
     assert "6 of 24 threads left free (background)" in reason
+    lanes, _reason = L.plan_auto(crest_cfg(priority="background", conformer_search="auto"), tower)    # 9 x 2
+    assert lanes == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 10)]
     # an explicit thread count is used as given, as before (the free threads are for the automatic budget)
     assert sum(x.threads for x in L.plan_auto(crest_cfg(threads=24, free_threads=4), tower)[0]) == 24
-    assert L.plan_auto(crest_cfg(threads=12, free_threads=4), tower)[0] == [Lane(f"cpu{i}", "cpu", 2) for i in range(1, 7)]
+    assert L.plan_auto(crest_cfg(threads=12, free_threads=4), tower)[0] == [Lane(f"cpu{i}", "cpu", 4) for i in range(1, 4)]
     # MMFF: one lane per physical core, within the budget
     assert len(L.plan_auto(pipeline.BuildConfig(method="mmff", free_threads=16), tower)[0]) == 8
     # threads 0 = the budget for "1" and "N" too; an explicit list is used as given

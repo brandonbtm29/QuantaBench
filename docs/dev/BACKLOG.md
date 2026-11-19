@@ -42,9 +42,16 @@ to improve the simulation load and thread allocation." A lane killed by the time
 attempt had no features and only the stage it was killed in. The fix computes the features at dispatch and keeps
 the stages the parent saw begin (`RunTelemetry.stage_seen`). Details in the PR and its CHANGELOG entry.
 
-## SCHED-2: CREST lanes and the cost model by rotatable bonds · ready
-From CREST-RUN-1's timings: rotatable bonds, not atom count, set the cost of a CREST search, and 2 threads per
-search are too few from about 17 rotatable bonds.
+## SCHED-2: CREST lanes and the cost model by rotatable bonds · in progress (lanes and the fit: PR, 2026-11-18)
+From CREST-RUN-1's timings: atoms and rotatable bonds explain the cost of a CREST search about equally (scatter x2.91
+with atoms alone, x2.76 with log(1 + rotors)), rotatable bonds, not atom count, decide which searches run out of
+time, and 2 threads per search are too few from about 17 rotatable bonds.
+- **Done (2026-11-18, Brandon's item 6 of the Nov 18 review):** `--conformers crest` on a machine with no known
+  performance cores plans lanes of at least 4 threads (the workstation 3 x 5 + 2 x 4; the run resumed that day by
+  hand with 3 x 5); `timings --fit` fits a (1 + rotors)^r term, runs use it for the dynamic threads and the
+  predicted seconds, and a CREST run with such a fit hands out its molecules by predicted cost. The built-in
+  model keeps atoms^4 (the rebuild had no molecule under 9 rotors). Still open: routing, the time limit, and the
+  replay below.
 - **Lane plan:** for a batch of flexible molecules, fewer and wider CREST searches on a machine with many threads
   (for example 3 or 4 searches of 4 to 6 threads in place of 7 of 2); the launch-time rule of `dist/threads.py`
   should widen by predicted cost, not only when one molecule dominates the batch.

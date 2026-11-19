@@ -31,10 +31,19 @@ In a large batch every lane is busy until the queue is nearly empty, so nothing 
 the policy widens a molecule that would otherwise set the end of the batch on its own (a 54-heavy-atom PFAS on a
 2-thread lane), and gives the idle threads to the molecules of a batch smaller than its lanes.
 
-A machine's own constants: ``quantabench-cli timings --fit`` fits time = A x atoms^p x threads^-q to the CREST
-stages recorded in its run folders (``chem.telemetry``) and saves them per CREST level in
+A machine's own constants: ``quantabench-cli timings --fit`` fits time = A x atoms^p x (1 + rotors)^r x
+threads^-q to the CREST stages recorded in its run folders (``chem.telemetry``) and saves them per CREST level in
 ``<settings>/machines/cost-models/<machine>.json`` (``CostModel``, ``load_cost_model``). A run uses them when they
 are there and pass ``usable``, else the built-in ``COST_POWER`` and ``SPEEDUP_POWER``.
+
+Rotatable bonds (SCHED-2, 2026-11-18): in the CREST rebuild of Nov 17-18 (738 GFN-FF --quick searches, 25-108
+atoms, 9-34 rotatable bonds) atoms and rotatable bonds explained the time about equally (scatter x2.91 with atoms
+alone, x2.76 with log(1 + rotors) added), and rotatable bonds, not size, picked the searches that ran out of time
+(17-19 rotors: 37 of 88 on the workstation). So a fit adds the term r log(1 + rotors) when the stages it fits
+carry rotor counts (``telemetry_attempts.n_rotatable``: RDKit's rotatable bonds of the prepared structure, hydrogens included, which
+``speed.molecule_rotors`` counts the same way for a molecule not run yet). The built-in has no rotor term
+(``ROT_POWER`` 0): those searches had no molecule under 9 rotatable bonds, so the term is not known for the rigid
+molecules a built-in must also cover. A fit's ``rot_power`` replaces it on the machine that ran the searches.
 """
 
 from __future__ import annotations
@@ -51,6 +60,8 @@ COST_POWER = 4.0
 #: CREST speedup from base to w threads ~ (w / base) ** SPEEDUP_POWER (Mac 4 -> 13 threads: 0.48; the workstation 5 -> 23: 0.42;
 #: Mac 2 -> 4: 0.9)
 SPEEDUP_POWER = 0.6
+#: predicted CREST time also ~ (1 + rotatable bonds) ** ROT_POWER: none in the built-in (a machine's fit adds it)
+ROT_POWER = 0.0
 #: a wider CREST call must predict an end of the batch at least this much earlier than the narrower one
 MARGIN = 0.10
 #: only a molecule whose predicted time at its lane's width exceeds this many times the rest's work over the other
@@ -61,14 +72,19 @@ CALIBRATION_SAMPLES = 50
 #: fitted constants outside these ranges are not used (a fit on odd data); the built-ins are used instead
 POWER_RANGE = (1.0, 8.0)
 SPEEDUP_RANGE = (0.0, 1.2)
+ROT_RANGE = (0.0, 6.0)
 #: folder of the fitted cost models, in the machine registry (``dist.profile.registry_dir``). A subfolder: the
 #: registry reads every ``*.json`` of its own folder as a machine profile
 COST_MODEL_DIR = "cost-models"
 
 
-def crest_cost(size: float, power: float = COST_POWER) -> float:
-    """Predicted CREST time of a molecule of ``size`` atoms (with hydrogens) at base width, in relative units."""
-    return max(1.0, float(size)) ** power
+def crest_cost(size: float, power: float = COST_POWER, rotors: float = 0.0, rot_power: float = ROT_POWER) -> float:
+    """Predicted CREST time of a molecule of ``size`` atoms (with hydrogens) and ``rotors`` rotatable bonds at base
+    width, in relative units."""
+    cost = max(1.0, float(size)) ** power
+    if rot_power:
+        cost *= (1.0 + max(0.0, float(rotors or 0.0))) ** rot_power
+    return cost
 
 
 def speedup(width: int, base: int, power: float = SPEEDUP_POWER) -> float:
@@ -112,24 +128,29 @@ def choose_width(cost: float, base: int, free: int, budget: int, rest: float, po
 # ------------------------------------------------------------------------------------- the cost model
 @dataclass(frozen=True)
 class CostModel:
-    """CREST time = ``scale_s`` x size^``power`` x threads^-``speedup_power`` (size: atoms with hydrogens). The
-    built-in one has no scale (relative units only); a fitted one (``quantabench-cli timings --fit``) predicts
-    seconds too."""
+    """CREST time = ``scale_s`` x size^``power`` x (1 + rotors)^``rot_power`` x threads^-``speedup_power`` (size:
+    atoms with hydrogens; rotors: ``speed.molecule_rotors``). The built-in one has no scale (relative units only)
+    and no rotor term; a fitted one (``quantabench-cli timings --fit``) predicts seconds too."""
 
     power: float = COST_POWER
     speedup_power: float = SPEEDUP_POWER
     scale_s: float | None = None
     source: str = "built-in"          # "built-in" | "fit <machine> <level> (<n> molecules, <date>)"
     scatter: float | None = None      # the fit's scatter factor per molecule (exp of the rms log residual)
+    rot_power: float = ROT_POWER      # 0: rotatable bonds are not part of it
 
-    def cost(self, size: float) -> float:
-        return crest_cost(size, self.power)
+    def cost(self, size: float, rotors: float = 0.0) -> float:
+        return crest_cost(size, self.power, rotors, self.rot_power)
 
-    def seconds(self, size: float, width: int) -> float | None:
+    def seconds(self, size: float, width: int, rotors: float = 0.0) -> float | None:
         """Predicted seconds of a CREST call on ``width`` threads (None without a fitted scale)."""
         if not self.scale_s:
             return None
-        return self.scale_s * max(1.0, float(size)) ** self.power * max(1, int(width)) ** -self.speedup_power
+        return self.scale_s * self.cost(size, rotors) * max(1, int(width)) ** -self.speedup_power
+
+    def formula(self) -> str:
+        """``atoms^p x (1 + rotors)^r``, for the logs."""
+        return f"atoms^{self.power:.2f}" + (f" x (1 + rotors)^{self.rot_power:.2f}" if self.rot_power else "")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -153,9 +174,11 @@ def cost_model_path(machine: str) -> Path:
 
 
 def usable(entry: dict) -> tuple[bool, str]:
-    """Whether a stored fit may be used: finite constants within ``POWER_RANGE`` and ``SPEEDUP_RANGE``."""
+    """Whether a stored fit may be used: finite constants within ``POWER_RANGE``, ``SPEEDUP_RANGE`` and
+    ``ROT_RANGE`` (a fit saved before the rotor term has none: 0)."""
     try:
         p, q = float(entry["power"]), float(entry["speedup_power"])
+        r = float(entry.get("rot_power") or 0.0)
         a = entry.get("scale_s")
         a = None if a is None else float(a)
     except (KeyError, TypeError, ValueError):
@@ -164,6 +187,8 @@ def usable(entry: dict) -> tuple[bool, str]:
         return False, f"power {p:g} outside {POWER_RANGE}"
     if not (math.isfinite(q) and SPEEDUP_RANGE[0] <= q <= SPEEDUP_RANGE[1]):
         return False, f"speedup power {q:g} outside {SPEEDUP_RANGE}"
+    if not (math.isfinite(r) and ROT_RANGE[0] <= r <= ROT_RANGE[1]):
+        return False, f"rotor power {r:g} outside {ROT_RANGE}"
     if a is not None and not (math.isfinite(a) and a > 0):
         return False, f"scale {a!r} not positive"
     return True, ""
@@ -193,7 +218,8 @@ def load_cost_model(machine: str, level: str, log: Callable[[str], None] | None 
         n = entry.get("n_molecules", "?")
         return CostModel(float(entry["power"]), float(entry["speedup_power"]), None if a is None else float(a),
                          f"fit {machine} {level} ({n} molecules, {str(entry.get('updated', ''))[:10]})",
-                         entry.get("scatter") if isinstance(entry.get("scatter"), (int, float)) else None)
+                         entry.get("scatter") if isinstance(entry.get("scatter"), (int, float)) else None,
+                         float(entry.get("rot_power") or 0.0))
     except Exception:  # noqa: BLE001 - a broken file must not stop a run
         return BUILT_IN
 
@@ -254,7 +280,7 @@ class ThreadBudget:
 
 class DynamicThreads:
     """One parallel run's dynamic CREST threads (see the module docstring). ``cost_of(mol_id)``: the predicted CREST
-    cost (``crest_cost`` of the molecule's size). The parent of the run is the only caller; ``now`` defaults to
+    cost (``CostModel.cost`` of the molecule's size and rotatable bonds). The parent of the run is the only caller; ``now`` defaults to
     ``time.monotonic()``."""
 
     def __init__(self, budget: int, cost_of: Callable[[str], float], speedup_power: float = SPEEDUP_POWER):

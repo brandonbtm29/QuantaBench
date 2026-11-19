@@ -705,16 +705,22 @@ def test_timings_defaults_to_the_output_folder(tmp_path, capsys):
 
 # ------------------------------------------------------------------------------------------- fit
 def synthetic(machine="synthbox", level="gfnff quick", n=40, widths=(2, 4, 8), p=3.7, q=0.5, a=2e-3, sigma=0.2,
-              seed=7):
+              seed=7, r=None):
+    """CREST rows with time = a x size^p x threads^-q (x (1 + rotors)^r with rotor counts when ``r`` is given)."""
     rng = random.Random(seed)  # noqa: S311 - a test's reproducible draws
+    rot_rng = random.Random(seed + 1)  # noqa: S311
     out = []
     for i in range(n):
         size = rng.randint(10, 70)
         w = widths[i % len(widths)]
         t = a * size ** p * w ** -q * math.exp(rng.gauss(0.0, sigma))
-        out.append({"machine": machine, "crest_level": level, "stage": "conformers", "engine": f"crest {level}",
-                    "outcome": "ok", "mol_id": f"m{i}", "run_id": f"r{i % 3}", "attempt": 1, "size": float(size),
-                    "threads_given": w, "wall_s": t})
+        row = {"machine": machine, "crest_level": level, "stage": "conformers", "engine": f"crest {level}",
+               "outcome": "ok", "mol_id": f"m{i}", "run_id": f"r{i % 3}", "attempt": 1, "size": float(size),
+               "threads_given": w, "wall_s": t}
+        if r is not None:
+            row["n_rotatable"] = rot = rot_rng.randint(0, 20)
+            row["wall_s"] = t * (1 + rot) ** r
+        out.append(row)
     return out
 
 
@@ -732,6 +738,7 @@ def test_the_fit_recovers_p_and_q_and_runs_use_it(tmp_path, monkeypatch):
     assert model.power == pytest.approx(fit.power) and model.source.startswith("fit synthbox gfnff quick (40 molecules")
     assert model.seconds(30, 4) == pytest.approx(fit.scale_s * 30 ** fit.power * 4 ** -fit.speedup_power)
     assert T.load_cost_model("synthbox", "gfn2 quick") is T.BUILT_IN and T.load_cost_model("nobody", "x") is T.BUILT_IN
+    assert fit.rot_power == 0.0 and "no rotor counts" in fit.rot_note and model.rot_power == 0.0
     # the registry still reads only machine profiles (the fits are in a subfolder)
     from quantabench.dist import profile
 
@@ -740,6 +747,45 @@ def test_the_fit_recovers_p_and_q_and_runs_use_it(tmp_path, monkeypatch):
     [fit2] = timings.fit_all(synthetic(level="gfn2 quick", p=4.4))
     timings.save_fit(fit2)
     assert set(T.read_cost_models("synthbox")["models"]) == {"gfnff quick", "gfn2 quick"}
+
+
+def test_the_fit_adds_rotatable_bonds_when_the_rows_count_them(tmp_path):
+    # SCHED-2: time = a x atoms^p x (1 + rotors)^r x threads^-q
+    [fit] = timings.fit_all(synthetic(n=80, p=2.5, r=1.5))
+    assert fit.ok, fit.why
+    assert fit.rot_power == pytest.approx(1.5, abs=0.2) and fit.power == pytest.approx(2.5, abs=0.25)
+    assert fit.rot_power_se < 0.2 and fit.atoms_scatter > 1.5 * fit.scatter
+    text = "\n".join(timings.fit_lines(fit))
+    assert "x (1 + rotors)^1." in text and "atoms alone: scatter x" in text
+    timings.save_fit(fit)
+    model = T.load_cost_model("synthbox", "gfnff quick")
+    assert model.rot_power == pytest.approx(fit.rot_power)
+    assert model.cost(30, 9) == pytest.approx(30 ** fit.power * 10 ** fit.rot_power)
+    assert model.seconds(30, 4, 9) == pytest.approx(fit.scale_s * model.cost(30, 9) * 4 ** -fit.speedup_power)
+    assert "(1 + rotors)^1." in model.formula()
+    # rotors that do not matter: the term comes out near 0 or below and is dropped when it is not positive
+    [flat] = timings.fit_all(synthetic(n=80, p=3.7, r=0.0, sigma=0.05))
+    assert flat.ok and flat.rot_power == pytest.approx(0.0, abs=0.05)
+    assert flat.rot_power == 0.0 or flat.rot_power_se is not None
+    # too few different counts: atoms alone
+    few = [dict(row, n_rotatable=row["n_rotatable"] % 2) for row in synthetic(n=40, r=1.0)]
+    [two] = timings.fit_all(few)
+    assert two.rot_power == 0.0 and "fewer than 3 different" in two.rot_note
+    # the built-in has no rotor term: rotors change nothing
+    assert T.BUILT_IN.rot_power == 0.0 and T.BUILT_IN.cost(30, 12) == T.BUILT_IN.cost(30) == 30 ** T.COST_POWER
+
+
+def test_a_fit_saved_before_the_rotor_term_still_loads(tmp_path):
+    path = T.cost_model_path("oldbox")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"machine": "oldbox", "models": {
+        "gfnff quick": {"power": 3.9, "speedup_power": 0.5, "scale_s": 1e-3, "n_molecules": 40},
+        "gfn2 quick": {"power": 3.9, "speedup_power": 0.5, "rot_power": 9.0}}}), encoding="utf-8")
+    model = T.load_cost_model("oldbox", "gfnff quick")
+    assert model.rot_power == 0.0 and model.cost(20, 15) == pytest.approx(20 ** 3.9)
+    logs = []
+    assert T.load_cost_model("oldbox", "gfn2 quick", logs.append) is T.BUILT_IN
+    assert "rotor power 9 outside" in logs[0]
 
 
 def test_the_fit_says_why_without_enough_data(tmp_path, capsys):
@@ -765,7 +811,8 @@ def write_synthetic_run(run_dir, rows_):
         for r in rows_:
             key = {"run_id": f"syn-{run_dir.name}", "mol_id": r["mol_id"], "attempt": 1}
             telemetry._insert(store.conn, "telemetry_attempts", {**key, "outcome": "ok", "size": r["size"],
-                                                                  "lane_threads": 2})
+                                                                  "lane_threads": 2,
+                                                                  "n_rotatable": r.get("n_rotatable")})
             telemetry._insert(store.conn, "telemetry_stages", {**key, "stage": "conformers", "engine": r["engine"],
                                                                 "outcome": "ok", "wall_s": r["wall_s"],
                                                                 "threads_given": r["threads_given"]})
@@ -789,6 +836,12 @@ def test_the_fit_cli_saves_a_fit_with_enough_data(tmp_path, capsys):
     assert cli.main(["timings", str(tmp_path / "few"), "--fit"]) == 0
     assert "not saved: not enough data: 8 molecule(s), needs 30" in capsys.readouterr().out
     assert not T.cost_model_path("smallbox").exists()
+    # rotor counts in the job tables: the fit has the rotor term
+    data = synthetic(machine="rotorbox", n=60, p=2.5, r=1.5)
+    write_synthetic_run(tmp_path / "rot" / "a", data)
+    assert cli.main(["timings", str(tmp_path / "rot"), "--fit"]) == 0
+    assert "(1 + rotors)^1." in capsys.readouterr().out
+    assert T.load_cost_model("rotorbox", "gfnff quick").rot_power == pytest.approx(1.5, abs=0.25)
 
 
 def test_bad_fitted_constants_are_not_used(tmp_path):
@@ -819,6 +872,36 @@ def test_a_saved_fit_drives_the_dynamic_threads(tmp_path, fake_crest, monkeypatc
     assert json.loads(run["cost_model"])["power"] == pytest.approx(fit.power)
     big = rows(run_dir, "telemetry_attempts", "WHERE mol_id = 'PFHpA'")[0]
     assert big["predicted_s"] == pytest.approx(fit.scale_s * 23 ** fit.power * big["crest_threads"] ** -fit.speedup_power)
+
+
+def test_a_rotor_fit_orders_the_queue_and_predicts_with_rotors(tmp_path, fake_crest, monkeypatch):
+    from quantabench.dist import profile, speed
+
+    [fit] = timings.fit_all(synthetic(machine=profile.machine_name(), n=80, p=2.5, r=1.5))
+    assert fit.rot_power > 1.0
+    timings.save_fit(fit)
+    logs = []
+    inp = [from_smiles(ETHANOL, id="ethanol"), from_smiles(PFHPA, id="PFHpA")]
+    rot = speed.molecule_rotors(inp[1])
+    assert rot == 5 and speed.molecule_rotors(inp[0]) == 1            # O-H counts, CH3 and CF3 do not
+    results, run_dir = jobs.run_resumable(inp, crest_cfg(tmp_path), tmp_path / "run", lanes=three_lanes(),
+                                          log=logs.append)
+    assert all(r.status == "ok" for r in results)
+    assert any("x (1 + rotors)^" in m for m in logs)
+    big = rows(run_dir, "telemetry_attempts", "WHERE mol_id = 'PFHpA'")[0]
+    assert big["predicted_s"] == pytest.approx(fit.scale_s * 23 ** fit.power * (1 + rot) ** fit.rot_power
+                                               * big["crest_threads"] ** -fit.speedup_power)
+
+
+def test_the_dispatch_order_follows_the_cost_it_is_given():
+    from quantabench.dist import lanes as lanes_mod
+
+    todo = [("rigid", None), ("flexible", None), ("small", None)]
+    size = {"rigid": 60.0, "flexible": 50.0, "small": 20.0}
+    rot = {"rigid": 1, "flexible": 18, "small": 2}
+    model = T.CostModel(power=2.5, speedup_power=0.5, rot_power=1.5)
+    assert lanes_mod.dispatch_order(todo, size.get) == [0, 1, 2]
+    assert lanes_mod.dispatch_order(todo, lambda m: model.cost(size[m], rot[m])) == [1, 0, 2]
 
 
 def test_timings_without_recorded_runs(tmp_path, capsys):

@@ -59,7 +59,9 @@ How a parallel run works (``run_parallel``):
 * timings (``chem.telemetry``): each lane measures its molecule's stages and sends the numbers with the result;
   the parent adds the lane, its threads and the CREST threads it lent, and writes the rows in the result's
   transaction. A lane that dies or is killed gets a partial row: its last stage, from when the parent heard of
-  it. The CREST cost model is this machine's fitted one when ``timings --fit`` saved one (``threads.CostModel``).
+  it. The CREST cost model is this machine's fitted one when ``timings --fit`` saved one (``threads.CostModel``);
+  when that fit has a rotor term, a CREST run also hands out its molecules in order of predicted cost (atoms and
+  rotatable bonds) rather than atoms alone, so the flexible molecules that take longest start first.
 * ``should_stop`` is polled by the parent and copied into a shared stop flag (``StopEvent``: Event semantics,
   no lock) that every lane's ``should_stop`` reads, so a cancel reaches the molecule running in each lane.
 * a lane that dies (segfault, OOM kill, ``os._exit``) is restarted. Its molecule's crash count goes up,
@@ -112,16 +114,23 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
   12 x 1 363 s, 24 x 1 331 s, 12 x 2 318 s. Energies agree across layouts to 1e-9 eV.
 * in-process torch engines on the CPU (dxtb GFN1/GFN2, AIMNet2): 2-thread lanes on the physical cores (as
   fast as 1-thread lanes on all cores, with half the processes: each holds torch, ~0.5-1 GB).
-* external programs (an engine with ``.external``, CREST conformer search, a QM stage): 2-thread lanes on
-  all threads (the programs spend part of their time in I/O and start-up).
+* external programs (an engine with ``.external``, a QM stage): 2-thread lanes on all threads (the programs spend
+  part of their time in I/O and start-up).
+* CREST conformer search for every molecule (``--conformers crest``) on a CPU with no known performance cores
+  (the workstation): lanes of at least ``CREST_LANE_THREADS`` (4) threads on all threads, the threads a whole
+  number of lanes leaves given one per lane (15 threads: 3 x 5; 23: 3 x 5 + 2 x 4). Until 2026-11-18 these were
+  2-thread lanes. In the CREST rebuild (GFN-FF quick, a 5,400 s limit per molecule, 7 x 2 on the workstation
+  through WSL) 37 of the 88 molecules with 17-19 rotatable bonds ran out of time and 59 of 230 lane-hours went to
+  molecules that then ran out of time, while the MacBook's 4-thread lanes had none; the earlier test of 4 large ions (1 x 23 756 s, 4 x 5 769 s) had not shown it (SCHED-2). A run with
+  ``--conformers auto`` keeps the 2-thread rule: CREST runs for its flexible neutral molecules only, the rest gain
+  nothing from more threads, and dynamic threads widen a CREST search that would set the end of the batch.
 * CREST conformer search on a CPU with known performance cores (Apple Silicon, ``resources.performance_cores``:
   ``hw.perflevel0.physicalcpu``, the physical cores when that cannot be read): ``CREST_LANE_THREADS`` (4)
   threads per lane, lanes = performance cores / 4 rounded half up, at least 1 (the M3 Max's 10: 3 x 4, 12
   threads on 10 performance + 4 efficiency cores). GFN-FF gas phase, 20 PFAS, M3 Max, 2026-11-07: 1 x 12
   1,727 s, 3 x 4 773 s, 5 x 2 1,457 s, 6 x 2 (the 2-thread rule) 3,108 s. With 2 threads per lane the batch
   waits for its largest molecule (54 heavy atoms) on 2 threads while the other lanes are idle; one molecule on
-  12 threads scales poorly. Elsewhere CREST keeps the 2-thread rule above: on the workstation (WSL CREST) the layout
-  mattered little (4 large ions: 1 x 23 756 s, 4 x 5 769 s). Lanes are planned per run, not per stage: the
+  12 threads scales poorly. Lanes are planned per run, not per stage: the
   refinement and properties after CREST (tblite, xtb, ...) run in the same lanes with the same threads; only the
   CREST call itself can run wider (dynamic threads, above).
 * a GPU-capable engine with a GPU: one GPU lane with 4 threads (RDKit embedding and the host side of the
@@ -436,6 +445,7 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
         reason = f"parallel molecules = {parallel_molecules} (Compute settings)"
     else:
         budget, cpu_cores = total, cores
+        spread = False                    # CREST elsewhere: the threads a whole number of lanes leaves go one per lane
         if device != "cpu":
             g = GPU_LANE_THREADS if total >= 2 * GPU_LANE_THREADS else max(1, total // 2)
             lanes.append(Lane(_gpu_lane_name(device, 1), device, g))
@@ -456,6 +466,15 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
             wanted = max(1, min(int(fast / CREST_LANE_THREADS + 0.5), budget // per))    # rounded half up
             reason = (f"CREST: {per}-thread lanes, one per {CREST_LANE_THREADS} of the {perf} performance cores "
                       "(rounded)")
+        elif kind == "external" and crest and str(getattr(cfg, "conformer_search", "")).lower() == "crest":
+            # CREST for every molecule on a machine with no known performance cores (SCHED-2, the CREST rebuild of
+            # 2026-11-17/18): at least CREST_LANE_THREADS threads per lane, on all threads, the rest shared out one by
+            # one. A run with conformers "auto" (CREST for its flexible neutral molecules only) keeps the 2-thread
+            # rule below: most of its molecules gain nothing from more threads, and dynamic threads widen the rest.
+            per = min(CREST_LANE_THREADS, budget)
+            wanted = max(1, budget // per)
+            per, spread = max(1, budget // wanted), True
+            reason = f"CREST: lanes of at least {min(CREST_LANE_THREADS, budget)} threads on all threads"
         elif kind == "external":
             per, wanted = 2, budget // 2
             reason = ("CREST" if crest else "external programs") + ": 2-thread lanes on all threads"
@@ -473,7 +492,8 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
             reason += f", capped at {cap} lanes (Windows)"
         if not lanes and n <= 1:
             return [Lane("main", "auto", total)], f"{reason}: room for one lane only{_free_note(cfg)}"
-        lanes += [Lane(f"cpu{i + 1}", "cpu", per) for i in range(n)]
+        extra = max(0, min(n, budget - n * per)) if spread and n >= 1 else 0
+        lanes += [Lane(f"cpu{i + 1}", "cpu", per + (1 if i < extra else 0)) for i in range(n)]
         if lanes[0].device != "cpu":
             reason = f"{method} on {device}: 1 GPU lane with {lanes[0].threads} threads; " + reason
     if why_gpu:
@@ -1009,7 +1029,8 @@ def speed_policy(lanes: list[Lane], cfg):
 
 def dispatch_order(todo, size_of, crashes: dict[str, int] | None = None) -> list[int]:
     """Indices into ``todo`` ([(id, MoleculeInput)]) in the order a parallel run hands the molecules out:
-    largest first (``size_of(id)``: ``speed.molecule_size``, atoms with hydrogens), so the end of the batch is
+    largest first (``size_of(id)``: ``speed.molecule_size``, atoms with hydrogens; in a CREST run the cost model's
+    predicted cost, which counts rotatable bonds when this machine's fit has them), so the end of the batch is
     short molecules and no lane is left alone with a large one while the others are idle (the CREST runs on
     the Mac waited 51 min for a 54-heavy-atom molecule on 2 threads). Molecules that crashed a process
     (``crashes``) still go last, as in ``JobStore.todo``; equal sizes keep the input order."""
@@ -1124,11 +1145,23 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     announced = False
     held_logged = False
     sizes: dict[str, float] = {}
+    rotors: dict[str, int] = {}
 
     def size_of(mol_id: str) -> float:
         if mol_id not in sizes:
             sizes[mol_id] = speed.molecule_size(inputs[mol_id])
         return sizes[mol_id]
+
+    def rotors_of(mol_id: str) -> int:
+        """Rotatable bonds (``speed.molecule_rotors``), counted only when the cost model has a rotor term."""
+        if model is None or not model.rot_power:
+            return 0
+        if mol_id not in rotors:
+            rotors[mol_id] = speed.molecule_rotors(inputs[mol_id])
+        return rotors[mol_id]
+
+    def cost_of(mol_id: str) -> float:
+        return model.cost(size_of(mol_id), rotors_of(mol_id))
 
     def typical_size() -> float:
         return sum(sizes.values()) / len(sizes) if sizes else speed.DEFAULT_SIZE
@@ -1136,13 +1169,12 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
     # dynamic CREST threads (dist.threads): this process owns the CPU lanes' thread budget
     budget = dynamic_threads_for(cfg, lanes, dynamic_threads, thread_budget)
     model = (cost_model or threads_mod.cost_model_for(cfg, log) or threads_mod.BUILT_IN) if crest_run else None
-    dyn = (threads_mod.DynamicThreads(budget, lambda m: model.cost(size_of(m)), model.speedup_power)
-           if budget else None)
+    dyn = threads_mod.DynamicThreads(budget, cost_of, model.speedup_power) if budget else None
     if dyn is not None:
         log(f"Dynamic threads: a CREST search may also use idle lanes' threads, in whole lanes, {budget} threads in "
             "all (build --no-dynamic-threads turns it off)")
         if model.source != threads_mod.BUILT_IN.source:
-            log(f"  cost model: {model.source}: time ~ atoms^{model.power:.2f}, speedup (threads/lane)^"
+            log(f"  cost model: {model.source}: time ~ {model.formula()}, speedup (threads/lane)^"
                 f"{model.speedup_power:.2f} (quantabench-cli timings --fit)")
 
     def threads_back(w: _LaneProcess) -> None:
@@ -1151,7 +1183,9 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
             dyn.finish(w.lane.name)
 
     # k: the dispatch position (progress counts in it), largest molecules first
-    queue = deque((k, todo[j][0], todo[j][1]) for k, j in enumerate(dispatch_order(todo, size_of,
+    # (by predicted CREST cost when the cost model counts rotatable bonds: the flexible molecules go first)
+    order_key = cost_of if model is not None and model.rot_power else size_of
+    queue = deque((k, todo[j][0], todo[j][1]) for k, j in enumerate(dispatch_order(todo, order_key,
                                                                                    store.crash_counts())))
 
     def lane_state(w: _LaneProcess) -> str:
@@ -1427,7 +1461,7 @@ def run_parallel(store, todo, cfg, lanes: list[Lane], run_dir, *, total: int, do
                             policy.started(w.lane.name, size_of(mol_id))
                         # its timing row goes out with mark_running's commit (chem.telemetry)
                         tm.dispatched(mol_id, inp, lane=w.lane, width=width if crest_run else None,
-                                      size=size_of(mol_id), k=k, pid=w.pid,
+                                      size=size_of(mol_id), rotors=rotors_of(mol_id), k=k, pid=w.pid,
                                       predicted_s=dyn.predicted_seconds(mol_id, w.lane.threads, width)
                                       if shared and dyn is not None else None)
                         store.mark_running(mol_id)
