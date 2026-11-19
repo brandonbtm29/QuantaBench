@@ -58,7 +58,7 @@ search are too few from about 17 rotatable bonds.
 - Acceptance: a rerun of CREST-RUN-1's time-limit failures finishes, and a simulated replay of its gas phase
   shows fewer lane-hours lost.
 
-## BATCH-1: The staged-batch scripts as features · in progress (time window: PR, 2026-11-18)
+## BATCH-1: The staged-batch scripts as features · in progress (time window: PR #30; batches: PR, 2026-11-18)
 The QSAR runs depend on scripts outside the repository (`scratch/batches/` on the workstation): the tranche runner
 with its deadline and resume, the budget setter, and the time window for one machine. They have no tests.
 - **A time window per machine** in the settings (for example 02:00 to 08:00): the worker pauses with drain at the
@@ -73,6 +73,12 @@ with its deadline and resume, the budget setter, and the time window for one mac
   --window`, the dock's "Time window"; the worker pauses with drain when it closes and resumes when it opens, only at
   the edges (`dist.control.parse_window`, `in_window`; `JobManager._check_window`). Left: the deadline and resume for
   `grid build`, and batch lists.
+- 2026-11-18 (branch `feat/batch-runner`, on top of the time window): `quantabench-cli batch run` / `batch status`
+  (`dist/batch.py`): phases, attempts over what no run folder of the phase has finished, the deadline (remote
+  shares cancelled, the local share stopped at its next molecule, exit 5), snapshots of the remote shares from every
+  unmerged `grid.json` of the phase, `--include-paused`, `--list` of input files, `paired.csv` and `report.md`. The
+  deadline lives in `batch run`, not `grid build`. Not ported: the QSAR-specific `analyze_tranche.py` step, and the
+  budget setter (`machines set --max-cpu` covers it). Left: run CREST-RUN-1's water phase with it (acceptance).
 
 ## FIX-6: A flaky macOS test of run priority · ready
 `tests/test_machine_control.py::test_priority_applied_to_running_processes` fails now and then on macOS CI (a
