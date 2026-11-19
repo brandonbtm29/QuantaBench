@@ -788,6 +788,7 @@ class JobManager:
     WATCH_S = 2.0
     SETTINGS_S = 15.0
     BATTERY_S = 30.0
+    WINDOW_S = 30.0
 
     def __init__(self, output_dir: str | Path, name: str, state_dir: str | Path | None = None,
                  lanes: str | None = None, max_jobs: int = 1, log: Callable[[str], None] = _noop,
@@ -814,6 +815,8 @@ class JobManager:
         self.away_after_s = 120.0
         self.rejoin_wait_s = 600.0
         self.pause_on_battery = False
+        self.window: tuple[int, int] | None = None     # the hours this machine may work (dist.control.parse_window)
+        self._window_inside: bool | None = None        # at the last check (None: not checked since it was set)
         self.lanes = lanes
         # --priority / --free-threads of the worker: jobs that do not set their own use them (else the settings)
         self.priority = priority
@@ -847,8 +850,10 @@ class JobManager:
         if st["paused"]:
             self._log(f"Paused since {st['since'] or '?'}" + (f" by {st['by']}" if st["by"] else "")
                       + (" (on battery)" if st["reason"] == "battery" else "")
+                      + (" (outside its time window)" if st["reason"] == "window" else "")
                       + f": no job starts until `quantabench-cli worker resume` ({control_mod.pause_path(self.pause_dir)})")
         self._read_settings()
+        self._check_window()                  # outside its time window it starts paused (before any job runs)
         if self.state_dir is not None:
             self._take_state_lock()
             self._load_state()
@@ -1195,7 +1200,8 @@ class JobManager:
         if paused:
             self._log(("Paused now: molecules in progress stop at their next checkpoint" if mode == "now" else
                        "Paused: molecules in progress finish") + "; no new molecule starts"
-                      + (f" (by {by})" if by else "") + (" (on battery)" if reason == "battery" else ""))
+                      + (f" (by {by})" if by else "") + (" (on battery)" if reason == "battery" else "")
+                      + (f" (outside its time window {self._window_label()})" if reason == "window" else ""))
         elif was:
             self._log("Resumed" + (f" (by {by})" if by else "") + (f"; {len(requeued)} paused job(s) go on"
                                                                    if requeued else ""))
@@ -1366,7 +1372,16 @@ class JobManager:
             return
         self.away_after_s = max(10.0, float(s.dist.away_after_s or 120.0))
         self.rejoin_wait_s = max(10.0, float(s.dist.rejoin_wait_s or 600.0))
-        self.pause_on_battery = bool(s.machine_control_for(self.name)["pause_on_battery"])
+        control = s.machine_control_for(self.name)
+        self.pause_on_battery = bool(control["pause_on_battery"])
+        from . import control as control_mod
+
+        try:
+            window = control_mod.parse_window(control["window"])
+        except ValueError:                    # machine_control_for keeps only valid windows; never here
+            window = None
+        if window != self.window:
+            self.window, self._window_inside = window, None    # a changed window is applied at the next check
         level = s.priority_for(self.name) if self.priority is None else None
         if level is None:
             return
@@ -1391,12 +1406,38 @@ class JobManager:
         elif not on_battery and self.paused and self.pause_info.get("reason") == "battery":
             self.set_paused(False, by="power")
 
+    def _window_label(self) -> str:
+        from . import control as control_mod
+
+        return control_mod.window_text(self.window) or "none"
+
+    def _check_window(self, now: datetime | None = None) -> None:
+        """The time window (``machine_control`` "window"): pause with drain when it closes, resume when it opens.
+        It acts only when the window opens or closes (and at the first check after start or a change), so a pause
+        by hand inside the window stays, and a resume by hand outside it holds until the window closes again. A
+        window that is removed lifts its own pause."""
+        from . import control as control_mod
+
+        if self.window is None:
+            self._window_inside = None
+            if self.paused and self.pause_info.get("reason") == "window":
+                self.set_paused(False, by="window removed")
+            return
+        inside = control_mod.in_window(self.window, now)
+        if inside == self._window_inside:
+            return
+        self._window_inside = inside
+        if not inside and not self.paused:
+            self.set_paused(True, "drain", by="window", reason="window")
+        elif inside and self.paused and self.pause_info.get("reason") == "window":
+            self.set_paused(False, by=f"window {self._window_label()}")
+
     def _watch(self) -> None:
         """The watcher thread: the pause file (``worker pause`` with the worker running elsewhere writes it), sleep and
         wake, the grid client's polls, the settings (live run priority) and the battery."""
         from . import control as control_mod
 
-        last_settings = last_battery = time.monotonic()
+        last_settings = last_battery = last_window = time.monotonic()
         while not self._watch_stop.wait(self.WATCH_S):
             try:
                 st = control_mod.read_pause(self.pause_dir)
@@ -1416,6 +1457,9 @@ class JobManager:
                 if now - last_battery >= self.BATTERY_S:
                     last_battery = now
                     self._check_battery()
+                if now - last_window >= self.WINDOW_S:
+                    last_window = now
+                    self._check_window()
             except Exception as exc:  # noqa: BLE001 - the watcher must outlive anything it checks
                 self._log(f"Watcher: {type(exc).__name__}: {exc}")
 
