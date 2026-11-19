@@ -14,6 +14,7 @@ Paths inside settings may use ``~``; they are stored portably so the same file w
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import os
@@ -195,7 +196,8 @@ class SensorSettings:
 #: per-machine sensor keys and their types (``SensorSettings.machine`` entries)
 SENSOR_KEYS: dict[str, type] = {"enabled": bool, "interval_s": float, "lhm_url": str}
 #: per-machine machine-control keys (``DistSettings.machine_control`` entries, DIST-7) and their types
-MACHINE_CONTROL_KEYS: dict[str, type] = {"split": str, "weight": float, "pause_on_battery": bool, "max_cpu": float}
+MACHINE_CONTROL_KEYS: dict[str, type] = {"split": str, "weight": float, "pause_on_battery": bool, "max_cpu": float,
+                                         "window": str}
 SPLIT_MODES = ("auto", "manual", "off")
 
 
@@ -411,9 +413,12 @@ class Settings:
     def machine_control_for(self, machine: str | None = None) -> dict:
         """``machine``'s (default: this one) DIST-7 controls: ``split`` ("auto" | "manual" | "off"), ``weight`` (the
         manual weight, 1 by default), ``pause_on_battery`` (True: a laptop's worker takes no work on battery; it
-        never matters on a machine without one) and ``max_cpu`` (percent, 0 = not set); values of the wrong type are
-        ignored."""
-        out = {"split": "auto", "weight": 1.0, "pause_on_battery": True, "max_cpu": 0.0}
+        never matters on a machine without one), ``max_cpu`` (percent, 0 = not set) and ``window`` (the hours it may
+        work, "HH:MM-HH:MM" in its local time, "" = any hour; ``dist.control.parse_window``); values of the wrong type
+        or form are ignored."""
+        from .dist.control import parse_window, window_text
+
+        out = {"split": "auto", "weight": 1.0, "pause_on_battery": True, "max_cpu": 0.0, "window": ""}
         entry = _machine_entry(self.dist.machine_control, machine)
         if isinstance(entry, dict):
             for k, kind in MACHINE_CONTROL_KEYS.items():
@@ -422,6 +427,9 @@ class Settings:
                     out[k] = v
                 elif kind is float and isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v >= 0:
                     out[k] = float(v)
+                elif k == "window" and isinstance(v, str):
+                    with contextlib.suppress(ValueError):
+                        out[k] = window_text(parse_window(v))
                 elif kind is str and isinstance(v, str) and v.strip().lower() in SPLIT_MODES:
                     out[k] = v.strip().lower()
         return out
@@ -438,7 +446,11 @@ class Settings:
                 value = float(value)
                 if not value >= 0:
                     raise ValueError(f"{key} must be 0 or more")
-            if kind is str:
+            if key == "window":
+                from .dist.control import parse_window, window_text
+
+                value = window_text(parse_window(value)) or None      # "none" removes the window
+            elif kind is str:
                 value = str(value).strip().lower()
                 if value not in SPLIT_MODES:
                     raise ValueError(f"split must be one of {', '.join(SPLIT_MODES)}, not {value!r}")

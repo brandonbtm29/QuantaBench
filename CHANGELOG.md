@@ -2,6 +2,25 @@
 
 ## Unreleased (after 0.3.0)
 
+### Staged batches from the CLI: phases, attempts, a deadline and resume (BATCH-1, 2026-11-18)
+- `quantabench-cli batch run` runs a molecule list as phases (`--phases gas,water`) on the machines that answer, into one run folder, and `batch status` shows where it stands. Running the same command again resumes: only molecules without a result run.
+- Each phase runs as attempts (a `grid build --wait` each, at most `--max-attempts`); a machine that went away with molecules leaves them to the next attempt.
+- `--deadline 07:00` cancels the remote shares and stops the local share at its next molecule (exit 5, resumable).
+- What other machines finished in their synced run folders is copied into the phase folder from every unmerged `grid.json`, so a killed attempt still counts. On Nov 18 a killed attempt of the script left 337 finished molecules uncounted.
+- `--include-paused` keeps a paused machine (a time window) in the grid; `--list` runs several input files one after the other; the end pairs the phases (`paired.csv`) and writes `report.md`.
+- Until now these were `run_tranche.py` and `qb_grid.py`, scratch scripts on the workstation with no tests.
+
+### A time window per machine (BATCH-1, 2026-11-18)
+- `quantabench-cli machines set NAME --window 02:00-08:00`, or the Machines dock's "Time window": the hours a machine
+  may work, in its own local time (`22:00-06:00` wraps midnight; `none` removes it).
+- Its worker pauses itself with drain when the window closes and resumes when it opens. A grid moves the unstarted
+  molecules of the paused machine to the others, and work sharing gives it molecules again after the resume.
+- Only the window's edges act: a pause by hand inside the window stays, and a resume by hand outside it holds until
+  the window next closes. A worker that starts outside its window starts paused; removing the window lifts its
+  pause.
+- Brandon (2026-11-17): "The macbook is free to run at night from the 2 am to 8 am time frame." Until now a script on
+  the workstation paused and resumed the MacBook's worker for the CREST rebuild.
+
 ### CREST lanes of 4 threads or more, and rotatable bonds in the CREST cost model (SCHED-2, 2026-11-18)
 - **Before:** `--conformers crest` on a machine with no known performance cores (the workstation) got 2-thread lanes on all threads (11 x 2), and the CREST cost model knew atom counts only.
   - In the CREST rebuild of Nov 17-18 (7 x 2 lanes through WSL, 90-minute limit), 37 of the 88 molecules with 17-19 rotatable bonds ran out of time; 59 of the workstation's 230 lane-hours went to molecules that then ran out of time. The MacBook's 4-thread lanes had none.

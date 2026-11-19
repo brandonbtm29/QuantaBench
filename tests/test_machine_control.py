@@ -407,6 +407,84 @@ def test_pause_on_battery_and_back_on_power(tmp_path, monkeypatch):
         m.stop(5)
 
 
+def test_time_window_parsing_and_hours():
+    from datetime import datetime
+
+    assert control.parse_window("02:00-08:00") == (120, 480)
+    assert control.parse_window(" 2:00 - 8:30 ") == (120, 510)
+    assert control.parse_window("22:00-06:00") == (1320, 360)
+    assert control.parse_window("08:00-24:00") == (480, 0)
+    for none in ("", None, "none", "Always", "off"):
+        assert control.parse_window(none) is None
+    for bad in ("2-8", "02:00", "25:00-08:00", "02:60-08:00", "08:00-08:00", "24:30-02:00"):
+        with pytest.raises(ValueError):
+            control.parse_window(bad)
+    assert control.window_text((120, 480)) == "02:00-08:00" and control.window_text(None) == ""
+    at = lambda h, m=0: datetime(2026, 11, 18, h, m)  # noqa: E731
+    night = (120, 480)
+    assert control.in_window(night, at(2)) and control.in_window(night, at(7, 59))
+    assert not control.in_window(night, at(8)) and not control.in_window(night, at(1, 59))
+    wrap = (1320, 360)
+    assert control.in_window(wrap, at(23)) and control.in_window(wrap, at(0, 30)) and not control.in_window(wrap, at(12))
+    assert control.in_window(None, at(12))
+
+
+def test_time_window_pauses_and_resumes_the_worker_at_its_edges(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    settings_mod.update_machine("lap", window="02:00-08:00")
+    assert settings_mod.load().machine_control_for("lap")["window"] == "02:00-08:00"
+    m = worker_mod.JobManager(tmp_path / "runs", "lap", state_dir=tmp_path / "state", awake=False, watch=False)
+    at = lambda h, m_=0: datetime(2026, 11, 18, h, m_)  # noqa: E731
+    try:
+        m._read_settings()
+        assert m.window == (120, 480)
+        m._check_window(at(12))                         # outside: paused with drain, reason "window"
+        assert m.paused and m.pause_info["reason"] == "window" and m.pause_mode == "drain"
+        assert control.read_pause(m.pause_dir)["paused"]
+        m._check_window(at(13))                         # still outside: nothing changes
+        assert m.paused
+        m._check_window(at(2, 1))                       # the window opens: resumed
+        assert not m.paused
+        m.set_paused(True, by="me")                     # a pause by hand inside the window stays
+        m._check_window(at(3))
+        m._check_window(at(9))
+        m._check_window(at(2, 30))
+        assert m.paused and m.pause_info["reason"] == "user"
+        m.set_paused(False, by="me")
+        m._check_window(at(9))                          # closes: paused again by the window
+        assert m.paused and m.pause_info["reason"] == "window"
+        m.set_paused(False, by="me")                    # a resume by hand outside the window holds ...
+        m._check_window(at(10))
+        assert not m.paused
+        m._check_window(at(3))                          # ... until the window opens and closes again
+        m._check_window(at(8, 5))
+        assert m.paused and m.pause_info["reason"] == "window"
+        settings_mod.update_machine("lap", window=None)    # a window removed lifts its own pause
+        m._read_settings()
+        assert m.window is None
+        m._check_window(at(12))
+        assert not m.paused
+        with pytest.raises(ValueError):
+            settings_mod.update_machine("lap", window="8-2")
+    finally:
+        m.stop(5)
+
+
+def test_a_worker_started_outside_its_window_starts_paused(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    settings_mod.update_machine("lap", window="02:00-08:00")
+    real = control.in_window
+    monkeypatch.setattr(control, "in_window", lambda w, now=None: real(w, now or datetime(2026, 11, 18, 15)))
+    m = worker_mod.JobManager(tmp_path / "runs", "lap", state_dir=tmp_path / "state", awake=False, watch=False)
+    m.start()
+    try:
+        assert m.paused and m.pause_info["reason"] == "window"
+    finally:
+        m.stop(5)
+
+
 def test_clock_watch_sees_a_sleep():
     mono, wall = [0.0], [1000.0]
     cw = control.ClockWatch(interval=5.0, gap=30.0, clock=lambda: mono[0], wall=lambda: wall[0])
@@ -740,6 +818,12 @@ def test_machines_set_cli_and_max_cpu(isolated_settings, capsys, monkeypatch):
     assert cli.main(["machines", "set", "bench-pc", "--weight", "2", "--pause-on-battery"]) == 0
     c = settings_mod.load().machine_control_for("bench-pc")
     assert (c["split"], c["weight"], c["pause_on_battery"]) == ("manual", 2.0, True)
+    assert cli.main(["machines", "set", "bench-pc", "--window", "02:00-08:00"]) == 0
+    assert settings_mod.load().machine_control_for("bench-pc")["window"] == "02:00-08:00"
+    assert "works only 02:00-08:00 (its time window)" in capsys.readouterr().out
+    assert cli.main(["machines", "set", "bench-pc", "--window", "2am"]) == 2
+    assert cli.main(["machines", "set", "bench-pc", "--window", "none"]) == 0
+    assert settings_mod.load().machine_control_for("bench-pc")["window"] == ""
     assert cli.main(["machines", "set", "bench-pc", "--lanes", "gpu:x"]) == 2
     assert cli.main(["machines", "set", "elsewhere", "--max-cpu", "50"]) == 2       # no thread count known
     assert cli.main(["machines", "set", "bench-pc", "--priority", "default", "--free-threads", "default"]) == 0

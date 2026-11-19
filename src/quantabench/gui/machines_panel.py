@@ -13,8 +13,8 @@ Per machine (DIST-7, docs/WORKERS.md "Pausing a machine, a closing laptop"):
   own batch follow it); another machine is paused through its worker (``POST /v1/pause``). "Pause now" also stops
   the molecules in progress at their next checkpoint. A grid that follows a paused machine moves its unstarted
   molecules to the others.
-- **Processing budget** of the selected machine: run priority, free threads (or a max CPU %), lanes and pause on
-  battery, saved for that machine only (``settings.update_machine``: a fresh read and write). Its worker reads them
+- **Processing budget** of the selected machine: run priority, free threads (or a max CPU %), lanes, pause on
+  battery and its time window (the hours it may work; its worker pauses outside them), saved for that machine only (``settings.update_machine``: a fresh read and write). Its worker reads them
   within about 15 s once the settings have synced (the priority is applied to running lanes at once).
 
 Splitting a batch across machines is ``quantabench-cli grid build``; a "Run on" choice for the Run buttons is the next
@@ -175,6 +175,12 @@ class MachinesPanel(QWidget):
         form.addRow("Lanes", self.lanes)
         self.pause_on_battery = QCheckBox("Pause its worker while it runs on battery")
         form.addRow("", self.pause_on_battery)
+        self.window_edit = QLineEdit()
+        self.window_edit.setPlaceholderText("any hour")
+        self.window_edit.setToolTip("The hours it may work, in its own local time: HH:MM-HH:MM (02:00-08:00; "
+                                    "22:00-06:00 wraps midnight). Its worker pauses with drain when the window "
+                                    "closes and resumes when it opens. Empty = any hour.")
+        form.addRow("Time window", self.window_edit)
         buttons = QHBoxLayout()
         self.apply_btn = QPushButton("Save for this machine")
         self.apply_btn.clicked.connect(self.apply_budget)
@@ -240,6 +246,7 @@ class MachinesPanel(QWidget):
             own = next((v for k, v in s.dist.machine_lanes.items() if settings_mod.machine_key(k) == key), "")
             self.lanes.setText(str(own or ""))
             self.pause_on_battery.setChecked(bool(c["pause_on_battery"]))
+            self.window_edit.setText(c["window"])
         finally:
             self._filling = before
 
@@ -256,11 +263,18 @@ class MachinesPanel(QWidget):
         if err:
             self.note.setText(f"Lanes {spec!r}: {err}")
             return
+        from ..dist import control
+
+        try:
+            window = control.window_text(control.parse_window(self.window_edit.text()))
+        except ValueError as exc:
+            self.note.setText(str(exc))
+            return
         level = self.priority.currentText()
         values = {"priority": None if level == "default" else level,
                   "free_threads": None if self.free_threads.value() < 0 else self.free_threads.value(),
                   "lanes": spec, "pause_on_battery": self.pause_on_battery.isChecked(),
-                  "max_cpu": float(self.max_cpu.value()) or None}
+                  "max_cpu": float(self.max_cpu.value()) or None, "window": window or None}
         try:
             settings_mod.update_machine(key, **values)
         except (OSError, ValueError) as exc:
@@ -269,7 +283,8 @@ class MachinesPanel(QWidget):
         self._sync_window_settings()
         self.note.setText(f"Saved for {key}: priority {level}, free threads "
                           f"{'default' if values['free_threads'] is None else values['free_threads']}, lanes "
-                          f"{spec or 'default'}. Its worker reads them within about 15 s once the settings have "
+                          f"{spec or 'default'}" + (f", time window {window}" if window else "")
+                          + ". Its worker reads them within about 15 s once the settings have "
                           "synced (the priority at once, lanes and free threads with its next job).")
         self.refresh()
 
