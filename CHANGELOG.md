@@ -2,6 +2,9 @@
 
 ## Unreleased (after 0.3.0)
 
+### "conformer pools merged" is logged once (2026-11-19)
+- A molecule whose CREST and RDKit conformer pools were merged logged the merge line twice: once when the pools were merged, and again with the pool's other notes. It is now logged once, with the other notes.
+
 ### Staged batches from the CLI: phases, attempts, a deadline and resume (BATCH-1, 2026-11-18)
 - `quantabench-cli batch run` runs a molecule list as phases (`--phases gas,water`) on the machines that answer, into one run folder, and `batch status` shows where it stands. Running the same command again resumes: only molecules without a result run.
 - Each phase runs as attempts (a `grid build --wait` each, at most `--max-attempts`); a machine that went away with molecules leaves them to the next attempt.
