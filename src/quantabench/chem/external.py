@@ -21,7 +21,8 @@ This module is the shared contract every external engine uses:
                             run priority in force (``quantabench.priority``; ``popen_args`` builds the call)
 
 Engines pass **file names relative to ``cwd``** in ``cmd``, so the same command works natively and
-through WSL (where ``cwd`` is translated to ``/mnt/c/...``).
+through WSL (where ``cwd`` is translated to ``/mnt/c/...``, or the program runs in a folder inside WSL:
+``program_cwd``, ``chem.wsl_scratch``).
 """
 
 from __future__ import annotations
@@ -480,6 +481,9 @@ SCRATCH_FILE_RE = re.compile(r"^psi\.\d+\.\w+$|^timer\.dat$")
 SCRATCH_KEEP_DAYS = 3.0
 #: a folder without an owner record (made before 2026-11-13, SCRATCH-1) counts as left behind after this long unchanged
 UNOWNED_GRACE_H = 12.0
+#: in a job folder whose program runs in a folder inside WSL (``chem.wsl_scratch``): that folder ({"dir", "kind"}), so
+#: ``sweep_scratch`` removes it too when the job's process was killed
+WSL_TWIN_FILE = ".qb_wsl_dir"
 
 
 #: a scratch root for when the settings name none, before the system's temp folder (the test suite sets it, so a
@@ -505,16 +509,29 @@ def _this_process_started() -> float:
         return 0.0
 
 
-def make_scratch_dir(prefix: str) -> Path:
-    """A new folder in the scratch root with this process's owner record (``OWNER_FILE``)."""
+def owner_record() -> dict:
+    """This process as the owner of a scratch folder (``OWNER_FILE``): pid, start time, host, now."""
     import socket
 
+    return {"pid": os.getpid(), "started": _this_process_started(), "host": socket.gethostname(),
+            "created": time.time()}
+
+
+def make_scratch_dir(prefix: str) -> Path:
+    """A new folder in the scratch root with this process's owner record (``OWNER_FILE``)."""
     d = Path(tempfile.mkdtemp(prefix=f"{ascii_name(prefix)}_", dir=scratch_root()))
     with contextlib.suppress(OSError):
-        (d / OWNER_FILE).write_text(json.dumps({"pid": os.getpid(), "started": _this_process_started(),
-                                                "host": socket.gethostname(), "created": time.time()}),
-                                    encoding="utf-8")
+        (d / OWNER_FILE).write_text(json.dumps(owner_record()), encoding="utf-8")
     return d
+
+
+def wsl_twin(folder: str | Path) -> str:
+    """The folder inside WSL that a job folder's program ran in (``WSL_TWIN_FILE``), '' if none."""
+    try:
+        info = json.loads((Path(folder) / WSL_TWIN_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(info.get("dir") or "") if isinstance(info, dict) else ""
 
 
 def remove_if_empty(folder: str | Path) -> bool:
@@ -617,10 +634,32 @@ class SweepResult:
     removed: int = 0              # of them, folders removed whole (older than the keep time)
     freed_bytes: int = 0
     running: int = 0              # folders of processes still running (left alone)
+    wsl_removed: int = 0          # of them, folders whose job folder inside WSL was removed (``WSL_TWIN_FILE``)
 
     def summary(self) -> str:
         return (f"{self.freed_bytes / 1e9:.1f} GB freed in {self.folders} left-behind scratch folder(s) "
-                f"({self.removed} removed, {self.pruned} kept with their logs)")
+                f"({self.removed} removed, {self.pruned} kept with their logs)"
+                + (f"; {self.wsl_removed} job folder(s) inside WSL removed" if self.wsl_removed else ""))
+
+
+def _remove_wsl_twins(folders: list[Path]) -> int:
+    """Remove the folders inside WSL these left-behind job folders' programs ran in (``WSL_TWIN_FILE``; one
+    ``wsl.exe`` call for all), then their records. Returns how many; 0 when WSL cannot be reached (the records stay
+    for the next sweep)."""
+    from . import wsl_scratch
+
+    twins = {d: wsl_twin(d) for d in folders}
+    twins = {d: t for d, t in twins.items() if t}
+    if not twins:
+        return 0
+    try:
+        wsl_scratch.remove(list(twins.values()))
+    except wsl_scratch.WslScratchError:
+        return 0
+    for d in twins:
+        with contextlib.suppress(OSError):
+            (d / WSL_TWIN_FILE).unlink()
+    return len(twins)
 
 
 def sweep_scratch(owners: set[int] | None = None, keep_days: float = SCRATCH_KEEP_DAYS,
@@ -630,7 +669,8 @@ def sweep_scratch(owners: set[int] | None = None, keep_days: float = SCRATCH_KEE
     (``prune_scratch``), the folder itself, with its logs, once it is ``keep_days`` old. A folder of a process
     that is still running is never touched, nor one of another host. ``owners``: only folders made by these
     pids (the lanes just killed). Without an owner record (older versions) a folder counts as left behind after
-    ``UNOWNED_GRACE_H`` hours unchanged. ``settings.engines.keep_scratch`` turns the sweep off."""
+    ``UNOWNED_GRACE_H`` hours unchanged. A left-behind folder whose program ran inside WSL (``WSL_TWIN_FILE``,
+    ``chem.wsl_scratch``) also gets that folder removed. ``settings.engines.keep_scratch`` turns the sweep off."""
     res = SweepResult()
     if bool(getattr(_engine_settings(), "keep_scratch", False)):
         return res
@@ -640,6 +680,7 @@ def sweep_scratch(owners: set[int] | None = None, keep_days: float = SCRATCH_KEE
         folders = [d for d in root.iterdir() if d.is_dir()]
     except OSError:
         return res
+    left: list[tuple[Path, float]] = []           # (folder, seconds since its last change)
     for d in folders:
         info = _owner(d)
         if info is not None:
@@ -650,8 +691,12 @@ def sweep_scratch(owners: set[int] | None = None, keep_days: float = SCRATCH_KEE
                 continue
         elif owners is not None or now - _newest_change(d) < UNOWNED_GRACE_H * 3600:
             continue
+        left.append((d, now - _newest_change(d)))
+    if left and not dry_run:   # before the folders change: a folder removed whole takes its twin's record with it
+        res.wsl_removed = _remove_wsl_twins([d for d, _age in left])
+    for d, age in left:
         res.folders += 1
-        if now - _newest_change(d) >= keep_days * 86400:
+        if age >= keep_days * 86400:
             size = _folder_bytes(d)
             if not dry_run:
                 shutil.rmtree(d, ignore_errors=True)
@@ -758,23 +803,28 @@ class ProgramRun:
         return "\n".join(self.text().splitlines()[-n:])
 
 
-def _kill_wsl_side(cwd: Path) -> None:
-    """Kill the Linux process a ``wsl:`` program started (its PID is in ``cwd/.qb_pid``)."""
-    if not (cwd / ".qb_pid").is_file():
-        return
+def _kill_wsl_side(cwd: Path, linux_cwd: str | None = None) -> None:
+    """Kill the Linux process a ``wsl:`` program started (its PID is in ``.qb_pid`` of the folder it ran in:
+    ``linux_cwd`` inside WSL, else ``cwd`` through ``/mnt``)."""
+    if not linux_cwd:
+        if not (cwd / ".qb_pid").is_file():
+            return
+        linux_cwd = to_wsl_path(cwd.resolve())
     script = ('p=$(cat .qb_pid 2>/dev/null); [ -n "$p" ] || exit 0; kill -TERM "$p" 2>/dev/null; '
               'for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$p" 2>/dev/null || exit 0; sleep 0.5; done; '
               'kill -KILL "$p" 2>/dev/null; true')
     with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run(["wsl.exe", "--cd", to_wsl_path(cwd.resolve()), "-e", "sh", "-c", script],
+        subprocess.run(["wsl.exe", "--cd", linux_cwd, "-e", "sh", "-c", script],
                        capture_output=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
 
 
-def _kill_tree(proc: subprocess.Popen, cwd: Path | None = None, via_wsl: bool = False) -> None:
+def _kill_tree(proc: subprocess.Popen, cwd: Path | None = None, via_wsl: bool = False,
+               linux_cwd: str | None = None) -> None:
     """Stop ``proc`` and everything it started: the process group on POSIX (SIGTERM, then SIGKILL for
-    whatever is left), ``taskkill /T`` on Windows, and the Linux side of a WSL program."""
+    whatever is left), ``taskkill /T`` on Windows, and the Linux side of a WSL program (which ran in ``linux_cwd``
+    inside WSL, or in ``cwd``)."""
     if via_wsl and cwd is not None:
-        _kill_wsl_side(cwd)
+        _kill_wsl_side(cwd, linux_cwd)
     if proc.poll() is not None:
         return
     try:
@@ -811,7 +861,8 @@ def set_program_registry(folder: str | Path | None) -> None:
     _program_registry = Path(folder) if folder else None
 
 
-def _record_program(proc: subprocess.Popen, cwd: Path, via_wsl: bool, shown: Sequence[str]) -> Path | None:
+def _record_program(proc: subprocess.Popen, cwd: Path, via_wsl: bool, shown: Sequence[str],
+                    linux_cwd: str | None = None) -> Path | None:
     if _program_registry is None:
         return None
     try:
@@ -825,7 +876,8 @@ def _record_program(proc: subprocess.Popen, cwd: Path, via_wsl: bool, shown: Seq
     try:
         _program_registry.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps({"pid": proc.pid, "started": started, "cwd": str(cwd), "via_wsl": via_wsl,
-                                   "cmd": [str(c) for c in shown[:3]]}), encoding="utf-8")
+                                   "wsl_cwd": linux_cwd or "", "cmd": [str(c) for c in shown[:3]]}),
+                       encoding="utf-8")
         os.replace(tmp, path)            # never a half-written record
     except OSError:
         return None
@@ -841,7 +893,7 @@ def _kill_recorded(info: dict) -> bool:
         return False
     cwd = Path(str(info.get("cwd", "")))
     if info.get("via_wsl") and IS_WINDOWS:
-        _kill_wsl_side(cwd)              # wsl.exe going away does not stop the Linux side
+        _kill_wsl_side(cwd, str(info.get("wsl_cwd") or "") or None)   # wsl.exe going away does not stop Linux's side
     try:
         same = abs(psutil.Process(pid).create_time() - float(info.get("started") or 0.0)) < 1.0
         alive = True
@@ -1135,7 +1187,7 @@ def program_name(cmd: Sequence[str]) -> str:
 def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: dict[str, str] | None = None,
                 stdin_text: str | None = None, timeout: float | None = None, log_name: str = "program.log",
                 should_stop: Callable[[], bool] | None = None, log: Callable[[str], None] | None = None,
-                check: bool = True, poll_s: float = 0.2) -> ProgramRun:
+                check: bool = True, poll_s: float = 0.2, program_cwd: str | None = None) -> ProgramRun:
     """Run ``cmd`` in ``cwd``; stdout+stderr go to ``cwd/log_name``.
 
     ``cmd[0]`` may be a ``ProgramInfo.command()`` prefix, including the WSL launcher; file arguments
@@ -1143,13 +1195,17 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
     ``program_env(threads)``. ``should_stop`` is polled every ``poll_s`` seconds: when it returns True the
     whole process tree is killed and ``Cancelled`` is raised. A timeout raises ``ExternalProgramError``,
     so does a non-zero exit when ``check`` (with the last lines of the log).
+
+    ``program_cwd``: the folder the program runs in when it is not ``cwd`` (which then holds only the log): for a
+    WSL program a Linux path inside WSL (``chem.wsl_scratch``), so its files never cross to the Windows disk.
     """
     cwd = Path(cwd)
     cwd.mkdir(parents=True, exist_ok=True)
     cmd = [str(c) for c in cmd]
     via_wsl = bool(cmd) and Path(cmd[0]).name.lower() in ("wsl.exe", "wsl")
+    linux_cwd = program_cwd if via_wsl and program_cwd else None
     if via_wsl:
-        cmd = [cmd[0], "--cd", to_wsl_path(cwd.resolve()), *cmd[1:]]
+        cmd = [cmd[0], "--cd", linux_cwd or to_wsl_path(cwd.resolve()), *cmd[1:]]
     if env is None:
         env = program_env(threads, via_wsl=via_wsl)
     if timeout is None:
@@ -1165,7 +1221,9 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
     name = program_name(shown)
     usage: tuple[float | None, float | None] = (None, None)
     with open(log_file, "wb") as out:
-        kwargs: dict = {"cwd": str(cwd), "env": env, "stdout": out, "stderr": subprocess.STDOUT,
+        # a native program's own folder (program_cwd), else cwd (also for wsl.exe, which takes its folder from --cd)
+        kwargs: dict = {"cwd": str(program_cwd if program_cwd and not via_wsl else cwd), "env": env, "stdout": out,
+                        "stderr": subprocess.STDOUT,
                         "stdin": subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL, **start_kwargs}
         if not IS_WINDOWS and not Path(shown[0]).is_file() and shutil.which(shown[0]) is None:
             raise ExternalProgramError(f"could not start {shown[0]}: no such program")
@@ -1177,7 +1235,7 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
             raise ExternalProgramError(f"could not start {shown[0]}: {exc}") from exc
         priority.after_start(proc.pid, prio)     # Windows: the program's I/O priority
         meter.started(proc)
-        record = _record_program(proc, cwd, via_wsl, shown)
+        record = _record_program(proc, cwd, via_wsl, shown, linux_cwd)
         try:
             if stdin_text is not None:
                 try:
@@ -1195,14 +1253,14 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
                 if should_stop is not None and should_stop():
                     raise Cancelled()
                 if timeout is not None and time.perf_counter() - t0 > timeout:
-                    _kill_tree(proc, cwd, via_wsl)
+                    _kill_tree(proc, cwd, via_wsl, linux_cwd)
                     run = ProgramRun(-1, time.perf_counter() - t0, log_file)
                     raise ExternalProgramError(f"{Path(shown[0]).name} timed out after {timeout:.0f} s\n"
                                                f"{run.tail()}")
         except BaseException:
             # Cancel, Ctrl+C (the child has its own session, so SIGINT never reaches it), or any error in
             # should_stop/log: never leave the program running.
-            _kill_tree(proc, cwd, via_wsl)
+            _kill_tree(proc, cwd, via_wsl, linux_cwd)
             raise
         finally:
             if record is not None:

@@ -124,4 +124,6 @@ ignore = [
 "src/quantabench/chem/external.py" = ["S603", "S607", "S110"]
 "src/quantabench/chem/eng_*.py" = ["S603", "S607"]
 "src/quantabench/chem/crest.py" = ["S603", "S607"]
+# wsl.exe runs its shell steps; /dev/shm here is WSL's, and every job folder in it is made by mktemp -d
+"src/quantabench/chem/wsl_scratch.py" = ["S603", "S607", "S108"]
 "src/quantabench/chem/qm.py" = ["S603", "S607"]

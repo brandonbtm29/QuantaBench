@@ -102,6 +102,11 @@ class EngineSettings:
     omp_stacksize: str = "4G"         # OMP_STACKSIZE for xtb/CREST/MOPAC/Psi4 child processes
     qm_memory_gb: float = 4.0         # memory per Psi4 job
     timeout_s: float = 0.0            # 0 = no limit per external run
+    # where CREST through WSL (a wsl: path on Windows) runs (chem.wsl_scratch, CREST-SCRATCH-1): "auto" = /dev/shm
+    # inside WSL when it has room, else WSL's own disk; "shm"; "disk"; "off" = the Windows scratch folder through
+    # /mnt/c (before 2026-11-20: every file CREST writes crosses to the Windows disk). Native CREST is not affected.
+    crest_wsl_scratch: str = "auto"
+    crest_wsl_shm_min_gb: float = 2.0  # "auto": /dev/shm and WSL's free memory keep this much, plus 2x the job's size
 
 
 @dataclass

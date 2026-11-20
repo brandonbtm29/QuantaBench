@@ -593,9 +593,11 @@ def record_decisions(monkeypatch) -> list:
 
 def test_speed_aware_slow_lane_leaves_the_batch_to_the_fast_lane(tmp_path, monkeypatch):
     """The benchmark says cpu2 is 100x slower: it leaves all 4 molecules to cpu1 (one log line says so), and
-    the run completes."""
+    the run completes. cpu1 takes 1 s per molecule, so cpu2 is ready and asked while molecules are still
+    queued: with no delay cpu1 sometimes finished all 4 before cpu2 had started, and nothing was held (the
+    speed ratio, and so the decision, does not change: the benchmark is scaled to cpu1's measured time)."""
     seeds(monkeypatch)
-    monkeypatch.setenv(L.TEST_DELAY_ENV, "cpu2=2.0")
+    monkeypatch.setenv(L.TEST_DELAY_ENV, "cpu1=1.0,cpu2=2.0")
     c = cfg(tmp_path)
     logs = []
     results, out = jobs.run_resumable(inputs(), c, tmp_path / "run", log=logs.append, lanes=two_kinds())
