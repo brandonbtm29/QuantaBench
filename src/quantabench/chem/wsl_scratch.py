@@ -77,7 +77,8 @@ def _one_line(script: str) -> str:
 
 
 #: what the choice needs: the disk folder, free space on /dev/shm, available memory, and the job folders there
-#: (path, age in s, size in KB, owner record). Args: SHM_ROOT, DISK_SUBDIR, MEMINFO.
+#: (path, age in s, size in KB, owner record). Args: SHM_ROOT, DISK_SUBDIR, MEMINFO. The age takes GNU stat (WSL)
+#: or BSD stat (the tests' stand-in for WSL on macOS); without either a folder counts as new and is kept.
 PROBE_SCRIPT = _one_line(r'''
 shm=$1; cache="${XDG_CACHE_HOME:-$HOME/.cache}"; disk="$cache/$2";
 echo "disk_root=$disk";
@@ -89,7 +90,7 @@ for root in "$shm" "$disk"; do
   for d in "$root"/*/; do
     [ -d "$d" ] || continue;
     d=${d%/};
-    age=$(( now - $(stat -c %Y -- "$d" 2>/dev/null || echo "$now") ));
+    age=$(( now - $(stat -c %Y -- "$d" 2>/dev/null || stat -f %m -- "$d" 2>/dev/null || echo "$now") ));
     kb=$(du -sk -- "$d" 2>/dev/null | cut -f1);
     owner=$(cat "$d/.qb_owner.json" 2>/dev/null | tr -d '\n\t');
     printf 'job\t%s\t%s\t%s\t%s\n' "$d" "$age" "${kb:-0}" "$owner";
