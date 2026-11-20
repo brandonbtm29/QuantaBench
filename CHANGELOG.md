@@ -2,6 +2,19 @@
 
 ## Unreleased (after 0.3.0)
 
+### MD on AMD OpenCL GPUs: no nonbonded forces with LAMMPS' default tuning (MD-2 fix, 2026-11-20)
+- On the workstation's RX 9060 XT (gfx1200), the GPU package's "AMD_GPU" OpenCL tuning built empty neighbor lists without an error.
+  - The pair style and `pppm/gpu` returned no force, energy or virial, so an NPT box of C6F14 expanded to half its density.
+  - `clear` then hung while the device shut down.
+  - `device_type generic` fixes both: the forces match the CPU to 1e-6.
+- `md.liquid.gpu_switches()` now gives the GPU command line: `-sf hybrid gpu omp -pk gpu 1 device_type generic pair/only on -pk omp N`.
+  - With `pair/only on`, PPPM and the bonded terms run on N OpenMP threads.
+  - It was the fastest setup measured: 15.2 ns/day for 9,780 atoms, against 10.2 with everything on the GPU.
+  - `device_type generic` is left out on CUDA/HIP builds.
+  - The MD-2 README and the MD benchmark's GPU variants use it.
+- `in.bulk` and `in.slab` now stop with `QB_ERROR` and exit code 3 when the pair style returns no energy at all.
+  - The check is `run 0` plus a guard on `ecoul` and `evdwl − etail`, so a GPU failure like this one can't run silently.
+
 ### An MD benchmark of each machine (MD-BENCH-1, 2026-11-20)
 - `quantabench-cli machines --bench md` measures how many ns/day this machine's LAMMPS runs a molecular liquid.
   - The liquid is C6F14 with OPLS-AA: 3,000 atoms by default, or with `--md-size pilot` the 9,780 atoms of MD-2's pilot slab.
@@ -10,7 +23,7 @@
   - Each variant is its own LAMMPS process, and ns/day is LAMMPS' own `Performance:` line.
 - The variants:
   - On the CPU with OpenMP: `ewald`, `cutoff12` and `cutoff16`.
-  - Where `lmp -h` lists the GPU package: `-sf gpu -pk gpu 1` with `cutoff12` and `cutoff16`.
+  - Where `lmp -h` lists the GPU package: `md.liquid.gpu_switches()` (see the fix above) with `cutoff12` and `cutoff16`.
   - `--md-variants` picks others (`cpu-cutoff18`, `kokkos-cutoff16`), and `--md-threads N` sets the CPU threads.
 - **A CPU/GPU check.** On the workstation the GPU package's NPT expanded a C6F14 box to half its density while the CPU held it.
   - Each GPU (or KOKKOS) variant now repeats the CPU's `run 0` on the same configuration and velocities.

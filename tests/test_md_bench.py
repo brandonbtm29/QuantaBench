@@ -181,7 +181,10 @@ def test_variants_parse_validate_and_plan():
 def test_accelerator_switches():
     gpu = lammps_info()
     assert bench.accelerator_args(gpu, "cpu", 6) == (["-sf", "omp", "-pk", "omp", "6"], 6, "omp")
-    assert bench.accelerator_args(gpu, "gpu", 6) == (["-sf", "gpu", "-pk", "gpu", "1"], 1, "gpu")
+    assert bench.accelerator_args(gpu, "gpu", 6) == (["-sf", "hybrid", "gpu", "omp", "-pk", "gpu", "1", "device_type",
+                                                      "generic", "pair/only", "on", "-pk", "omp", "6"], 6, "gpu")
+    cuda = lammps_info(HELP_GPU.replace("GPU package API: OpenCL", "GPU package API: CUDA"))
+    assert "device_type" not in bench.accelerator_args(cuda, "gpu", 6)[0]
     assert bench.accelerator_args(gpu, "kokkos", 6) == (["-k", "on", "g", "1", "-sf", "kk"], 1, "kokkos-gpu")
     omp_kk = lammps_info(HELP_GPU.replace("HIP Serial", "OpenMP"))
     assert bench.accelerator_args(omp_kk, "kokkos", 4)[0] == ["-k", "on", "t", "4", "-sf", "kk"]

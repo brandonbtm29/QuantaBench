@@ -29,7 +29,7 @@ LAMMPS' own ``Performance:`` line of the timed run. Variants are ``<accelerator>
 
 ``cpu``     ``-sf omp -pk omp N`` (OPENMP package; plain styles without it), N threads (default: the thread budget
             of a one-lane run, at most the physical cores: LAMMPS' OpenMP styles gain little from SMT)
-``gpu``     ``-sf gpu -pk gpu 1`` (GPU package; where ``lmp -h`` lists it), cutoff variants only: LAMMPS has no
+``gpu``     ``liquid.gpu_switches``: ``-sf hybrid gpu omp -pk gpu 1 [device_type generic] pair/only on -pk omp N`` (GPU package; where ``lmp -h`` lists it), cutoff variants only: LAMMPS has no
             GPU version of ``lj/long/coul/long`` or ``pppm/disp``
 ``kokkos``  ``-k on g 1 -sf kk`` (KOKKOS with a GPU backend) or ``-k on t N -sf kk`` (OpenMP backend); only
             when asked for
@@ -281,7 +281,10 @@ def accelerator_args(info: LammpsInfo, accelerator: str, threads: int) -> tuple[
             return ["-sf", "omp", "-pk", "omp", str(threads)], threads, "omp"
         return [], 1, "none"
     if accelerator == "gpu":
-        return ["-sf", "gpu", "-pk", "gpu", "1"], 1, "gpu"
+        from .liquid import gpu_switches
+        opencl = str(info.accelerators.get("GPU", {}).get("api", "")).lower() == "opencl"
+        omp = threads if info.has("OPENMP") else None
+        return gpu_switches(opencl, omp), (omp or 1), "gpu"
     if info.kokkos_on_gpu:
         return ["-k", "on", "g", "1", "-sf", "kk"], 1, "kokkos-gpu"
     return ["-k", "on", "t", str(threads), "-sf", "kk"], threads, "kokkos-omp"

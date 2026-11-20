@@ -750,7 +750,8 @@ Depends on: none (research only; can run any night).
 - 2026-11-05: done through FORK-1: the dxtb fork with tad-libcint 0.4 gives GFN2, polarizability and IR
   intensities natively on Windows (the workstation: matches Linux to ~1e-15 to 4e-9).
 
-## MD-2: Liquid-slab surface tension · in-PR 2026-11-20 (branch `feat/md-surface-tension`; the pilot runs needs-Brandon)
+## MD-2: Liquid-slab surface tension · merged 2026-11-20 (PR #33); the pilot runs are running
+- 2026-11-20, GPU: on the workstation's RX 9060 XT (OpenCL), LAMMPS' default AMD tuning gave empty neighbor lists, so there were no nonbonded forces (NPT expanded; `clear` hung). Fixed by `device_type generic` in `md.liquid.gpu_switches()`, plus a `QB_ERROR` guard in the inputs (PR with MD-BENCH-1). Other AMD/OpenCL cards untested.
 Plan: the Claude Doc "Plan: first MD surface-tension tests in QuantaBench"; methods: docs/ENGINES.md, "Liquid-slab MD
 and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecular dynamics".
 - Done (2026-11-20):

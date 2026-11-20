@@ -215,7 +215,16 @@ def test_cutoff_variant_has_tail_in_bulk_only(c6f14, tmp_path):
     assert "lj/cut/coul/long ${rc}" in bulk and "variable rc             index 16" in bulk
     assert "pair_modify     mix geometric tail yes" in bulk
     assert "tail yes" not in slab and "kspace_style    pppm ${kacc}" in slab and "pppm/disp" not in slab
-    assert "-sf gpu -pk gpu 1 -in in.slab" in (tmp_path / "README.txt").read_text(encoding="utf-8")
+    readme = (tmp_path / "README.txt").read_text(encoding="utf-8")
+    assert "-sf hybrid gpu omp -pk gpu 1 device_type generic pair/only on -pk omp 4 -in in.slab" in readme
+    for text in (bulk, slab):                     # the guard against a GPU run without nonbonded forces
+        assert "variable        qb_epair equal abs(ecoul)+abs(evdwl-etail)" in text and '"quit 3"' in text
+
+
+def test_gpu_switches():
+    assert L.gpu_switches(True, 4) == ["-sf", "hybrid", "gpu", "omp", "-pk", "gpu", "1", "device_type", "generic",
+                                       "pair/only", "on", "-pk", "omp", "4"]
+    assert L.gpu_switches(False, None) == ["-sf", "gpu", "-pk", "gpu", "1"]
 
 
 def test_parse_dispersion_and_box_plan(hexane):
