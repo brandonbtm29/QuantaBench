@@ -90,6 +90,14 @@ PROGRAMS: dict[str, ProgramSpec] = {
     "obabel": ProgramSpec("obabel", ("obabel",), ("-V",), r"Open Babel (\d+\.\d+(?:\.\d+)?)",
                           "conda install -c conda-forge openbabel (GPL-2.0: QuantaBench runs it as a separate program)",
                           engine=False),
+    # liquid MD setups (md.liquid, md.forcefield; MD-2). Packmol (MIT) packs the box; without it a lattice start is
+    # used. antechamber marks the AmberTools environment whose Python runs md/ff_driver.py (GAFF2, OpenFF Sage)
+    "packmol": ProgramSpec("packmol", ("packmol",), ("--version",), r"Version (\d+\.\d+(?:\.\d+)?)",
+                           "conda install -c conda-forge packmol (or a build from https://github.com/m3g/packmol)",
+                           engine=False),
+    "antechamber": ProgramSpec("antechamber", ("antechamber",), ("-h",), r"antechamber (\d+(?:\.\d+)*)",
+                               "conda create -n qbmd -c conda-forge python=3.12 ambertools packmol openff-toolkit-base "
+                               "openff-interchange-base openff-forcefields (Linux, macOS, WSL)", engine=False),
 }
 
 

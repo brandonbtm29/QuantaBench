@@ -17,6 +17,9 @@
                          [--lammps-dir DIR]
     quantabench-cli md smd --system pfoa_graphite.extxyz -o DIR [--gpu] [--run]
     quantabench-cli md parse DIR
+    quantabench-cli md liquid-slab --smiles "FC(F)(F)C(F)(F)..." --name c6f14 -o DIR [--ff oplsaa|openff|gaff2]
+                         [--dispersion ewald|cutoff12|cutoff16] [--size pilot|full] [--molecules N] [--run]
+    quantabench-cli md surface-tension DIR                                      # sigma +- error, densities, checks
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
     quantabench-cli update [--check] [--upgrade-packages]                       # git pull + reinstall if needed
     quantabench-cli sketcher [--install [--from-zip ZIP]] [--use DIR]            # the Sketch dock's editor files
@@ -1221,7 +1224,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--lammps-gpu", action="store_true", help="with --lammps-dir: use the LAMMPS GPU package")
     s.set_defaults(func=_slab)
 
-    md = sub.add_parser("md", help="LAMMPS steered MD: write setups, summarize results")
+    md = sub.add_parser("md", help="LAMMPS: steered MD and liquid-slab surface tension; write setups, summarize results")
     msub = md.add_subparsers(dest="md_command", required=True)
     sm = msub.add_parser("smd", help="adsorbate pulled off a frozen slab (rigid adsorbate, UFF/graphite LJ)")
     sm.add_argument("--system", required=True, help="extxyz/traj with tags (0 = surface, 1 = adsorbate) and charges")
@@ -1237,6 +1240,9 @@ def build_parser() -> argparse.ArgumentParser:
     mp = msub.add_parser("parse", help="summarize log.lammps and pull_force.txt (detachment work, peak force)")
     mp.add_argument("dir")
     mp.set_defaults(func=_md_parse)
+    from .cli_md import register as register_md
+
+    register_md(msub)           # md liquid-slab, md surface-tension (quantabench.cli_md)
 
     up = sub.add_parser("update", help="update this QuantaBench checkout (git pull --ff-only, reinstall if "
                                        "dependencies changed; --upgrade-packages also upgrades the packages)")

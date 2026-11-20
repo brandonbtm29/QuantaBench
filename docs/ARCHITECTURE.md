@@ -78,6 +78,10 @@
 | `md.params` | UFF Lennard-Jones table (Rappé 1992) and graphite presets (AMBER parm94, Steele 1973). |
 | `md.lammps` | `write_smd_setup`: `system.data`, `in.smd` (rigid adsorbate, frozen slab, Langevin, `fix smd`), README, JSON; `run_lammps` via the Python module. |
 | `md.lammps_log` | `log.lammps` thermo blocks, `pull_force.txt`, detachment work and peak force. |
+| `md.oplsaa` | MD-2: OPLS-AA atom typing (alkanes, Watkins-Jorgensen perfluoroalkanes, (fluoro)benzenes) and its parameter table, each value with its GROMACS `oplsaa.ff` line (cross-checked against foyer's XML by `scripts/check_oplsaa_params.py`); RB to OPLS torsion conversion. |
+| `md.forcefield` | MD-2: `type_molecule(smiles, ff=)` -> `TypedMolecule` (types, charges, LJ, bonded terms in LAMMPS real units, a source per parameter, LJ overrides); backends `oplsaa` (in process), `gaff2` and `openff` (AmberTools/OpenFF in their own conda env through `md/ff_driver.py`, the Python found next to `antechamber`). |
+| `md.liquid` | MD-2: the liquid-slab folder: box plan, Packmol or lattice packing, `system.data`, `ff.params`, `in.bulk` (NPT), `in.slab` (opens the box along z, NVT, pressure tensor and density profile), README, JSON; `run_liquid_slab` via the Python module. |
+| `md.surface_tension` | MD-2: σ = (Lz/2)⟨Pzz − (Pxx+Pyy)/2⟩ with block errors, statistical inefficiency, blocking curve; centred density profiles and their tanh fit; bulk density, drift and checks; `surface_tension.json` / `.md`. |
 | `gui.main_window` | Window, docks, toolbars, the Appearance dock, the status line, the 2D/3D splitter and the shared selection; File > Open run folder, Build > Resume run folder. |
 | `gui.workspaces` | UI-1's task workspaces: `WORKSPACES` (Build, Calculate, Simulate, Analyze, Library: the docks each shows, by object name and area) and `WorkspaceManager` (the activity bar, switching, each workspace's own `saveState` kept in the window settings, Reset layout). |
 | `gui.playback` | `PlaybackBar` under the view: first / previous / play / next / last, a slider, a label and a rate; it holds only an index and a count, so conformers now and frames or molecules later. |
@@ -102,7 +106,7 @@
 | `gui.review_panel` | The Review window (ADV-1): shown when Run is pressed (`MainWindow.request_run` -> `review_before_run`) and on demand (Review..., F6); the review runs on a worker thread; Apply sets a finding's or preset's settings in the pipeline pages, Explain opens the methods guide. |
 | `gui.surface_dialog`, `gui.settings_dialog`, `gui.workers` | Dialogs and `QThread` workers. |
 | `gui.energy_widgets` | `EnergySpinBox`: an energy input shown in the display unit and stored in a fixed one (the energy window in kcal/mol), returning the stored value exactly until it is edited. |
-| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`); `sketcher` (`cli_sketcher`); `monitor` (`cli_monitor`: live machine metrics); `methods` (`cli_methods`); `review` and the review header of `build` (`cli_review`). |
+| `cli` | `doctor`, `build` (resumable for batches), `status`, `merge`, `freq`, `import`, `slab`, `md smd`, `md parse`, `settings`; `md liquid-slab`, `md surface-tension` (`cli_md`); `pubchem enrich`/`lookup` (`cli_pubchem`); `conformers compare` (`cli_conformers`); `sketcher` (`cli_sketcher`); `monitor` (`cli_monitor`: live machine metrics); `methods` (`cli_methods`); `review` and the review header of `build` (`cli_review`). |
 
 ## Key decisions
 
@@ -209,4 +213,10 @@ aborts the process).
 <smd folder>/              md smd, slab --lammps-dir, or the surface builder
     system.data  in.smd  README.txt  smd_setup.json
     log.lammps  pull_force.txt  smd.lammpstrj  equilibrated.data  final.data   (after the run)
+
+<liquid-slab folder>/      md liquid-slab (MD-2)
+    system.data  ff.params  in.bulk  in.slab  in.run  README.txt  liquid_setup.json  packing/
+    log.bulk  bulk_density.txt  bulk_final.data                                 (after in.bulk)
+    log.slab  slab_box.txt  pressure_tensor.txt  density_profile.txt  slab.lammpstrj  slab_final.data  (in.slab)
+    surface_tension.json  surface_tension.md                                    (md surface-tension)
 ```

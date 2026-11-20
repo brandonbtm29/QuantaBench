@@ -455,7 +455,7 @@ program are in [ENGINES.md](ENGINES.md).
 | `interop` | `cclib` | Import Gaussian/ORCA/Psi4/xtb/MOPAC output files |
 | `protonate` | `dimorphite-dl` | Alternative pH protonation |
 | `ovito` | `ovito` | Embedded OVITO viewport |
-| `md` | `lammps` | LAMMPS Python module: `md smd --run` and quick checks of SMD setups |
+| `md` | `lammps` | LAMMPS Python module: `md smd --run`, `md liquid-slab --run` and quick checks of the setups |
 | `excel` | `openpyxl` | `.xlsx`/`.xlsm` input (CompTox dashboard exports) |
 | `editor` | `PySide6` (its Qt WebEngine) | The Sketch dock: Schrödinger's 2D Sketcher, downloaded on first use (below) |
 | `validate` | `matplotlib` | Parity plots of `quantabench-cli validate` |
@@ -469,6 +469,10 @@ Notes on the new extras:
   the GPU package (OpenCL on Radeon), use the LAMMPS Windows installer's `lmp.exe`; every SMD folder's
   `README.txt` lists the exact commands, e.g. `lmp.exe -sf gpu -pk gpu 1 neigh no -in in.smd`.
   QuantaBench only writes the input files and parses the outputs, so the extra is optional.
+  The liquid-slab setups (`md liquid-slab`, MD-2) need nothing beyond the core install for OPLS-AA; Packmol
+  (optional: a lattice start is the fallback) and the GAFF2/OpenFF force fields come from a conda environment,
+  `conda create -n qbmd -c conda-forge python=3.12 ambertools packmol openff-toolkit-base
+  openff-interchange-base openff-forcefields` (Linux, macOS, WSL; docs/ENGINES.md, "Liquid-slab MD").
 - **`excel`.** openpyxl is pure Python. Legacy `.xls` files additionally need `xlrd`; otherwise save
   them as `.xlsx` or `.csv`.
 - **`editor`.** The Sketch dock (Build > Sketch a molecule...) runs

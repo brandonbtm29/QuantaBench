@@ -2,6 +2,16 @@
 
 ## Unreleased (after 0.3.0)
 
+### Liquid-slab MD and surface tension (MD-2, 2026-11-20)
+- `quantabench-cli md liquid-slab --smiles ... -o DIR` writes a LAMMPS folder for a liquid-vapour slab of a pure liquid. `in.bulk` packs, minimizes and runs NPT at 298.15 K and 1 atm. `in.slab` opens the box along z with 5 nm of vacuum per side and runs NVT, writing the pressure tensor every 10 fs and the density profile along z. Both run with the plain `lmp` executable.
+- `quantabench-cli md surface-tension DIR` gives σ = (Lz/2)⟨Pzz − (Pxx+Pyy)/2⟩ with a 1-ns block-averaged error, the statistical inefficiency, the slab's plateau and vapour densities against the bulk NPT density, the interface width and the drift (`surface_tension.json`, `.md`).
+- Force fields (`--ff`):
+  - `oplsaa` (default): OPLS-AA with Watkins & Jorgensen's perfluoroalkane types, typed in process for alkanes, perfluoroalkanes and (fluoro)benzenes. Every value carries its GROMACS `oplsaa.ff` line and was checked against foyer's XML (`scripts/check_oplsaa_params.py`).
+  - Perfluoroalkyl C-C-C-C torsions get Watkins & Jorgensen's own torsion. foyer's XML and a bond-type lookup give the hydrocarbon torsion there.
+  - `gaff2` and `openff` (Sage 2.3.0) with AM1-BCC charges, through AmberTools and OpenFF in their own conda environment.
+- Long-range dispersion (`--dispersion`): `ewald` (`lj/long/coul/long` + `pppm/disp`, the default), or plain cutoffs `cutoff12`, `cutoff16` and `cutoff18`. Only the cutoffs run on the GPU package. `pair_modify tail yes` is used in the bulk only, never in the slab.
+- `chem.external` now finds `packmol` (optional: without it the box starts as a lattice and is compressed) and `antechamber`.
+
 ### "conformer pools merged" is logged once (2026-11-19)
 - A molecule whose CREST and RDKit conformer pools were merged logged the merge line twice: once when the pools were merged, and again with the pool's other notes. It is now logged once, with the other notes.
 

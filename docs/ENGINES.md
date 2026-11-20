@@ -1185,6 +1185,96 @@ On the 2026-11-05 pull (391 molecules with a surface-tension record): 213 get a 
 (80 from compilations, 81 other, 52 CHRIS), 25 of them with their own slope; 4 had a unit slip repaired, and 2 had
 only implausible values.
 
+## Liquid-slab MD and surface tension (`md liquid-slab`, `md surface-tension`; MD-2)
+
+A pure liquid's surface tension σ from a liquid-vapour slab in LAMMPS, starting from a SMILES:
+
+```
+quantabench-cli md liquid-slab --smiles "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --name c6f14 -o c6f14_ewald \
+    [--ff oplsaa|openff|gaff2] [--dispersion ewald|cutoff12|cutoff16|cutoff18] [--size pilot|full] [--molecules N] \
+    [--sigma-ref 12.33 --density-ref 1.67 --ref-note "..."]
+cd c6f14_ewald && lmp -in in.bulk && lmp -in in.slab          # README.txt: OpenMP, MPI and GPU commands
+quantabench-cli md surface-tension c6f14_ewald                 # sigma +- error, densities, checks (.json, .md)
+quantabench-cli md liquid-slab --list-ff                       # which force fields are installed
+```
+
+The folder runs with the plain `lmp` executable (no Python at run time): `system.data` (atom_style full, the packed
+box), `ff.params` (coefficients), `in.bulk`, `in.slab`, `in.run` (both), `README.txt` (the model, every parameter
+with its source, the commands) and `liquid_setup.json` (every setting and parameter). Any `index` variable can be
+changed at run time, e.g. `lmp -in in.slab -var production_ns 2`.
+
+**Protocol.** The box (pilot: 4 x 4 nm lateral, full: 5 x 5 nm; a 10 nm liquid slab either way, about 490 and 760
+molecules of C6F14) is packed at QuantaBench's density estimate (`chem.estimates`) by Packmol, or, without
+Packmol, as a lattice that the bulk input compresses (NVT + `fix deform`). `in.bulk`: minimization, a 10 ps
+warm-up at 0.5 fs, 1 ns NPT at 298.15 K and 1 atm (Nosé-Hoover thermostat and barostat, 1 fs, isotropic),
+`bulk_final.data`. `in.slab`: every molecule made whole across z (unwrapped coordinates, centres of mass back in
+the bulk box), 5 nm of vacuum added on each side (still periodic in z), then NVT at 298.15 K, 2 ns to settle
+plus 10 ns of production; the pressure tensor every 10 fs (`fix ave/time`), the mass density in 0.5 Å bins along z
+averaged over 10 ps blocks (`compute chunk/atom bin/1d` + `fix ave/chunk`), `fix momentum` against drift.
+
+**Long-range dispersion** (`--dispersion`):
+
+| variant | pair and kspace styles | σ | runs on |
+|---|---|---|---|
+| `ewald` (default) | `lj/long/coul/long long long 12.0` + `pppm/disp 1e-5`, dispersion accuracies 1e-4 (real space) and 2e-3 (k-space) as LAMMPS' Howto_dispersion recommends for real units | the Tsige/Grest choice (in 't Veld et al. 2007; Isele-Holder et al. 2012) | CPU (OPENMP, INTEL, OPT; LAMMPS has no GPU styles for it) |
+| `cutoff12` | `lj/cut/coul/long 12.0` + `pppm 1e-5` | plain truncation: biased low (up to 20 % for alkanes, Ismail et al. 2007) | CPU or GPU package |
+| `cutoff16`, `cutoff18` | the same with a 16 or 18 Å cutoff | smaller bias, more pairs | CPU or GPU package |
+
+The bulk NPT of the cutoff variants uses `pair_modify tail yes` (valid in a homogeneous liquid, so the bulk density
+is right); the slab never does. With Lorentz-Berthelot mixing (openff, gaff2) the `ewald` variant adds
+`kspace_modify mix/disp geom` (geometric mixing in k-space only; LAMMPS Howto_dispersion).
+
+**Force fields** (`--ff`, `md.forcefield`):
+
+| key | what | charges | mixing, 1-4 LJ / Coulomb | covers | runs |
+|---|---|---|---|---|---|
+| `oplsaa` | OPLS-AA with Watkins & Jorgensen's 2001 perfluoroalkane types (opls_961-965) | the force field's | geometric, 0.5 / 0.5 | alkanes, perfluoroalkanes (CF4, branched, cyclic), benzene and fluorobenzenes; everything else is refused with a pointer to the others | in process, core install |
+| `gaff2` | GAFF2 (AmberTools' gaff2.dat + parmchk2) | AM1-BCC (antechamber, sqm) | Lorentz-Berthelot, 0.5 / 0.8333 | any organic molecule | AmberTools' Python (below) |
+| `openff` | OpenFF Sage, `openff-2.3.0.offxml` (`--offxml` for another) | AM1-BCC (AmberTools sqm through the OpenFF toolkit) | Lorentz-Berthelot, 0.5 / 0.8333 | any organic molecule Sage covers | AmberTools' Python, exported by OpenFF Interchange |
+
+- **Where the OPLS-AA numbers come from.** `md/oplsaa.py` stores each value as written in GROMACS' `oplsaa.ff`
+  (`ffnonbonded.itp`, `ffbonded.itp`, commit bc88adaf4e) with its line number, and converts to LAMMPS units in
+  one place (bonds and angles K = k/2; Ryckaert-Bellemans to OPLS V1-V4 by the GROMACS manual's relations).
+  `scripts/check_oplsaa_params.py --gromacs DIR --foyer oplsaa.xml` compares every entry with both GROMACS and
+  foyer's `oplsaa.xml` (MIT, commit 89b7fa867d): 85 checks, no difference on 2026-11-20.
+- **Two deliberate differences from foyer.** (1) Watkins & Jorgensen fitted their own C-C-C-C torsion for
+  perfluoroalkanes (V1..V4 = 6.622, 0.948, -1.388, -2.118 kcal/mol). Its carbons share the bond type `CT` with
+  alkanes, so GROMACS keeps it as `#define dih_perfluoroalkane_CT_CT_CT_CT` for a topology to apply by hand, and
+  foyer, which looks up by class, gives the hydrocarbon torsion instead. QuantaBench applies the perfluoro torsion
+  to every C-C-C-C dihedral of four perfluoroalkyl carbons. (2) foyer's XML has no impropers; GROMACS'
+  `improper_Z_CA_X_Y` (1.1 kcal/mol, n = 2) keeps aromatic carbons planar here.
+- **What the OPLS-AA table is.** GROMACS' OPLS-AA carries revisions made after the 1996 paper (its hydrocarbon
+  H-C-C-H torsion is marked "new 11/99"); these are the parameters GROMACS and foyer users run. They were not
+  checked against the 1996 paper's tables here.
+- **Cross-check environment.** OpenFF and AmberTools are conda-forge packages without PyPI wheels, and AmberTools
+  has no native Windows build, so `gaff2` and `openff` run in their own environment through `md/ff_driver.py`
+  (like Psi4): QuantaBench finds its Python next to `antechamber` (settings key `antechamber`,
+  `QUANTABENCH_ANTECHAMBER`, PATH, conda environments). On Windows, write those setups in WSL, Linux or macOS;
+  the folders then run anywhere. Install:
+
+  ```
+  conda create -n qbmd -c conda-forge python=3.12 ambertools packmol openff-toolkit-base \
+      openff-interchange-base openff-forcefields
+  ```
+- **AM1-BCC** is computed on the one conformer QuantaBench embeds (ETKDGv3 + MMFF94s), so it can differ slightly
+  from a multi-conformer (ELF10) charge set. Rounded antechamber charges (±0.002 e on C6F14) are spread evenly
+  so the molecule is exactly neutral, with a note.
+- **Hook for refits.** `--overrides FILE.json` (`{"lj": {"f": {"epsilon": .., "sigma": ..}}, "source": ".."}`)
+  replaces Lennard-Jones parameters by atom type and records the source, e.g. for Träg & Zahn's GAFF2
+  fluorocarbon refit (J. Mol. Model. 2019, 25, 39) once its numbers are taken from the paper.
+
+**Analysis** (`md.surface_tension`): σ = (Lz/2)·⟨Pzz − (Pxx + Pyy)/2⟩ over the production samples (Lz the whole
+box; 1 atm·Å = 0.0101325 mN/m), its standard error from 1 ns blocks (at least 4; shorter runs get 4 equal blocks
+and a note), with the statistical inefficiency and the Flyvbjerg-Petersen blocking curve as checks. The 10 ps
+density profiles are centred on the slab (a circular mean, so drift and boundary crossings are handled),
+averaged, and fitted with a tanh profile: plateau density (also directly over the slab's middle), vapour
+density, Gibbs dividing surface, 10-90 % width. Checks: production ≥ 7 ns (Tsige & Grest 2008), the plateau within
+1 % of the bulk NPT density, slab drift under 5 Å, the two halves of the production run agreeing. The speed of
+each stage (ns/day) comes from the logs.
+
+**Windows.** Prefer the LAMMPS installer's `lmp.exe` over PyPI's wheel for these runs (MD-1: the Windows wheel
+failed 5-10 % of identical SMD runs). `--run` (the Python module, blocking) is for short checks only.
+
 ## Not available yet
 
 - NMR shieldings (Psi4 has none; planned through PySCF).
