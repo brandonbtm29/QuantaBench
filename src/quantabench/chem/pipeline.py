@@ -709,8 +709,7 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
                                 cfg.seed, threads, seeds=seeds)
             both = search_rule.merge_pools(cs, rd, cfg.refine_top, cfg.rmsd_threshold)
             result.conformer_search = search_rule.MERGED
-            log(f"  {both.notes[-1]}")
-            return both
+            return both                     # its notes, the merge note among them, are logged with the pool's
     result.conformer_search = "rdkit"
     # Keep a wider force-field window: the refined ranking can differ from MMFF's.
     return confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,

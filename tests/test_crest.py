@@ -415,7 +415,8 @@ def test_the_merged_pool_refines_both_sources(fake_crest, monkeypatch):
     assert both.status == "ok", both.error
     assert both.conformer_search == "crest+rdkit" and both.forcefield == "CREST/gfnff + MMFF94s"
     assert both.summary_row()["conformer_search"] == "crest+rdkit"
-    assert any(ln.startswith("  conformer pools merged: CREST's lowest 2 and RDKit's lowest") for ln in lines)
+    merged_lines = [ln for ln in lines if ln.startswith("  conformer pools merged: CREST's lowest 2 and RDKit's lowest")]
+    assert len(merged_lines) == 1, merged_lines          # logged once (it was logged twice before 2026-11-19)
     assert both.n_embedded > 3                                             # CREST's 3 frames + RDKit's
 
 
