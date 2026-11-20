@@ -164,7 +164,8 @@ def test_variants_parse_validate_and_plan():
     # default plan: GPU variants only with the GPU package; ewald never on the GPU
     run, refused, notes = bench.plan_variants(lammps_info(HELP_WHEEL), None)
     assert [v.name for v in run] == ["cpu-ewald", "cpu-cutoff12", "cpu-cutoff16"] and not refused
-    assert notes == ["this LAMMPS has no GPU package"]
+    # on Windows the note adds where to get a LAMMPS with the GPU package
+    assert len(notes) == 1 and notes[0].startswith("this LAMMPS has no GPU package")
     run, refused, notes = bench.plan_variants(lammps_info(), None)
     assert [v.name for v in run] == list(bench.DEFAULT_VARIANTS) and not notes
     run, refused, _ = bench.plan_variants(lammps_info(HELP_WHEEL), ["gpu-cutoff16", "gpu-ewald", "kokkos-cutoff16",
