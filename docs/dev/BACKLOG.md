@@ -769,6 +769,39 @@ Depends on: none (research only; can run any night).
 - 2026-11-05: done through FORK-1: the dxtb fork with tad-libcint 0.4 gives GFN2, polarizability and IR
   intensities natively on Windows (the workstation: matches Linux to ~1e-15 to 4e-9).
 
+## MD-2: Liquid-slab surface tension · in-PR 2026-11-20 (branch `feat/md-surface-tension`; the pilot runs needs-Brandon)
+Plan: the Claude Doc "Plan: first MD surface-tension tests in QuantaBench"; methods: docs/ENGINES.md, "Liquid-slab MD
+and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecular dynamics".
+- Done (2026-11-20):
+  - `md liquid-slab` and `md surface-tension`; `md.oplsaa`, `md.forcefield`, `md.liquid`, `md.surface_tension`,
+    `md/ff_driver.py`; tests in `tests/test_md_liquid.py`, with a LAMMPS smoke test of both dispersion styles.
+  - OPLS-AA with Watkins-Jorgensen perfluoroalkanes (85 checks against GROMACS and foyer, no difference). GAFF2
+    and OpenFF Sage 2.3.0 with AM1-BCC in a conda env (`qbmd`: ambertools 23.3, openff-toolkit 0.19.0,
+    interchange 0.5.5, packmol 21.2.1).
+  - Pilot folders written on 2026-11-20, each at pilot size (4 x 4 nm lateral, 10 nm slab), 1 ns bulk, 2 ns settle
+    and 10 ns production:
+    - C6F14 OPLS-AA: ewald, cutoff12 and cutoff16 (489 molecules);
+    - n-hexane OPLS-AA ewald (753);
+    - C6F6 OPLS-AA ewald (803);
+    - C6F14 GAFF2 ewald and C6F14 OpenFF ewald.
+- Next:
+  - Run the pilots on the workstation (installer `lmp.exe`, OpenMP; the cutoff16 one also on the GPU package).
+    Compare σ and density with the measured values, and ewald against cutoff12/16.
+  - Check that the slab plateau matches the bulk density, and that 10 ns gives an error bar under about
+    0.5 mN/m. If not, use the full size (5 x 5 nm) and longer production.
+  - Decide the default force field for PFAS after the pilots. OPLS-AA typing covers only alkanes,
+    perfluoroalkanes and (fluoro)benzenes. Functional PFAS (acids, alcohols, ethers, sulfonyl groups) need GAFF2
+    or OpenFF, or more OPLS-AA types (LigParGen-style 1.14·CM1A-LBCC charges).
+  - The Träg & Zahn 2019 GAFF2 fluorocarbon refit through `--overrides`, once its parameters are taken from the
+    paper (not typed from memory).
+  - Semifluorinated chains need Pierce et al. 2008's modified OPLS-AA (extra H-F terms), which is not in the table.
+  - A tail correction for the cutoff variants' σ (Blokhuis et al. 1995), so the GPU-friendly runs can be
+    corrected rather than only compared.
+  - The test-area method as a second σ estimator.
+  - A GUI page (the Simulate workspace, SIM-1) and runs through the job queue.
+- Open: the C6F14 reference. Freire et al. 2006 measured 12.33 mN/m at 298.15 K; Jasper's compilation (Stiles &
+  Cady 1952) gives 11.44. The plan uses 12.33; both are recorded in the pilot READMEs.
+
 ## MD-1: Counter-ions in vacuum SMD (Windows LAMMPS non-determinism + ion-pair heating) · ready
 - On the Windows workstation, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a
   TFA⁻ + Na⁺ on graphite setup with "Out of range atoms - cannot compute PPPM" (also with

@@ -29,7 +29,7 @@ dynamics. Every step is visible in an OVITO-style 3D workspace.
 | Export | XYZ, extended XYZ with charges, SDF conformer ensembles, PDB, MOL, LAMMPS data, IR spectrum CSV, batch `summary.csv` and `descriptors.csv` |
 | Batches | Resumable: a SQLite job table in the run folder survives crashes and reboots; split a list across machines with `--chunk k/n` and merge the tables |
 | Surfaces | AB-stacked graphite and metal slabs; place a molecule at a set gap, grab and turn it with the mouse, overlap check |
-| Molecular dynamics | LAMMPS steered-MD setup (adsorbate pulled off a frozen graphite slab), log and pull-force analysis (detachment work, peak force) |
+| Molecular dynamics | LAMMPS steered-MD setup (adsorbate pulled off a frozen graphite slab), log and pull-force analysis (detachment work, peak force); liquid-vapour slabs of pure liquids (OPLS-AA with perfluoroalkane types, GAFF2 or OpenFF Sage; dispersion Ewald or cutoffs) and their surface tension with error bars |
 | Viewer | 2D structure (RDKit) and 3D (PyVista) side by side, sharing one atom selection; distance/angle/dihedral readout; element, charge or tag coloring; ESP-mapped surfaces; IR spectrum panel with experimental overlay and normal-mode animation |
 | Interop | Import Gaussian, ORCA, Psi4, xtb, MOPAC outputs (cclib) and experimental spectra (CSV, JCAMP-DX) |
 
