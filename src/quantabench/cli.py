@@ -769,6 +769,10 @@ def _settings(args) -> int:
             s.set_engine_path_for(name.strip(), value.strip(), machine)
             print(f"{name.strip()} on {machine}: {value.strip() or 'automatic'}")
         changed = True
+    if args.crest_wsl_scratch is not None:
+        s.engines.crest_wsl_scratch = args.crest_wsl_scratch
+        print(f"CREST scratch through WSL: {args.crest_wsl_scratch}")
+        changed = True
     if changed:
         settings_mod.save(s)
     print(f"# {path}{'' if path.exists() else ' (not created yet: defaults shown)'}")
@@ -1299,6 +1303,10 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--free-threads", metavar="N",
                     help="logical threads the automatic budgets leave free, this machine only or --machine NAME "
                          "(resources.machine_free_threads; default = back to the default of every machine, 1)")
+    se.add_argument("--crest-wsl-scratch", choices=["auto", "shm", "disk", "off"],
+                    help="where CREST through WSL (a wsl: path on Windows) runs (engines.crest_wsl_scratch, every "
+                         "machine): auto = /dev/shm inside WSL when it has room, else WSL's own disk; shm; disk; off = "
+                         "the Windows scratch folder through /mnt/c, as before 2026-11-20 (slow, heavy disk writes)")
     se.add_argument("--machine", nargs="?", const="", metavar="NAME",
                     help="with --engine-path, --priority or --free-threads: the machine to set them for. Without "
                          "--machine, or with --machine and no name, it is this machine")

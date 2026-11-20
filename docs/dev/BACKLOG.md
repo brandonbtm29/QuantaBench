@@ -36,6 +36,25 @@ on the workstation (not in the repository).
 - **After the gas phase:** rerun the molecules that ran out of time with wider lanes and a 3 h limit; then water;
   then a decision on the 173 molecules left out.
 
+## CREST-SCRATCH-1: CREST through WSL in a folder inside WSL · done 2026-11-20 (branch `fix/crest-wsl-scratch`)
+On the workstation CREST runs as `wsl:.../bin/crest` and used to run in its Windows job folder through `/mnt/c`: every
+file it wrote crossed WSL's 9P bridge to NTFS, about 20 MB/s of disk writes (some 70 GB an hour) just after a CREST
+batch started.
+- Done: `chem.wsl_scratch`. Each job runs in `/dev/shm/quantabench/<job>` when /dev/shm and WSL's memory have
+  `engines.crest_wsl_shm_min_gb` (2 GB) plus twice the job's expected size free, else in
+  `~/.cache/quantabench/scratch/<job>`; only the conformers and CREST's two summaries come back (small files on a
+  failure, everything with keep_scratch); the folder is removed in a `finally`; killed runs' folders go through
+  `sweep_scratch` (the Windows job folder names its twin) and at the next job (owner records). A note per molecule
+  says which scratch was used. `engines.crest_wsl_scratch` = auto | shm | disk | off; Settings > Engines; `settings
+  --crest-wsl-scratch`. Tests: `tests/test_wsl_scratch.py` (the real shell steps through a stand-in `wsl.exe`).
+- Next (needs-Brandon): on the workstation, a CREST batch with `auto`. Check the disk writes in Task Manager or
+  Resource Monitor against the 20 MB/s before (vmmem's writes should be near zero), the notes (/dev/shm or disk),
+  `free -h` inside WSL while the lanes run, and that nothing is left in `/dev/shm/quantabench` afterwards. Then compare
+  CREST times per molecule with CREST-RUN-1's.
+- Later: telemetry columns for the scratch kind (today the note only), so the cost fit can tell the runs apart; an
+  opt-in /dev/shm for native Linux CREST (off by default: it already runs on a local disk); the same folder inside WSL
+  for other `wsl:` programs (xtb, if it is ever run that way).
+
 ## TELEM-1: Timings of killed attempts keep the molecule's features and finished stages · in-PR 2026-11-18 (PR #26)
 Brandon (2026-11-18): "double check and see if we are recording the metadata for failed molecules, so we can continue
 to improve the simulation load and thread allocation." A lane killed by the time limit sent no telemetry, so its
@@ -848,6 +867,8 @@ and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecula
   (`taskkill /T`), paths with spaces ("GitHub Projects"), Psi4's PCMSolver on win-64, GUI Engines tab.
 
 ## ENG-2: CREST through WSL · done 2026-11-16 for batch runs (the GUI checks below need-Brandon)
+- 2026-11-20: CREST runs in a folder inside WSL (/dev/shm or WSL's disk), not in the Windows job folder through
+  `/mnt/c` (CREST-SCRATCH-1).
 - 2026-11-16: the workstation's path is set for that machine only, `doctor` shows it, and a 3-molecule gas test
   built: about 1.8x slower per molecule than the MacBook, conformers as low or lower. Since 2026-11-17 the
   workstation runs CREST this way in CREST-RUN-1.

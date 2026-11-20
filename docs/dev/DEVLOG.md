@@ -316,3 +316,25 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **For the cost model:** CREST stages that finished in an attempt killed later now count. The killed stage
   (outcome `timeout`, wall = the limit) is censored data, kept out of the fit as before; a censored fit could use
   it later.
+
+## 2026-11-20: CREST through WSL in a folder inside WSL (CREST-SCRATCH-1, branch `fix/crest-wsl-scratch`)
+- **The problem:** the workstation runs CREST as `wsl:.../bin/crest`, in its Windows job folder through `/mnt/c`. Every
+  file CREST writes crossed WSL's 9P bridge to NTFS: about 20 MB/s of disk writes right after a CREST batch started.
+- **The design** (`chem.wsl_scratch`):
+  - Each job gets `/dev/shm/quantabench/<job>` when /dev/shm and WSL's MemAvailable both have 2 GB
+    (`engines.crest_wsl_shm_min_gb`) plus twice the job's expected size free (64 MiB + 4 MiB per atom, generous: a
+    CREST folder of a 100-atom molecule holds tens of MB at a time); else `~/.cache/quantabench/scratch/<job>`.
+    Both checks matter: /dev/shm's tmpfs is half of WSL's memory, and the lanes' CREST processes use the same memory.
+  - Every step is one shell script through `wsl.exe -e sh -c` (probe, prepare, fetch, remove), written as one line
+    like the existing WSL wrapper. Probe and prepare are two calls before each search; WSL is running anyway.
+  - `run_program(program_cwd=...)` puts the Linux folder after `--cd`. CREST's stdout still goes to the Windows log
+    through the pipe, which is not 9P. The cancel and a dead lane's clean-up (`kill_recorded_programs`) kill the
+    process through the `.qb_pid` in the Linux folder.
+  - Clean-up: a `finally` removes the folder (success, failure, cancel, time limit). A killed process leaves a
+    Windows job folder that names its twin (`.qb_wsl_dir`), so `sweep_scratch` removes the twin too. Without
+    starting WSL for runs that never used it, every new CREST job removes the Linux folders whose owner (the
+    Windows process, the same `.qb_owner.json`) has ended.
+  - A note per molecule ("CREST scratch: WSL /dev/shm (...)"), not a telemetry column: no schema change.
+- **Tests:** `tests/test_wsl_scratch.py` (23) runs the real scripts through a stand-in `wsl.exe` and `df` on
+  Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
+  check (BACKLOG CREST-SCRATCH-1).

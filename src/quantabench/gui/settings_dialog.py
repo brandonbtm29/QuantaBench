@@ -583,6 +583,10 @@ class SettingsDialog(QDialog):
     PROGRAM_FIELDS = (("xtb", "xtb", "xtb executable"), ("crest", "CREST", "crest executable"),
                       ("mopac", "MOPAC", "MOPAC executable"), ("psi4_python", "Psi4 Python", "Python with psi4"),
                       ("obabel", "Open Babel", "obabel executable (file formats QuantaBench does not read)"))
+    #: (label, engines.crest_wsl_scratch) of Engines > Runs > CREST scratch through WSL (chem.wsl_scratch.MODES)
+    CREST_WSL_SCRATCH = (("Automatic: /dev/shm if it has room, else WSL's disk", "auto"),
+                         ("WSL's memory (/dev/shm)", "shm"), ("WSL's own disk", "disk"),
+                         ("Off: the scratch folder through /mnt/c (slow)", "off"))
 
     def _engines_tab(self) -> QWidget:
         """Paths of external programs (blank = find automatically), scratch folder, OpenMP stack, QM memory."""
@@ -660,6 +664,18 @@ class SettingsDialog(QDialog):
         self.ext_timeout.setSpecialValueText("No limit")
         self.ext_timeout.setValue(e.timeout_s)
         rf.addRow("Time limit per run", self.ext_timeout)
+        self.crest_wsl_scratch = QComboBox()       # chem.wsl_scratch (CREST-SCRATCH-1)
+        for label, key in self.CREST_WSL_SCRATCH:
+            self.crest_wsl_scratch.addItem(label, key)
+        self.crest_wsl_scratch.setCurrentIndex(
+            max(0, self.crest_wsl_scratch.findData(str(e.crest_wsl_scratch or "auto").strip().lower())))
+        self.crest_wsl_scratch.setToolTip(
+            "Windows, CREST as a wsl: path: the folder CREST runs in. Inside WSL, its many files never cross to the "
+            "Windows disk; only the conformers and summaries come back, and the folder is removed afterwards. "
+            "Automatic takes /dev/shm (WSL's memory) when it has engines.crest_wsl_shm_min_gb (default 2 GB) free "
+            "plus twice the job's expected size, else WSL's own disk. Off runs it in the scratch folder above "
+            "through /mnt/c, as before (slow, heavy disk writes). Native CREST (Linux, macOS) is not affected.")
+        rf.addRow("CREST scratch through WSL", self.crest_wsl_scratch)
         lay.addWidget(run)
         lay.addStretch(1)
         return w
@@ -828,4 +844,5 @@ class SettingsDialog(QDialog):
         e.omp_stacksize = self.stacksize.text().strip() or "4G"
         e.qm_memory_gb = self.qm_memory.value()
         e.timeout_s = self.ext_timeout.value()
+        e.crest_wsl_scratch = self.crest_wsl_scratch.currentData() or "auto"
         return s
