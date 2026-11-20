@@ -252,7 +252,7 @@ polarizabilities against Lorentz-Lorenz values from PubChem's n_D and ρ and aga
 | van Krevelen / Bondi group volumes | additive group V_vdW (Bondi 1964) times a packing coefficient | the same idea as the packing model, with tabulated instead of computed volumes | none | Bondi has CF2/CF3 increments | published tables | not implemented: the computed V_vdW does the same job for any structure |
 | ML density models | — | no open, pretrained and independently validated model was found (search 2026-11-11); EPA's TEST (public domain) has a density QSAR whose predictions are on the CompTox Dashboard: use it as an external baseline | — | — | — | — |
 | COSMO volume | the cavity volume of a COSMO calculation (MOPAC PM7, openCOSMO-RS), then a packing correlation like the one above | about as good as the packing model once calibrated (it is a different volume, not more information) | seconds (MOPAC) | MOPAC's elements | MOPAC (Apache-2.0) | not wired: the COSMO volume is not parsed into descriptors |
-| MD of the bulk liquid | NPT simulation of a box of molecules: OpenMM with OpenFF Sage or GAFF2, or LAMMPS | a few percent for organics in published force-field benchmarks (OpenFF fits liquid densities); fluorocarbons are a known weak spot | about 0.5-2 h per molecule on a GPU | the force field's | OpenMM (MIT), OpenFF (MIT), AmberTools | later (the Simulate track) |
+| MD of the bulk liquid | NPT simulation of a box of molecules: OpenMM with OpenFF Sage or GAFF2, or LAMMPS | a few percent for organics in published force-field benchmarks (OpenFF fits liquid densities); fluorocarbons are a known weak spot | about 0.5-2 h per molecule on a GPU | the force field's | OpenMM (MIT), OpenFF (MIT), AmberTools | LAMMPS setups: `md liquid-slab` (MD-2; its bulk NPT stage gives the force field's density) |
 
 **Polarizability**
 
@@ -347,6 +347,21 @@ value. Add Jasper's coefficients next (below), so that most molecules get a seco
 **Note for later.** PFAS surfactants (PFCAs longer than C6, PFSAs, their salts) have no pure-liquid σ at 25 °C: their
 target is γ at the CMC of an aqueous solution, model (2) of "Two targets", with the counter-ion and electrolyte
 recorded. Neither the tiers nor the parachor models above apply to it.
+
+## Surface tension by molecular dynamics (MD-2)
+
+Where no measurement exists, and to test the force fields that later MD work on PFAS will rely on, σ can be
+computed: `quantabench-cli md liquid-slab` writes a LAMMPS liquid-vapour slab of the pure liquid (bulk NPT,
+then an NVT slab with 5 nm of vacuum on each side) and `md surface-tension` turns its pressure tensor into
+σ = (Lz/2)⟨Pzz − (Pxx+Pyy)/2⟩ (Kirkwood & Buff 1949) with a block-averaged error, plus the slab's plateau and vapour
+densities against the bulk density (docs/ENGINES.md, "Liquid-slab MD and surface tension"). The method follows the
+Tsige/Grest work: OPLS-AA with Watkins & Jorgensen's perfluoroalkane parameters (Tsige & Grest, J. Phys. Chem. C
+2008, 112, 5029), long-range dispersion by Ewald sums (in 't Veld, Ismail & Grest, J. Chem. Phys. 2007, 127,
+144711), because truncating the Lennard-Jones terms at 12 Å lowers σ by up to 20 % (Ismail et al., Mol. Phys.
+2007, 105, 3155). GAFF2 and OpenFF Sage (both with AM1-BCC charges) are the cross-checks for molecules OPLS-AA
+typing does not cover. First targets: perfluorohexane, hexafluorobenzene and n-hexane as the control (BACKLOG
+MD-2). Two measured values for perfluorohexane at 25 °C differ by 0.9 mN/m (12.33, Freire et al., J. Chem. Eng.
+Data 2006, 51, 1820; 11.44, Stiles & Cady 1952 via Jasper), which is about the accuracy MD can hope to test.
 
 ## Open questions
 - Which temperature: 25 °C (TEST, CRC, most PFAS work) or 20 °C (much of Jasper and HSDB)? Recommended: 25 °C,
