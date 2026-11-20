@@ -309,6 +309,70 @@ The LaunchAgent is for the user to install; QuantaBench does not install service
 was installed on 2026-11-12, at his request (`launchctl print gui/$(id -u)/io.github.brandonbtm29.quantabench-worker`
 shows it; a test `kill -KILL` of the worker was followed by a new one within a second).
 
+## The MD benchmark (MD-BENCH-1)
+
+The throughput benchmark gives molecules/hour per engine. An MD job needs a different number: how many ns/day
+this machine's LAMMPS runs a molecular liquid. `md` in a benchmark list measures it:
+
+```
+quantabench-cli machines --bench md [--md-size small|pilot] [--md-variants LIST] [--md-threads N] [--max-seconds 60]
+quantabench-cli machines --bench default,md        (the engines as well)
+quantabench-cli worker --bench-methods default,md  (at the worker's start; auto: only what is missing)
+quantabench-cli md estimate (DIR | --atoms N --ns NS) [--dispersion ewald] [--include-unverified] [--all-variants]
+```
+
+It is never in the default list, so a worker starts as fast as before unless `md` is asked for.
+
+- **The system.** Liquid C6F14, OPLS-AA with the Watkins-Jorgensen perfluoroalkane types (`md.forcefield`), at
+  QuantaBench's density estimate. `small` is 150 molecules (3,000 atoms, a 37 Å cube). `pilot` is the 489
+  molecules (9,780 atoms) of MD-2's pilot slab.
+  - It is packed by Packmol, else as a lattice, then minimized, compressed to the estimated density in 1 ps of
+    NVT and minimized again.
+  - This is done once per QuantaBench version and size, in the machine's cache folder (`md_bench/`), not in the
+    synced settings.
+- **The runs.** One LAMMPS process per variant, each ending without `clear` (`in.run`, which chains bulk and slab
+  with `clear`, hung on the GPU package).
+  - Each run reads the cached box, draws velocities at 298.15 K from a fixed seed, does `run 0`, 100 warm-up
+    steps, then NVT at 1 fs. The timed run stops at 10,000 steps or after `--max-seconds` (default 60; LAMMPS'
+    `timer timeout`), whichever comes first.
+  - ns/day is LAMMPS' own `Performance:` line for the timed run.
+  - Variants are `<accelerator>-<dispersion>`, with the dispersion variants of `md liquid-slab`:
+    - `cpu-*`: `-sf omp -pk omp N`, N = `--md-threads`, by default this machine's one-lane thread budget, at most
+      its physical cores.
+    - `gpu-*`: `-sf gpu -pk gpu 1`, cutoff variants only (LAMMPS has no GPU version of the `ewald` styles).
+    - `kokkos-*`: `-k on g 1 -sf kk`, or `-k on t N -sf kk` for an OpenMP KOKKOS build.
+  - The default is `cpu-ewald`, `cpu-cutoff12` and `cpu-cutoff16`, plus `gpu-cutoff12` and `gpu-cutoff16` where
+    `lmp -h` lists the GPU package and a compatible GPU. KOKKOS only runs when listed in `--md-variants`.
+  - A GPU run records the device the GPU package chose (`device`, from its `Device 0: ...` line), so a run that
+    went to an integrated GPU shows.
+- **The CPU/GPU check.** On the workstation the GPU package's NPT expanded a C6F14 box to half its density while
+  the CPU held it, so a fast GPU number is not trusted on its own.
+  - Every non-CPU variant's `run 0` is compared with the CPU's for the same dispersion: the same configuration and
+    the same velocities. If the CPU variant is not in the list, its `run 0` alone is run.
+  - The pressure must agree within 20 atm. The potential energy must agree within 0.5 kcal/mol + 1e-4 x the size
+    of its terms. Mixed precision explains far less than either; the LJ tail correction alone is 58 atm at 16 Å.
+  - The result is `check`: `ok`, `mismatch` (shown as *unverified*) or `skipped` (no CPU reference). The `run 0`
+    numbers of both runs are stored, so a mismatch shows which term differs.
+- **In the registry.** `md_throughput` in `machines/<name>.json` holds:
+  - the LAMMPS version, its packages and accelerators, and the system;
+  - per variant: ns/day, atoms, threads, steps, seconds, the `run 0` values and the check.
+  - A file without the key (an older QuantaBench) loads as before.
+  - Variants not measured again are kept. A failed re-measurement replaces the old number. A run without LAMMPS
+    keeps the old numbers and notes the attempt.
+  - `quantabench-cli machines` shows it as `md: cpu-ewald 6.5 ns/day (9,780 atoms, 6 thr), gpu-cutoff16 10.6
+    ns/day (9,780 atoms, OpenCL) [pressure check: mismatch]`, and the Machines dock as its "MD (ns/day)" column
+    (the full line in its tooltip).
+- **Estimates.** `md estimate` and `md liquid-slab` scale a variant's ns/day by the benchmark's atoms / the job's
+  atoms (PPPM MD costs about linearly in atoms at fixed density).
+  - A cutoff that was not measured is scaled from the nearest one on the same accelerator by (rc_measured/rc)³,
+    and the estimate says so.
+  - Unverified variants are left out unless `--include-unverified`.
+  - `quantabench.md.bench.estimate_hours(md_throughput, atoms, ns, dispersion=...)` is the same in Python.
+- **Without LAMMPS** the benchmark is skipped with the reason (`md: not measured (LAMMPS not found (...))`).
+  Nothing else in the profile changes.
+- **Not yet.** MPI ranks (`mpirun -np N lmp`, often faster than OpenMP threads for LAMMPS on a CPU) are not
+  benchmarked. The KOKKOS variants have not run on a KOKKOS build yet.
+
 ## API (version 1)
 
 Every request needs `Authorization: Bearer <settings.dist.worker_token>`.
@@ -393,7 +457,9 @@ still running), 411/413/415 (body).
    and each GPU, a few minutes, with submitted jobs held (`grid machines` shows it as benchmarking). The result
    goes into its profile, so `grid build --weights auto` gives it the right share. Later starts skip it;
    `--bench always` measures again (after a hardware or PyTorch change), `--bench never` never does. The GUI's
-   Machines dock has the same as a button, "Benchmark this computer".
+   Machines dock has the same as a button, "Benchmark this computer". `--bench-methods default,md` adds the MD
+   benchmark (below; a few minutes more), and with `auto` a machine that has molecules/hour but no MD numbers
+   then measures only the MD part.
 
 3. **Start at login** (normal PowerShell; no console window, log in `%LOCALAPPDATA%\QuantaBench\worker.log`):
 

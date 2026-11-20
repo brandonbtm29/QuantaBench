@@ -6,6 +6,8 @@ LAMMPS and their surface tension.
         [--molecules N] [--sigma-ref 12.33 --density-ref 1.67] [--run]
     quantabench-cli md liquid-slab --list-ff
     quantabench-cli md surface-tension DIR [--skip-ns 2] [--block-ns 1] [--json]
+    quantabench-cli md estimate (DIR | --atoms N --ns NS) [--dispersion ewald] [--machine NAME] [--all-variants]
+        [--include-unverified] [--json]          run time from each machine's MD benchmark (MD-BENCH-1)
 """
 
 from __future__ import annotations
@@ -59,6 +61,19 @@ def register(msub) -> None:
     st.add_argument("--json", action="store_true", help="print the full JSON report")
     st.set_defaults(func=_surface_tension)
 
+    es = msub.add_parser("estimate", help="run time of an MD job on each machine, from its MD benchmark "
+                                          "(quantabench-cli machines --bench md)")
+    es.add_argument("dir", nargs="?", help="a liquid-slab folder (its atoms, bulk + slab ns and dispersion)")
+    es.add_argument("--atoms", type=int, help="atoms of the job")
+    es.add_argument("--ns", type=float, help="simulated time, ns")
+    es.add_argument("--dispersion", help="ewald, cutoff12, cutoff16, ... (default: any measured variant)")
+    es.add_argument("--machine", help="only this machine (default: every machine in the registry)")
+    es.add_argument("--all-variants", action="store_true", help="every measured variant, not only the fastest")
+    es.add_argument("--include-unverified", action="store_true",
+                    help="also variants whose CPU/GPU pressure check failed")
+    es.add_argument("--json", action="store_true")
+    es.set_defaults(func=_estimate)
+
 
 def _liquid_slab(args) -> int:
     from .md import forcefield as F
@@ -105,6 +120,7 @@ def _liquid_slab(args) -> int:
           f"bulk {s.config.bulk_ns:g} ns, slab {s.config.settle_ns:g} + {s.config.production_ns:g} ns")
     for n in tm.notes + s.notes:
         print(f"  note: {n}")
+    _runtime_estimate(s)
     print(f"  Run: cd {s.out_dir} && lmp -in in.bulk && lmp -in in.slab   (OpenMP, MPI and GPU commands: README.txt)")
     print(f"  Then: quantabench-cli md surface-tension {s.out_dir}")
     if args.run:
@@ -129,6 +145,80 @@ def _liquid_slab(args) -> int:
 class _Args:
     def __init__(self, **kw):
         self.__dict__.update(kw)
+
+
+def _runtime_estimate(s) -> None:
+    """Print, and add to README.txt, how long bulk + slab take on each machine with an MD benchmark (MD-BENCH-1)."""
+    from .md import bench
+
+    ns = s.config.bulk_ns + s.config.settle_ns + s.config.production_ns
+    try:
+        lines = bench.estimate_lines(s.n_atoms, ns, s.config.dispersion)
+    except Exception as exc:  # noqa: BLE001 - an estimate never stops a setup
+        lines = []
+        print(f"  Run time: no estimate ({type(exc).__name__}: {exc})")
+    if not lines:
+        print("  Run time: no machine has an MD benchmark yet (quantabench-cli machines --bench md on each)")
+        return
+    head = (f"{ns:g} ns of {s.n_atoms:,} atoms ({s.config.dispersion}), from each machine's MD benchmark "
+            "(quantabench-cli machines --bench md):")
+    print(f"  Run time, {head}")
+    for line in lines:
+        print(f"    {line}")
+    readme = s.out_dir / "README.txt"
+    note = ("The benchmark is a bulk box; the slab's vacuum lengthens its k-space grid, so the slab runs somewhat "
+            "slower. quantabench-cli md estimate <this folder> repeats this with newer benchmarks.")
+    with open(readme, "a", encoding="utf-8") as fh:
+        fh.write("\nRUN TIME ESTIMATE\n  " + head + "\n" + "".join(f"    {x}\n" for x in lines) + f"  {note}\n")
+
+
+def _estimate(args) -> int:
+    from .dist import profile as profile_mod
+    from .md import bench
+
+    atoms, ns, dispersion = args.atoms, args.ns, args.dispersion
+    if args.dir:
+        try:
+            meta = json.loads((Path(args.dir).expanduser() / "liquid_setup.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"{args.dir}: no readable liquid_setup.json ({exc})", file=sys.stderr)
+            return 2
+        cfg = meta.get("config") or {}
+        atoms = atoms or int(meta.get("n_atoms") or 0)
+        ns = ns or sum(float(cfg.get(k) or 0.0) for k in ("bulk_ns", "settle_ns", "production_ns"))
+        dispersion = dispersion or cfg.get("dispersion")
+    if not atoms or not ns or atoms <= 0 or ns <= 0:
+        print("give a liquid-slab folder, or --atoms and --ns", file=sys.stderr)
+        return 2
+    if dispersion:
+        try:
+            dispersion = bench.parse_variant(f"cpu-{dispersion}").dispersion
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+    profiles = [p for p in profile_mod.load_profiles() if not args.machine or p.name == args.machine]
+    rows = []
+    for p in profiles:
+        est = bench.estimate_hours(p.md_throughput, atoms, ns, dispersion=dispersion,
+                                   include_unverified=args.include_unverified)
+        for e in (est if args.all_variants else est[:1]):
+            rows.append({"machine": p.name, "variant": e.variant, "hours": round(e.hours, 2),
+                         "ns_per_day": round(e.ns_per_day, 4), "measured_ns_per_day": e.measured_ns_per_day,
+                         "measured_atoms": e.measured_atoms, "threads": e.threads, "check": e.check, "note": e.note})
+    if args.json:
+        print(json.dumps({"atoms": atoms, "ns": ns, "dispersion": dispersion, "estimates": rows}, indent=1))
+        return 0
+    print(f"{ns:g} ns of {atoms:,} atoms ({dispersion or 'any dispersion'}), from each machine's MD benchmark:")
+    if not rows:
+        print("  no machine has a matching MD benchmark (quantabench-cli machines --bench md on each)")
+        return 0
+    for r in rows:
+        flag = "" if r["check"] in ("", "ok") else f"  [pressure check: {r['check']}: unverified]"
+        print(f"  {r['machine']:24s} {r['variant']:14s} {bench.format_hours(r['hours']):>18s}  "
+              f"({bench.fmt_ns(r['ns_per_day'])} ns/day here; measured {bench.fmt_ns(r['measured_ns_per_day'])} on "
+              f"{r['measured_atoms']:,} atoms" + (f", {r['note']}" if r["note"] else "") + ")" + flag)
+    print("  Hours scale the benchmark's ns/day by its atoms / these atoms; a slab with vacuum runs somewhat slower.")
+    return 0
 
 
 def _surface_tension(args) -> int:

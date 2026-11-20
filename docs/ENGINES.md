@@ -1304,7 +1304,18 @@ density, Gibbs dividing surface, 10-90 % width. Checks: production ≥ 7 ns (Tsi
 each stage (ns/day) comes from the logs.
 
 **Windows.** Prefer the LAMMPS installer's `lmp.exe` over PyPI's wheel for these runs (MD-1: the Windows wheel
-failed 5-10 % of identical SMD runs). `--run` (the Python module, blocking) is for short checks only.
+failed 5-10 % of identical SMD runs). `--run` (the Python module, blocking) is for short checks only. QuantaBench
+finds `lmp` like the other programs (Settings > Engines > LAMMPS, `quantabench-cli settings --engine-path
+lammps=PATH`, `QUANTABENCH_LAMMPS`, PATH, conda environments); with the wheel in the venv, point it at the
+installer's `lmp.exe`, which has the GPU package.
+
+**How long it takes** (MD-BENCH-1). `quantabench-cli machines --bench md` measures this machine's ns/day for each
+variant on a liquid C6F14 box (docs/WORKERS.md, "The MD benchmark"). With that in the registry, `md liquid-slab`
+prints the hours of bulk + slab on each machine and adds them to README.txt, and `quantabench-cli md estimate DIR`
+(or `--atoms N --ns NS --dispersion ewald`) repeats it later. The hours scale the measured ns/day by the atom ratio.
+The benchmark box has no vacuum, and the slab's longer k-space grid makes the slab somewhat slower, so read them
+as a lower bound. A GPU variant that failed the benchmark's CPU/GPU pressure check is left out unless
+`--include-unverified`.
 
 ## Not available yet
 

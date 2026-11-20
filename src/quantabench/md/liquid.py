@@ -404,7 +404,9 @@ def bulk_input(tm: TypedMolecule, cfg: LiquidSlabConfig, compress_to: Sequence[f
     L += _styles(tm, cfg, "bulk")
     L += ["read_data       system.data", "include         ff.params"]
     L += _kspace(tm, cfg)
-    L += ["neighbor        2.0 bin", "neigh_modify    delay 0 every 1 check yes", "",
+    L += ["neighbor        2.0 bin", "neigh_modify    delay 0 every 1 check yes", ""]
+    L += pair_energy_guard()
+    L += [
           "variable        rho equal density",
           "thermo_style    custom step time temp press pe ke etotal density lx ly lz",
           "thermo          ${thermo_every}", "thermo_modify   flush yes", "",
@@ -462,7 +464,9 @@ def slab_input(tm: TypedMolecule, cfg: LiquidSlabConfig, elements_by_type: Seque
     L += _styles(tm, cfg, "slab")
     L += ["read_data       bulk_final.data", "include         ff.params"]
     L += _kspace(tm, cfg)
-    L += ["neighbor        2.0 bin", "neigh_modify    delay 0 every 1 check yes", "",
+    L += ["neighbor        2.0 bin", "neigh_modify    delay 0 every 1 check yes", ""]
+    L += pair_energy_guard()
+    L += [
           "# --- open the box along z ---",
           "# Store every atom's unwrapped z and its molecule's centre of mass, shift each molecule by whole box",
           "# lengths so that its centre lies in the bulk box (molecules stay whole), then add the vacuum.",
@@ -518,6 +522,32 @@ include in.slab
 """
 
 
+def gpu_switches(opencl: bool = True, omp_threads: int | None = 4) -> list[str]:
+    """LAMMPS command-line switches for a GPU-package run.
+
+    On OpenCL builds the GPU package picks per-vendor kernel tuning. On the workstation's AMD RX 9060 XT (gfx1200,
+    RDNA4) the "AMD_GPU" tuning built empty neighbor lists without any error: the pair style and pppm/gpu then
+    returned no force, energy or virial, so an NPT box of C6F14 expanded to half its density, and ``clear`` hung
+    while the device shut down (2026-11-20, report in Runs\\md-gpu-check-2026-11-20). ``device_type generic``
+    fixes both and matches the CPU forces to 1e-6. ``pair/only on`` keeps PPPM and the bonded terms on the CPU
+    (OPENMP threads), which was also the fastest setup measured there (15.2 vs 10.2 ns/day for 9,780 atoms).
+    ``opencl=False`` (CUDA/HIP builds) leaves the device tuning to LAMMPS."""
+    pk = ["-pk", "gpu", "1"] + (["device_type", "generic"] if opencl else [])
+    if omp_threads:
+        return ["-sf", "hybrid", "gpu", "omp", *pk, "pair/only", "on", "-pk", "omp", str(omp_threads)]
+    return ["-sf", "gpu", *pk]
+
+
+def pair_energy_guard() -> list[str]:
+    """Input lines that stop LAMMPS (exit code 3) when the pair style returns no energy at all: what a GPU
+    neighbor-list failure looks like (see ``gpu_switches``). Placed after read_data and the force field."""
+    return ["# --- guard: nonbonded energy must be non-zero (a GPU neighbor-list failure returns none) ---",
+            "run             0 post no",
+            "variable        qb_epair equal abs(ecoul)+abs(evdwl-etail)",
+            'if "${qb_epair} < 1.0e-6" then "print \'QB_ERROR: the pair style returned no energy; nonbonded '
+            'forces are missing (GPU neighbor-list failure?)\'" "quit 3"', ""]
+
+
 def _commands(cfg: LiquidSlabConfig) -> list[str]:
     kind, _rc = parse_dispersion(cfg.dispersion)
     L = ["HOW TO RUN (from this folder; the two stages one after the other, or both with in.run)",
@@ -535,10 +565,15 @@ def _commands(cfg: LiquidSlabConfig) -> list[str]:
               "  accelerated versions are OPENMP, INTEL and OPT), so run it on the CPU as above. The GPU-friendly",
               "  variants are cutoff16 / cutoff18 (quantabench-cli md liquid-slab ... --dispersion cutoff16)."]
     else:
-        L += ["  GPU (GPU package, OpenCL/CUDA/HIP build; lj/cut/coul/long and pppm run on the GPU):",
-              "    lmp.exe -sf gpu -pk gpu 1 -in in.bulk",
-              "    lmp.exe -sf gpu -pk gpu 1 -in in.slab",
-              "    (Linux: lmp -sf gpu -pk gpu 1 -in in.bulk && lmp -sf gpu -pk gpu 1 -in in.slab)"]
+        g = " ".join(gpu_switches(True, 4))
+        L += ["  GPU (GPU package; the pair style on the GPU, PPPM and the bonded terms on 4 OpenMP threads):",
+              f"    lmp.exe {g} -in in.bulk",
+              f"    lmp.exe {g} -in in.slab",
+              f"    (Linux: lmp {g} -in in.bulk && lmp {g} -in in.slab)",
+              "  'device_type generic' is needed on OpenCL builds: with LAMMPS' AMD tuning an RX 9060 XT (gfx1200)",
+              "  built empty neighbor lists and the run had no nonbonded forces (the inputs now stop with QB_ERROR",
+              "  if that happens). CUDA/HIP builds: drop 'device_type generic'. Run the two stages as separate",
+              "  processes on a GPU (in.run, with clear between them, hung there without the fix)."]
     L += ["  Shorter runs: add for example  -var bulk_ns 0.2  to in.bulk and  -var settle_ns 0.5 -var production_ns 2",
           "  to in.slab. A smoke test: -var bulk_ns 0.02 (bulk), -var settle_ns 0.01 -var production_ns 0.01 (slab).",
           "  Python (the lammps module, for short checks): quantabench.md.liquid.run_liquid_slab(<this folder>)"]

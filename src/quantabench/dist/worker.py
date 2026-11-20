@@ -144,6 +144,13 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def md_measured(profile) -> bool:
+    """Whether a machine profile holds an MD benchmark (MD-BENCH-1: a variant with a measured ns/day)."""
+    from ..md.bench import rated
+
+    return bool(rated(getattr(profile, "md_throughput", None)))
+
+
 class RequestError(Exception):
     """A request the worker refuses; ``status`` is the HTTP status code."""
 
@@ -2011,11 +2018,13 @@ class Worker:
                                   on_change=self._publish_status)
         self.commit = git_commit()
         prof = profile_mod.local_profile()
-        if not prof.throughput and self.name != prof.name:   # --name: the registry keeps it under that name
+        if self.name != prof.name:   # --name: the registry keeps it under that name
             stored = profile_mod.load_profile(self.name)
-            if stored is not None and stored.throughput:
+            if stored is not None and stored.throughput and not prof.throughput:
                 prof = dataclasses.replace(prof, throughput=dict(stored.throughput),
                                            benchmarks=dict(stored.benchmarks))
+            if stored is not None and stored.md_throughput and not prof.md_throughput:
+                prof = dataclasses.replace(prof, md_throughput=dict(stored.md_throughput))
         prof = dataclasses.replace(prof, name=self.name, address=self.url, updated=_now())
         self.profile = prof
         loopback = ipaddress.ip_address(self.host).is_loopback
@@ -2107,6 +2116,8 @@ class Worker:
         prof = self.profile
         if old is not None and not prof.throughput and old.throughput:
             prof = dataclasses.replace(prof, throughput=dict(old.throughput))
+        if old is not None and not prof.md_throughput and old.md_throughput:
+            prof = dataclasses.replace(prof, md_throughput=dict(old.md_throughput))
         try:
             path = profile_mod.save_profile(prof)
             self.log(f"Published {self.url} in {path}")
@@ -2116,10 +2127,25 @@ class Worker:
     # -------------------------------------------------------------- join-time benchmark
     def needs_benchmark(self) -> bool:
         """``bench``: "always"; "auto" when this machine has no throughput measurement yet (a machine joining
-        the pool: ``grid build --weights auto`` would otherwise only guess its share from its core count)."""
+        the pool: ``grid build --weights auto`` would otherwise only guess its share from its core count), or
+        when ``--bench-methods`` asks for "md" and it has no MD measurement yet."""
         if self.bench == "always":
             return True
-        return self.bench == "auto" and not self.profile.throughput
+        return self.bench == "auto" and self._methods_to_measure() != []
+
+    def _methods_to_measure(self) -> list[str] | None:
+        """The benchmark list for this start (None = the default engines, [] = nothing to measure): all of
+        ``bench_methods`` with ``--bench always``; with "auto" only the missing parts: the engines when there is
+        no throughput yet, "md" when it was asked for and there is no MD measurement yet."""
+        from . import profile as profile_mod
+
+        if self.bench == "always":
+            return self.bench_methods
+        engines, want_md = profile_mod.split_md(self.bench_methods)
+        need_engines = engines != [] and not self.profile.throughput
+        if not (want_md and not md_measured(self.profile)):
+            return engines if need_engines else []
+        return ((engines if engines is not None else ["default"]) if need_engines else []) + [profile_mod.MD_METHOD]
 
     def _start_benchmark(self) -> None:
         if not self.needs_benchmark():
@@ -2138,7 +2164,7 @@ class Worker:
                  "(a few minutes; jobs wait meanwhile; `worker --bench never` skips this)")
         try:
             kw = {"max_seconds": self.bench_seconds} if self.bench_seconds else {}
-            prof = profile_mod.local_profile(bench=True, methods=self.bench_methods, address=self.url,
+            prof = profile_mod.local_profile(bench=True, methods=self._methods_to_measure(), address=self.url,
                                              should_stop=self._bench_stop.is_set, log=self.log, **kw)
             if self._bench_stop.is_set():
                 self.log("Benchmark stopped; nothing saved (it runs again on the next start)")
@@ -2146,6 +2172,10 @@ class Worker:
             self.profile = dataclasses.replace(prof, name=self.name, address=self.url, updated=_now())
             self.manager.environment["profile"] = self.profile.to_dict()
             measured = ", ".join(f"{k} {v:,.0f}/h" for k, v in sorted(self.profile.throughput.items()))
+            if md_measured(self.profile):
+                from ..md.bench import short_text
+
+                measured += ("; " if measured else "") + "MD ns/day: " + short_text(self.profile.md_throughput)
             self.log(f"Benchmark done: {measured or 'nothing measured'}")
             self._publish_profile()
         except Exception as exc:  # a failed benchmark must not keep jobs waiting
@@ -2318,7 +2348,8 @@ def register_cli(subparsers) -> None:
                    help="measure this machine's throughput at start: auto (default: only when it has no "
                         "measurement yet, i.e. a machine joining), always, or never")
     w.add_argument("--bench-methods", metavar="METHODS",
-                   help="with --bench: comma list (default: the available ones of mmff, gfn1-xtb, gfn2-xtb, aimnet2)")
+                   help="with --bench: comma list (default: the available ones of mmff, gfn1-xtb, gfn2-xtb, aimnet2); "
+                        "'md' adds the LAMMPS MD benchmark (a few minutes more), e.g. default,md")
     w.add_argument("--name", help="worker name (default: this machine's name)")
     w.add_argument("--state-dir", help="folder for the job list and queued inputs (default: the per-user "
                                        "state folder; not the synced settings)")

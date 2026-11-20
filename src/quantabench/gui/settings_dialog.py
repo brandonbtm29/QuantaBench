@@ -582,7 +582,8 @@ class SettingsDialog(QDialog):
     #: (settings key, label, file-dialog title) of the external programs QuantaBench can run
     PROGRAM_FIELDS = (("xtb", "xtb", "xtb executable"), ("crest", "CREST", "crest executable"),
                       ("mopac", "MOPAC", "MOPAC executable"), ("psi4_python", "Psi4 Python", "Python with psi4"),
-                      ("obabel", "Open Babel", "obabel executable (file formats QuantaBench does not read)"))
+                      ("obabel", "Open Babel", "obabel executable (file formats QuantaBench does not read)"),
+                      ("lammps", "LAMMPS", "lmp executable (MD; the Windows installer's lmp.exe has the GPU package)"))
     #: (label, engines.crest_wsl_scratch) of Engines > Runs > CREST scratch through WSL (chem.wsl_scratch.MODES)
     CREST_WSL_SCRATCH = (("Automatic: /dev/shm if it has room, else WSL's disk", "auto"),
                          ("WSL's memory (/dev/shm)", "shm"), ("WSL's own disk", "disk"),
@@ -694,7 +695,7 @@ class SettingsDialog(QDialog):
 
         def detect():
             rows = []
-            for name in ("xtb", "crest", "mopac", "obabel"):
+            for name in ("xtb", "crest", "mopac", "obabel", "lammps"):
                 if typed.get(name):
                     info = external.inspect_path(name, typed[name])
                     rows.append((name, info, "typed path does not exist" if info is None else ""))

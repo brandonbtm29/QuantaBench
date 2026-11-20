@@ -20,6 +20,7 @@
     quantabench-cli md liquid-slab --smiles "FC(F)(F)C(F)(F)..." --name c6f14 -o DIR [--ff oplsaa|openff|gaff2]
                          [--dispersion ewald|cutoff12|cutoff16] [--size pilot|full] [--molecules N] [--run]
     quantabench-cli md surface-tension DIR                                      # sigma +- error, densities, checks
+    quantabench-cli md estimate DIR | --atoms N --ns NS                         # hours per machine (MD-BENCH-1)
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
     quantabench-cli update [--check] [--upgrade-packages]                       # git pull + reinstall if needed
     quantabench-cli sketcher [--install [--from-zip ZIP]] [--use DIR]            # the Sketch dock's editor files
@@ -31,6 +32,7 @@ Splitting work (``quantabench.dist``):
     quantabench-cli build --file cohort.xlsx --method gfn1-xtb --lanes auto     # parallel processes here
     quantabench-cli lanes auto                                                  # what a lane spec means here
     quantabench-cli machines [--refresh] [--bench mmff,gfn1-xtb]                # machine registry + throughput
+    quantabench-cli machines --bench md [--md-size pilot]                       # LAMMPS ns/day per variant (MD-BENCH-1)
     quantabench-cli build --file cohort.xlsx --method mmff --chunk-weights auto # this machine's weighted share;
         # the first machine stores the split (settings/machines/splits), the others reuse it for that list
     quantabench-cli worker                                                      # serve jobs over Tailscale
@@ -1246,7 +1248,7 @@ def build_parser() -> argparse.ArgumentParser:
     mp.set_defaults(func=_md_parse)
     from .cli_md import register as register_md
 
-    register_md(msub)           # md liquid-slab, md surface-tension (quantabench.cli_md)
+    register_md(msub)           # md liquid-slab, md surface-tension, md estimate (quantabench.cli_md)
 
     up = sub.add_parser("update", help="update this QuantaBench checkout (git pull --ff-only, reinstall if "
                                        "dependencies changed; --upgrade-packages also upgrades the packages)")

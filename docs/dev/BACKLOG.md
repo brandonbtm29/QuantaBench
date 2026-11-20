@@ -769,7 +769,8 @@ Depends on: none (research only; can run any night).
 - 2026-11-05: done through FORK-1: the dxtb fork with tad-libcint 0.4 gives GFN2, polarizability and IR
   intensities natively on Windows (the workstation: matches Linux to ~1e-15 to 4e-9).
 
-## MD-2: Liquid-slab surface tension · in-PR 2026-11-20 (branch `feat/md-surface-tension`; the pilot runs needs-Brandon)
+## MD-2: Liquid-slab surface tension · merged 2026-11-20 (PR #33); the pilot runs are running
+- 2026-11-20, GPU: on the workstation's RX 9060 XT (OpenCL), LAMMPS' default AMD tuning gave empty neighbor lists, so there were no nonbonded forces (NPT expanded; `clear` hung). Fixed by `device_type generic` in `md.liquid.gpu_switches()`, plus a `QB_ERROR` guard in the inputs (PR with MD-BENCH-1). Other AMD/OpenCL cards untested.
 Plan: the Claude Doc "Plan: first MD surface-tension tests in QuantaBench"; methods: docs/ENGINES.md, "Liquid-slab MD
 and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecular dynamics".
 - Done (2026-11-20):
@@ -785,6 +786,8 @@ and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecula
     - C6F6 OPLS-AA ewald (803);
     - C6F14 GAFF2 ewald and C6F14 OpenFF ewald.
 - Next:
+  - Before the pilots: `quantabench-cli machines --bench md --md-size pilot` on the workstation (MD-BENCH-1) gives
+    the ns/day of each variant and checks the GPU package's pressure at `run 0`.
   - Run the pilots on the workstation (installer `lmp.exe`, OpenMP; the cutoff16 one also on the GPU package).
     Compare σ and density with the measured values, and ewald against cutoff12/16.
   - Check that the slab plateau matches the bulk density, and that 10 ns gives an error bar under about
@@ -801,6 +804,36 @@ and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecula
   - A GUI page (the Simulate workspace, SIM-1) and runs through the job queue.
 - Open: the C6F14 reference. Freire et al. 2006 measured 12.33 mN/m at 298.15 K; Jasper's compilation (Stiles &
   Cady 1952) gives 11.44. The plan uses 12.33; both are recorded in the pilot READMEs.
+
+## MD-BENCH-1: An MD benchmark of each machine (ns/day) · in-PR 2026-11-20 (branch `feat/md-bench`, after PR #33; the workstation run needs-Brandon)
+Brandon (2026-11-20): "Maybe the worker benchmarking could include a short MD run?" Docs: docs/WORKERS.md, "The MD
+benchmark"; code: `md/bench.py`.
+- Done (2026-11-20):
+  - `machines --bench md` and `worker --bench-methods ...,md` (never in the default list). Liquid C6F14 OPLS-AA:
+    `small` has 3,000 atoms, `pilot` 9,780. The box is cached per QuantaBench version.
+  - One LAMMPS process per variant: `cpu-ewald`, `cpu-cutoff12` and `cpu-cutoff16` (OpenMP), plus `gpu-cutoff12`
+    and `gpu-cutoff16` (GPU package) where `lmp -h` lists it; `kokkos-*` when asked for.
+  - The `run 0` CPU/GPU check of pressure and energy: `ok`, `mismatch` (unverified) or `skipped`.
+  - Results in the registry key `md_throughput`; old files load. Shown in `machines` and in the Machines dock's
+    "MD (ns/day)" column.
+  - `md estimate` (hours from ns/day scaled by atoms), also printed by `md liquid-slab` and written into its
+    README.txt. LAMMPS is now in `chem.external` (`lammps`).
+  - Tests: `tests/test_md_bench.py`. A real 800-atom run checks the parsing and both outcomes of the check; it
+    skips without LAMMPS.
+  - Cloud container: 2 slow cores, the PyPI wheel (no GPU package), 1 thread by the default budget. The small box
+    was built in 63 s with Packmol. cpu-ewald 5.5, cpu-cutoff12 6.9 and cpu-cutoff16 3.6 ns/day; 161 s in all at
+    30 s per variant.
+- Next:
+  - Run it on the workstation with the installer's `lmp.exe`:
+    `quantabench-cli machines --bench md --md-size pilot --md-threads 6`. cpu-ewald should come out near the
+    6.5 ns/day of the pilot runs, and it shows whether the GPU package passes the pressure check (the half-density
+    NPT). If the venv's PyPI wheel is found first (`machines` shows the LAMMPS version), set
+    `quantabench-cli settings --engine-path lammps=<installer lmp.exe>`; the wheel has no GPU package.
+  - The KOKKOS variants are written but have not run (no KOKKOS build here).
+  - MPI ranks (`mpirun -np N lmp`) next to OpenMP threads; often faster for LAMMPS on a CPU.
+  - If the slab turns out much slower than the bulk benchmark, add a slab-shaped variant (with vacuum).
+  - A "Benchmark MD" button in the Machines dock. Use ns/day for splitting MD jobs across machines once MD runs as
+    worker jobs (SIM-1).
 
 ## MD-1: Counter-ions in vacuum SMD (Windows LAMMPS non-determinism + ion-pair heating) · ready
 - On the Windows workstation, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a

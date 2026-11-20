@@ -12,6 +12,8 @@ CONTRACT (implemented by the profile builder; field names are fixed, more may be
     load_profiles() -> list[MachineProfile]    every machine in the registry, newest first
     machine_name() -> str         stable, lowercase hostname (Tailscale MagicDNS-style)
     throughput_for(p, method, device="auto") -> float | None
+    md_throughput (MD-BENCH-1): ns/day of a LAMMPS liquid per accelerator and dispersion variant, measured only
+        when asked for (``machines --bench md``, ``worker --bench-methods ...,md``; ``md.bench`` has the schema)
 
 The registry folder is synced (SyncThing), so it may hold stale files, half-written ones, SyncThing
 conflict copies (``name.sync-conflict-....json``) and files written by newer or older QuantaBench versions.
@@ -27,6 +29,10 @@ and one larger molecule (``BENCH_SETS``; the set is recorded in ``benchmarks[key
 ``<method>+water@<device>``. Readers (``throughput_for``, ``best_throughput``, ``dist.speed``,
 ``dist.plan.auto_weight``, ``client.resolve_weights``, ``dist.lanes.plan_auto``) are given
 ``bench_method(method, solvent)``, so a run in water only ever uses water benchmarks.
+
+"md" in a benchmark list (``MD_METHOD``) is not an engine: it runs ``md.bench.run_md_benchmark`` (a few minutes of
+LAMMPS on the CPU and the GPU package) into ``md_throughput``. It is never part of the default list, so a worker's
+start-up benchmark stays as short as before unless "md" is asked for.
 """
 
 from __future__ import annotations
@@ -70,6 +76,8 @@ BENCH_PROTOCOL = {"max_conformers": 4, "refine_top": 2, "protonate": False, "xtb
                   "write_files": False, "frequencies": False, "conformer_search": "rdkit", "solvent": "",
                   "qm_method": "", "seed": 42}
 DEFAULT_BENCH_METHODS = ("mmff", "gfn1-xtb", "gfn2-xtb", "aimnet2")
+#: in a benchmark list (``machines --bench``, ``worker --bench-methods``): the LAMMPS MD benchmark (``md.bench``)
+MD_METHOD = "md"
 DXTB_METHODS = ("gfn1-xtb", "gfn2-xtb")    # run where torch_compat.dxtb_device puts them
 DEFAULT_MAX_SECONDS = 60.0         # per method and device: two devices stay within ~2 minutes per method
 MIN_SECONDS = 5.0                  # a fast engine repeats the set (up to MAX_PASSES times) until this long
@@ -102,6 +110,8 @@ class MachineProfile:
     wsl_programs: list[str] = field(default_factory=list)    # programs that run through WSL (``wsl:`` paths)
     benchmarks: dict[str, dict] = field(default_factory=dict)  # key -> {molecules, seconds, threads, date, ...}
     notes: list[str] = field(default_factory=list)
+    # -- MD-BENCH-1: {"lammps", "packages", "system", "variants": {"cpu-ewald": {"ns_per_day", ...}}, ...}
+    md_throughput: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -153,6 +163,10 @@ def _coerce(default, value, name: str) -> tuple[bool, object]:
                           if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0}
         if name == "benchmarks":
             return True, {str(k): v for k, v in value.items() if isinstance(v, dict)}
+        if name == "md_throughput":
+            from ..md.bench import clean_record
+
+            return True, clean_record(value)
         return True, value
     return True, value
 
@@ -434,17 +448,50 @@ def _configured_address(name: str) -> str:
     return str(workers.get(name, "") or "")
 
 
+def split_md(methods) -> tuple[list[str] | None, bool]:
+    """(engine methods, whether the MD benchmark is wanted) of a benchmark list: None = the default engines
+    (no list, or only "default"); [] = no engines (the list was only "md"). "default" next to other names
+    stays in the list (``expand_methods`` replaces it)."""
+    if not methods:
+        return None, False
+    items = [str(m).strip() for m in methods if m and str(m).strip()]
+    md = MD_METHOD in items
+    rest = [m for m in items if m != MD_METHOD]
+    if not rest:
+        return ([] if md else None), md
+    if rest == ["default"]:
+        return None, md
+    return rest, md
+
+
+def expand_methods(methods: Sequence[str] | None, engines: dict) -> list[str]:
+    """Engine methods to benchmark: ``methods`` with "default" replaced by the available ones of
+    ``DEFAULT_BENCH_METHODS`` (``engines``: method -> available); None = those defaults."""
+    defaults = [m for m in DEFAULT_BENCH_METHODS if engines.get(m)]
+    if methods is None:
+        return defaults
+    out: list[str] = []
+    for m in methods:
+        for x in (defaults if m == "default" else [m]):
+            if x not in out:
+                out.append(x)
+    return out
+
+
 def local_profile(bench: bool = False, methods=None, *, devices: Sequence[str] | None = None,
                   probe_wsl: bool = False, keep_previous: bool = True, address: str | None = None,
                   max_seconds: float = DEFAULT_MAX_SECONDS, should_stop: Callable[[], bool] | None = None,
                   log: Callable[[str], None] | None = None, solvent: str = "",
-                  bench_set: str = "pfas") -> MachineProfile:
+                  bench_set: str = "pfas", md_options: dict | None = None) -> MachineProfile:
     """This machine's profile. ``bench``: also measure throughput for ``methods`` (default: the available
     ones of ``DEFAULT_BENCH_METHODS``) on ``devices`` (default: CPU, plus each GPU for GPU-capable engines).
+    "md" in ``methods`` (``MD_METHOD``) also runs the MD benchmark (``md.bench.run_md_benchmark`` with
+    ``md_options``: size, variants, threads, steps), into ``md_throughput``; ["md"] alone runs only that.
 
     ``keep_previous``: measurements and the worker address already in this machine's registry file are
-    kept unless measured again (a failed re-measurement drops the old number). ``address``: the worker's
-    URL (the worker passes it); otherwise ``settings.dist.workers[<name>]``, else the stored one.
+    kept unless measured again (a failed re-measurement drops the old number; MD variants likewise, each on
+    its own, ``md.bench.merge``). ``address``: the worker's URL (the worker passes it); otherwise
+    ``settings.dist.workers[<name>]``, else the stored one.
     ``probe_wsl``: also ask programs that run through WSL for their version (starting WSL takes seconds).
     """
     from .. import __version__, resources
@@ -479,10 +526,19 @@ def local_profile(bench: bool = False, methods=None, *, devices: Sequence[str] |
     )
     measured: dict[str, dict] = {}
     if bench:
-        wanted = list(methods) if methods else [m for m in DEFAULT_BENCH_METHODS if p.engines.get(m)]
-        p.throughput = benchmark(wanted, devices, max_seconds=max_seconds, should_stop=should_stop, log=log,
-                                 details=measured, gpus=rep.gpus, solvent=solvent, bench_set=bench_set)
+        engine_methods, want_md = split_md(methods)
+        wanted = expand_methods(engine_methods, p.engines)
+        if wanted or not want_md:
+            p.throughput = benchmark(wanted, devices, max_seconds=max_seconds, should_stop=should_stop, log=log,
+                                     details=measured, gpus=rep.gpus, solvent=solvent, bench_set=bench_set)
         p.benchmarks = measured
+        if want_md and not (should_stop and should_stop()):
+            from ..md import bench as md_bench
+
+            opts = dict(md_options or {})
+            log("MD benchmark (LAMMPS; md.bench): ns/day of liquid C6F14 per accelerator and dispersion variant")
+            p.md_throughput = md_bench.run_md_benchmark(opts.pop("variants", None), max_seconds=max_seconds,
+                                                        should_stop=should_stop, log=log, **opts)
     if keep_previous:
         prev = load_profile(name)
         if prev is not None:
@@ -491,6 +547,10 @@ def local_profile(bench: bool = False, methods=None, *, devices: Sequence[str] |
                     p.throughput.setdefault(key, value)
             for key, info in prev.benchmarks.items():
                 p.benchmarks.setdefault(key, info)
+            if prev.md_throughput:
+                from ..md import bench as md_bench
+
+                p.md_throughput = md_bench.merge(prev.md_throughput, p.md_throughput)
             if not p.address:
                 p.address = prev.address
     return p
@@ -773,6 +833,10 @@ def describe(p: MachineProfile, this: bool = False, now: float | None = None,
     failed = {k: v.get("error") for k, v in p.benchmarks.items() if v.get("error") and k not in p.throughput}
     for k, err in failed.items():
         lines.append(f"  benchmark {k} failed: {err}")
+    if p.md_throughput:
+        from ..md.bench import describe_lines
+
+        lines += describe_lines(p.md_throughput)
     if p.address:
         lines.append(f"  worker:     {p.address}")
     if age is not None and age > STALE_DAYS * 86400:
@@ -783,18 +847,25 @@ def describe(p: MachineProfile, this: bool = False, now: float | None = None,
 
 
 def _parse_methods(text: str, engines: dict) -> list[str]:
+    """``--bench`` text -> methods: "default" = the available default engines, "md" = the MD benchmark (kept as
+    "md" in the list), anything else must be an engine."""
     items = [x.strip() for x in text.split(",") if x.strip()]
     if not items or items == ["default"]:
         return [m for m in DEFAULT_BENCH_METHODS if engines.get(m)]
-    unknown = [m for m in items if m not in engines]
+    unknown = [m for m in items if m not in engines and m not in ("default", MD_METHOD)]
     if unknown:
-        raise ValueError(f"unknown method(s): {', '.join(unknown)} (known: {', '.join(engines)})")
-    return items
+        raise ValueError(f"unknown method(s): {', '.join(unknown)} (known: {', '.join(engines)}, "
+                         f"default, {MD_METHOD})")
+    engine_methods, want_md = split_md(items)
+    out = expand_methods(engine_methods, engines) if engine_methods is not None else (
+        [m for m in DEFAULT_BENCH_METHODS if engines.get(m)])
+    return out + ([MD_METHOD] if want_md else [])
 
 
 def refresh_from_cli(bench: bool, methods=None, devices=None, max_seconds: float = DEFAULT_MAX_SECONDS,
                      probe_wsl: bool = False, out=None, solvent: str = "",
-                     bench_set: str = "pfas") -> tuple[MachineProfile | None, Path | None]:
+                     bench_set: str = "pfas", md_options: dict | None = None
+                     ) -> tuple[MachineProfile | None, Path | None]:
     """Build (and benchmark) this machine's profile and save it, for ``doctor --bench`` and ``machines``.
     Ctrl+C stops the benchmark after the current molecule and saves nothing; returns (None, None) then."""
     import signal
@@ -813,14 +884,22 @@ def refresh_from_cli(bench: bool, methods=None, devices=None, max_seconds: float
     old = signal.signal(signal.SIGINT, on_sigint) if bench and main else None
     try:
         if bench:
-            names = ", ".join(methods) if methods else "the available default engines"
-            what = (f"{len(BENCH_SET)} PFAS anions" if bench_set == "pfas"
-                    else f"the {bench_set} set of {len(BENCH_SETS[bench_set])} molecules")
-            print(f"Benchmarking {names} on {machine_name()} ({what}{', in ' + solvent if solvent else ''}, up to "
-                  f"{max_seconds:.0f} s per method and device)", file=out)
+            engine_methods, want_md = split_md(methods)
+            if engine_methods != []:
+                names = ", ".join(engine_methods) if engine_methods else "the available default engines"
+                what = (f"{len(BENCH_SET)} PFAS anions" if bench_set == "pfas"
+                        else f"the {bench_set} set of {len(BENCH_SETS[bench_set])} molecules")
+                print(f"Benchmarking {names} on {machine_name()} ({what}{', in ' + solvent if solvent else ''}, "
+                      f"up to {max_seconds:.0f} s per method and device)", file=out)
+            if want_md:
+                size = (md_options or {}).get("size") or "small"
+                print(f"MD benchmark on {machine_name()} (LAMMPS, liquid C6F14, {size} box; up to {max_seconds:.0f} s "
+                      "per variant, plus a one-time box set-up)", file=out)
+        kw = {"md_options": md_options} if md_options else {}
         prof = local_profile(bench=bench, methods=methods, devices=devices, probe_wsl=probe_wsl,
                              max_seconds=max_seconds, should_stop=lambda: stop["now"],
-                             log=lambda m: print(m, file=out, flush=True), solvent=solvent, bench_set=bench_set)
+                             log=lambda m: print(m, file=out, flush=True), solvent=solvent, bench_set=bench_set,
+                             **kw)
     finally:
         if old is not None:
             signal.signal(signal.SIGINT, old)
@@ -850,10 +929,21 @@ def _machines_cli(args) -> int:
                 print("No benchmark method is available on this machine.", file=sys.stderr)
                 return 2
         devices = [d.strip() for d in args.devices.split(",") if d.strip()] if args.devices else None
+        extra = {}
+        if methods and MD_METHOD in methods:
+            from ..md import bench as md_bench
+
+            try:
+                variants = md_bench.parse_variants(getattr(args, "md_variants", None))
+            except ValueError as exc:
+                print(exc, file=sys.stderr)
+                return 2
+            extra["md_options"] = {"size": getattr(args, "md_size", None) or md_bench.DEFAULT_SIZE,
+                                   "variants": variants, "threads": int(getattr(args, "md_threads", 0) or 0)}
         prof, _ = refresh_from_cli(bool(methods), methods, devices, args.max_seconds, args.wsl,
                                    out=sys.stderr if args.json else sys.stdout,
                                    solvent=getattr(args, "solvent", "") or "",
-                                   bench_set=getattr(args, "bench_set", "pfas") or "pfas")
+                                   bench_set=getattr(args, "bench_set", "pfas") or "pfas", **extra)
         if prof is None:
             return 130
     profiles = load_profiles()
@@ -882,7 +972,8 @@ def register_cli(subparsers) -> None:
     m.add_argument("--refresh", action="store_true", help="write this machine's profile to the registry")
     m.add_argument("--bench", metavar="METHODS",
                    help="measure throughput (molecules/hour on a fixed PFAS set) for these methods, e.g. "
-                        "mmff,gfn1-xtb, or 'default'; implies --refresh")
+                        "mmff,gfn1-xtb, or 'default'; 'md' adds the LAMMPS MD benchmark (ns/day; "
+                        "--md-* options), e.g. --bench md or --bench default,md; implies --refresh")
     m.add_argument("--devices", help="with --bench: devices to time, e.g. cpu,cuda:0 (default: CPU, plus each "
                                      "GPU for GPU-capable engines)")
     m.add_argument("--max-seconds", type=float, default=DEFAULT_MAX_SECONDS,
@@ -893,6 +984,15 @@ def register_cli(subparsers) -> None:
     m.add_argument("--solvent", default="",
                    help="with --bench: benchmark in this implicit solvent (e.g. water), keyed <method>+water@<device> "
                         "so it never mixes with gas phase; methods without a model for it are skipped")
+    m.add_argument("--md-size", choices=("small", "pilot"), default="small",
+                   help="with --bench md: the liquid C6F14 box, small (3,000 atoms, the default) or pilot (9,780 "
+                        "atoms, MD-2's pilot slab)")
+    m.add_argument("--md-variants", metavar="LIST",
+                   help="with --bench md: <cpu|gpu|kokkos>-<ewald|cutoff12|cutoff16|cutoff18>, comma list (default: "
+                        "cpu-ewald, cpu-cutoff12, cpu-cutoff16 and, with the GPU package, gpu-cutoff12, gpu-cutoff16)")
+    m.add_argument("--md-threads", type=int, default=0,
+                   help="with --bench md: OpenMP threads of the CPU variants (default: this machine's one-lane thread "
+                        "budget, at most its physical cores)")
     m.add_argument("--wsl", action="store_true", help="also probe versions of programs run through WSL (slow)")
     m.add_argument("--json", action="store_true")
     m.set_defaults(func=_machines_cli)
