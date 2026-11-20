@@ -34,7 +34,11 @@ def test_machines_dock_lists_registry_and_checks_workers(tmp_path, monkeypatch):
     profs = [profile.MachineProfile(name="tower-test", os="Windows 11", cpu="Ryzen 9 7900X", physical_cores=12,
                                     logical_cores=24, ram_gb=32, gpus=[{"name": "RX 9060 XT"}],
                                     throughput={"mmff@cpu": 9000.0, "aimnet2@cuda:0": 4000.0},
-                                    address="http://100.101.1.2:8765"),
+                                    address="http://100.101.1.2:8765",
+                                    md_throughput={"lammps": "4 Jul 2026", "variants": {   # MD-BENCH-1
+                                        "cpu-ewald": {"ns_per_day": 6.5, "atoms": 9780, "threads": 6},
+                                        "gpu-cutoff16": {"ns_per_day": 10.6, "atoms": 9780, "accelerator": "gpu",
+                                                         "check": "mismatch"}}}),
              profile.MachineProfile(name=here, physical_cores=4, logical_cores=8)]
     monkeypatch.setattr(profile, "load_profiles", lambda *a, **k: list(profs))
     tower = client.WorkerRef(name="tower-test", url="http://100.101.1.2:8765", source="registry",
@@ -60,6 +64,11 @@ def test_machines_dock_lists_registry_and_checks_workers(tmp_path, monkeypatch):
     assert got["tower-test"][1] == "worker (not checked)"
     hw, tp = COL["Hardware"], COL["Throughput (molecules/h)"]
     assert "RX 9060 XT" in got["tower-test"][hw] and got["tower-test"][tp].startswith("mmff@cpu 9,000")
+    md = COL["MD (ns/day)"]
+    assert got["tower-test"][md] == "cpu-ewald 6.5, gpu-cutoff16 10.6 (unverified)"
+    assert got[f"{here}  (this computer)"][md] == ""
+    row = next(r for r in range(t.rowCount()) if t.item(r, 0).text() == "tower-test")
+    assert "[pressure check: mismatch]" in t.item(row, md).toolTip()
     assert "Parallel lanes" in panel.here.text()
 
     panel.check_workers()

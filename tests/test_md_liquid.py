@@ -347,7 +347,8 @@ def test_cli_liquid_slab_and_surface_tension(tmp_path):
 
 def test_md_modules_import_without_heavy_dependencies():
     code = ("import sys; import quantabench.md.liquid, quantabench.md.forcefield, quantabench.md.surface_tension, "
-            "quantabench.cli_md; print(any(m in sys.modules for m in ('lammps', 'torch', 'openff', 'parmed')))")
+            "quantabench.md.bench, quantabench.cli_md; "
+            "print(any(m in sys.modules for m in ('lammps', 'torch', 'openff', 'parmed')))")
     src = str(Path(L.__file__).resolve().parents[2])
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
                          env={**os.environ, "PYTHONPATH": src})

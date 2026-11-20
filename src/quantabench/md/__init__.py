@@ -9,5 +9,8 @@ perfluoroalkane types; GAFF2 and OpenFF Sage through ``md/ff_driver.py`` in an A
 ``md.liquid`` writes a liquid-vapour slab folder (bulk NPT, then an NVT slab), and ``md.surface_tension``
 turns its pressure tensor and density profiles into σ ± error and densities.
 
+``md.bench`` (MD-BENCH-1) times this machine's LAMMPS on a liquid C6F14 box per accelerator and dispersion variant
+(``machines --bench md``), checks GPU variants against the CPU at ``run 0``, and estimates MD run times from that.
+
 None of them import the LAMMPS Python module (or OpenFF, ParmEd) at import time.
 """

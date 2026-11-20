@@ -49,7 +49,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-COLUMNS = ("Machine", "Status", "Split", "Share", "Run", "Hardware", "Throughput (molecules/h)", "Updated")
+COLUMNS = ("Machine", "Status", "Split", "Share", "Run", "Hardware", "Throughput (molecules/h)", "MD (ns/day)",
+           "Updated")
 COL = {name: k for k, name in enumerate(COLUMNS)}
 SPLIT_LABELS = {"auto": "Auto (measured speed)", "manual": "Manual weight", "off": "Off"}
 PRIORITY_CHOICES = ("default", "normal", "low", "background")
@@ -67,6 +68,18 @@ def _throughput(p) -> str:
     if not items:
         return "not measured"
     return ", ".join(f"{k} {float(v):,.0f}" for k, v in items[:4]) + (" ..." if len(items) > 4 else "")
+
+
+def _md_text(p) -> tuple[str, str]:
+    """(cell, tooltip) of the MD column (MD-BENCH-1): 'cpu-ewald 6.5, gpu-cutoff16 10.6 (unverified)'."""
+    md = getattr(p, "md_throughput", None) or {}
+    if not md:
+        return "", "Not measured: quantabench-cli machines --bench md (LAMMPS ns/day, a few minutes)"
+    from ..md import bench
+
+    lines = [x.strip() for x in bench.describe_lines(md)]
+    text = bench.short_text(md) or ("not measured" if md.get("skipped") else "")
+    return text, "\n".join(lines)
 
 
 def _sensor_text(raw) -> str:
@@ -414,12 +427,15 @@ class MachinesPanel(QWidget):
                     "Run": "",
                     "Hardware": _hardware(p) if p else "",
                     "Throughput (molecules/h)": _throughput(p) if p else ("not measured" if n == me else ""),
+                    "MD (ns/day)": _md_text(p)[0] if p else "",
                     "Updated": _age(p) if p else "",
                 }
                 for c, name in enumerate(COLUMNS):
                     item = QTableWidgetItem(cells[name])
                     if name == "Status" and ref is not None and ref.error:
                         item.setToolTip(ref.error)
+                    if name == "MD (ns/day)" and p is not None:
+                        item.setToolTip(_md_text(p)[1])
                     self.table.setItem(r, c, item)
                 self.table.setCellWidget(r, COL["Split"], self._split_widget(n, s))
                 self.table.setCellWidget(r, COL["Run"], self._pause_widget(n, n == me, ref, status))

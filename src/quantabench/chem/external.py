@@ -98,6 +98,14 @@ PROGRAMS: dict[str, ProgramSpec] = {
     "antechamber": ProgramSpec("antechamber", ("antechamber",), ("-h",), r"antechamber (\d+(?:\.\d+)*)",
                                "conda create -n qbmd -c conda-forge python=3.12 ambertools packmol openff-toolkit-base "
                                "openff-interchange-base openff-forcefields (Linux, macOS, WSL)", engine=False),
+    # LAMMPS (GPL-2.0) as the user's own program: md.liquid's and md.lammps' folders run with it, and the MD benchmark
+    # (md.bench, `machines --bench md`) times it. `lmp -h` prints the version, the packages and the accelerators.
+    # The Windows installer's lmp.exe has the GPU package (OpenCL); the PyPI wheel's lmp has OPENMP but no GPU
+    "lammps": ProgramSpec("lammps", ("lmp", "lmp_serial", "lmp_mpi", "lmp_omp"), ("-h",),
+                          r"Large-scale Atomic/Molecular Massively Parallel Simulator - (\d{1,2} \w{3} \d{4}"
+                          r"(?: - Update \d+)?)",
+                          "Windows: the installer from https://packages.lammps.org/windows.html (its lmp.exe has the "
+                          "GPU package); Linux/macOS: conda install -c conda-forge lammps, or pip install lammps"),
 }
 
 
