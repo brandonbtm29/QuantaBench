@@ -31,8 +31,11 @@ Implementation notes:
   (if native, not WSL) is put first on the child's PATH, so CREST uses that xtb and not an older one
   elsewhere on PATH.
 - Windows: CREST has no Windows build. Configure it as ``wsl:crest`` (Settings > Engines); the command
-  is built with ``ProgramInfo.command()`` and relative file names, and ``run_program`` translates the
-  job folder to ``/mnt/c/...``. CREST then uses the xtb inside WSL (install both in the same conda env).
+  is built with ``ProgramInfo.command()`` and relative file names. CREST then uses the xtb inside WSL (install
+  both in the same conda env). It runs in a folder inside WSL (``chem.wsl_scratch``: /dev/shm when it has room,
+  else WSL's disk; ``engines.crest_wsl_scratch``), not in the Windows job folder through ``/mnt/c``, where
+  every file it wrote crossed to the Windows disk (about 70 GB an hour in a batch). Only ``RESULT_FILES``
+  come back (the log is QuantaBench's own, in the Windows folder); a note says which scratch was used.
 - Run time grows quickly with size and flexibility: GFN-FF ``--quick`` on ethanol takes ~2 s, GFN2
   ``--quick`` on PFBA ~2 min on 2 cores; a C8 perfluoroalkyl acid with GFN2 is tens of minutes.
 """
@@ -61,6 +64,16 @@ METHOD_FLAGS = {"gfn2": "--gfn2", "gfn1": "--gfn1", "gfnff": "--gfnff", "gff": "
 #: CREST 3.0.2 stops with "-gfn2//gfnff option not yet available with new calculator": these methods
 #: need ``--legacy``, which runs the xtb binary for every calculation instead of CREST's built-in tblite
 LEGACY_METHODS = {"gfn2//gfnff"}
+#: what comes back from a job folder inside WSL (``chem.wsl_scratch``): what the pipeline reads, and CREST's two
+#: small summaries (CREST's output itself is the log QuantaBench writes in the Windows job folder)
+RESULT_FILES = ("crest_conformers.xyz", "crest.energies", "crest_best.xyz")
+
+
+def scratch_bytes(n_atoms: int) -> int:
+    """A generous guess of the most a CREST job folder holds at once (MTD trajectories, the ensembles, the threads'
+    optimization folders): 64 MiB + 4 MiB per atom, about 0.5 GB at 100 atoms. ``chem.wsl_scratch`` wants twice this
+    on /dev/shm, on top of ``engines.crest_wsl_shm_min_gb``."""
+    return (64 + 4 * max(0, int(n_atoms))) * 2**20
 
 
 #: lines of CREST's output that say why it stopped, most telling first (searched in an error's log tail)
@@ -237,7 +250,7 @@ def _embed_input(mol: Chem.Mol, seed: int, threads: int) -> tuple[Chem.Mol, str]
 def generate(mol: Chem.Mol, cfg, *, threads: int = 1, solvent: str = "", charge: int = 0, multiplicity: int = 1,
              should_stop: Callable[[], bool] = lambda: False,
              log: Callable[[str], None] = lambda _m: None) -> ConformerSet:
-    from . import external
+    from . import external, wsl_scratch
     from .eng_xtb import write_xyz
     from .optimize import Cancelled
 
@@ -267,11 +280,15 @@ def generate(mol: Chem.Mol, cfg, *, threads: int = 1, solvent: str = "", charge:
         log(f"  WARNING: {problem}")
     with external.work_dir("crest") as d:
         write_xyz(d / "input.xyz", numbers, start.GetConformer().GetPositions(), "QuantaBench CREST input")
-        run = external.run_program(cmd, d, threads=threads, env=env, timeout=timeout, log_name="crest.log",
-                                   should_stop=should_stop, log=log)
-        problem = optimizer_problem(run.text())
-        if problem:
-            raise external.ExternalProgramError(f"{problem}\n{run.tail(30)}")
+        # through WSL: a folder inside WSL (/dev/shm or its disk), removed whatever happens; else d itself
+        with wsl_scratch.job_folder(program, d, inputs=("input.xyz",), expected_bytes=scratch_bytes(len(numbers)),
+                                    log=log) as place:
+            run = external.run_program(cmd, d, threads=threads, env=env, timeout=timeout, log_name="crest.log",
+                                       should_stop=should_stop, log=log, program_cwd=place.linux_dir)
+            place.fetch(RESULT_FILES)
+            problem = optimizer_problem(run.text())
+            if problem:
+                raise external.ExternalProgramError(f"{problem}\n{run.tail(30)}")
         out_file = d / "crest_conformers.xyz"
         if not out_file.is_file():
             raise external.ExternalProgramError(f"CREST wrote no crest_conformers.xyz\n{run.tail(30)}")
@@ -321,4 +338,4 @@ def generate(mol: Chem.Mol, cfg, *, threads: int = 1, solvent: str = "", charge:
         ids.append(out.AddConformer(conf, assignId=True))
         energies.append(e * KCAL_PER_HARTREE)
     return ConformerSet(mol=out, conf_ids=ids, energies_kcal=energies, forcefield=f"CREST/{method}",
-                        n_embedded=len(frames))
+                        n_embedded=len(frames), notes=[place.note] if place.note else [])

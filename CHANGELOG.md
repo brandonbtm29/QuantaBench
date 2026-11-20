@@ -2,6 +2,16 @@
 
 ## Unreleased (after 0.3.0)
 
+### CREST through WSL runs in a folder inside WSL (CREST-SCRATCH-1, 2026-11-20)
+- **Before:** on Windows, CREST (a `wsl:` path) ran in its Windows job folder, reached from Linux as `/mnt/c/.../Temp/QuantaBench/crest_*`. Every file it wrote (MTD trajectories, the optimization of every snapshot, many small temporary files per thread, in every lane) crossed WSL's 9P bridge to NTFS: about 20 MB/s of disk writes (some 70 GB an hour) just after a CREST batch started on the workstation, and slow.
+- **Now** each CREST job runs in a folder of WSL's own file system (`chem.wsl_scratch`):
+  - `/dev/shm/quantabench/<job>` when /dev/shm and WSL's available memory both have `engines.crest_wsl_shm_min_gb` (default 2 GB) free plus twice the job's expected size (64 MiB + 4 MiB per atom); else `~/.cache/quantabench/scratch/<job>` on WSL's disk.
+  - Only `crest_conformers.xyz`, `crest.energies` and `crest_best.xyz` come back; CREST's output is QuantaBench's log in the Windows job folder, as before. A failure or the time limit also brings back the folder's top-level files up to 8 MB; Keep job folders brings back everything.
+  - The folder inside WSL is removed whatever happens (success, failure, cancel, time limit). A killed run's is removed by the scratch clean-up (each Windows job folder names it) and by the next CREST job (the folder's owner record); `quantabench-cli scratch` lists and cleans them too.
+  - A note on each molecule says which scratch was used ("CREST scratch: WSL /dev/shm (...)").
+- `engines.crest_wsl_scratch`: `auto` (default), `shm`, `disk`, `off` (the old way). Settings > Engines > CREST scratch through WSL, or `quantabench-cli settings --crest-wsl-scratch`. Native CREST (Linux, macOS) is unchanged.
+- `external.run_program(program_cwd=...)` runs a WSL program in a folder inside WSL (its cancel and a dead lane's clean-up kill it there).
+
 ### "conformer pools merged" is logged once (2026-11-19)
 - A molecule whose CREST and RDKit conformer pools were merged logged the merge line twice: once when the pools were merged, and again with the pool's other notes. It is now logged once, with the other notes.
 

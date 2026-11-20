@@ -3,6 +3,8 @@
     quantabench-cli scratch                      what is in it: folders of running jobs, left behind, older ones
     quantabench-cli scratch --clean [--dry-run]  clean what ended processes left (as every run does when it starts)
     quantabench-cli scratch --clean --older-than 0   also remove the kept logs of failed jobs now
+
+On Windows with CREST through WSL, also the job folders inside WSL (``chem.wsl_scratch``).
 """
 
 from __future__ import annotations
@@ -13,7 +15,8 @@ DESCRIPTION = (
     "for a few days, without its bulky files. A process that is killed (a lane past the time limit, a crash, a "
     "closed window) cannot clean up: every run cleans what ended processes left when it starts, and a lane's when "
     "it is killed. This command shows the folder and does the same cleaning on demand; a folder of a process that "
-    "is still running is never touched.")
+    "is still running is never touched. On Windows with CREST through WSL, CREST runs in a folder inside WSL "
+    "(/dev/shm or WSL's disk; engines.crest_wsl_scratch): those folders are listed and cleaned too.")
 
 
 def register(sub) -> None:
@@ -50,6 +53,7 @@ def scratch_command(args) -> int:
                   f"  (bulky files {_gb(sum(r[2] for r in sel))})")
     if not rows:
         print("  empty")
+    wsl = _wsl_rows()
     if not args.clean:
         if any(r[0] != "running" for r in rows):
             print("`quantabench-cli scratch --clean` removes what ended processes left (--dry-run to see first).")
@@ -58,5 +62,39 @@ def scratch_command(args) -> int:
     res = external.sweep_scratch(keep_days=keep, dry_run=args.dry_run)
     print(("Would free " if args.dry_run else "Freed ") + f"{_gb(res.freed_bytes)}: {res.folders} left-behind "
           f"folder(s), {res.removed} {'to remove' if args.dry_run else 'removed'} whole, {res.pruned} kept with "
-          f"their logs; {res.running} of running jobs left alone")
+          f"their logs; {res.running} of running jobs left alone"
+          + (f"; {res.wsl_removed} job folder(s) inside WSL removed with them" if res.wsl_removed else ""))
+    if wsl:
+        from .chem import wsl_scratch
+
+        try:
+            w = wsl_scratch.sweep(dry_run=args.dry_run)
+        except wsl_scratch.WslScratchError as exc:
+            print(f"Inside WSL: not cleaned ({exc})")
+        else:
+            print(f"Inside WSL: {'would free' if args.dry_run else 'freed'} {_gb(w.freed_bytes)} in {w.folders} "
+                  f"job folder(s) of ended runs; {w.running} of running jobs left alone")
     return 0
+
+
+def _wsl_rows() -> bool:
+    """Print the job folders inside WSL (CREST through WSL on Windows, ``chem.wsl_scratch``); True if there are any to
+    look at."""
+    from .chem import wsl_scratch
+
+    try:
+        if not wsl_scratch.in_use():
+            return False
+        pr = wsl_scratch.probe()
+    except Exception as exc:  # noqa: BLE001 - WSL not answering: say so, the rest of the command goes on
+        print(f"Inside WSL ({wsl_scratch.SHM_ROOT}, WSL's disk): not reachable ({exc})")
+        return False
+    print(f"Inside WSL: {wsl_scratch.SHM_ROOT} and {pr.disk_root}")
+    old = {j.path for j in wsl_scratch.stale(pr.jobs)}
+    for state, sel in (("running", [j for j in pr.jobs if j.path not in old]),
+                       ("left behind", [j for j in pr.jobs if j.path in old])):
+        if sel:
+            print(f"  {state:16s} {len(sel):5d} folder(s)  {_gb(sum(j.size for j in sel)):>10s}")
+    if not pr.jobs:
+        print("  empty")
+    return True

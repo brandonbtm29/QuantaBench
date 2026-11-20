@@ -365,6 +365,7 @@ Each external job gets a scratch folder (Settings > Engines > Scratch folder; de
   - 2026-11-13: lanes killed at the 30-minute limit in b03's ESP pass left 59 Psi4 folders with 479 GB of DF integrals.
 - **`quantabench-cli scratch`** shows the folder. `--clean [--dry-run] [--older-than DAYS]` does the same clean-up on demand.
 - **Settings > Engines > Keep job folders** keeps everything: for debugging, it also turns the clean-up off.
+- **CREST through WSL** runs in a folder inside WSL, not in this one (CREST, "Where CREST runs through WSL", below). Its Windows job folder holds the input, CREST's output and what comes back, and names the folder inside WSL, so the clean-up of a killed run removes that one too. On Windows, `quantabench-cli scratch` also lists and cleans the folders inside WSL.
 
 Programs run at this machine's run priority (Run priority and free threads, below). Threads come from the
 Compute settings; `OMP_STACKSIZE` (default 4G) avoids stack overflows in
@@ -498,6 +499,7 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     `quantabench-cli settings --engine-path crest=wsl:/home/...` there: this machine only, see Finding
     programs; `--machine NAME` sets another machine's, `--machine` alone this one's). The full path is needed
     because WSL starts it without conda's PATH.
+    It then runs in a folder inside WSL ("Where CREST runs through WSL", below).
   - macOS (Apple Silicon): **not conda-forge's crest.** Its osx-arm64 3.0.2 cannot optimize molecules of 19
     atoms or more (below). Use the fork's macOS build: `crest-macos-arm64.tar.gz` from `brandonbtm29/crest`
     (release [`qb-v3.0.2-macos1`](https://github.com/brandonbtm29/crest/releases/tag/qb-v3.0.2-macos1), branch
@@ -506,6 +508,35 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     `scripts/install_macos.sh --with-engines` does this by itself (`scripts/fork-packages.json`, `macos` >
     `programs` > `crest`; FORK-5). Keep conda-forge's xtb in
     qb-tools: `gfn2//gfnff` runs it.
+- **Where CREST runs through WSL** (Windows, a `wsl:` path; since 2026-11-20, CREST-SCRATCH-1).
+  - Before, CREST ran in its Windows job folder, which Linux reaches as `/mnt/c/Users/.../Temp/QuantaBench/crest_*`.
+    Every file CREST wrote (MTD trajectories, the optimization of every snapshot, many small temporary files per
+    thread, in every lane) crossed WSL's 9P bridge to NTFS. Just after a CREST batch started on the workstation that
+    was about 20 MB/s of disk writes, some 70 GB an hour, and slow.
+  - Now each job gets a folder of WSL's own file system:
+    - `/dev/shm/quantabench/<job>` (memory) when /dev/shm and WSL's available memory both have at least
+      `engines.crest_wsl_shm_min_gb` (default 2 GB) free plus twice the job's expected size (64 MiB + 4 MiB per atom,
+      a generous guess). WSL's memory is capped (by default half the PC's), and several lanes run at once, so each
+      job checks when it starts;
+    - otherwise `~/.cache/quantabench/scratch/<job>` (`$XDG_CACHE_HOME` if set) on WSL's ext4 disk.
+  - The input is copied in, and CREST runs there (`wsl.exe --cd <that folder>`). CREST's output is the log QuantaBench
+    writes through the pipe, in the Windows job folder, as before. What comes back:
+    - success: `crest_conformers.xyz` (what the pipeline reads), `crest.energies` and `crest_best.xyz`;
+    - a failure or the time limit: the folder's top-level files up to 8 MB (CREST's small logs, `crestopt.log`), next
+      to its log in the kept Windows job folder; trajectories and subfolders stay behind;
+    - Settings > Engines > Keep job folders: everything;
+    - a cancel: nothing.
+  - The folder inside WSL is removed in every case. A killed process cannot do that: the clean-up of left-behind job
+    folders removes it (each Windows job folder names its folder inside WSL), and each new CREST job removes the folders
+    inside WSL whose owner has ended (they have the same owner record, `.qb_owner.json`). WSL also empties /dev/shm
+    when it shuts down.
+  - A note on each molecule says which was used: `CREST scratch: WSL /dev/shm (/dev/shm 7.9 GB free, 15.2 GB of
+    WSL's memory available, 2.4 GB wanted)`, or `WSL disk (ext4)` with the reason.
+  - `engines.crest_wsl_scratch`: `auto` (the default, above), `shm`, `disk`, or `off` (the Windows job folder through
+    `/mnt/c`, as before). Settings > Engines > CREST scratch through WSL, or `quantabench-cli settings
+    --crest-wsl-scratch auto|shm|disk|off`. `engines.crest_wsl_shm_min_gb` is in the settings file only. When no
+    folder can be made inside WSL, the job runs in the Windows folder, with a warning and a note.
+  - Native CREST (Linux, macOS) is not affected: it runs in its job folder on a local disk, as always.
 - **Levels.** `--crest-method gfn2 | gfnff | gfn2//gfnff | gfn1`; `--quick` is the default
   (`--crest-full` for a full run). gfn2, gfn1 and gfnff run inside CREST 3. `gfn2//gfnff` needs
   CREST's `--legacy` mode (added automatically) and an `xtb` on the PATH CREST sees.

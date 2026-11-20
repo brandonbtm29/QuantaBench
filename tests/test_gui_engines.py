@@ -107,6 +107,8 @@ def test_settings_engines_tab_round_trip_and_detection(tmp_path, monkeypatch):
     d.keep_scratch.setChecked(True)
     d.stacksize.setText("2G")
     d.qm_memory.setValue(8)
+    assert d.crest_wsl_scratch.currentData() == "auto"          # CREST through WSL: /dev/shm or WSL's disk
+    d.crest_wsl_scratch.setCurrentIndex(d.crest_wsl_scratch.findData("disk"))
     out = d.result_settings()
     # the shared default stays for the other machines; this machine gets its own paths ("" = automatic here)
     me = sm.this_machine()
@@ -116,6 +118,7 @@ def test_settings_engines_tab_round_trip_and_detection(tmp_path, monkeypatch):
     assert out.engine_paths_for("another-machine") == {"xtb": ("~/bin/xtb", "all machines")}
     assert out.engines.scratch_dir == str(tmp_path / "scratch") and out.engines.keep_scratch
     assert out.engines.omp_stacksize == "2G" and out.engines.qm_memory_gb == 8
+    assert out.engines.crest_wsl_scratch == "disk"
 
     # "Detect now" checks typed paths without touching the cache or the environment
     monkeypatch.setattr(external, "find_program", lambda name, **k: None)
