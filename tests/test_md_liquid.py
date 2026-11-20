@@ -173,7 +173,7 @@ def _section_rows(data: str, name: str) -> int:
 def test_write_liquid_slab_lattice(hexane, tmp_path):
     cfg = L.LiquidSlabConfig(lateral=26.0, slab_thickness=24.0, packing="lattice", dispersion="ewald")
     s = L.write_liquid_slab(hexane, tmp_path, cfg, density_estimate=0.66)
-    data = (tmp_path / "system.data").read_text()
+    data = (tmp_path / "system.data").read_text(encoding="utf-8")
     c = _counts(data)
     n = s.n_molecules
     assert n == round(26 * 26 * 24 / (hexane.mass / 0.66 / 6.02214076e23 * 1e24))
@@ -184,12 +184,12 @@ def test_write_liquid_slab_lattice(hexane, tmp_path):
         assert _section_rows(data, sec) == c[k], sec
     mols = {int(line.split()[1]) for line in data.split("Atoms # full\n\n")[1].split("\n\n")[0].splitlines()}
     assert mols == set(range(1, n + 1))
-    ff = (tmp_path / "ff.params").read_text()
+    ff = (tmp_path / "ff.params").read_text(encoding="utf-8")
     assert len(re.findall(r"^pair_coeff (\d) \1 ", ff, re.M)) == 3
     assert "dihedral_coeff 3 1.3 -0.05 0.2 0" in ff
     for name in ("in.bulk", "in.slab", "in.run"):
-        _check_input_syntax((tmp_path / name).read_text())
-    bulk, slab = (tmp_path / "in.bulk").read_text(), (tmp_path / "in.slab").read_text()
+        _check_input_syntax((tmp_path / name).read_text(encoding="utf-8"))
+    bulk, slab = (tmp_path / "in.bulk").read_text(encoding="utf-8"), (tmp_path / "in.slab").read_text(encoding="utf-8")
     assert "pair_style      lj/long/coul/long long long ${rc}" in bulk and "pppm/disp" in slab
     assert "force/disp/real 0.0001 force/disp/kspace 0.002" in slab
     assert "tail yes" not in bulk + slab and "mix/disp" not in slab        # geometric mixing: no mix/disp geom
@@ -199,11 +199,11 @@ def test_write_liquid_slab_lattice(hexane, tmp_path):
     assert "fix             ptens all ave/time ${p_every} 1 ${p_every}" in slab and "variable p_every        index 10" in slab
     assert "bin/1d z lower ${bin} units box" in slab and "change_box      all z final" in slab
     assert "special_bonds   lj 0 0 0.5 coul 0 0 0.5" in bulk
-    meta = json.loads((tmp_path / "liquid_setup.json").read_text())
+    meta = json.loads((tmp_path / "liquid_setup.json").read_text(encoding="utf-8"))
     assert meta["n_molecules"] == n and meta["packing"] == "lattice" and meta["molecule"]["forcefield"] == "oplsaa"
     assert all(t["source"] for t in meta["molecule"]["lj_types"].values())
     assert all(t["source"] for t in meta["molecule"]["dihedral_types"].values())
-    readme = (tmp_path / "README.txt").read_text()
+    readme = (tmp_path / "README.txt").read_text(encoding="utf-8")
     assert "lmp.exe -sf omp -pk omp 12 -in in.bulk" in readme and "no GPU version" in readme
     assert s.min_contact > 1.0
 
@@ -211,11 +211,11 @@ def test_write_liquid_slab_lattice(hexane, tmp_path):
 def test_cutoff_variant_has_tail_in_bulk_only(c6f14, tmp_path):
     cfg = L.LiquidSlabConfig(lateral=34.0, slab_thickness=20.0, packing="lattice", dispersion="cutoff16")
     L.write_liquid_slab(c6f14, tmp_path, cfg, density_estimate=1.67)
-    bulk, slab = (tmp_path / "in.bulk").read_text(), (tmp_path / "in.slab").read_text()
+    bulk, slab = (tmp_path / "in.bulk").read_text(encoding="utf-8"), (tmp_path / "in.slab").read_text(encoding="utf-8")
     assert "lj/cut/coul/long ${rc}" in bulk and "variable rc             index 16" in bulk
     assert "pair_modify     mix geometric tail yes" in bulk
     assert "tail yes" not in slab and "kspace_style    pppm ${kacc}" in slab and "pppm/disp" not in slab
-    assert "-sf gpu -pk gpu 1 -in in.slab" in (tmp_path / "README.txt").read_text()
+    assert "-sf gpu -pk gpu 1 -in in.slab" in (tmp_path / "README.txt").read_text(encoding="utf-8")
 
 
 def test_parse_dispersion_and_box_plan(hexane):
@@ -326,8 +326,8 @@ def test_analyze_synthetic_slab(tmp_path):
     assert {c["check"] for c in r["checks"]} >= {"production length", "slab centre at the bulk density", "slab drift"}
     assert r["reference"]["sigma_mN_m"] == 12.33
     js, md = S.write_report(tmp_path, r)
-    assert json.loads(js.read_text())["sigma"]["mean_mN_m"] == s["mean_mN_m"]
-    assert "**σ (mN/m)**" in md.read_text()
+    assert json.loads(js.read_text(encoding="utf-8"))["sigma"]["mean_mN_m"] == s["mean_mN_m"]
+    assert "**σ (mN/m)**" in md.read_text(encoding="utf-8")
     r2 = S.analyze(tmp_path, skip_ns=4.0)                                    # 3 ns left: 4 shorter blocks
     assert r2["sigma"]["n_blocks"] == 4 and any("rough error bar" in n for n in r2["notes"])
 
@@ -336,7 +336,7 @@ def test_cli_liquid_slab_and_surface_tension(tmp_path):
     out = tmp_path / "hex"
     assert cli.main(["md", "liquid-slab", "--smiles", HEXANE, "--name", "hexane", "-o", str(out), "--lateral", "26",
                      "--thickness", "20", "--packing", "lattice", "--dispersion", "cutoff12", "--sigma-ref", "17.9"]) == 0
-    assert (out / "in.slab").is_file() and json.loads((out / "liquid_setup.json").read_text())["config"]["reference_sigma"] == 17.9
+    assert (out / "in.slab").is_file() and json.loads((out / "liquid_setup.json").read_text(encoding="utf-8"))["config"]["reference_sigma"] == 17.9
     assert cli.main(["md", "liquid-slab", "--smiles", "CCO", "-o", str(tmp_path / "x")]) == 2      # refused by OPLS rules
     assert cli.main(["md", "liquid-slab", "--list-ff"]) == 0
     _synthetic_run(tmp_path / "syn")

@@ -40,7 +40,7 @@ def _conda_version(name: str) -> str:
     prefix = Path(sys.executable).resolve().parent.parent
     for p in sorted(glob.glob(str(prefix / "conda-meta" / f"{name}-[0-9]*.json"))):
         try:
-            return json.loads(Path(p).read_text())["version"]
+            return json.loads(Path(p).read_text(encoding="utf-8"))["version"]
         except (OSError, ValueError, KeyError):
             pass
     return ""
@@ -81,7 +81,7 @@ def openff(task: dict, work: Path) -> dict:
     from openff.toolkit import ForceField, Molecule
     from openff.units import unit
 
-    (work / "in.mol").write_text(task["molblock"])
+    (work / "in.mol").write_text(task["molblock"], encoding="utf-8")
     mol = Molecule.from_file(str(work / "in.mol"), file_format="MOL", allow_undefined_stereo=True)
     mol.assign_partial_charges("am1bcc", use_conformers=[mol.conformers[0]])
     ff = ForceField(task.get("offxml") or "openff-2.3.0.offxml")
@@ -89,8 +89,8 @@ def openff(task: dict, work: Path) -> dict:
     ic = Interchange.from_smirnoff(ff, [mol], charge_from_molecules=[mol])
     ic.box = np.eye(3) * 5.0 * unit.nanometer
     ic.to_lammps(str(work / "off"))
-    data = (work / "off.lmp").read_text()
-    inp = next(work.glob("off*.in")).read_text()
+    data = (work / "off.lmp").read_text(encoding="utf-8")
+    inp = next(work.glob("off*.in")).read_text(encoding="utf-8")
     sec = _sections(data)
     ffname = task.get("offxml") or "openff-2.3.0.offxml"
     n = mol.n_atoms
@@ -199,7 +199,7 @@ def _canon(*types: str) -> str:
 def gaff2(task: dict, work: Path) -> dict:
     import parmed
 
-    (work / "in.mol").write_text(task["molblock"])
+    (work / "in.mol").write_text(task["molblock"], encoding="utf-8")
     q = int(task.get("net_charge", 0))
     _run(["antechamber", "-i", "in.mol", "-fi", "mdl", "-o", "mol.mol2", "-fo", "mol2", "-c", "bcc", "-at", "gaff2",
           "-nc", str(q), "-rn", "MOL", "-pf", "y"], work, "antechamber.log")
@@ -207,7 +207,7 @@ def gaff2(task: dict, work: Path) -> dict:
     (work / "leap.in").write_text("source leaprc.gaff2\nloadamberparams mol.frcmod\nm = loadmol2 mol.mol2\n"
                                   "saveamberparm m mol.prmtop mol.inpcrd\nquit\n")
     _run(["tleap", "-f", "leap.in"], work, "tleap.log")
-    frcmod = (work / "mol.frcmod").read_text()
+    frcmod = (work / "mol.frcmod").read_text(encoding="utf-8")
     missing = [ln for ln in frcmod.splitlines() if "ATTN" in ln]
     s = parmed.load_file(str(work / "mol.prmtop"), str(work / "mol.inpcrd"))
     ref = [ln.split() for ln in task["molblock"].splitlines()[4:4 + len(s.atoms)]]
@@ -289,7 +289,7 @@ def gaff2(task: dict, work: Path) -> dict:
 
 def main(argv: list[str]) -> int:
     task_path, result_path = Path(argv[1]), Path(argv[2])
-    task = json.loads(task_path.read_text())
+    task = json.loads(task_path.read_text(encoding="utf-8"))
     try:
         with tempfile.TemporaryDirectory(prefix="qbff_") as tmp:
             work = Path(tmp)
