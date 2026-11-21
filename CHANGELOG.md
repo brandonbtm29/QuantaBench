@@ -2,6 +2,21 @@
 
 ## Unreleased (after 0.3.0)
 
+### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
+- **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
+  Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use
+  LAMMPS' tail correction, which assumes a uniform density.
+- **Now** `md.surface_tension` adds the mean-field LJ tail for a tanh profile (Blokhuis et al. 1995), as Tsige &
+  Grest did, for `cutoff*` folders: `lj_tail_sigma`, `tail_integral` (Gauss-Legendre; checked against SciPy's
+  `dblquad` and the sharp-interface limit (3π/2)εσ⁶ρ²/rc²) and `read_lj_types` (`ff.params`, the mixing rule of
+  `in.slab`, the counts and masses of `bulk_final.data`).
+  - The report gains "σ + LJ tail beyond rc" with the tail, its width w and the sharp-interface upper bound, and
+    the reference row shows both deviations. `surface_tension.json` has `sigma.tail` and `sigma.corrected_mN_m`.
+  - Pilot C: 7.96 + 3.16 = 11.12 mN/m (sharp interface +3.99).
+  - The note says the tail does not undo the slab's lower density (C: −4.7 % against the bulk run), so a corrected
+    cutoff σ is a check against the `ewald` variant.
+  - Non-LJ pair styles and sixthpower mixing get no correction (the old note).
+
 ### MD on AMD OpenCL GPUs: no nonbonded forces with LAMMPS' default tuning (MD-2 fix, 2026-11-20)
 - On the workstation's RX 9060 XT (gfx1200), the GPU package's "AMD_GPU" OpenCL tuning built empty neighbor lists without an error.
   - The pair style and `pppm/gpu` returned no force, energy or virial, so an NPT box of C6F14 expanded to half its density.
