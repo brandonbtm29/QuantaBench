@@ -1303,6 +1303,18 @@ density, Gibbs dividing surface, 10-90 % width. Checks: production ≥ 7 ns (Tsi
 1 % of the bulk NPT density, slab drift under 5 Å, the two halves of the production run agreeing. The speed of
 each stage (ns/day) comes from the logs.
 
+**Cutoff variants: the LJ tail.** A plain LJ cutoff misses the dispersion beyond rc, and LAMMPS' tail correction
+assumes a uniform density, so `in.slab` runs without it and σ comes out low (pilot C6F14 at 12 Å: 7.96 against
+11.25 for Tsige & Grest's 16 Å + tail). For `cutoff*` folders the analysis adds the mean-field tail for a tanh
+profile, as Tsige & Grest (2008) did (Blokhuis et al. 1995; Chapela et al. 1977):
+σ_tail = 12π Σᵢⱼ εᵢⱼσᵢⱼ⁶ ΔρᵢΔρⱼ ∫₀¹ds ∫_rc^∞ dr coth(rs/w)(3s³ − s) r⁻³. The site types, ε and σ come from `ff.params`,
+the mixing rule from `in.slab` and the counts and masses from `bulk_final.data`; Δρ and w (half the fitted d) come
+from the slab's own profile. The report shows the raw σ, σ + tail (C6F14 at 12 Å: 7.96 + 3.16 = 11.12) and the
+sharp-interface upper bound of the tail. The tail does not undo the slab's lower density (a truncated slab liquid
+is less cohesive than the bulk run, which had the uniform tail: −4.7 % for C6F14 at 12 Å), so treat a corrected cutoff
+σ as a check against the `ewald` variant. Other pair styles (exp-6, Buckingham) and the sixthpower mixing rule get
+no correction, only the note.
+
 **Windows.** Prefer the LAMMPS installer's `lmp.exe` over PyPI's wheel for these runs (MD-1: the Windows wheel
 failed 5-10 % of identical SMD runs). `--run` (the Python module, blocking) is for short checks only. QuantaBench
 finds `lmp` like the other programs (Settings > Engines > LAMMPS, `quantabench-cli settings --engine-path

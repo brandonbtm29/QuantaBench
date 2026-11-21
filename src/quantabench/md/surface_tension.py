@@ -23,6 +23,19 @@ averaged, and ρ(z) = ½(ρl+ρv) − ½(ρl−ρv)·tanh(2(|z−zc|−z0)/d) is
 z0 the Gibbs dividing surface, d the interface width (10-90 % width = 1.0986·d). The plateau is also averaged
 directly over the slab's middle (|z−zc| < z0 − 2d), and compared with the bulk NPT density: a slab whose middle is
 not at the bulk density is too thin or not equilibrated.
+
+LJ tail (cutoff variants): a slab run with a plain LJ cutoff misses the dispersion beyond rc, and LAMMPS' tail
+correction assumes a uniform density, so the slab runs without it. ``lj_tail_sigma`` adds it afterwards as
+Tsige & Grest (J. Phys. Chem. C 2008, 112, 5029) did, with the mean-field result for a tanh profile
+(Blokhuis et al., Mol. Phys. 1995, 85, 665; Chapela et al., J. Chem. Soc. Faraday Trans. 2 1977, 73, 1133):
+
+    σ_tail = 12π Σᵢⱼ εᵢⱼ σᵢⱼ⁶ Δρᵢ Δρⱼ ∫₀¹ ds ∫_rc^∞ dr coth(rs/w) (3s³ − s) r⁻³
+
+over the LJ site types i, j (Δρᵢ: liquid minus vapour number density of type i, from the fitted plateau), with
+w = d/2 for the fitted ρ ∝ tanh(2(z − z0)/d), i.e. ρ ∝ tanh((z − z0)/w). A sharp interface (w → 0) gives the
+upper bound (3π/2) Σ εσ⁶ΔρΔρ / rc², which is reported too. The correction does not undo the slab's own lower
+density (a truncated liquid is less cohesive than the bulk run, which had the uniform tail), so a corrected cutoff σ
+is a check against the full-dispersion (ewald) variant, not a replacement for it.
 """
 
 from __future__ import annotations
@@ -43,6 +56,9 @@ from .. import __version__
 ATM_A_TO_MN_M = 0.0101325
 #: tanh profile: the 10-90 % width is atanh(0.8) · d = 1.0986 d for ρ ∝ tanh(2(z − z0)/d)
 TANH_10_90 = math.atanh(0.8)
+#: 1 kcal/mol/Å² in mN/m: 4184 J / N_A / 1e-20 m²
+KCAL_MOL_A2_TO_MN_M = 4184.0 / 6.02214076e23 / 1e-20 * 1e3
+AVOGADRO = 6.02214076e23
 
 
 # ------------------------------------------------------------------------------------------------ readers
@@ -228,6 +244,126 @@ def fit_tanh(dist: np.ndarray, rho: np.ndarray) -> dict[str, float] | None:
             "err_rho_liquid": float(err[0]), "err_z0": float(err[2]), "err_d": float(err[3])}
 
 
+# ------------------------------------------------------------------------------------------- the LJ tail
+@dataclass
+class LJType:
+    """One LAMMPS atom type of the run: its LJ ε (kcal/mol) and σ (Å), mass (g/mol) and number of atoms."""
+    index: int
+    eps: float
+    sigma: float
+    mass: float
+    count: int
+    label: str = ""
+
+
+def tail_integral(rc: float, w: float, n: int = 96) -> float:
+    """I(rc, w) = ∫₀¹ ds ∫_rc^∞ dr coth(rs/w) (3s³ − s) / r³ (Å⁻²), for ρ ∝ tanh((z − z0)/w); w = 0: the sharp
+    interface, 1/(8 rc²). With t = rc/r the integrand is smooth on (0, 1]², so Gauss-Legendre in s and t suffices."""
+    if rc <= 0:
+        raise ValueError("the cutoff must be positive")
+    if w <= 0:
+        return 1.0 / (8.0 * rc * rc)
+    x, wq = np.polynomial.legendre.leggauss(n)
+    u, wu = 0.5 * (x + 1.0), 0.5 * wq
+    s, t = np.meshgrid(u, u, indexing="ij")
+    coth = 1.0 / np.tanh(rc * s / (w * t))
+    f = t * coth * (3.0 * s**3 - s)
+    return float((wu[:, None] * wu[None, :] * f).sum() / (rc * rc))
+
+
+def _mixed(a: LJType, b: LJType, mixing: str) -> tuple[float, float]:
+    eps = math.sqrt(a.eps * b.eps)
+    sig = 0.5 * (a.sigma + b.sigma) if mixing == "arithmetic" else math.sqrt(a.sigma * b.sigma)
+    return eps, sig
+
+
+def lj_tail_sigma(types: list[LJType], rho_liquid: float, rho_vapour: float, rc: float, w: float, *,
+                  mixing: str = "geometric", pairs: dict[tuple[int, int], tuple[float, float]] | None = None) -> float:
+    """The LJ surface tension beyond the cutoff ``rc`` (Å), in mN/m, for a pure liquid whose atoms are ``types``
+    (counts over the whole system: only their ratios matter), at liquid and vapour mass densities ``rho_liquid`` and
+    ``rho_vapour`` (g/cm³) and tanh width ``w`` (Å, ρ ∝ tanh((z − z0)/w)). ``pairs``: explicit (i, j) -> (ε, σ)
+    coefficients that replace the mixing rule. See the module docstring."""
+    mass = sum(t.count * t.mass for t in types)
+    if mass <= 0 or rho_liquid <= rho_vapour:
+        return 0.0
+    per_atom = (rho_liquid - max(rho_vapour, 0.0)) * AVOGADRO * 1e-24 / mass   # Δρ of a type, per atom of it, Å⁻³
+    total = 0.0
+    for a in types:
+        for b in types:
+            key = (min(a.index, b.index), max(a.index, b.index))
+            eps, sig = (pairs or {}).get(key) or _mixed(a, b, mixing)
+            total += eps * sig**6 * (a.count * per_atom) * (b.count * per_atom)
+    return 12.0 * math.pi * total * tail_integral(rc, w) * KCAL_MOL_A2_TO_MN_M
+
+
+def _data_types(path: Path) -> tuple[dict[int, float], dict[int, int]]:
+    """Masses and atom counts per type from a LAMMPS data file (Atoms styles full, molecular, charge, atomic)."""
+    masses: dict[int, float] = {}
+    counts: dict[int, int] = {}
+    section, col = "", 2
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.split("#", 1)[0].strip()
+        head = line.strip()
+        if not text:
+            continue
+        word = text.split()[0]
+        if word.isalpha() or word[0].isalpha():
+            section = word
+            if section == "Atoms":
+                style = head.split("#", 1)[1].strip().split()[0] if "#" in head else "full"
+                col = 1 if style in ("atomic", "charge") else 2
+            continue
+        tok = text.split()
+        if section == "Masses" and len(tok) >= 2:
+            masses[int(tok[0])] = float(tok[1])
+        elif section == "Atoms" and len(tok) > col:
+            t = int(tok[col])
+            counts[t] = counts.get(t, 0) + 1
+    return masses, counts
+
+
+def read_lj_types(folder: str | Path) -> tuple[list[LJType], str, dict[tuple[int, int], tuple[float, float]]] | None:
+    """The LJ types of a slab folder: ``pair_coeff`` lines of ``ff.params``, the mixing rule of ``in.slab``
+    (LAMMPS' default: geometric) and the masses and counts of ``bulk_final.data`` (else ``system.data``).
+    None when something is missing or the pair style is not plain 12-6 LJ."""
+    folder = Path(folder)
+    ff, data = folder / "ff.params", next((folder / n for n in ("bulk_final.data", "system.data")
+                                           if (folder / n).is_file()), None)
+    if not ff.is_file() or data is None:
+        return None
+    slab = folder / "in.slab"
+    mixing = "geometric"
+    if slab.is_file():
+        text = slab.read_text(encoding="utf-8")
+        style = re.search(r"^\s*pair_style\s+(\S+)", text, re.M)
+        if style and not style.group(1).startswith("lj/cut"):
+            return None
+        mix = re.search(r"^\s*pair_modify\s.*\bmix\s+(geometric|arithmetic|sixthpower)", text, re.M)
+        if mix:
+            mixing = mix.group(1)
+    if mixing == "sixthpower":
+        return None
+    own: dict[int, tuple[float, float, str]] = {}
+    pairs: dict[tuple[int, int], tuple[float, float]] = {}
+    for line in ff.read_text(encoding="utf-8").splitlines():
+        body, _, comment = line.partition("#")
+        tok = body.split()
+        if len(tok) >= 5 and tok[0] == "pair_coeff":
+            try:
+                i, j, eps, sig = int(tok[1]), int(tok[2]), float(tok[3]), float(tok[4])
+            except ValueError:
+                return None                      # wildcards or another style's coefficients
+            if i == j:
+                own[i] = (eps, sig, comment.strip())
+            else:
+                pairs[(min(i, j), max(i, j))] = (eps, sig)
+    masses, counts = _data_types(data)
+    if not own or not counts or any(t not in own or t not in masses for t in counts):
+        return None
+    types = [LJType(t, own[t][0], own[t][1], masses[t], n, own[t][2]) for t, n in sorted(counts.items())]
+    return types, mixing, pairs
+
+
 # ------------------------------------------------------------------------------------------------- analysis
 def _setup(folder: Path) -> dict:
     p = folder / "liquid_setup.json"
@@ -357,8 +493,26 @@ def analyze(folder: str | Path, *, skip_ns: float | None = None, block_ns: float
     perf = {stage: log_performance(folder / f"log.{stage}") for stage in ("bulk", "slab")}
     out["performance_ns_day"] = {k: (v[-1] if v else None) for k, v in perf.items()}
     if (cfg.get("dispersion") or "").startswith("cutoff"):
-        notes.append(f"plain LJ cutoff at {out['cutoff_A']:g} Å without a tail correction in the slab: σ is biased "
-                     "low (Ismail et al. 2007: up to 20 % at 12 Å for alkanes); compare with the ewald variant")
+        fit = out.get("density", {}).get("tanh_fit")
+        lj = read_lj_types(folder) if fit and out.get("cutoff_A") else None
+        if lj:
+            types, mixing, pairs = lj
+            rc, w = float(out["cutoff_A"]), 0.5 * fit["d"]
+            rl, rv = fit["rho_liquid"], max(fit["rho_vapour"], 0.0)
+            tail = lj_tail_sigma(types, rl, rv, rc, w, mixing=mixing, pairs=pairs)
+            sharp = lj_tail_sigma(types, rl, rv, rc, 0.0, mixing=mixing, pairs=pairs)
+            out["sigma"]["tail"] = {"mN_m": tail, "sharp_interface_mN_m": sharp, "w_A": w, "rc_A": rc,
+                                    "mixing": mixing, "rho_liquid_g_cm3": rl, "rho_vapour_g_cm3": rv,
+                                    "method": "mean-field LJ tail for a tanh profile (Blokhuis et al. 1995)"}
+            out["sigma"]["corrected_mN_m"] = ba.mean + tail
+            if ref_s:
+                out["reference"]["sigma_corrected_rel"] = (ba.mean + tail - ref_s) / ref_s
+            notes.append(f"plain LJ cutoff at {rc:g} Å, no tail correction in the slab: the LJ beyond rc adds "
+                         f"{tail:.2f} mN/m (sharp interface {sharp:.2f}), computed afterwards from the fitted profile. "
+                         "It does not undo the slab's lower density, so compare with the ewald variant")
+        else:
+            notes.append(f"plain LJ cutoff at {out['cutoff_A']:g} Å without a tail correction in the slab: σ is biased "
+                         "low (Ismail et al. 2007: up to 20 % at 12 Å for alkanes); compare with the ewald variant")
     out["checks"] = checks
     out["notes"] = notes
     return out
@@ -401,6 +555,11 @@ def format_report(r: dict) -> str:
          f"| first / second half | {s['first_half_mN_m']:.2f} / {s['second_half_mN_m']:.2f} |",
          f"| ⟨Pxx⟩, ⟨Pyy⟩, ⟨Pzz⟩ (atm) | {s['pressure_atm']['Pxx']:.1f}, {s['pressure_atm']['Pyy']:.1f}, "
          f"{s['pressure_atm']['Pzz']:.1f} |"]
+    if "tail" in s:
+        t = s["tail"]
+        L.insert(L.index("|---|---|") + 2,
+                 f"| σ + LJ tail beyond {t['rc_A']:g} Å (mN/m) | {s['corrected_mN_m']:.2f} (tail +{t['mN_m']:.2f}, "
+                 f"w = {t['w_A']:.1f} Å; sharp interface +{t['sharp_interface_mN_m']:.2f}) |")
     b = r.get("bulk")
     if b:
         L.append(f"| bulk NPT density (g/cm³) | {b['density_g_cm3']:.4f} ± {_f(b['sem_g_cm3'], '.4f')} |")
@@ -418,7 +577,8 @@ def format_report(r: dict) -> str:
         L.append(f"| slab drift (Å) | {d['centre_drift_A']:+.2f} (max {d['centre_max_excursion_A']:.2f}) |")
     ref = r.get("reference")
     if ref and "sigma_mN_m" in ref:
-        L.append(f"| reference σ (mN/m) | {ref['sigma_mN_m']} ({ref['sigma_rel']:+.1%}) {ref.get('note', '')} |")
+        corr = f"; with the tail {ref['sigma_corrected_rel']:+.1%}" if "sigma_corrected_rel" in ref else ""
+        L.append(f"| reference σ (mN/m) | {ref['sigma_mN_m']} ({ref['sigma_rel']:+.1%}{corr}) {ref.get('note', '')} |")
     if ref and "density_g_cm3" in ref:
         L.append(f"| reference density (g/cm³) | {ref['density_g_cm3']} (bulk {ref['density_rel']:+.1%}) |")
     perf = r.get("performance_ns_day", {})

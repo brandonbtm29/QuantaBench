@@ -341,6 +341,82 @@ def test_analyze_synthetic_slab(tmp_path):
     assert r2["sigma"]["n_blocks"] == 4 and any("rough error bar" in n for n in r2["notes"])
 
 
+def test_tail_integral_limits_and_quadrature():
+    rc = 12.0
+    assert S.tail_integral(rc, 0.0) == pytest.approx(1.0 / (8.0 * rc * rc))
+    assert S.tail_integral(rc, 1e-3) == pytest.approx(1.0 / (8.0 * rc * rc), rel=1e-3)   # thin interface -> sharp
+    # a diffuse interface lowers the tail; checked against an adaptive double integral of the same expression
+    from scipy import integrate
+
+    w = 5.14
+    ref, _ = integrate.dblquad(lambda r, s: (3 * s**3 - s) / np.tanh(r * s / w) / r**3, 1e-9, 1.0,
+                               lambda s: rc, lambda s: 4000.0)
+    assert S.tail_integral(rc, w) == pytest.approx(ref, rel=2e-4)
+    assert 0.78 < S.tail_integral(rc, w) * 8 * rc * rc < 0.80
+
+
+def test_lj_tail_sigma_sharp_limit_and_mixing():
+    # one LJ type, sharp interface: (3π/2) ε σ⁶ ρ² / rc² (Fowler's formula with g = 1 beyond rc)
+    t = [S.LJType(1, 0.2, 3.5, 16.0, 100)]
+    rho_g, rc = 0.5, 10.0
+    n = rho_g * S.AVOGADRO * 1e-24 / 16.0
+    expect = 1.5 * math.pi * 0.2 * 3.5**6 * n * n / rc**2 * S.KCAL_MOL_A2_TO_MN_M
+    assert S.lj_tail_sigma(t, rho_g, 0.0, rc, 0.0) == pytest.approx(expect)
+    assert S.lj_tail_sigma(t, rho_g, rho_g, rc, 0.0) == 0.0
+    # only the composition matters, not the system size; the vapour lowers Δρ
+    t2 = [S.LJType(1, 0.2, 3.5, 16.0, 7)]
+    assert S.lj_tail_sigma(t2, rho_g, 0.1, rc, 4.0) == pytest.approx(S.lj_tail_sigma(t, 0.6, 0.2, rc, 4.0))
+    two = [S.LJType(1, 0.05, 2.9, 19.0, 14), S.LJType(2, 0.07, 3.5, 12.0, 6)]
+    geo = S.lj_tail_sigma(two, 1.6, 0.0, 12.0, 5.0)
+    ari = S.lj_tail_sigma(two, 1.6, 0.0, 12.0, 5.0, mixing="arithmetic")
+    assert ari > geo                                       # (a+b)/2 >= √(ab), and σ enters as σ⁶
+    same = S.lj_tail_sigma(two, 1.6, 0.0, 12.0, 5.0, pairs={(1, 2): (math.sqrt(0.05 * 0.07), math.sqrt(2.9 * 3.5))})
+    assert same == pytest.approx(geo)
+
+
+def _cutoff_files(folder: Path, mix: str = "geometric") -> None:
+    setup = json.loads((folder / "liquid_setup.json").read_text(encoding="utf-8"))
+    setup["config"]["dispersion"] = "cutoff12"
+    (folder / "liquid_setup.json").write_text(json.dumps(setup), encoding="utf-8")
+    (folder / "ff.params").write_text("# test\npair_coeff 1 1 0.053 2.95  # F\npair_coeff 2 2 0.066 3.5  # C\n"
+                                      "bond_coeff 1 367 1.332\n", encoding="utf-8")
+    (folder / "in.slab").write_text(f"pair_style      lj/cut/coul/long ${{rc}}\npair_modify     mix {mix}  # no tail\n",
+                                    encoding="utf-8")
+    atoms = "".join(f"{i + 1} 1 {2 if i % 10 < 3 else 1} 0.0 0 0 0\n" for i in range(200))     # 3 C : 7 F
+    (folder / "system.data").write_text("LAMMPS data file\n\n200 atoms\n2 atom types\n\nMasses\n\n1 18.998  # F\n"
+                                        f"2 12.011  # C\n\nAtoms # full\n\n{atoms}\nBonds\n\n1 1 1 2\n", encoding="utf-8")
+
+
+def test_analyze_cutoff_slab_adds_the_lj_tail(tmp_path):
+    _synthetic_run(tmp_path, sigma=8.0)
+    r0 = S.analyze(tmp_path)                                               # ewald: no tail
+    assert "tail" not in r0["sigma"]
+    _cutoff_files(tmp_path)
+    types, mixing, pairs = S.read_lj_types(tmp_path)
+    assert [(t.index, t.count) for t in types] == [(1, 140), (2, 60)] and mixing == "geometric" and not pairs
+    r = S.analyze(tmp_path)
+    s, fit = r["sigma"], r["density"]["tanh_fit"]
+    assert s["tail"]["w_A"] == pytest.approx(0.5 * fit["d"]) and s["tail"]["rc_A"] == 12.0
+    assert 0 < s["tail"]["mN_m"] < s["tail"]["sharp_interface_mN_m"]
+    assert s["corrected_mN_m"] == pytest.approx(s["mean_mN_m"] + s["tail"]["mN_m"])
+    assert r["reference"]["sigma_corrected_rel"] == pytest.approx((s["corrected_mN_m"] - 12.33) / 12.33)
+    md = S.format_report(r)
+    assert "σ + LJ tail beyond 12 Å" in md and "with the tail" in md
+    assert any("the LJ beyond rc adds" in n for n in r["notes"])
+    (tmp_path / "ff.params").unlink()                                      # no force field: the old note
+    r2 = S.analyze(tmp_path)
+    assert "tail" not in r2["sigma"] and any("Ismail" in n for n in r2["notes"])
+
+
+def test_read_lj_types_refuses_what_it_cannot_correct(tmp_path):
+    _synthetic_run(tmp_path)
+    _cutoff_files(tmp_path, mix="sixthpower")
+    assert S.read_lj_types(tmp_path) is None
+    _cutoff_files(tmp_path)
+    (tmp_path / "in.slab").write_text("pair_style      buck/coul/long 12\n", encoding="utf-8")
+    assert S.read_lj_types(tmp_path) is None
+
+
 def test_cli_liquid_slab_and_surface_tension(tmp_path):
     out = tmp_path / "hex"
     assert cli.main(["md", "liquid-slab", "--smiles", HEXANE, "--name", "hexane", "-o", str(out), "--lateral", "26",
