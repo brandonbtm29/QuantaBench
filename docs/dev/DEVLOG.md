@@ -339,6 +339,119 @@ Newest entries at the bottom. One entry per working session or nightly run.
   Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
   check (BACKLOG CREST-SCRATCH-1).
 
+## 2026-11-22: FIX-6, the flaky macOS test of run priority (branch `fix/fix-6-macos-priority-test`)
+- **CI's failure** (#25's macOS run, 2026-11-17): `apply_to_pids([child], "low")` changed 1 process and the next
+  read gave 10; the following `apply_to_pids(..., "normal")` found the child at -10 ("already there"). Nothing in the
+  test can make a nice value smaller, so -10 had to be the value before the change: inherited from pytest, which
+  therefore runs at -10 on the runner (inferred; the test's message now says this process's nice).
+- **The race, shown on the MacBook (macOS 27, M3 Max):** a scratch script forks, execs a target and calls
+  setpriority(10) once at a delay swept over 0-6 ms; 80 ms later it reads the child's nice. 297 of 1,200 changes were
+  lost: those that landed 0.25-3 ms after the fork (the exec), and with a re-exec launcher also those at 4-6 ms (its
+  second exec). The read right after the change gave 10 in every case but one. So macOS drops a nice value set while
+  the process is inside exec(), and it reports the new value until the exec ends. Probably the exec builds the new
+  image's process from a copy taken when the exec starts (not checked in XNU's source).
+- **Why only CI showed it:** the failing child was named "Python". python.org's framework `bin/python3.12` (what
+  setup-python installs) starts and then re-execs `Python.app/Contents/MacOS/Python` with posix_spawn(SETEXEC).
+  `Popen` returns after the first exec, so the test's change could land in the second. Homebrew's python3.12 and
+  python.org's 3.13 on the MacBook do not re-exec, and a change right after `Popen` held in 60 of 60 tries with each.
+- **The CI failure reproduced:** a C copy of that launcher (posix_spawn with SETEXEC into Homebrew's Python.app) set
+  as `sys.executable` by a scratch plugin, its re-exec delayed 6-9 ms (a slower machine). pytest ran at `nice -n 5`,
+  so that a lost change shows. 6 of 1,000 runs failed with CI's message, 5 in place of -10.
+- **Fix:** the test waits for its child's "up" line before changing its priority. `apply_to_pids` looks again after
+  0.25 s (POSIX only: Windows has no exec) and lowers again the processes an exec put back. A live priority change can
+  reach a lane or a program that is just starting, and the `sh -c` wrappers of `external.run_program` exec two or
+  three times. psutil keeps the same process across an exec (same pid and start time), so lowering again works.
+- **After:** 0 of 500 runs failed in the same setup. The old test (no wait) with the new `apply_to_pids` failed 0 of
+  300 times, so the second look fixes it in the product too. A new test with a fake process covers the second look and
+  Windows' single set.
+- Found on the way: `apply_to_pids` on Linux lowers only the main thread of each process (PRIO-2).
+
+## 2026-11-22: FIX-7, the Windows worker test that leaves jobs.sqlite-wal behind (branch `fix/fix-7-windows-worker-wal`)
+- **CI:** `test_archive_manifest_sync_temp_files_and_failed_streams` failed on #34's Windows run (2026-11-20), as
+  before on #15, #20 and #21. The job said "done" and its run folder still had `jobs.sqlite-wal`.
+- **Reproduced on the workstation:** the test alone, 1,200 runs in a worktree: 16 failed (1 of 200, then 15 of 1,000),
+  all on -wal (and -shm).
+- **Found with a logging copy of the test** (scratch, not in the repo; 14 of 800 failed). It records every
+  `JobStore` open and close with its thread and whether -wal exists, `_checkpoint`'s start and end, and each status
+  poll's `finishing` check. When -wal is found it also lists every open connection (`gc.get_objects`), the process's
+  file handles and its threads. Every failure looked the same:
+  - an HTTP poll checks `finishing` (False) and opens the table read-only while the job runs, 8-13 ms before the
+    checkpoint;
+  - the run closes its store, the worker writes the final counts and tables, and `_checkpoint`'s writable close
+    removes -wal (it is gone at the checkpoint's end);
+  - the poll closes its connection 2-18 ms later, and -wal and -shm are back.
+  No connection was left open afterwards and no handle was on the files, so it was not a leaked connection, a
+  background thread or Windows locking a temp folder. The poll's read took 12-33 ms because it shared the GIL with
+  the worker's thread, which was writing the final tables.
+- **Why FIX-2's `finishing` was not enough:** it stops polls that start after it is set. A poll that checked it just
+  before, and was still reading, kept its connection open across the checkpoint. A read-only connection recreates
+  -wal (DEVLOG 2026-11-12) and cannot remove it. On Linux the writer's close leaves -wal while another connection is
+  open and `_checkpoint` tries again; on Windows the close removed it under the open reader, so nothing was left to
+  retry.
+- **Fix:** `Job.table_lock`. The poll's check and read are one step under it (`JobManager._live_counts`), and the
+  end of the run sets `finishing` under it, so the end waits for a read in progress. Polls only wait on each other for
+  the few ms a read takes.
+- **After:** 0 of 1,000 runs failed, and 0 of 800 for the logging copy. The new test passed 30 of 30 times on the
+  workstation.
+- **Test:** `test_the_end_of_a_run_waits_for_a_status_poll_reading_the_job_table`. It holds a poll inside `open_run`'s
+  last query after the run ended and checks that the checkpoint does not begin until the poll lets go. Without the
+  lock it fails on Linux too.
+
+## 2026-11-22: CREST through WSL: one BLAS thread and a bounded log (CREST-LOG-1, branch `fix/crest-log-1-openblas`)
+- **The problem** (the ops agent, ~02:50 at the resume of CREST-RUN-1 with 2 lanes x 5 threads): the workstation's
+  disk writes went back to 14-24 MB/s though CREST now runs inside WSL. WSL's disks wrote 6 KB/s; one lane's
+  `crest.log` in the Windows job folder reached 368 MB in 11 minutes, nearly all one line: "OpenBLAS Warning : Detect
+  OpenMP Loop and this application may hang. Please rebuild the library with USE_OPENMP=1 option."
+- **The cause, confirmed:** conda-forge's CREST 3.0.2 in WSL links libgomp and `libopenblas-0.3.34-pthreads` (its
+  `conda-meta`, `ldd`). `program_env` set `OPENBLAS_NUM_THREADS` to the molecule's threads. CREST 3 runs its
+  calculations in its own OpenMP threads, and a pthreads OpenBLAS called inside an OpenMP region with more than one
+  thread prints that warning on every call. 45 s of CREST at `-T 5` on 544-63-8: 27,192 warning lines (3.3 MB) with
+  `OPENBLAS_NUM_THREADS=5`, none (240 lines, 11 KB) with 1. CREST's install notes ask for `OPENBLAS_NUM_THREADS=1`
+  "as there may be an ugly warning in the concurrent (nested) parallel code parts otherwise".
+  - xtb 6.7.1 (`--opt`, `--grad --alpb water`) and tblite 0.6.0 (`run --grad`) from the same environment print no
+    warning with 5 BLAS threads: their BLAS runs outside their OpenMP loops, and xtb's docs recommend
+    `OPENBLAS_NUM_THREADS=<ncores>`. They keep their thread caps.
+  - The Mac's CREST (the fork's build) links an OpenBLAS built with `USE_OPENMP`: no warning, and inside CREST's
+    threads it already runs one thread.
+- **The fix:**
+  - `crest.child_env` adds `BLAS_ENV` = `OPENBLAS_NUM_THREADS=1` (natively and through WSL; `WSLENV` forwards it).
+    `OMP_MAX_ACTIVE_LEVELS=1` was already set. `GOTO_NUM_THREADS` is not needed: OpenBLAS reads
+    `OPENBLAS_NUM_THREADS` first.
+  - The WSL wrapper sends stdout and stderr to `$QUANTABENCH_WSL_LOG` when it is set (`exec >file 2>&1` before the
+    final exec, so the PID, the priority wrapper and `.qb_pid` are unchanged). `run_program(program_log=...)` sets it
+    for a program in a folder inside WSL; CREST passes `crest.out`. When the program ends or is killed at the time
+    limit, `wsl_scratch.output_tail` (one awk pass inside WSL) appends to the Windows log: the first 200 and the last
+    2,000 lines, 1 MiB at most (a quarter for the head), lines cut at 2,000 characters, runs of identical lines as one
+    line and "[QuantaBench: the line above repeated N more times]", and one line saying how much was left out.
+    Above 16 MB of output the run's log gets a WARNING. A failure brings `crest.out` back whole when it is under 8 MB
+    (the existing rule for small files); keep_scratch brings everything.
+  - Through WSL with `crest_wsl_scratch = off`, or natively, the output still goes through the pipe (the BLAS fix
+    alone stops the flood there).
+- **On the workstation** (544-63-8, tetradecanoic acid, 12 rotatable bonds; GFN-FF `--quick`, `-T 5`, nice 19; other
+  agents were using the machine, so single timings scatter):
+  - Two lanes at once, as in the batch, same start geometry, main's way (5 BLAS threads, output through wsl.exe to
+    NTFS) next to the branch's, twice: 272 s vs 184 s and 157 s vs 123 s. Main's CREST had 9 threads and kept about
+    8.5 cores busy on a 5-thread lane (1,144 CPU-s vs about 500 in round 2): OpenBLAS's own threads on top of CREST's.
+    Its log grew at 0.6 MB/s (165 MB and 98 MB), through about 3,500 writes a second by wsl.exe (177 bytes each).
+    The branch's lane: no write by wsl.exe while CREST ran, `crest.log` 0 bytes until the end; CREST's whole output
+    74-120 KB.
+  - Best GFN-FF energy of the ensemble: -4150.225 / -4150.226 kcal/mol (main) and -4150.225 / -4149.484 (branch); one
+    lane at a time, 5 BLAS threads -4149.592 / -4150.082, 1 thread -4150.084 / -4150.225. The batch (2026-11-20)
+    found -4150.225. Same spread either way: single-threaded BLAS does not slow CREST or change what it finds.
+  - The smoke job through QuantaBench with the branch (one lane of 5 threads, the batch's protocol, background
+    priority): CREST 107 s (the batch: 140 s with a second lane running), 1,130 conformers, `crest.log` 0 bytes while
+    CREST ran (`crest.out` inside WSL: 23 KB, 527 lines, no warning, at the last look before CREST ended), the note
+    "CREST scratch: WSL /dev/shm". The lowest GFN2 conformer: -1426.75296 eV, 0.17 kcal/mol below the batch's
+    (-1426.74561).
+  - The machine's total disk writes could not isolate CREST: other work wrote 2-400 MB/s while these ran. One lane at a time:
+    4.9 MB/s on average with the flood through NTFS, 4.3 with the same flood inside WSL, 2-4 idle; during the smoke
+    job 4.1 MB/s (317 writes/s). The per-process numbers above are the clean measure.
+- **Tests:** `tests/test_crest.py` (the env natively and through WSL, xtb's unchanged, `program_log` passed),
+  `tests/test_wsl_scratch.py` (CREST writes `crest.out` in its WSL folder and gets one BLAS thread; the same line
+  1e6 times; 1e6 numbered lines; long lines and the byte bound; the time limit; no folder inside WSL; a CREST that
+  prints the warning 1e6 times (123 MB) and fails: the kept `crest.log` has 4 lines and `crest.out` stays behind).
+  The scripts ran against the real WSL too (mawk; 122 MB summarized in 0.3 s).
+
 ## 2026-11-22: programs never outlive QuantaBench; probes can't hang (ENG-3, branch `feat/eng-3-process-robustness`)
 - **The problem** (the 2026-11-01 review's leftovers): a GUI or CLI that crashed or was ended in Task Manager left
   xtb, CREST, MOPAC or Psi4 running, with nobody to stop them; on Windows `subprocess.run(timeout=...)` in the version
@@ -391,3 +504,8 @@ Newest entries at the bottom. One entry per working session or nightly run.
   WSL (5 s after the kill). With the job switched off (the stand-in GUI's `QBTEST_NO_JOB=1`, the behaviour before),
   the stand-in engine and its grandchild outlive the killed GUI and the test fails. The full suite (offscreen Qt and VTK): 1,811 passed; the 22 failures also fail on `main` or
   pass alone (BACKLOG TEST-WIN-1).
+- **Merged after CREST-LOG-1** (#47): a `wsl:` program now runs as `sh -c WSL_GUARD sh -c WSL_WRAPPER prog args`
+  where `WSL_WRAPPER` also sends the output to `$QUANTABENCH_WSL_LOG` when it is set; the guard's stdout and stderr
+  stay on wsl.exe's pipe. The guard's `wait` printed "Terminated" into the run's Windows log when a program was
+  stopped (cancel, time limit); CREST-LOG-1's time-limit test caught it. `wait $p 2>/dev/null` keeps that line out;
+  the exit code is unchanged.

@@ -10,6 +10,30 @@
 - Version probes write to files and kill their process tree: bounded by their timeout. The conda scan takes the newest
   version, not the first environment alphabetically. The GUI's first start probes versions in a worker.
 
+### CREST through WSL: one BLAS thread per CREST thread, and its output kept inside WSL (CREST-LOG-1, 2026-11-22)
+- CREST now gets `OPENBLAS_NUM_THREADS=1` (CREST's install notes). The WSL CREST links a pthreads OpenBLAS, which
+  printed "OpenBLAS Warning : Detect OpenMP Loop and this application may hang" on every BLAS call inside CREST's
+  OpenMP threads (a 368 MB log in 11 minutes in the CREST rebuild) and ran extra BLAS threads (a 5-thread lane used
+  about 8.5 cores). Other programs keep their thread caps.
+- Through WSL, CREST's stdout and stderr go to `crest.out` in its folder inside WSL; `crest.log` in the Windows job
+  folder gets a bounded copy when CREST ends: the first 200 and the last 2,000 lines, 1 MiB at most, repeated lines
+  collapsed to one line and a count (`external.run_program(program_log=...)`, `wsl_scratch.output_tail`).
+
+### A finished worker job no longer leaves jobs.sqlite-wal behind on Windows (FIX-7, 2026-11-22)
+- A status poll that was reading the job table when the run ended kept its read-only connection open across the
+  worker's checkpoint, so -wal and -shm came back after the checkpoint had removed them. This was the flaky
+  `test_archive_manifest_sync_temp_files_and_failed_streams` on Windows CI.
+- `Job.table_lock`: a poll checks whether the job is finishing and reads the table in one step, and the end of the run
+  waits for a read in progress before it writes the final tables and checkpoints.
+
+### A live priority change no longer lost to a starting process on macOS (FIX-6, 2026-11-22)
+- macOS drops a nice value set while a process is inside exec(), although it reports the new value until the exec
+  ends. A live change (DIST-7) that reached a lane or a program that was just starting could leave it at the old
+  priority. This is also why `test_priority_applied_to_running_processes` failed now and then on macOS CI: python.org's
+  framework python re-execs itself into Python.app right after it starts.
+- `priority.apply_to_pids` (POSIX) looks again at the processes it lowered after 0.25 s and lowers once more those an
+  exec put back; the log line says how many. The test now waits until its child runs.
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use

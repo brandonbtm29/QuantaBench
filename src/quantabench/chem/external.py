@@ -18,8 +18,9 @@ This module is the shared contract every external engine uses:
                             limit, a crashed or killed run (each folder names its owner process)
 ``run_program(cmd, cwd)``   run, stream output to a log file, honour cancellation and timeouts,
                             raise ``ExternalProgramError`` with the log tail on failure; the program runs at the
-                            run priority in force (``quantabench.priority``; ``popen_args`` builds the call) and
-                            cannot outlive this process on Windows (a kill-on-close job, ``quantabench.proctree``)
+                            run priority in force (``quantabench.priority``; ``popen_args`` builds the call),
+                            cannot outlive this process on Windows (a kill-on-close job, ``quantabench.proctree``),
+                            and a WSL program in a folder inside WSL can keep its output there (``program_log``)
 
 Engines pass **file names relative to ``cwd``** in ``cmd``, so the same command works natively and
 through WSL (where ``cwd`` is translated to ``/mnt/c/...``, or the program runs in a folder inside WSL:
@@ -52,9 +53,13 @@ WSL_PREFIX = "wsl:"
 #: overflow the default 8 MB on larger molecules), then exec the program (same PID, same process group).
 #: This replaces a Python ``preexec_fn``, which is unsafe in the forked child of a multi-threaded GUI.
 STACK_WRAPPER = 'ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" 2>/dev/null; exec "$0" "$@"'
-#: The same inside WSL, plus the Linux PID in .qb_pid (a cancel kills it through ``wsl.exe``: ``_kill_wsl_side``).
+#: inside WSL: when set (``run_program(program_log=...)``), the file of the folder the program runs in that takes its
+#: stdout and stderr, instead of the pipe through wsl.exe to the Windows log (CREST-LOG-1)
+WSL_LOG_VAR = "QUANTABENCH_WSL_LOG"
+#: The same inside WSL, plus the Linux PID in .qb_pid (a cancel kills it through ``wsl.exe``: ``_kill_wsl_side``),
+#: and the output into ``$QUANTABENCH_WSL_LOG`` when it is set.
 WSL_WRAPPER = ('ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" 2>/dev/null; echo $$ > .qb_pid; '
-               'exec "$0" "$@"')
+               f'[ -n "${WSL_LOG_VAR}" ] && exec >"${WSL_LOG_VAR}" 2>&1; exec "$0" "$@"')
 #: ``run_program`` starts a ``wsl:`` program as ``wsl.exe ... -e sh -c WSL_GUARD sh -c WSL_WRAPPER prog args``, with
 #: wsl.exe's stdin a pipe that QuantaBench holds open and never writes (the lifeline; ENG-3). The guard runs the
 #: program in the background in its own process group (WSL makes the guard a session and group leader) and waits for
@@ -63,12 +68,15 @@ WSL_WRAPPER = ('ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" 2>/
 #: job, a cancel, End task). WSL's hang-up alone ends a program that does not ignore SIGHUP; the watchdog also ends
 #: those that do, and CREST's xtb children. When the program ends, the guard stops the watchdog, sends SIGTERM to
 #: what the program left in the group and exits with the program's code. ``kill -TERM -$$`` can only reach the guard's
-#: own group (a group's id is its leader's PID).
+#: own group (a group's id is its leader's PID). ``wait``'s stderr goes to /dev/null: sh reports a program ended by a
+#: signal ("Terminated"), and that line would land in the run's log after a cancel or a time limit.
 WSL_GUARD = ('exec 3<&0 </dev/null; g=$$; '
              'k() { trap "" TERM; kill -TERM -$g 2>/dev/null; sleep 2; kill -KILL -$g 2>/dev/null; exit 0; }; '
              '(trap "" INT TERM; trap k HUP; while read -r _ <&3; do :; done; k) >/dev/null 2>&1 & w=$!; '
-             '"$0" "$@" 3<&- & p=$!; wait $p; rc=$?; kill -KILL $w 2>/dev/null; '
+             '"$0" "$@" 3<&- & p=$!; wait $p 2>/dev/null; rc=$?; kill -KILL $w 2>/dev/null; '
              'trap "" TERM; kill -TERM -$g 2>/dev/null; exit $rc')
+#: a program that writes more output than this inside WSL gets a warning in the run's log (CREST's own is far smaller)
+LOUD_OUTPUT_BYTES = 16 * 2**20
 
 
 class ExternalProgramError(RuntimeError):
@@ -1252,10 +1260,29 @@ def program_name(cmd: Sequence[str]) -> str:
     return name[:-4] if name.lower().endswith((".exe", ".bat", ".cmd")) else name
 
 
+def _add_wsl_output(out, linux_dir: str, name: str, program: str, log: Callable[[str], None] | None) -> None:
+    """Append the bounded copy of a WSL program's output file (``wsl_scratch.output_tail``) to its open log ``out``;
+    a line saying why when it cannot be read. Never raises."""
+    from . import wsl_scratch
+
+    try:
+        text, size = wsl_scratch.output_tail(linux_dir, name)
+    except Exception as exc:  # noqa: BLE001 - the program's result matters more than its log
+        text, size = f"[QuantaBench: could not read {name} inside WSL ({exc})]\n", 0
+    with contextlib.suppress(OSError, ValueError):
+        out.seek(0, os.SEEK_END)                  # after whatever wsl.exe itself wrote
+        out.write(text.encode("utf-8", errors="replace"))
+        out.flush()
+    if log and size > LOUD_OUTPUT_BYTES:
+        log(f"  WARNING: {program} wrote {size / 2**20:.0f} MB of output inside WSL; the log has its first and last "
+            "lines, repeated lines collapsed")
+
+
 def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: dict[str, str] | None = None,
                 stdin_text: str | None = None, timeout: float | None = None, log_name: str = "program.log",
                 should_stop: Callable[[], bool] | None = None, log: Callable[[str], None] | None = None,
-                check: bool = True, poll_s: float = 0.2, program_cwd: str | None = None) -> ProgramRun:
+                check: bool = True, poll_s: float = 0.2, program_cwd: str | None = None,
+                program_log: str | None = None) -> ProgramRun:
     """Run ``cmd`` in ``cwd``; stdout+stderr go to ``cwd/log_name``.
 
     ``cmd[0]`` may be a ``ProgramInfo.command()`` prefix, including the WSL launcher; file arguments
@@ -1266,6 +1293,11 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
 
     ``program_cwd``: the folder the program runs in when it is not ``cwd`` (which then holds only the log): for a
     WSL program a Linux path inside WSL (``chem.wsl_scratch``), so its files never cross to the Windows disk.
+
+    ``program_log``: with such a ``program_cwd``, the file there that takes the program's stdout and stderr (the WSL
+    wrapper, ``WSL_LOG_VAR``), so they do not stream through wsl.exe into ``cwd/log_name`` as many small writes to
+    NTFS. When it ends (or is killed at the time limit) a bounded copy of it is added to ``cwd/log_name``
+    (``wsl_scratch.output_tail``: the first and last lines, repeated lines collapsed). Ignored for other programs.
 
     The program cannot outlive this process on Windows: it runs in a kill-on-close job of its own
     (``proctree.start``), closed when it ends (which also ends what it left running). A ``wsl:`` program also runs
@@ -1280,6 +1312,11 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
         cmd = [cmd[0], "--cd", linux_cwd or to_wsl_path(cwd.resolve()), *cmd[1:]]
     if env is None:
         env = program_env(threads, via_wsl=via_wsl)
+    inner_log = program_log if linux_cwd and program_log else None
+    if inner_log:
+        env = {**env, WSL_LOG_VAR: inner_log}
+        names = [x for x in env.get("WSLENV", "").split(":") if x]
+        env["WSLENV"] = ":".join(dict.fromkeys([*names, f"{WSL_LOG_VAR}/u"]))
     if timeout is None:
         limit = float(getattr(_engine_settings(), "timeout_s", 0) or 0)
         timeout = limit if limit > 0 else None
@@ -1328,9 +1365,13 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
                     raise Cancelled()
                 if timeout is not None and time.perf_counter() - t0 > timeout:
                     _kill_tree(proc, cwd, via_wsl, linux_cwd)
+                    if inner_log:
+                        _add_wsl_output(out, linux_cwd, inner_log, name, log)
                     run = ProgramRun(-1, time.perf_counter() - t0, log_file)
                     raise ExternalProgramError(f"{Path(shown[0]).name} timed out after {timeout:.0f} s\n"
                                                f"{run.tail()}")
+            if inner_log:
+                _add_wsl_output(out, linux_cwd, inner_log, name, log)
         except BaseException:
             # Cancel, Ctrl+C (the child has its own session, so SIGINT never reaches it), or any error in
             # should_stop/log: never leave the program running.

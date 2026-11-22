@@ -35,6 +35,38 @@ on the workstation (not in the repository).
   the rest of the run records full timings for killed attempts.
 - **After the gas phase:** rerun the molecules that ran out of time with wider lanes and a 3 h limit; then water;
   then a decision on the 173 molecules left out.
+- **2026-11-22 resume (2 lanes x 5 threads), paused again at ~02:50:** the workstation's disk writes went back to
+  14-24 MB/s although CREST ran inside WSL (CREST-SCRATCH-1). The cause was CREST's own output: one lane's `crest.log`
+  reached 368 MB in 11 minutes, almost all one repeated line, "OpenBLAS Warning : Detect OpenMP Loop and this
+  application may hang". The WSL CREST links a pthreads OpenBLAS and got `OPENBLAS_NUM_THREADS=5`, and wsl.exe wrote
+  its stdout to NTFS. Fixed in CREST-LOG-1 (one BLAS thread per CREST thread; the output stays inside WSL). Resume
+  with that merged.
+
+## CREST-LOG-1: CREST through WSL: one BLAS thread and a bounded log · in-PR 2026-11-22 (branch `fix/crest-log-1-openblas`)
+Found by the ops agent at the 2026-11-22 resume of CREST-RUN-1 (above): one lane's `crest.log` grew to 368 MB in 11
+minutes, nearly all "OpenBLAS Warning : Detect OpenMP Loop and this application may hang. Please rebuild the library
+with USE_OPENMP=1 option.", written by wsl.exe to the Windows job folder as thousands of small writes a second.
+- Cause, confirmed on the workstation: conda-forge's CREST 3.0.2 in WSL links libgomp and
+  `libopenblas-0.3.34-pthreads`; `program_env` gave it `OPENBLAS_NUM_THREADS` = the molecule's threads. A pthreads
+  OpenBLAS called inside CREST's OpenMP threads with more than one thread warns on every call. 45 s of CREST at
+  `-T 5`: 27,192 warning lines (3.3 MB) with 5 BLAS threads, none (11 KB of output) with 1. xtb `--opt`/`--grad` and
+  tblite with 5 BLAS threads print none (their BLAS runs outside their OpenMP loops). The Mac's CREST (the fork's
+  build) links an OpenBLAS built with `USE_OPENMP`, which never warns.
+- Done: `crest.child_env` sets `OPENBLAS_NUM_THREADS=1` (CREST's install notes ask for it; `OMP_MAX_ACTIVE_LEVELS=1`
+  was already set; `GOTO_NUM_THREADS` is not needed, `OPENBLAS_NUM_THREADS` comes first). Other programs are
+  unchanged. Through WSL, CREST's stdout and stderr go to `crest.out` in its folder inside WSL (the WSL wrapper,
+  `QUANTABENCH_WSL_LOG`; `run_program(program_log=...)`), and `crest.log` gets a bounded copy when CREST ends or is
+  killed at the time limit (`wsl_scratch.output_tail`: the first 200 and last 2,000 lines, 1 MiB, lines cut at 2,000
+  characters, repeated lines collapsed to one line and a count); more than 16 MB gets a WARNING in the run's log.
+  Tests: `tests/test_crest.py`, `tests/test_wsl_scratch.py` (the same line 1e6 times, 1e6 numbered lines, long lines,
+  the time limit, a chatty CREST that fails).
+- Measured on the workstation (544-63-8, 12 rotatable bonds; DEVLOG 2026-11-22): two lanes at once, main's way vs
+  the branch's, 272 vs 184 s and 157 vs 123 s; main's 5-thread lane kept about 8.5 cores busy (OpenBLAS's threads on
+  top of CREST's) and wrote its log at 0.6 MB/s in about 3,500 writes a second; the branch's wrote nothing to NTFS
+  while CREST ran. Same best energies. The smoke job through QuantaBench: CREST 107 s, `crest.log` 0 bytes while CREST
+  ran (no warning in `crest.out`), the lowest GFN2 conformer 0.17 kcal/mol below the batch's.
+- Later: switch the WSL environment to conda-forge's OpenMP OpenBLAS (`libopenblas=*=openmp*`) as well, if a profile
+  ever shows CREST's serial BLAS calls matter (not needed for the warning).
 
 ## CREST-SCRATCH-1: CREST through WSL in a folder inside WSL · done 2026-11-20 (branch `fix/crest-wsl-scratch`)
 On the workstation CREST runs as `wsl:.../bin/crest` and used to run in its Windows job folder through `/mnt/c`: every
@@ -106,10 +138,34 @@ with its deadline and resume, the budget setter, and the time window for one mac
   deadline lives in `batch run`, not `grid build`. Not ported: the QSAR-specific `analyze_tranche.py` step, and the
   budget setter (`machines set --max-cpu` covers it). Left: run CREST-RUN-1's water phase with it (acceptance).
 
-## FIX-6: A flaky macOS test of run priority · ready
+## FIX-6: A flaky macOS test of run priority · in-PR 2026-11-22 (branch `fix/fix-6-macos-priority-test`)
 `tests/test_machine_control.py::test_priority_applied_to_running_processes` fails now and then on macOS CI (a
 process is left at nice -10); it passes on a rerun. Seen on #17 and #25. Find the race or make the test wait for
 the priority change.
+- **Cause: macOS loses a nice value set while the process is inside exec().** The image that comes out of the exec
+  keeps the value from before, although getpriority() shows the new one until the exec ends. The test lowered its
+  child right after `Popen`. On GitHub's runners `sys.executable` is python.org's framework python, which re-execs
+  itself into `Python.app` a few ms after it starts (the failing child was named "Python"). A change that landed in
+  that second exec was lost: the test read 10 at once, then the value the child inherited from pytest (-10 there).
+- **Shown on the MacBook** (fork, exec, one setpriority at a delay swept over 0-6 ms, a read 80 ms later): 297 of
+  1,200 changes were lost, all of them landing inside an exec (Homebrew's python: one; a copy of python.org's re-exec
+  launcher: two). The CI failure itself, with that launcher as `sys.executable`, its re-exec
+  delayed 6-9 ms and pytest at nice 5: 6 of 1,000 runs (`... or 5 == 0`, CI's message with 5 for -10).
+- **Fix:** the test waits until the child's Python runs. `apply_to_pids` (POSIX) looks at the processes it
+  lowered again after `RECHECK_S` (0.25 s) and lowers once more those an exec put back: lanes and programs that are
+  just starting (the `sh -c` wrappers of `external.run_program` exec two or three times) could keep the old
+  priority. After: 0 of 500 runs, and 0 of 300 for the old test with the new `apply_to_pids`. Test:
+  `test_a_priority_lost_in_an_exec_is_set_again`.
+- Found on the way: PRIO-2 below.
+
+## PRIO-2: A live priority change on Linux lowers only each lane's main thread · ready
+Found with FIX-6 (2026-11-22). Linux keeps a nice value (and an I/O priority) per thread, and `setpriority(PRIO_PROCESS,
+pid)`, which psutil's `nice()` calls, changes only the thread whose id is the pid. `priority.apply_to_process` walks
+`/proc/self/task`; `apply_to_pids`, used when the priority changes while a batch runs (DIST-7), does not, so a lane's
+threads that already run (PyTorch's and OpenMP's pools, a dxtb or AIMNet2 refine) keep the old priority; programs the
+lane starts later inherit the new one from the main thread. Checked in the cloud: after `psutil.Process(pid).nice(10)`
+the main thread is at 10 and the child's other thread at 0. Fix: walk `/proc/<pid>/task` for each process (nice and
+ionice), with a test that a lane's second thread is lowered too.
 
 ## REL-1: Tag 0.3.0 · done 2026-11-18 (Brandon: "complete item 8"; tag `v0.3.0`)
 0.1, 0.2 and 0.3 are all unreleased and nothing is tagged. After TELEM-1 and this status update: set the version,
@@ -189,6 +245,32 @@ Follow-ups:
     keeps the timed conformer, and the rest are embedded without small-ring torsions (about 0.5 s each).
 - 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
   about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
+
+## FIX-7: The flaky Windows worker test that leaves jobs.sqlite-wal behind · in-PR 2026-11-22 (branch `fix/fix-7-windows-worker-wal`)
+`tests/test_worker.py::test_archive_manifest_sync_temp_files_and_failed_streams` failed again on #34's Windows CI
+(2026-11-20): the run folder still had `jobs.sqlite-wal` when the job reported "done". FIX-2 (#16, #21) had made the
+checkpoint retry and the polls after the final counts use them (`Job.finishing`); the test had failed on #15, #20, #21.
+- **Cause: a status poll that was already reading the job table when the run ended.** `JobManager.public` checked
+  `finishing`, then opened the table read-only: two steps. A poll that passed the check just before the end (the
+  client polls every 0.1 s) could still be reading when `_checkpoint` ran: its read-only connection stayed open across
+  the checkpoint, which removed -wal, and when it closed, -wal and -shm were back. A read-only connection cannot
+  remove them. On Windows the writer's close removes -wal even while a read-only connection is open; on Linux it waits
+  for that connection, so `_checkpoint`'s retries cover it there.
+- **Shown on the workstation:** a scratch copy of the test that logs every open and close of the job table, the
+  checkpoint and the polls failed 14 of 800 times. In every failure an HTTP poll opened the table read-only while the
+  job ran, 8-13 ms before the checkpoint, and closed it 2-18 ms after the checkpoint had removed -wal; -wal and -shm
+  were there after that close. No other connection was open (`gc.get_objects`), the process had no handle on the
+  files, and no thread but the worker's own ran: not a connection left open, not a background thread, not Windows
+  locking a temp folder.
+- **Fix:** `Job.table_lock`. A poll checks `finishing` and reads the table under it (`JobManager._live_counts`), and
+  the end of the run sets `finishing` under it, so the end waits for a read in progress before the final tables and
+  the checkpoint. Test: `test_the_end_of_a_run_waits_for_a_status_poll_reading_the_job_table` holds a poll inside its
+  read at the end of a run; without the lock the checkpoint begins while the poll has the table open (on every OS).
+- **Before / after** (1,000 runs of the test each, in a worktree on the workstation): 15 / 0 failed; the
+  logging copy 14 of 800 / 0 of 800. The new test passed 30 of 30 times there.
+- Not changed: `molecule_states` (`GET .../molecules`, the grid client's sync) still reads the table without the
+  lock, so a read that overlaps the checkpoint can leave the two files (an empty -wal; `.stignore` lists both, and the
+  next writable open removes them). Any read-only open after the end recreates them too (DEVLOG 2026-11-12).
 
 ## FIX-5: Crashes in the GUI tests (Windows CI) · done 2026-11-17 (PR #23)
 Main's Windows CI for 486e332 (#19's merge, with #21) aborted in
