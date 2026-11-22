@@ -2,6 +2,11 @@
 
 ## Unreleased (after 0.3.0)
 
+### The lifeline guard for native programs on macOS and Linux (ENG-3b, 2026-11-22)
+- xtb, CREST, MOPAC, Psi4 and g-xTB on the MacBook (and Linux) now end when the GUI or CLI that started them dies,
+  even of SIGKILL: they run under the guard CREST through WSL already had, whose lifeline is their stdin. Run timings
+  still report the program's own peak memory and CPU time, and a program killed by a signal still reports it.
+
 ### Programs never outlive QuantaBench; probes can't hang (ENG-3, 2026-11-22)
 - Windows: xtb, CREST (wsl.exe), MOPAC, Psi4, g-xTB and tblite's CPCM helper run in kill-on-close job objects, and the
   lanes in one of their parent's, so a crashed or killed GUI or CLI takes them along; a cancel ends the whole job.

@@ -78,7 +78,11 @@ t0 = time.time()
 lines = Path(args[0]).read_text().splitlines()
 n = int(lines[0])
 if str(n) in os.environ.get("FAKE_CREST_KILL_LANE", "").split(","):
-    os.kill(os.getppid(), signal.SIGKILL)            # the lane that started this CREST dies mid-search
+    import psutil
+    lane = psutil.Process().parent()                 # the lane: the first ancestor that is not a shell (the lifeline
+    while lane is not None and lane.name() in ("sh", "dash", "bash", "zsh"):   # guard and the stack wrapper)
+        lane = lane.parent()
+    os.kill(lane.pid, signal.SIGKILL)                # the lane that started this CREST dies mid-search
     time.sleep(10)
 c0 = time.process_time()
 while time.process_time() - c0 < float(os.environ.get("FAKE_CREST_BURN", "0")):
