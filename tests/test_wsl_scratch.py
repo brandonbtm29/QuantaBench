@@ -448,7 +448,8 @@ def test_the_same_line_a_million_times_comes_back_once(fake_wsl, tmp_path):
 def test_a_long_output_comes_back_as_its_first_and_last_lines(fake_wsl, tmp_path):
     linux = _wsl_job_dir(fake_wsl)
     lines: list[str] = []
-    run = external.run_program(_wsl_sh("seq 1 1000000; exit 3"), tmp_path / "win", log_name="seq.log",
+    count = "awk 'BEGIN { for (i = 1; i <= 1000000; i++) print i }'"     # (BSD seq prints 1e+06)
+    run = external.run_program(_wsl_sh(f"{count}; exit 3"), tmp_path / "win", log_name="seq.log",
                                program_cwd=str(linux), program_log="seq.out", check=False, log=lines.append)
     assert run.returncode == 3
     text = run.log_file.read_text()
