@@ -137,8 +137,13 @@ In a water run, not every step sees the water. The review lists it for the run's
   a hydrated ion pair without its water, or the anion of a salt whose cation is the larger ion.
 - **Ring conformers.** The RDKit search keeps the ring shapes ETKDG and MMFF94s give, mostly chairs. *Thorough*
   (Settings > Build defaults > Ring conformers, `--ring-conformers thorough`; Spartan's Conformer Rules) also makes
-  twist-boats of every saturated six-membered ring from the 5 lowest conformers; they join the pool when they are in
-  the window (cyclohexane's is 5.9 kcal/mol above the chair in MMFF94s).
+  twist-boats of every saturated six-membered ring from the 20 lowest conformers (*Twist-boat seeds*,
+  `--twist-boat-seeds`); they join the pool when they are in the window (cyclohexane's is 5.9 kcal/mol above the
+  chair in MMFF94s). On 45 QSAR molecules with such rings, 20 seeds instead of 5 lowered the refined best conformer
+  of 6 fused polycyclics (steroids, cinchona alkaloids) by 0.1-2.8 kcal/mol; the force-field step took 2.6x as long.
+- **Salts as separate entries.** *Keep the counter-ions as separate entries* (Settings > Build defaults,
+  `--counterion-entries`) computes the counter-ions the build removes as molecules of their own in the same run:
+  K-PFOS gives PFOS⁻ and K⁺ (`kpfos_K+`, with `counterion_of` = `kpfos` in summary.csv). One entry per distinct ion.
 - **Metal complexes drawn as ions** (a ferrocene as Fe²⁺ and two cyclopentadienides) cannot be built: draw the
   metal-ligand bonds.
 - **Undefined stereocentres.** RDKit embeds an undefined centre at random for every conformer. One centre mixes two

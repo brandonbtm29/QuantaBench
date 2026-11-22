@@ -159,6 +159,11 @@ What the standardization does with research records (every step is in the molecu
   where the counter-ion is the larger ion (tetrabutylammonium trifluoroacetate computes the trifluoroacetate). The
   notes say "stripped before the largest-fragment rule (build filters): O (water), [Na+] (sodium)", and
   `removed_fragments` lists them first. Off by default; science settings (stored with the run, sent to workers).
+- **Counter-ions as separate entries** (`counterion_entries`, `chem.salts`, off by default): the removed fragments
+  that are ions or named counter-ions (never water, a copy of the kept ion or a neutral molecule) become molecules of
+  the run, `<record>_<formula>` (`kpfos_K+`), named after the ion, with the record's posted fields and a
+  `counterion_of` column listing every record of the run it came from; one per InChIKey, none for an ion the list
+  already has. The list is expanded before a grid chunks it, so every machine agrees.
 - **Metal salts.** A bondless Al³⁺, Zn²⁺, Fe²⁺/Fe³⁺ or Cu²⁺ cation (as well as Na⁺, K⁺, Ca²⁺, Mg²⁺,
   Ba²⁺, Sr²⁺) is a counter-ion when the rest of the record is an organic ion and counter-ions: fosetyl-Al
   (`[Al+3]` + 3 ethyl phosphonates) computes one ethyl phosphonate anion, and `removed_fragments` lists

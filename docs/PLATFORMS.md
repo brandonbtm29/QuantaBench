@@ -68,7 +68,9 @@ worker processes that share the CPU threads and the GPU (for example `gpu:1x4,cp
 threads and five 2-thread CPU lanes). The parent process stays the only writer of `jobs.sqlite`. On the workstation,
 MMFF ran 3.7x and GFN1-xTB 3.45x faster than one process with all 12 threads.
 
-`auto` plans a GPU lane for a GPU-capable engine only where this machine's benchmark says the GPU is the faster
+`auto` never plans more lanes than physical cores; a typed spec may use up to the logical threads, and the plan says
+when it runs more lanes than cores (hyperthreads add little for these engines). `auto` plans a GPU lane for a
+GPU-capable engine only where this machine's benchmark says the GPU is the faster
 lane: `<method>@<gpu>` beats `<method>@cpu` in the registry (`machines --refresh --bench aimnet2`). Both are
 timed one molecule at a time in one process with the same threads, so this compares one lane with one lane; a
 GPU lane slower than a CPU lane only takes four threads from the CPU lanes. The plan's reason gives the

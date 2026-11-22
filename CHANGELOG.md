@@ -2,6 +2,18 @@
 
 ## Unreleased (after 0.3.0)
 
+### SETTINGS-1 follow-ups: salts as separate entries, lanes at the physical cores, twist-boat seeds (2026-11-22)
+- **Keep the counter-ions as separate entries** (Settings > Build defaults, `build --counterion-entries`; science
+  setting `counterion_entries`, off): the counter-ions a build removes become molecules of the run. K-PFOS gives
+  PFOS⁻ and `kpfos_K+`, whose `counterion_of` column names the records it came from; posted fields are copied; one
+  entry per InChIKey in a run.
+- **Automatic lanes** never exceed the physical cores. A typed lane spec may go up to the logical threads, and the
+  plan line says when it runs more lanes than cores (hyperthreads add little for these engines).
+- **Twist-boat seeds** (Build defaults, `--twist-boat-seeds`; science setting `twist_boat_seeds`, default 20, was
+  5): Thorough ring conformers seed twist-boats from the 20 lowest conformers. On 45 QSAR molecules with saturated
+  six-membered rings, 20 seeds lowered the refined best conformer of 6 fused polycyclics by 0.1-2.8 kcal/mol and
+  never raised one; the force-field step took 2.6x as long. Thorough runs stored before keep 5 when resumed.
+
 ### Settings > Build defaults: build filters and ring conformers (SETTINGS-1, 2026-11-22)
 - Spartan's Import Filters as build filters, for every input: water, acids (HCl, HBr, HI, HF, ...) and counter-ions
   picked by name (sodium, potassium, ammonium, tetrabutylammonium, chloride, ... 34 in all) are stripped before the

@@ -253,10 +253,10 @@ class SettingsDialog(QDialog):
             self.lane_count.addItem(f"{n} at once ({n} CPU lanes)", str(n))
         self.lane_count.addItem("Custom lane spec (Expert)", self.CUSTOM_LANES)
         self.lane_count.setToolTip("How many molecules of a batch run at once, each in its own worker process (lane).\n"
-                                   "Automatic: from the cores, the GPU and the method (one lane per physical core\n"
-                                   "for CPU methods). One at a time: one process with all the threads. Custom: a\n"
-                                   "lane spec with GPU lanes or threads per lane, typed under Expert.\n"
-                                   "Saved for this machine only, like the Machines dock's lanes.")
+                                   "Automatic: from the cores, the GPU and the method, never more lanes than physical\n"
+                                   "cores. One at a time: one process with all the threads. Custom: a lane spec typed\n"
+                                   "under Expert (GPU lanes, threads per lane), up to the logical threads; hyperthreads\n"
+                                   "add little for these engines. Saved for this machine only, like the Machines dock's.")
         lanes_form.addRow("Molecules at once", self.lane_count)
         self.lanes = QComboBox()
         self.lanes.setObjectName("compute_lane_spec")
@@ -448,6 +448,20 @@ class SettingsDialog(QDialog):
             "six-membered ring, the 5 lowest conformers are also held at each twist-boat and optimized, so twist-boat\n"
             "conformers within the window join the pool (Max conformers still caps it). CREST makes its own.")
         form.addRow("Ring conformers", self.ring_conformers)
+        self.twist_boat_seeds = QSpinBox()            # advanced: only with Thorough
+        self.twist_boat_seeds.setObjectName("build_twist_boat_seeds")
+        self.twist_boat_seeds.setRange(1, 1000)
+        self.twist_boat_seeds.setValue(max(1, int(b.twist_boat_seeds)))
+        self.twist_boat_seeds.setSuffix(" lowest conformers")
+        self.twist_boat_seeds.setToolTip(
+            "Thorough ring conformers: twist-boats are made from this many of the lowest force-field conformers.\n"
+            "20 by default: on 45 QSAR molecules with six-membered rings, 20 instead of 5 found a lower refined\n"
+            "conformer for 6 fused polycyclics (by 0.1-2.8 kcal/mol) and never a higher one; the force-field step\n"
+            "took 2.6x as long. Each seed costs 6 starts per ring. A science setting.")
+        form.addRow("Twist-boat seeds", self.twist_boat_seeds)
+        self.ring_conformers.currentIndexChanged.connect(
+            lambda *_a: self.twist_boat_seeds.setEnabled(self.ring_conformers.currentData() == "thorough"))
+        self.twist_boat_seeds.setEnabled(self.ring_conformers.currentData() == "thorough")
         # stored in kcal/mol (a science setting), shown in the relative-energy unit of the Display tab
         self.window = EnergySpinBox(0.5, 50, units.KCAL, units.EnergyDisplay.of(self.s).relative)
         self.window.set_stored(b.energy_window_kcal)
@@ -507,13 +521,22 @@ class SettingsDialog(QDialog):
         self.desalt = QCheckBox("Then keep the largest fragment (removes the remaining counter-ions)")
         self.desalt.setChecked(b.keep_largest_fragment)
         fl.addWidget(self.desalt)
+        self.counterion_entries = QCheckBox("Keep the counter-ions as separate entries (K-PFOS: PFOS⁻ and K⁺)")
+        self.counterion_entries.setObjectName("build_counterion_entries")
+        self.counterion_entries.setChecked(b.counterion_entries)
+        self.counterion_entries.setToolTip(
+            "Each counter-ion the build removes (an ion, or a named counter-ion; never water) becomes a molecule of\n"
+            "its own in the same run: id <record>_<formula> (kpfos_K+), the record's posted fields, and\n"
+            "summary.csv's counterion_of naming the records it came from. One entry per distinct ion (InChIKey).\n"
+            "A science setting: stored with each run.")
+        fl.addWidget(self.counterion_entries)
         self.strip_summary = QLabel()
         self.strip_summary.setWordWrap(True)
         self.strip_summary.setStyleSheet("color: gray;")
         fl.addWidget(self.strip_summary)
         outer.addWidget(box)
         outer.addStretch(1)
-        for check in (self.strip_water, self.strip_acids, self.desalt):
+        for check in (self.strip_water, self.strip_acids, self.desalt, self.counterion_entries):
             check.toggled.connect(self._update_strip_summary)
         self.strip_list.itemChanged.connect(self._update_strip_summary)
         self._update_strip_summary()
@@ -534,8 +557,9 @@ class SettingsDialog(QDialog):
                                           counterions=standardize.counterion_names(self.strip_counterions()))
         then = ("then the largest fragment is kept" if self.desalt.isChecked()
                 else "then the remaining fragments are computed together")
-        self.strip_summary.setText(f"Stripped first: {strip.label()}; {then}." if strip
-                                   else f"Nothing stripped first; {then}.")
+        entries = " The counter-ions removed become entries of their own." if self.counterion_entries.isChecked() else ""
+        self.strip_summary.setText((f"Stripped first: {strip.label()}; {then}." if strip
+                                    else f"Nothing stripped first; {then}.") + entries)
 
     def _import_tab(self) -> QWidget:
         """The stored choices of File > Open's Import Options dialog (``Settings.import_``), also the defaults of
@@ -1034,8 +1058,10 @@ class SettingsDialog(QDialog):
         b.strip_water = self.strip_water.isChecked()
         b.strip_acids = self.strip_acids.isChecked()
         b.strip_counterions = self.strip_counterions()
+        b.counterion_entries = self.counterion_entries.isChecked()
         b.max_conformers = self.max_confs.value()
         b.ring_conformers = self.ring_conformers.currentData() or "normal"
+        b.twist_boat_seeds = self.twist_boat_seeds.value()
         b.energy_window_kcal = self.window.stored()
         b.rmsd_threshold = self.rmsd.value()
         b.fmax = self.fmax.value()

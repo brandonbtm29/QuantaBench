@@ -561,3 +561,49 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - Tests: `tests/test_build_filters.py` (12), `tests/test_gui_settings_build.py`, and
   `test_worker.py::test_build_filters_travel_to_a_worker` (a worker over HTTP). Screenshot:
   `docs/dev/screenshots/SETTINGS-1/build_defaults_tab.png`.
+
+## 2026-11-22: SETTINGS-1 follow-ups (branch `feat/settings-1-followups`)
+Brandon's answers on PRs #40, #45 and #46: keep a salt's counter-ion as a separate entry; cap Automatic lanes at the
+physical cores; check whether Thorough ring conformers should seed from more than 5 conformers.
+- **Salts** (`chem.salts`, `BuildConfig.counterion_entries`):
+  - The input list is expanded once, before `jobs.run_resumable` takes its chunk and in `pipeline.run`, so the
+    entries depend only on the list and the settings: every machine of a grid makes the same ones, and a resume with
+    the same list adds none.
+  - Counter-ions are the fragments the build removes (`standardize(info=...)`, after the build filters) that are
+    ions or named counter-ions. Water, a copy of the kept ion and neutral molecules are left out. HCl counts, as
+    chloride.
+  - Entries are de-duplicated by the InChIKey of the fragment as drawn, also against the list's own single-fragment
+    inputs.
+  - Each entry's id is `<first record>_<formula>`, cut to the worker's 60 characters. Its `counterion_of` lists every
+    record it came from (`;`), and it copies the posted fields of the first record.
+  - The GUI gives an entry a row when its result arrives.
+  - No new counter-ion names ("keep what we have for now").
+- **Lanes:** `plan_auto` already gave one lane per physical core for most engines. The 2-thread lanes of external
+  programs could exceed the physical cores on a machine with more than two threads per core; now every automatic plan
+  stops at the physical cores. `parse_lanes` already refused more lanes than logical threads; `plan_text` now
+  adds a note when a typed spec runs more lanes than physical cores. The coordinator relayed NOVA's MD and CREST
+  measurements: flat scaling past ~6-8 threads per job.
+- **Twist-boat seeds**:
+  - **What the sources say.** Spartan's manual: Thorough "considers twist-boat conformers of six-membered rings (in
+    addition to chair conformers)". Wavefunction's conformer FAQ: twist-boats "are unlikely by default", and its
+    FINDBOATS keyword samples them. Wang, Witek, Landrum and Riniker (J. Chem. Inf. Model. 2020) add small-ring torsion
+    potentials to ETKDG. None says how many conformers to start twist-boats from.
+  - **The check.** 45 molecules with a saturated six-membered ring, sampled from the QSAR table (seed 7; 38 with one
+    such ring, 7 with 2-4; at most 40 heavy atoms). Each ran gas MMFF94s (normal, thorough with 5 seeds, thorough with
+    20), then AIMNet2 on the 20 lowest of each thorough pool, ranked by the refinement. On the workstation, 12
+    processes at below-normal priority, about 40 min.
+  - **Results:**
+    - 20 seeds gave a larger force-field pool for 30 of 45 molecules, with new conformers among the 20 lowest for 27.
+    - The lowest force-field energy dropped for 6, by 0.07-4.85 kcal/mol.
+    - After the refinement the best conformer changed for 6 of 45, always to a lower one: 0.11-2.83 kcal/mol lower,
+      heavy-atom RMSD 0.47-2.59 Å. These were mestranol, progesterone, medroxyprogesterone, a hydroxy-keto
+      steroid (53-05-4), hydroquinine and cinchonamine: all fused polycyclics. No monocyclic molecule changed.
+    - Cost per molecule: force field median 6.3 s with 5 seeds against 15.6 s with 20 (2.6x in total), refinement
+      +20 %.
+  - **Decision.** The default is now 20 (`TWIST_BOAT_SEEDS`, `twist_boat_seeds`, Build defaults > *Twist-boat
+    seeds*, `--twist-boat-seeds`), as an advanced science setting.
+    - It matters only with Thorough (`_ONLY_WITH`).
+    - A Thorough run stored before it ran with 5 (`LEGACY_DEFAULTS`).
+    - Not tested: more than 20.
+- Tests: `tests/test_salts.py`, plus additions to `test_build_filters.py`, `test_gui_settings_build.py` and
+  `test_lanes.py`.
