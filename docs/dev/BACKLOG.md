@@ -962,6 +962,19 @@ not try to match Spartan exactly.
 - MOPAC COSMO: energies step as surface segments switch (CF3COO⁻ in water: finite-difference forces off by
   0.3 eV/Å at h = 1 mÅ); consider running MOPAC frequencies in the gas phase automatically.
 
+## TEST-WIN-1: The full suite on the workstation: failures that are not the code's · ready
+Found 2026-11-22 (ENG-3), each also on `main`:
+- `test_eng_mopac.py::test_real_pipeline_native_cosmo` leaves this process's tblite CPCM helper running (it lives
+  until exit, `chem.cpcm_worker`), so the 14 `test_lanes.py` tests that check for no child processes fail after it
+  when the real MOPAC is installed. Close the helpers at the end of that test, or count them out in `lane_processes`.
+- The same two real-MOPAC tests miss their reference values with MOPAC 23.2.5 (water dipole 1.347 vs 1.259 D; the
+  COSMO pipeline's 3.22 vs 3.0 ± 0.2).
+- With `QT_QPA_PLATFORM=offscreen`, `tests/test_gui.py` crashes the process (access violation in pyvistaqt's
+  `QtInteractor` initialize); with `PYVISTA_OFF_SCREEN=true` as well, 3 tests that need a rendered view fail. RUNBOOK
+  or conftest could say how to run the suite there.
+- `test_vibrations.py` (3) stop at the memory guard late in a full run (2.9 GB in use against a 2.8 GB budget); alone
+  they pass.
+
 ## VAL-1: Validation tooling against Spartan · done 2026-11-05 (the 300-molecule run is done; three data questions need-Brandon)
 Done (docs/VALIDATION.md):
 - Spartan wide table: `inchikey`, `canonical_smiles` of the structure as Spartan drew it (formal charges from
