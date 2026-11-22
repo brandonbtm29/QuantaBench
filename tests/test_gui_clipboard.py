@@ -824,4 +824,8 @@ def test_ctrl_shift_c_in_the_list_and_in_the_analyze_table(tmp_path, fake_clipbo
         QTest.keyClick(sheets[0], Qt.Key.Key_C, both)
         assert called == [True] and fake_clipboard.mime is None
     assert QGuiApplication.clipboard() is not None
+    # QTest's Ctrl+Shift clicks leave Shift in QGuiApplication.keyboardModifiers(); a later test's
+    # QTableView.selectRow would then extend a selection instead of making one
+    QTest.keyRelease(w.mol_list, Qt.Key.Key_Shift)
+    QTest.keyRelease(w.mol_list, Qt.Key.Key_Control)
     _close(app, w)

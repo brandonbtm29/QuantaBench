@@ -659,3 +659,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
   - For UI-9's keymap: every action is a QAction with an `objectName` (`edit.paste`, `edit.copy_molecules`,
     `edit.copy_as.<kind>`), in `win.actions_by_name`, default keys in `clipboard.DEFAULT_KEYS` only. The Molecules
     box's Ctrl+V check now compares the key with the paste action's current shortcuts, so a rebinding moves it too.
+- **Merged after SETTINGS-1's Lookups tab** (#46): `test_ctrl_shift_c_in_the_list_and_in_the_analyze_table` left Shift
+  in `QGuiApplication.keyboardModifiers()` (QTest's Ctrl+Shift clicks), so `test_lookups_tab_round_trip`'s
+  `selectRow` extended a selection instead of making one and removed nothing. The clipboard test now releases Shift
+  and Control before it closes its window.
