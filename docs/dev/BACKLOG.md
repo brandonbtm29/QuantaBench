@@ -594,7 +594,7 @@ calculation output reads cclib outputs and `.spartan` documents; the 2D view (RD
   installed, never bundled or imported. The embedded editors need QtWebEngine, which is in
   `PySide6-Addons`, not the `PySide6-Essentials` QuantaBench depends on: an optional `[editor]` extra.
 
-## UI-4: Import from many formats, with Spartan-style import options · ready (formats and options done)
+## UI-4: Import from many formats, with Spartan-style import options · in-PR (formats and options done; paste, drag-and-drop and Copy as in PR, branch `feat/ui-4-clipboard-dnd`)
 Depends on: none (goes into today's File menu and Molecules box; UI-1 later moves it into Build).
 - **Done 2026-11-07 (branch `feat/import-formats`):** the formats, the Open Babel fallback, the Import Options
   dialog with Settings > Import and `Settings.import_`, the text box (InChI, InChIKey), the CLI flags
@@ -603,11 +603,38 @@ Depends on: none (goes into today's File menu and Molecules box; UI-1 later move
   search). Code: `chem/formats.py`, `chem/import_options.py`, `gui/import_options.py`; tests:
   `tests/test_import_formats.py`, `tests/test_import_options.py`, `tests/test_gui_import_options.py`.
   Screenshot: `docs/img/import_options_dialog.png`.
-- **Left:** clipboard, drag-and-drop and Copy as (below; another branch). Needs-Brandon: open a few real
+- **Paste, drag-and-drop and Copy as · in-PR 2026-11-22 (branch `feat/ui-4-clipboard-dnd`):** built on the
+  2026-11-07 clipboard work (`feat/clipboard`, merged; bullet below).
+  - Paste now goes through File > Open's path: read on a worker thread, then the Import Options (dialog when the
+    paste has choices and Settings > Import says to ask; filters, 2D → 3D, posted fields as list columns). Text
+    adds XYZ (frames or bare `element x y z` lines, bonds by `rdDetermineBonds`, stereo from 3D), tables with a
+    SMILES column (CSV, `;`, or tab-separated cells copied from a spreadsheet; the Pipeline dock's SMILES/ID
+    column and SMILES preference apply), and InChI / InChIKeys (already in `parse_text`). Nothing readable → a
+    message naming the formats found and what QuantaBench reads.
+  - Drops on the window and the molecule list: any number of files through `open_files` (every `read_file`
+    format; unknown types get File > Open's message, or Open Babel), outputs through Import calculation output,
+    a run folder, a `.qbproj` project, any other folder as the files directly in it.
+  - Copy as (Edit menu and the molecule list's right-click menu, `MoleculeListView.menu_hooks`): SMILES as
+    entered, canonical SMILES, InChI, InChIKey, MOL/SDF, XYZ (the conformer shown; best conformer of other built
+    molecules; input 3D or the preview geometry otherwise), CDXML. SMILES of 14,000 rows copies at once (0.25 s
+    with the selection, cloud VM); other formats above 200 molecules run on a worker thread (14,000: canonical
+    SMILES 1.8 s, SDF 3.8 s, InChI 4.8 s; the window blocks ~0.2 s).
+  - Brandon's answers (2026-11-22): a ChemDraw paste keeps asking until "Don't ask again"; the dialog and the
+    paste log line name **Tools > Settings > Import**. **Copy molecules** (Ctrl+Shift+C in the Molecules dock, Edit
+    menu, right-click menu): the selected rows as a TSV table (ID, SMILES, Name, the posted fields shown) for
+    Excel and back (`application/x-quantabench-molecules` keeps the ID column the id). Ctrl+C stays Qt's cell
+    copy; the Analyze table keeps its own Ctrl+Shift+C. Actions are named QActions (`edit.paste`,
+    `edit.copy_molecules`, `edit.copy_as.<kind>`) with their default keys in `gui.clipboard.DEFAULT_KEYS`, in
+    `win.actions_by_name`, for UI-9's keymap; no `QShortcut`.
+  - Tests: `tests/test_gui_clipboard.py`, `tests/test_interchange.py`. Screenshots: `docs/dev/screenshots/UI-4/`.
+- **Left:** Needs-Brandon: open a few real
   ChemDraw `.cdx` files (the CDX reader is tested on hand-built files only; RDKit's own Python reader takes
   every file as CDXML). Follow-ups: *keep coordinates* is not used with CREST (it makes its own start
   geometry); posted fields show for molecules opened in this session, not for rows of an opened run folder;
-  ORCA `%coords` and Z-matrix blocks and CIF disorder are not read.
+  ORCA `%coords` and Z-matrix blocks and CIF disorder are not read; `.xyz` files (File > Open) do not take stereo
+  from the 3D coordinates as pasted XYZ now does; a spreadsheet copy of Copy molecules (text only) posts its ID and
+  Name columns as data fields, as File > Open does for a table's columns; XYZ text of a charged structure needs a MOL block or SMILES (bonds are
+  assigned for charge 0).
 - **Formats** (all through `chem.inputs.read_file`, so the CLI gets them too): SDF/MOL V2000 and V3000,
   MOL2, PDB, XYZ (bonds by `rdDetermineBonds`), SMILES lists, CSV/XLSX, InChI lists (`.inchi`, one per
   line), ChemDraw `.cdx` / `.cdxml` (RDKit), Marvin `.mrv`, CML (small reader, or Open Babel), CIF of
@@ -853,8 +880,23 @@ Follow-ups (ready):
 - Acceptance: tests that each preset produces the right `BuildConfig`; queue runs jobs in order with
   cancellation; screenshot.
 
-## RES-1: MD front-end survey and Simulate workspace design · ready
+## RES-1: MD front-end survey and Simulate workspace design · in-PR 2026-11-22 (branch `feat/res-1-simulate-design`)
 Depends on: none (research only; can run any night).
+- 2026-11-22: `docs/SIMULATE_DESIGN.md`: the survey of 9 tools plus OpenFF Interchange/NAGL and RadonPy (a table over
+  the six aspects, what to borrow and avoid), the workspace flow as text mockups, the data model (System,
+  Parameterization, Protocol/Stage, Run/Segment, Telemetry, Trajectory, Analysis) and how it fits UI-2, UI-5 and
+  the workers, engines with GPU support on AMD, Apple and NVIDIA, the force-field routes, protocol templates,
+  monitoring and analysis, v1/v2/v3, risks and 12 open questions. Grounded in the MD pilots' lessons.
+- 2026-11-22, Brandon's answers added to the doc (marked "(Brandon, 2026-11-22)"):
+  - v1 stays on this computer; splitting across machines (replicas, hand-offs through data files, GPU + CPU in one
+    machine) is v2, gated on a consistency test with pilot A (§6).
+  - A COMSOL-like parameterization builder: a force-field node and a resolution per component, global physics nodes
+    (the LJ cutoff or "screening length", long-range dispersion with the automatic tail, electrostatics),
+    compatibility checks, benchmark-backed defaults (§9.1).
+  - LigParGen is allowed.
+  - σ by default: 16 Å + tail on the GPU; the C6F14 target stays Freire 2006 with no offsets.
+  - A resource-aware scheduler (§7, SCHED-3).
+  - Where MD runs live is still open; the facts and a recommendation are in §5.
 - Survey how LAMMPS-GUI, VMD + QwikMD, CHARMM-GUI, OpenMM-Setup, Materials Studio Forcite/Amorphous
   Cell, MAPS, SAMSON, Packmol/moltemplate and OVITO handle: system building, force-field assignment,
   protocol setup, run control, live monitoring, trajectory analysis.
@@ -863,6 +905,43 @@ Depends on: none (research only; can run any night).
   No code. Cite sources.
 
 ## SIM-1: Simulate workspace v1 · blocked (needs RES-1 design approved by Brandon)
+- The design is `docs/SIMULATE_DESIGN.md` (RES-1); it waits for Brandon's approval and his answers to its open
+  questions (DEC-1). Proposed v1 there, two PRs: MD runs as jobs (a run supervisor with segments, pause through a
+  STOP file, resume, live telemetry, `md run/status/pause/resume`, the liquid slab's default dispersion `cutoff16`),
+  then the Simulate panel for the liquid slab and the rigid pull on this computer, with the parameterization
+  builder's minimal version (one component node, the cutoff and electrostatics nodes, the checks).
+
+## BUILD-CLEAN: "Clean up" for a molecule's 2D layout and 3D structure · ready
+Brandon (2026-11-22): "When a molecule is built, do we currently have an option where we can 'clean up' the structure
+like ChemDraw?"
+- Today:
+  - 3D: the model kit's edit model has Minimize (MMFF; `chem.edit.Minimize`, UI-7), and its GUI button comes with the
+    model kit's build mode (PR #44).
+  - 2D: the 2D view lays every molecule out automatically (CoordGen, or a pinned zig-zag for long chains;
+    `gui.viewer2d`), but no command redoes the layout of the molecule shown. The Schrödinger sketcher has its own
+    Clean Up (`chem.sketch` refers to it).
+- Add **Clean up** in three places:
+  - the Molecules dock's context menu;
+  - the model kit;
+  - next to the Sketch dock's buttons.
+
+  It offers 2D (re-run the layout with RDKit's CoordGen, the zig-zag rule kept) and 3D (MMFF minimize, UFF where MMFF
+  has no parameters, as one undoable command). Selected atoms can be held fixed.
+- Acceptance: tests that a messy 2D drawing and a distorted 3D geometry come back clean with the connectivity and
+  stereo unchanged; screenshot.
+
+## SCHED-3: A scheduler that runs GPU-bound and CPU-bound jobs side by side · ready (design: SIMULATE_DESIGN.md §7; MD jobs after SIM-1 PR 1)
+Brandon (2026-11-22): "Maybe we can include a job queue or scheduler? If one type of job is better suited for the CPU
+and another for a GPU, then we can tell the user that both jobs can run efficiently at the same time."
+- **A resource profile per job:** CPU threads and how busy they are, the GPU and its memory, RAM, disk I/O. It comes
+  from the run timings, MON-1's samples, MD-BENCH-1's ns/day and the method.
+- **A ledger per machine** (threads within the budget, one GPU-heavy job per GPU, RAM headroom, one heavy-disk job).
+  The queue starts a job when its profile fits beside the running ones, and says so ("can run side by side"), with
+  the measured slowdown once there is one.
+- **GPU MD is not GPU-only:** in the pilots' GPU runs, PPPM and the bonded terms on the CPU took 75-86 % of the loop
+  time (pilot B, 6 threads; pilot C, 4 threads), so its profile is the GPU plus 4-6 threads.
+- Acceptance: a GPU job (AIMNet2 batch or GPU MD) and a CPU job (CREST or xTB lanes) start together on one machine
+  within its budget; the Jobs dock shows each one's share and the note; tests of the ledger with stand-in profiles.
 
 ## FIX-1: Windows CI green · done 2026-11-05
 - 2026-11-05: first green CI on Windows, Linux and macOS (PLAT-2). The failures since then were separate bugs,
@@ -1319,10 +1398,18 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
     a time, N) and the Expert box's lane spec edit this machine's one spec (`Settings.lanes_for`, as the Machines dock
     and the job dialog); the tab's per-machine changes are stamped for the SyncThing merge. Not science settings.
   - **Build defaults** (Settings > Import Filters, Conformer Rules): strip water, HCl and named counter-ions
-    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search.
+    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search. In PR
+    (`feat/settings-1-build-defaults`, 2026-11-22): `strip_water`, `strip_acids`, `strip_counterions` (names of
+    `standardize.NAMED_COUNTERIONS`) and `ring_conformers` ("normal" | "thorough": twist-boats of six-membered rings,
+    Spartan's "Thorough"), all science fields, off/normal by default; `build --strip`, `--ring-conformers`. Open:
+    whether salts should keep their counter-ion as a separate entry (the settings plan's question).
   - **Lookups** (Databases, URLs): URL templates with `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`
     (PubChem, NIST WebBook by CAS, nmrshiftdb, EPA CompTox), opened from the molecule list; PubChem cache folder
-    and maximum age; a folder of reference tables with experimental values.
+    and maximum age; a folder of reference tables with experimental values. In PR (`feat/settings-1-lookups`,
+    2026-11-22): the templates (`settings.lookups.urls`, `quantabench.lookups`), the molecule list's right-click
+    *Look up* menu, the cache folder and maximum age (`lookups.pubchem_cache_dir`, `pubchem_max_age_days`). Left: the
+    folder of reference tables; the nmrshiftdb2 template (its documented 13C JCAMP export) is not checked against
+    the site.
   - **Machines** (Available Servers, Embedded Server): the `dist` settings (workers, port, bind, token), now
     only in settings.json.
 - Later: **Molecule display** (default 3D style, atom labels such as charges and exposed area, surface style; the

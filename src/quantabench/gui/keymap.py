@@ -74,8 +74,8 @@ def _ws(n: int) -> str:
     return f"Ctrl+Alt+{n}" if MAC else f"Alt+{n}"
 
 
-COPY_KINDS = (("smiles", "SMILES"), ("inchi", "InChI"), ("inchikey", "InChIKey"), ("mol", "MOL"), ("xyz", "XYZ"),
-              ("cdxml", "CDXML"))
+COPY_KINDS = (("smiles", "SMILES"), ("canonical", "Canonical SMILES"), ("inchi", "InChI"), ("inchikey", "InChIKey"),
+              ("mol", "MOL / SDF"), ("xyz", "XYZ"), ("cdxml", "CDXML"))
 
 SPECS: tuple[ActionSpec, ...] = (
     # ---------------------------------------------------------------- File

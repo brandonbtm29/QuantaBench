@@ -151,6 +151,14 @@ What the standardization does with research records (every step is in the molecu
   `removed_fragments` column (`[Na+]`, `2 x [Br-]`, a second copy of the parent, a co-crystallized acid).
   Bonds to alkali and alkaline-earth metals are ionic and are disconnected first (`CC(=O)O[Na]` is
   sodium acetate). Turn off *keep largest fragment* to compute the whole record instead.
+- **Build filters** (Settings > Build defaults > Fragments, `build --strip`; Spartan's Import Filters): water, small
+  neutral inorganic acids (HCl, HBr, HI, HF, ...) and counter-ions picked by name (`sodium`, `tetrabutylammonium`,
+  `chloride`, ... in `standardize.NAMED_COUNTERIONS`; a name also matches the neutral form, triethylamine for
+  triethylammonium) are removed before the largest-fragment rule, for every input. They matter where that rule would
+  not remove the fragment: with *keep largest fragment* off (a hydrate's ion pair is computed without its water), or
+  where the counter-ion is the larger ion (tetrabutylammonium trifluoroacetate computes the trifluoroacetate). The
+  notes say "stripped before the largest-fragment rule (build filters): O (water), [Na+] (sodium)", and
+  `removed_fragments` lists them first. Off by default; science settings (stored with the run, sent to workers).
 - **Metal salts.** A bondless Al³⁺, Zn²⁺, Fe²⁺/Fe³⁺ or Cu²⁺ cation (as well as Na⁺, K⁺, Ca²⁺, Mg²⁺,
   Ba²⁺, Sr²⁺) is a counter-ion when the rest of the record is an organic ion and counter-ions: fosetyl-Al
   (`[Al+3]` + 3 ethyl phosphonates) computes one ethyl phosphonate anion, and `removed_fragments` lists
@@ -1225,9 +1233,11 @@ quantabench-cli pubchem lookup 335-67-1 --experimental                          
   User-Agent is `QuantaBench/<version> (+https://github.com/brandonbtm29/QuantaBench)`, with no email.
   Requests are batched where PUG REST allows: properties 100 CIDs a request, synonyms and registry numbers 50.
 - **Cache:** every answer (200, 404, 400) goes into one SQLite file, by default the per-machine cache folder
-  (`QUANTABENCH_CACHE_DIR/pubchem/pubchem_cache.sqlite`; `--cache DIR` elsewhere). An interrupted run (Ctrl+C,
-  network loss: it stops after 10 failures in a row) resumes from where it stopped when run again, and
-  `--offline` never touches the network. Keep the cache out of SyncThing unless only one machine writes it.
+  (`QUANTABENCH_CACHE_DIR/pubchem/pubchem_cache.sqlite`; Settings > Lookups > PubChem cache > Folder, or
+  `--cache DIR`, elsewhere). An interrupted run (Ctrl+C, network loss: it stops after 10 failures in a row) resumes
+  from where it stopped when run again, and `--offline` never touches the network. Keep the cache out of SyncThing
+  unless only one machine writes it. Settings > Lookups > Maximum age (`lookups.pubchem_max_age_days`, 0 = no
+  limit) makes an older answer a miss: it is asked again and replaced; `--offline` still reads it.
 - **Requests for a list of N molecules** with an empty cache: about N lookups + N/100 + 2·N/50 batches, plus N
   PUG View records with `--experimental`. For 14,000 CAS RNs that is about 14,700 requests (1 h at 4/s) without
   `--experimental` and 28,700 (2 h) with it, while PubChem reports Green; up to 4x longer under Red.

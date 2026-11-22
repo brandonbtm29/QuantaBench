@@ -13,6 +13,45 @@
   play conformers, Up/Down and Ctrl+Home/End step molecules, + and - zoom and Ctrl+arrows turn the 3D view, Esc and
   Ctrl+A clear and select the atoms in both views, R resets the view there; Edit > Find a molecule (Ctrl+F).
 
+### Paste, drag-and-drop and Copy as (UI-4, 2026-11-22)
+- Edit > Paste (Ctrl+V) now takes XYZ, CSV and spreadsheet cells with a SMILES column, InChI and InChIKeys besides
+  ChemDraw, MOL/SD, CDXML, Marvin and SMILES, and goes through File > Open's Import Options (filters, 2D → 3D,
+  data fields posted as molecule-list columns). An unreadable clipboard gives a message.
+- Copy molecules (Ctrl+Shift+C in the Molecules dock): the selected rows as a table (ID, SMILES, name, the data
+  fields shown) for Excel, and back with Ctrl+V. The Import Options dialog and the paste log name Tools > Settings
+  > Import.
+- Copy as (Edit menu and the molecule list's new right-click menu): SMILES, canonical SMILES, InChI, InChIKey,
+  MOL/SDF, XYZ of the conformer shown, CDXML. 14,000 rows copy as SMILES in a quarter second; other formats run on a
+  worker thread for large selections.
+- Drops on the window and the molecule list: several files at once in every File > Open format, run folders,
+  project folders, and plain folders (the files in them).
+
+### The Simulate workspace design (RES-1, 2026-11-22)
+- Docs only: `docs/SIMULATE_DESIGN.md`, a survey of MD front ends and the proposed Simulate workspace (flow, data
+  model, engines, force fields, templates, build order, open questions). It waits for Brandon's approval before SIM-1.
+  With Brandon's first answers: splitting across machines (v2, after a pilot A consistency test), a resource-aware
+  scheduler (SCHED-3), a COMSOL-like parameterization builder, 16 Å + tail on the GPU as the σ default. New backlog
+  items BUILD-CLEAN and SCHED-3.
+
+### Settings > Lookups and the molecule list's Look up menu (SETTINGS-1, 2026-11-22)
+- Spartan's Preferences > URLs: right-click a molecule for **Look up** in PubChem (by InChIKey), the NIST WebBook (by
+  CAS RN), nmrshiftdb2 (13C spectrum by InChI, JCAMP-DX) and EPA CompTox (by InChIKey). Settings > Lookups edits the
+  templates (`%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`, percent-encoded); a template whose value a molecule
+  lacks is greyed out with the reason. The CAS RN comes from a posted CAS field, the id or the name.
+- PubChem's cache: a folder (`lookups.pubchem_cache_dir`) and a maximum age (`lookups.pubchem_max_age_days`, 0 = no
+  limit): an older answer is asked again and replaced; `--offline` still reads it. Not science settings.
+
+### Settings > Build defaults: build filters and ring conformers (SETTINGS-1, 2026-11-22)
+- Spartan's Import Filters as build filters, for every input: water, acids (HCl, HBr, HI, HF, ...) and counter-ions
+  picked by name (sodium, potassium, ammonium, tetrabutylammonium, chloride, ... 34 in all) are stripped before the
+  largest-fragment rule. A hydrate's ion pair is computed dry with *Keep largest fragment* off; a salt whose cation is
+  larger keeps its anion. Notes and `removed_fragments` name what was stripped. `build --strip water,sodium`.
+- Spartan's Conformer Rules: *Ring conformers: Thorough* also makes twist-boats of every saturated six-membered ring
+  from the 5 lowest force-field conformers (`build --ring-conformers thorough`); Max conformers still caps the pool.
+- New science fields (`jobs.SCIENCE_FIELDS`, checked by `dist.worker.validate_config`, stored with each run):
+  `strip_water` (false), `strip_acids` (false), `strip_counterions` ("", sorted names), `ring_conformers`
+  ("normal"). The defaults are the behaviour before, so existing runs resume unchanged.
+
 ### Settings > Compute: an Expert box and this computer's cores (SETTINGS-1, 2026-11-22)
 - Spartan's Preferences > Jobs: a line with this computer's cores ("12 cores, 24 logical"), *Molecules at once*
   (Automatic, one at a time, or N lanes) in Parallel lanes, and a folded **Expert** box with the full lane spec, GPU

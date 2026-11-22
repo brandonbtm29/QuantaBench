@@ -99,8 +99,8 @@ def test_settings_engines_tab_round_trip_and_detection(tmp_path, monkeypatch):
     d = SettingsDialog(s, None)
     tabs = d.findChild(QTabWidget)
     assert [tabs.tabText(i) for i in range(tabs.count())] == ["Compute", "Build defaults", "Import",
-                                                                 "Surfaces && radii", "Display", "Controls", "Engines",
-                                                                 "Folders"]
+                                                                 "Surfaces && radii", "Display", "Controls", "Lookups",
+                                                                 "Engines", "Folders"]
     assert d.program_paths["xtb"].text() == "~/bin/xtb"
     d.program_paths["xtb"].setText("")
     d.program_paths["crest"].setText("wsl:/home/u/miniforge3/envs/qb-tools/bin/crest")

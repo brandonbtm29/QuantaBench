@@ -1,11 +1,11 @@
 """Settings dialog: compute resources, build defaults, import options, surfaces and radii, display (energy units),
-controls (the keymap, ``gui.controls_page``), engines, folders."""
+controls (the keymap, ``gui.controls_page``), lookups (web lookup templates, PubChem's cache), engines, folders."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -20,6 +20,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -75,6 +78,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._surfaces_tab(), "Surfaces && radii")    # "&&": a literal & (not a shortcut)
         tabs.addTab(self._display_tab(), "Display")
         tabs.addTab(self._controls_tab(parent), "Controls")
+        tabs.addTab(self._lookups_tab(), "Lookups")
         tabs.addTab(self._engines_tab(), "Engines")
         tabs.addTab(self._folders_tab(), "Folders")
         self.tabs = tabs
@@ -402,9 +406,21 @@ class SettingsDialog(QDialog):
                 out.append(f"{label} {combo.currentText()}")
         return out
 
+    #: (value, label) of Build defaults > Ring conformers (``conformers.RING_CONFORMERS``)
+    RING_CHOICES = (("normal", "Normal (the rings ETKDG and the force field give)"),
+                    ("thorough", "Thorough (also twist-boats of six-membered rings)"))
+
     def _build_tab(self) -> QWidget:
+        """Build defaults: the method, protonation and conformer settings, Spartan's Conformer Rules (ring conformers)
+        and its Import Filters as build filters (water, acids, named counter-ions stripped before the largest-fragment
+        rule). Every value here is a science setting (``jobs.SCIENCE_FIELDS``) except the method's label."""
+        from ..chem import standardize
+        from .collapsible import InfoLabel, with_info
+
         w = QWidget()
-        form = QFormLayout(w)
+        outer = QVBoxLayout(w)
+        form = QFormLayout()
+        outer.addLayout(form)
         b = self.s.build
         self.method = QComboBox()
         methods = method_keys()
@@ -420,13 +436,21 @@ class SettingsDialog(QDialog):
         self.protonate = QCheckBox("Assign protonation state at this pH")
         self.protonate.setChecked(b.protonate)
         form.addRow(self.protonate)
-        self.desalt = QCheckBox("Keep largest fragment (strip counter-ions)")
-        self.desalt.setChecked(b.keep_largest_fragment)
-        form.addRow(self.desalt)
         self.max_confs = QSpinBox()
         self.max_confs.setRange(1, 1000)
         self.max_confs.setValue(b.max_conformers)
         form.addRow("Max conformers", self.max_confs)
+        self.ring_conformers = QComboBox()
+        self.ring_conformers.setObjectName("build_ring_conformers")
+        for key, label in self.RING_CHOICES:
+            self.ring_conformers.addItem(label, key)
+        self.ring_conformers.setCurrentIndex(max(0, self.ring_conformers.findData(b.ring_conformers)))
+        self.ring_conformers.setToolTip(
+            "Spartan's Conformer Rules for the RDKit search. Normal: the ring shapes ETKDG embeds and MMFF94s keeps\n"
+            "(chairs; a twist-boat only where the embedding happens to make one). Thorough: for every saturated\n"
+            "six-membered ring, the 5 lowest conformers are also held at each twist-boat and optimized, so twist-boat\n"
+            "conformers within the window join the pool (Max conformers still caps it). CREST makes its own.")
+        form.addRow("Ring conformers", self.ring_conformers)
         # stored in kcal/mol (a science setting), shown in the relative-energy unit of the Display tab
         self.window = EnergySpinBox(0.5, 50, units.KCAL, units.EnergyDisplay.of(self.s).relative)
         self.window.set_stored(b.energy_window_kcal)
@@ -446,7 +470,75 @@ class SettingsDialog(QDialog):
         self.fmax.setSuffix(" eV/Å")
         self.fmax.setValue(b.fmax)
         form.addRow("Force convergence", self.fmax)
+
+        # Spartan's Import Filters (water, HCl) as build filters, with named counter-ions; then the largest fragment
+        box = QGroupBox("Fragments")
+        box.setObjectName("build_fragments")
+        fl = QVBoxLayout(box)
+        self.strip_note = InfoLabel(
+            "Applied to every molecule a build computes (SMILES, names, PubChem, files), before the largest-fragment "
+            "rule, in this order: the fragments ticked here are removed, then <i>Keep the largest fragment</i> "
+            "keeps one of the rest. Without it the rest is computed together (a hydrate's ion pair without its "
+            "water). A named counter-ion is removed even where it is the larger ion (tetrabutylammonium "
+            "trifluoroacetate). Science settings: stored with each run, sent to grid workers, and a run resumes only "
+            "with the same ones. File &gt; Open's own filters (Settings &gt; Import) act on files first.")
+        self.strip_water = QCheckBox("Strip water (hydrates)")
+        self.strip_water.setChecked(b.strip_water)
+        fl.addWidget(with_info(self.strip_water, self.strip_note))
+        self.strip_acids = QCheckBox("Strip acids: HCl, HBr, HI, HF and other small neutral inorganic fragments")
+        self.strip_acids.setChecked(b.strip_acids)
+        fl.addWidget(self.strip_acids)
+        fl.addWidget(QLabel("Strip these counter-ions:"))
+        self.strip_list = QListWidget()
+        self.strip_list.setObjectName("build_strip_counterions")
+        self.strip_list.setFlow(QListView.Flow.LeftToRight)
+        self.strip_list.setWrapping(True)
+        self.strip_list.setResizeMode(QListView.ResizeMode.Adjust)
+        fm = self.fontMetrics()
+        longest = max(fm.horizontalAdvance(name) for name in standardize.NAMED_COUNTERIONS)
+        self.strip_list.setGridSize(QSize(longest + 34, fm.lineSpacing() + 6))   # whole names, in columns
+        self.strip_list.setFixedHeight((fm.lineSpacing() + 6) * 7 + 2 * self.strip_list.frameWidth())
+        chosen = set(standardize.counterion_names(b.strip_counterions, strict=False))
+        for name, smiles in standardize.NAMED_COUNTERIONS.items():
+            item = QListWidgetItem(name)
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if name in chosen else Qt.CheckState.Unchecked)
+            item.setToolTip(f"{smiles} (also its neutral form)")
+            self.strip_list.addItem(item)
+        fl.addWidget(self.strip_list)
+        self.desalt = QCheckBox("Then keep the largest fragment (removes the remaining counter-ions)")
+        self.desalt.setChecked(b.keep_largest_fragment)
+        fl.addWidget(self.desalt)
+        self.strip_summary = QLabel()
+        self.strip_summary.setWordWrap(True)
+        self.strip_summary.setStyleSheet("color: gray;")
+        fl.addWidget(self.strip_summary)
+        outer.addWidget(box)
+        outer.addStretch(1)
+        for check in (self.strip_water, self.strip_acids, self.desalt):
+            check.toggled.connect(self._update_strip_summary)
+        self.strip_list.itemChanged.connect(self._update_strip_summary)
+        self._update_strip_summary()
         return w
+
+    def strip_counterions(self) -> str:
+        """The ticked counter-ions, as ``BuildDefaults.strip_counterions`` stores them ("potassium,sodium")."""
+        from ..chem import standardize
+
+        names = [self.strip_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.strip_list.count())
+                 if self.strip_list.item(i).checkState() == Qt.CheckState.Checked]
+        return standardize.canonical_counterions(names)
+
+    def _update_strip_summary(self, *_args) -> None:
+        from ..chem import standardize
+
+        strip = standardize.FragmentStrip(water=self.strip_water.isChecked(), acids=self.strip_acids.isChecked(),
+                                          counterions=standardize.counterion_names(self.strip_counterions()))
+        then = ("then the largest fragment is kept" if self.desalt.isChecked()
+                else "then the remaining fragments are computed together")
+        self.strip_summary.setText(f"Stripped first: {strip.label()}; {then}." if strip
+                                   else f"Nothing stripped first; {then}.")
 
     def _import_tab(self) -> QWidget:
         """The stored choices of File > Open's Import Options dialog (``Settings.import_``), also the defaults of
@@ -693,6 +785,177 @@ class SettingsDialog(QDialog):
         self.display_preview.setText(f"E = {d.with_unit(e_ev, units.EV, 'absolute', 5)}, "
                                      f"ΔE = {d.with_unit(de_kcal, units.KCAL, 'relative', 2)}")
         self.window.set_unit(d.relative)          # Build defaults' energy window follows the relative unit
+
+    #: the molecule the Lookups tab's preview expands a template for: PFOA (its record, CAS RN and InChI)
+    LOOKUP_EXAMPLE = {"name": "PFOA", "smiles": "OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F",
+                      "ident": "335-67-1"}
+
+    def _lookups_tab(self) -> QWidget:
+        """Spartan's Preferences > URLs and Databases: the molecule list's Look up templates, PubChem's cache."""
+        from .. import lookups
+        from .collapsible import InfoLabel, with_info
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lk = self.s.lookups
+        box = QGroupBox("Look up in a web database (the molecule list's right-click menu)")
+        bl = QVBoxLayout(box)
+        tokens = ", ".join(f"<code>{p}</code> ({what})" for p, what in lookups.PLACEHOLDER_HELP.items())
+        self.lookup_note = InfoLabel(
+            f"Each URL may use {tokens}. The structure keys are of the record as drawn (a salt's own InChIKey); the "
+            "CAS RN comes from a posted CAS field, the id or the name. A template whose value a molecule lacks is "
+            "greyed out for it. Not science settings: no computed value depends on them.")
+        hint = QLabel("Placeholders: " + " ".join(lookups.PLACEHOLDER_HELP))
+        hint.setStyleSheet("color: gray;")
+        bl.addWidget(with_info(hint, self.lookup_note))
+        self.lookup_table = QTableWidget(0, 2)
+        self.lookup_table.setObjectName("lookup_table")
+        self.lookup_table.setHorizontalHeaderLabels(["Name", "URL template"])
+        self.lookup_table.verticalHeader().setVisible(False)
+        self.lookup_table.horizontalHeader().setStretchLastSection(True)
+        self.lookup_table.setColumnWidth(0, 170)
+        self._fill_lookups(lk.urls)
+        self.lookup_table.itemChanged.connect(self._lookup_edited)
+        self.lookup_table.currentCellChanged.connect(self._update_lookup_preview)
+        bl.addWidget(self.lookup_table, 1)
+        row = QHBoxLayout()
+        self.lookup_preview = QLabel()
+        self.lookup_preview.setWordWrap(True)
+        self.lookup_preview.setStyleSheet("color: gray;")
+        self.lookup_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        row.addWidget(self.lookup_preview, 1)
+        for text, fn in (("Add", self._add_lookup), ("Remove", self._remove_lookup),
+                         ("Reset to defaults", self._reset_lookups)):
+            btn = QPushButton(text)
+            btn.clicked.connect(fn)
+            row.addWidget(btn)
+        bl.addLayout(row)
+        lay.addWidget(box, 1)
+
+        cbox = QGroupBox("PubChem cache")
+        cf = QFormLayout(cbox)
+        from ..chem import pubchem
+
+        self.pubchem_cache = QLineEdit(lk.pubchem_cache_dir)
+        self.pubchem_cache.setPlaceholderText("this computer's cache folder")
+        self.pubchem_cache.setToolTip("Where PubChem's answers are kept (name lookups, quantabench-cli pubchem), so a "
+                                      "rerun asks PubChem nothing twice.\nBlank: this computer's cache folder. A path "
+                                      "under ~ works on every machine; keep it out of a synced folder (SQLite).")
+        browse = QPushButton("...")
+        browse.setFixedWidth(32)
+        browse.clicked.connect(self._browse_pubchem_cache)
+        crow = QHBoxLayout()
+        crow.addWidget(self.pubchem_cache, 1)
+        crow.addWidget(browse)
+        cf.addRow("Folder", crow)
+        self.pubchem_age = QDoubleSpinBox()
+        self.pubchem_age.setObjectName("pubchem_max_age")
+        self.pubchem_age.setRange(0, 3650)
+        self.pubchem_age.setDecimals(0)
+        self.pubchem_age.setSuffix(" days")
+        self.pubchem_age.setSpecialValueText("No limit")
+        self.pubchem_age.setValue(float(lk.pubchem_max_age_days or 0.0))
+        self.pubchem_age.setToolTip("A cached answer older than this is asked again (and replaced). Offline runs "
+                                    "(--offline) still use old answers. No limit: kept until deleted.")
+        cf.addRow("Maximum age", self.pubchem_age)
+        try:
+            where = str(pubchem.default_cache_path())
+        except Exception:  # noqa: BLE001 - only a label
+            where = ""
+        self.pubchem_where = QLabel(f"In use now: {where}" if where else "")
+        self.pubchem_where.setStyleSheet("color: gray;")
+        self.pubchem_where.setWordWrap(True)
+        self.pubchem_where.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        cf.addRow("", self.pubchem_where)
+        lay.addWidget(cbox)
+        if self.lookup_table.rowCount():
+            self.lookup_table.setCurrentCell(0, 1)
+        self._update_lookup_preview()
+        return w
+
+    def _fill_lookups(self, entries) -> None:
+        self.lookup_table.blockSignals(True)
+        try:
+            self.lookup_table.setRowCount(0)
+            for e in entries or ():
+                if isinstance(e, dict):
+                    self._append_lookup(str(e.get("name") or ""), str(e.get("url") or ""))
+        finally:
+            self.lookup_table.blockSignals(False)
+        for r in range(self.lookup_table.rowCount()):
+            self._mark_lookup(r)
+
+    def _append_lookup(self, name: str, url: str) -> int:
+        r = self.lookup_table.rowCount()
+        self.lookup_table.insertRow(r)
+        self.lookup_table.setItem(r, 0, QTableWidgetItem(name))
+        self.lookup_table.setItem(r, 1, QTableWidgetItem(url))
+        return r
+
+    def _mark_lookup(self, r: int) -> None:
+        """A row whose URL is not an http(s) address is red, with the reason: it is not saved."""
+        from .. import lookups
+
+        item = self.lookup_table.item(r, 1)
+        if item is None:
+            return
+        why = lookups.check(item.text()) if item.text().strip() else ""
+        item.setForeground(Qt.GlobalColor.red if why else self.lookup_table.palette().text().color())
+        item.setToolTip(f"{why}: not saved" if why else item.text())
+
+    def _lookup_edited(self, item) -> None:
+        if item.column() == 1:
+            self._mark_lookup(item.row())
+        self._update_lookup_preview()
+
+    def _add_lookup(self) -> None:
+        r = self._append_lookup("", "https://")
+        self.lookup_table.setCurrentCell(r, 0)
+        self.lookup_table.editItem(self.lookup_table.item(r, 0))
+
+    def _remove_lookup(self) -> None:
+        for r in sorted({i.row() for i in self.lookup_table.selectedIndexes()}, reverse=True):
+            self.lookup_table.removeRow(r)
+        self._update_lookup_preview()
+
+    def _reset_lookups(self) -> None:
+        self._fill_lookups([dict(u) for u in settings_mod.DEFAULT_LOOKUP_URLS])
+        self._update_lookup_preview()
+
+    def lookup_entries(self) -> list[dict]:
+        """The table's templates as ``settings.lookups.urls`` keeps them: rows with a name and a valid URL."""
+        from .. import lookups
+
+        out = []
+        for r in range(self.lookup_table.rowCount()):
+            name, url = (self.lookup_table.item(r, c).text().strip() if self.lookup_table.item(r, c) else ""
+                         for c in (0, 1))
+            if name and not lookups.check(url):
+                out.append({"name": name, "url": url})
+        return out
+
+    def _update_lookup_preview(self, *_args) -> None:
+        """The selected template expanded for PFOA."""
+        from .. import lookups
+
+        r = self.lookup_table.currentRow()
+        item = self.lookup_table.item(r, 1) if r >= 0 else None
+        if item is None or not item.text().strip():
+            self.lookup_preview.setText("")
+            return
+        why = lookups.check(item.text())
+        if why:
+            self.lookup_preview.setText(f"Not usable: {why}.")
+            return
+        ex = self.LOOKUP_EXAMPLE
+        url, missing = lookups.expand(item.text().strip(), lookups.values_for(**ex))
+        self.lookup_preview.setText(f"{ex['name']}: {url}" + (f" (no {', '.join(missing)})" if missing else ""))
+
+    def _browse_pubchem_cache(self) -> None:
+        start = self.pubchem_cache.text() or str(Path.home())
+        path = QFileDialog.getExistingDirectory(self, "PubChem cache folder", str(Path(start).expanduser()))
+        if path:
+            self.pubchem_cache.setText(settings_mod.portable(path))
 
     #: (settings key, label, file-dialog title) of the external programs QuantaBench can run
     PROGRAM_FIELDS = (("xtb", "xtb", "xtb executable"), ("crest", "CREST", "crest executable"),
@@ -958,7 +1221,11 @@ class SettingsDialog(QDialog):
         b.ph = self.ph.value()
         b.protonate = self.protonate.isChecked()
         b.keep_largest_fragment = self.desalt.isChecked()
+        b.strip_water = self.strip_water.isChecked()
+        b.strip_acids = self.strip_acids.isChecked()
+        b.strip_counterions = self.strip_counterions()
         b.max_conformers = self.max_confs.value()
+        b.ring_conformers = self.ring_conformers.currentData() or "normal"
         b.energy_window_kcal = self.window.stored()
         b.rmsd_threshold = self.rmsd.value()
         b.fmax = self.fmax.value()
@@ -973,6 +1240,10 @@ class SettingsDialog(QDialog):
         d.relative_energy_unit = self.relative_unit.currentData()
         d.significant_digits = self.sig_digits.value()
         d.number_style = self.number_style.currentData()
+        lk = s.lookups
+        lk.urls = self.lookup_entries()
+        lk.pubchem_cache_dir = self.pubchem_cache.text().strip()
+        lk.pubchem_max_age_days = float(self.pubchem_age.value())
         s.output_dir = self.output.text().strip()
         e = s.engines
         for key, ed in self.program_paths.items():   # this machine only: other machines keep their own paths
