@@ -291,8 +291,8 @@ allow the Python environment, or use WSL2/Linux.
   `QUANTABENCH_AIMNET_BACKEND=stock|torch` forces one.
 - **dxtb (GFN1/GFN2-xTB) stays on the CPU by default.** AMD's Windows PyTorch has no GPU Cholesky (no
   MAGMA); QuantaBench can run those steps on the CPU inside a GPU calculation, and the results match,
-  but dxtb 0.4 measured 5-8x slower on this GPU than on the CPU. Settings > Compute > "dxtb on the
-  GPU" (or `QUANTABENCH_DXTB_GPU=on`) uses the GPU anyway.
+  but dxtb 0.4 measured 5-8x slower on this GPU than on the CPU. Settings > Compute > Expert > "dxtb on
+  the GPU" (or `QUANTABENCH_DXTB_GPU=on`) uses the GPU anyway.
 - A process that used the GPU can hang at exit in AMD's runtime (it spins one core after finishing).
   QuantaBench's own entry points (`quantabench`, `quantabench-cli`, lane processes, the test suite) exit
   at once with `os._exit` when they touched a ROCm GPU on Windows; after `git pull`, run
