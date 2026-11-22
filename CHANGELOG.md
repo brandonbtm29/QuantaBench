@@ -15,6 +15,13 @@
 - Drops on the window and the molecule list: several files at once in every File > Open format, run folders,
   project folders, and plain folders (the files in them).
 
+### A finished worker job no longer leaves jobs.sqlite-wal behind on Windows (FIX-7, 2026-11-22)
+- A status poll that was reading the job table when the run ended kept its read-only connection open across the
+  worker's checkpoint, so -wal and -shm came back after the checkpoint had removed them. This was the flaky
+  `test_archive_manifest_sync_temp_files_and_failed_streams` on Windows CI.
+- `Job.table_lock`: a poll checks whether the job is finishing and reads the table in one step, and the end of the run
+  waits for a read in progress before it writes the final tables and checkpoints.
+
 ### A live priority change no longer lost to a starting process on macOS (FIX-6, 2026-11-22)
 - macOS drops a nice value set while a process is inside exec(), although it reports the new value until the exec
   ends. A live change (DIST-7) that reached a lane or a program that was just starting could leave it at the old

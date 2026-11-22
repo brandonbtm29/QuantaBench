@@ -416,3 +416,34 @@ Newest entries at the bottom. One entry per working session or nightly run.
   300 times, so the second look fixes it in the product too. A new test with a fake process covers the second look and
   Windows' single set.
 - Found on the way: `apply_to_pids` on Linux lowers only the main thread of each process (PRIO-2).
+
+## 2026-11-22: FIX-7, the Windows worker test that leaves jobs.sqlite-wal behind (branch `fix/fix-7-windows-worker-wal`)
+- **CI:** `test_archive_manifest_sync_temp_files_and_failed_streams` failed on #34's Windows run (2026-11-20), as
+  before on #15, #20 and #21. The job said "done" and its run folder still had `jobs.sqlite-wal`.
+- **Reproduced on the workstation:** the test alone, 1,200 runs in a worktree: 16 failed (1 of 200, then 15 of 1,000),
+  all on -wal (and -shm).
+- **Found with a logging copy of the test** (scratch, not in the repo; 14 of 800 failed). It records every
+  `JobStore` open and close with its thread and whether -wal exists, `_checkpoint`'s start and end, and each status
+  poll's `finishing` check. When -wal is found it also lists every open connection (`gc.get_objects`), the process's
+  file handles and its threads. Every failure looked the same:
+  - an HTTP poll checks `finishing` (False) and opens the table read-only while the job runs, 8-13 ms before the
+    checkpoint;
+  - the run closes its store, the worker writes the final counts and tables, and `_checkpoint`'s writable close
+    removes -wal (it is gone at the checkpoint's end);
+  - the poll closes its connection 2-18 ms later, and -wal and -shm are back.
+  No connection was left open afterwards and no handle was on the files, so it was not a leaked connection, a
+  background thread or Windows locking a temp folder. The poll's read took 12-33 ms because it shared the GIL with
+  the worker's thread, which was writing the final tables.
+- **Why FIX-2's `finishing` was not enough:** it stops polls that start after it is set. A poll that checked it just
+  before, and was still reading, kept its connection open across the checkpoint. A read-only connection recreates
+  -wal (DEVLOG 2026-11-12) and cannot remove it. On Linux the writer's close leaves -wal while another connection is
+  open and `_checkpoint` tries again; on Windows the close removed it under the open reader, so nothing was left to
+  retry.
+- **Fix:** `Job.table_lock`. The poll's check and read are one step under it (`JobManager._live_counts`), and the
+  end of the run sets `finishing` under it, so the end waits for a read in progress. Polls only wait on each other for
+  the few ms a read takes.
+- **After:** 0 of 1,000 runs failed, and 0 of 800 for the logging copy. The new test passed 30 of 30 times on the
+  workstation.
+- **Test:** `test_the_end_of_a_run_waits_for_a_status_poll_reading_the_job_table`. It holds a poll inside `open_run`'s
+  last query after the run ended and checks that the checkpoint does not begin until the poll lets go. Without the
+  lock it fails on Linux too.

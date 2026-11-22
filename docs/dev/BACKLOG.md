@@ -214,6 +214,32 @@ Follow-ups:
 - 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
   about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
 
+## FIX-7: The flaky Windows worker test that leaves jobs.sqlite-wal behind · in-PR 2026-11-22 (branch `fix/fix-7-windows-worker-wal`)
+`tests/test_worker.py::test_archive_manifest_sync_temp_files_and_failed_streams` failed again on #34's Windows CI
+(2026-11-20): the run folder still had `jobs.sqlite-wal` when the job reported "done". FIX-2 (#16, #21) had made the
+checkpoint retry and the polls after the final counts use them (`Job.finishing`); the test had failed on #15, #20, #21.
+- **Cause: a status poll that was already reading the job table when the run ended.** `JobManager.public` checked
+  `finishing`, then opened the table read-only: two steps. A poll that passed the check just before the end (the
+  client polls every 0.1 s) could still be reading when `_checkpoint` ran: its read-only connection stayed open across
+  the checkpoint, which removed -wal, and when it closed, -wal and -shm were back. A read-only connection cannot
+  remove them. On Windows the writer's close removes -wal even while a read-only connection is open; on Linux it waits
+  for that connection, so `_checkpoint`'s retries cover it there.
+- **Shown on the workstation:** a scratch copy of the test that logs every open and close of the job table, the
+  checkpoint and the polls failed 14 of 800 times. In every failure an HTTP poll opened the table read-only while the
+  job ran, 8-13 ms before the checkpoint, and closed it 2-18 ms after the checkpoint had removed -wal; -wal and -shm
+  were there after that close. No other connection was open (`gc.get_objects`), the process had no handle on the
+  files, and no thread but the worker's own ran: not a connection left open, not a background thread, not Windows
+  locking a temp folder.
+- **Fix:** `Job.table_lock`. A poll checks `finishing` and reads the table under it (`JobManager._live_counts`), and
+  the end of the run sets `finishing` under it, so the end waits for a read in progress before the final tables and
+  the checkpoint. Test: `test_the_end_of_a_run_waits_for_a_status_poll_reading_the_job_table` holds a poll inside its
+  read at the end of a run; without the lock the checkpoint begins while the poll has the table open (on every OS).
+- **Before / after** (1,000 runs of the test each, in a worktree on the workstation): 15 / 0 failed; the
+  logging copy 14 of 800 / 0 of 800. The new test passed 30 of 30 times there.
+- Not changed: `molecule_states` (`GET .../molecules`, the grid client's sync) still reads the table without the
+  lock, so a read that overlaps the checkpoint can leave the two files (an empty -wal; `.stignore` lists both, and the
+  next writable open removes them). Any read-only open after the end recreates them too (DEVLOG 2026-11-12).
+
 ## FIX-5: Crashes in the GUI tests (Windows CI) · done 2026-11-17 (PR #23)
 Main's Windows CI for 486e332 (#19's merge, with #21) aborted in
 `test_gui_declutter.py::test_table_toolbar_menus_and_popout`, in the first `_wait` after a new window opened.
