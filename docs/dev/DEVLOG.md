@@ -509,3 +509,16 @@ Newest entries at the bottom. One entry per working session or nightly run.
   stay on wsl.exe's pipe. The guard's `wait` printed "Terminated" into the run's Windows log when a program was
   stopped (cancel, time limit); CREST-LOG-1's time-limit test caught it. `wait $p 2>/dev/null` keeps that line out;
   the exit code is unchanged.
+
+## 2026-11-22: lane plans fit the free memory (MEM-1, branch `fix/mem-1-lane-plan-free-memory`)
+- **Why:** the workstation ran short of memory during batch runs. Its hardware monitor's log (one sample a minute,
+  2026-11-08 to 11-22) shows the lowest free memory, under 1 GB, during the Psi4 tranche batches of 11-12/13 (five 4 GB
+  Psi4 lanes). Other programs use about 20 of its 31.2 GB, while the lane plan sized the lanes on 0.75 x 31.2 GB = 23 GB.
+- **The change:** `lanes.plan_auto` caps the lanes by `min(0.75 x RAM, available - 2 GB)` (`lane_memory_gb`; the
+  available memory at the plan is `HardwareReport.ram_available_gb` and `cpu_report()`'s). With 11 GB free, that batch
+  plans one 4 GB Psi4 lane, not five. A report without the field plans as before. The reason says
+  `capped by memory (11 GB free of 31 GB)`.
+- **WSL** (measured on the workstation): the VM's default cap is half the RAM (15.2 GB there), with 4 GB of swap, and
+  it shuts down when idle (`vmIdleTimeout`, 60 s). A GFN-FF CREST search through WSL took about 0.05 GB of WSL's
+  available memory and under 100 MB of /dev/shm. Microsoft documents `autoMemoryReclaim` (`[experimental]`, default
+  `dropCache`). /dev/shm is not cache: it is freed when QuantaBench removes the job folder.
