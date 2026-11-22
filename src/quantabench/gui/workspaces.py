@@ -20,6 +20,7 @@ in every workspace; only the arrangement changes, so nothing is rebuilt or reloa
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from PySide6.QtCore import QByteArray, QObject, QSize, Qt, Signal
@@ -176,9 +177,25 @@ class WorkspaceManager(QObject):
         """Object names of the managed docks that are shown now (shown = not hidden, even if behind a tab)."""
         return {n for n in MANAGED if (d := self.dock(n)) is not None and not d.isHidden()}
 
+    @contextmanager
+    def _still(self):
+        """Re-arrange the docks without Qt's dock animations: a tab bar the layout retires (deleteLater) while its
+        move is still animating is destroyed under the animation, which crashes in Qt (seen on Linux in the GUI tests:
+        the animation's end shows the half-deleted widget)."""
+        was = self.win.isAnimated()
+        self.win.setAnimated(False)
+        try:
+            yield
+        finally:
+            self.win.setAnimated(was)
+
     def apply_default(self, key: str) -> None:
         """Arrange the docks as workspace ``key``'s default: its docks in their areas, a tab group per area with the
         first in front, every other managed dock hidden."""
+        with self._still():
+            self._apply_default(key)
+
+    def _apply_default(self, key: str) -> None:
         ws = BY_KEY[key]
         # Take every managed dock out of the layout first: re-tabifying docks that are still in other tab groups
         # leaves those groups' tab bars behind (empty strips over the view)
@@ -221,9 +238,10 @@ class WorkspaceManager(QObject):
             self.states[self.current] = self.win.saveState(STATE_VERSION)
         self.current = key
         state = self.states.get(key)
-        self.showing_default = state is None or not self.win.restoreState(state, STATE_VERSION)
-        if self.showing_default:
-            self.apply_default(key)
+        with self._still():
+            self.showing_default = state is None or not self.win.restoreState(state, STATE_VERSION)
+            if self.showing_default:
+                self._apply_default(key)
         self.actions[key].setChecked(True)
         self.changed.emit(key)
 
