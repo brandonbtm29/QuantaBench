@@ -15,6 +15,14 @@
 - Drops on the window and the molecule list: several files at once in every File > Open format, run folders,
   project folders, and plain folders (the files in them).
 
+### A live priority change no longer lost to a starting process on macOS (FIX-6, 2026-11-22)
+- macOS drops a nice value set while a process is inside exec(), although it reports the new value until the exec
+  ends. A live change (DIST-7) that reached a lane or a program that was just starting could leave it at the old
+  priority. This is also why `test_priority_applied_to_running_processes` failed now and then on macOS CI: python.org's
+  framework python re-execs itself into Python.app right after it starts.
+- `priority.apply_to_pids` (POSIX) looks again at the processes it lowered after 0.25 s and lowers once more those an
+  exec put back; the log line says how many. The test now waits until its child runs.
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use
