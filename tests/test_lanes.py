@@ -57,6 +57,11 @@ def fake_mac(monkeypatch, perf_level0=10, physical=14, machine="arm64"):
                         lambda name: perf_level0 if name == "hw.perflevel0.physicalcpu" else None)
     monkeypatch.setattr(resources, "logical_cores", lambda: physical)
     monkeypatch.setattr(resources, "physical_cores", lambda: physical)
+    # the MacBook's 36 GB, mostly free: cpu_report() reads the available memory (MEM-1), and a CI runner has 7 GB
+    from collections import namedtuple
+
+    vm = namedtuple("svmem", "total available")
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: vm(36 * 1024**3, 30 * 1024**3))
 
 
 @pytest.fixture
