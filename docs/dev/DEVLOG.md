@@ -451,3 +451,61 @@ Newest entries at the bottom. One entry per working session or nightly run.
   1e6 times; 1e6 numbered lines; long lines and the byte bound; the time limit; no folder inside WSL; a CREST that
   prints the warning 1e6 times (123 MB) and fails: the kept `crest.log` has 4 lines and `crest.out` stays behind).
   The scripts ran against the real WSL too (mawk; 122 MB summarized in 0.3 s).
+
+## 2026-11-22: programs never outlive QuantaBench; probes can't hang (ENG-3, branch `feat/eng-3-process-robustness`)
+- **The problem** (the 2026-11-01 review's leftovers): a GUI or CLI that crashed or was ended in Task Manager left
+  xtb, CREST, MOPAC or Psi4 running, with nobody to stop them; on Windows `subprocess.run(timeout=...)` in the version
+  probes could block past its timeout when a launcher's child kept the pipe open; the conda scan took the first
+  environment in alphabetical order, not the newest program; the GUI's first start ran the `--version` probes on the
+  GUI thread.
+- **Windows** (`quantabench.proctree`, ctypes, no new dependency): `start` creates the program suspended, puts it in a
+  job object of its own with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, then resumes it (`NtResumeProcess`), so nothing it
+  starts escapes the job. `run_program` and tblite's CPCM helper start their programs this way; `release` closes the
+  job when the program has ended (ending what it left behind), `_kill_tree` terminates the job first (it also reaches
+  a child whose parent has exited, which `taskkill /T` misses). The usage meter reads the same job's accounting instead
+  of making one of its own. Lanes are adopted into one kill-on-close job of their parent (`Job.adopt`; each lane's
+  programs are in jobs nested in it). No other limit is set: the run priority is untouched.
+- **What WSL does** (measured on the workstation, WSL 2, kernel 6.18, `scratch/eng3/wsl_probe*.py`):
+  - wsl.exe starts helpers of its own: a second wsl.exe, wslhost.exe and two conhost.exe, all its children, so all in
+    the job (and the "launcher's child holds the pipe" case of the probes).
+  - When wsl.exe is ended, WSL hangs up the Linux session (SIGHUP): an ordinary program ends within a second or two;
+    one that ignores SIGHUP (`nohup`) or runs in another session (`setsid`) does not. So the old note that killing
+    wsl.exe never reaches the Linux side no longer holds, but it is not enough on its own.
+  - Closing wsl.exe's stdin pipe reaches the Linux side as EOF.
+- **The guard** (`external.WSL_GUARD`): a `wsl:` program runs as `sh -c WSL_GUARD sh -c WSL_WRAPPER prog args`, with
+  wsl.exe's stdin a pipe QuantaBench holds open and never writes. The program runs in the background in the guard's
+  process group; a watchdog subshell (ignoring INT/TERM) kills the whole group, SIGTERM then SIGKILL 2 s later, on
+  WSL's hang-up or at the lifeline's EOF (QuantaBench died but wsl.exe lived on: no job). When the program ends, the
+  guard stops the watchdog, sends SIGTERM to what is left in its group (CREST's xtb after a cancel: ENG-2's note) and
+  exits with the program's code. `kill -TERM -$$` can only reach the guard's own group. `.qb_pid`, the cancel through
+  it and the run priority's `nice`/`ionice` (in `WSL_WRAPPER`) are unchanged. `stdin_text` programs get no guard.
+- **Probes** (`proctree.run_probe`): output to temporary files (no pipe to wait for), the program started like
+  `start` (job on Windows, its own session on POSIX), the whole tree killed when it exits or times out. Used by
+  `_probe_version`, `python_module_version`, g-xTB's start check, `md.bench`'s `lmp -h` and the WSL cancel helper.
+  A program that prints its version and then hangs now gives its version.
+- **Conda scan:** every environment that has the program is a candidate; the newest version wins, read from
+  `conda-meta/<package>-<version>-<build>.json` (nothing runs; `ProgramSpec.conda_package` when the package name is not
+  the program's: openbabel, ambertools), else the version cache; the first in the old order among equals.
+- **GUI first start:** `MainWindow.__init__` builds the window inside `external.deferred_probes()` (no probe on this
+  thread; an uncached version comes back as "" and MOPAC/g-xTB treat it as available for now), then `_probe_programs`
+  runs `external.probe_versions` in a worker for xtb, CREST, g-xTB and MOPAC and relabels the engine lists. Every later
+  start has the versions on disk and runs nothing.
+- **Not done (POSIX):** no job objects there. Cancels, time limits and dead lanes were already covered (sessions, the
+  lanes' program registry); a GUI or CLI killed outright still leaves a running native program until it ends. A
+  lifeline guard like WSL's would work there too, but it changes which PID the usage meter samples; not needed now.
+- **Tests** (`tests/test_proctree.py`, `test_external.py`, `test_gui_engines.py`): probes bounded with a child that keeps
+  stdout open (all OSes); Windows: the job, a kill that reaches an orphan, a stand-in GUI killed outright with its
+  engine and grandchild ending, an adopted lane, and through the real WSL a program and child that ignore SIGHUP
+  ending when the GUI is killed, with the job and with only the lifeline; Linux: the guard's lifeline through a
+  stand-in wsl.exe, its exit code and leftovers; the conda scan; deferred probes and the GUI's start-up worker.
+- **On the workstation:** `tests/test_proctree.py` 10 passed (both real-WSL cases included); the real xtb tests (5)
+  and the real CREST GFN-FF search through WSL pass. A real CREST search through WSL (decanol, GFN-FF, 2 threads)
+  cancelled after 12 s, and again in a process killed outright after 12 s: nothing left running in its folder inside
+  WSL (5 s after the kill). With the job switched off (the stand-in GUI's `QBTEST_NO_JOB=1`, the behaviour before),
+  the stand-in engine and its grandchild outlive the killed GUI and the test fails. The full suite (offscreen Qt and VTK): 1,811 passed; the 22 failures also fail on `main` or
+  pass alone (BACKLOG TEST-WIN-1).
+- **Merged after CREST-LOG-1** (#47): a `wsl:` program now runs as `sh -c WSL_GUARD sh -c WSL_WRAPPER prog args`
+  where `WSL_WRAPPER` also sends the output to `$QUANTABENCH_WSL_LOG` when it is set; the guard's stdout and stderr
+  stay on wsl.exe's pipe. The guard's `wait` printed "Terminated" into the run's Windows log when a program was
+  stopped (cancel, time limit); CREST-LOG-1's time-limit test caught it. `wait $p 2>/dev/null` keeps that line out;
+  the exit code is unchanged.

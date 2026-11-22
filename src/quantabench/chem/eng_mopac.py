@@ -56,6 +56,8 @@ def available() -> tuple[bool, str]:
     info = external.find_program("mopac")
     if info is None:
         return False, f"MOPAC not found: {external.PROGRAMS['mopac'].install_hint}"
+    if not info.version and external.probes_deferred():
+        return True, ""                  # the GUI's start-up: its version is probed in a worker, then relabelled
     if not info.version:
         return False, (f"could not read the version of {info.path} (MOPAC >= 22 prints it with --version); "
                        "MOPAC2016 and older are not supported: install MOPAC 22+ (open source)")
