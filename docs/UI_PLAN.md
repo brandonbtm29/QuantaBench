@@ -29,7 +29,8 @@ molecule/system navigator, the playback bar and the job monitor.
    transition states.
 3. **Simulate (MD):** system → force field → protocol (minimize / equilibrate NVT/NPT / production /
    steered / annealing) → engine (OpenMM, LAMMPS) and resources → live telemetry (T, E, P, pull
-   force) → trajectory.
+   force) → trajectory. The design, from the MD front-end survey (RES-1), is
+   [SIMULATE_DESIGN.md](SIMULATE_DESIGN.md); it waits for Brandon's approval before SIM-1.
 4. **Analyze:** spreadsheet (molecules × properties) with formula columns and plots; spectra (IR, with
    experimental overlay; clicking a peak animates the mode); surfaces (ESP-colored SAS first, orbitals
    later); trajectory analysis (RDF, MSD, density profiles, work/PMF); overlay/align.

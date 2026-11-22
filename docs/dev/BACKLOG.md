@@ -739,8 +739,13 @@ Follow-ups (ready):
 - Acceptance: tests that each preset produces the right `BuildConfig`; queue runs jobs in order with
   cancellation; screenshot.
 
-## RES-1: MD front-end survey and Simulate workspace design · ready
+## RES-1: MD front-end survey and Simulate workspace design · in-PR 2026-11-22 (branch `feat/res-1-simulate-design`)
 Depends on: none (research only; can run any night).
+- 2026-11-22: `docs/SIMULATE_DESIGN.md`: the survey of 9 tools plus OpenFF Interchange/NAGL and RadonPy (a table over
+  the six aspects, what to borrow and avoid), the workspace flow as text mockups, the data model (System,
+  Parameterization, Protocol/Stage, Run/Segment, Telemetry, Trajectory, Analysis) and how it fits UI-2, UI-5 and
+  the workers, engines with GPU support on AMD, Apple and NVIDIA, the force-field routes, protocol templates,
+  monitoring and analysis, v1/v2/v3, risks and 12 open questions. Grounded in the MD pilots' lessons.
 - Survey how LAMMPS-GUI, VMD + QwikMD, CHARMM-GUI, OpenMM-Setup, Materials Studio Forcite/Amorphous
   Cell, MAPS, SAMSON, Packmol/moltemplate and OVITO handle: system building, force-field assignment,
   protocol setup, run control, live monitoring, trajectory analysis.
@@ -749,6 +754,10 @@ Depends on: none (research only; can run any night).
   No code. Cite sources.
 
 ## SIM-1: Simulate workspace v1 · blocked (needs RES-1 design approved by Brandon)
+- The design is `docs/SIMULATE_DESIGN.md` (RES-1); it waits for Brandon's approval and his answers to its open
+  questions (DEC-1). Proposed v1 there, two PRs: MD runs as jobs (a run supervisor with segments, pause through a
+  STOP file, resume, live telemetry, `md run/status/pause/resume`), then the Simulate panel for the liquid slab and
+  the rigid pull on this computer.
 
 ## FIX-1: Windows CI green · done 2026-11-05
 - 2026-11-05: first green CI on Windows, Linux and macOS (PLAT-2). The failures since then were separate bugs,

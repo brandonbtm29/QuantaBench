@@ -338,3 +338,21 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Tests:** `tests/test_wsl_scratch.py` (23) runs the real scripts through a stand-in `wsl.exe` and `df` on
   Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
   check (BACKLOG CREST-SCRATCH-1).
+
+## 2026-11-22: the Simulate workspace design (RES-1, branch `feat/res-1-simulate-design`)
+- **Survey** of LAMMPS-GUI, VMD + QwikMD, CHARMM-GUI, OpenMM-Setup, Materials Studio (Forcite, Amorphous Cell),
+  MAPS, SAMSON, Packmol/moltemplate and OVITO, plus OpenFF Interchange/NAGL and RadonPy, over system building,
+  force fields, protocols, run control, live monitoring and analysis. Sources are the tools' own pages, fetched on
+  2026-11-22. The commercial tools' vendor pages give feature lists only.
+- **The design** (`docs/SIMULATE_DESIGN.md`) keeps the runnable folder as the product and makes MD runs jobs of
+  their own kind, made of segments: one engine process each, ended by a pause, a time window, a move to the GPU or a
+  crash. Pilot B's hand-written resume and the MacBook's deadline stop were the reason. LAMMPS first, OpenMM with
+  OpenMM-ML in v2/v3.
+- **Found on the way:**
+  - LAMMPS' `fix halt` with `is_file()` and `error soft` stops a run cleanly when a file appears, so a pause can
+    write a restart file without killing the process.
+  - LAMMPS marks `fix smd` as unmaintained and recommends `fix colvars` or `fix plumed`: the flexible steered MD
+    should be written on Colvars.
+  - Binary restart files are meant for the same executable and platform only, so moving a run between machines
+    needs a data file.
+- **Open:** 12 questions for Brandon in the doc (DEC-1). SIM-1 stays blocked until he approves.

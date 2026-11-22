@@ -2,6 +2,10 @@
 
 ## Unreleased (after 0.3.0)
 
+### The Simulate workspace design (RES-1, 2026-11-22)
+- Docs only: `docs/SIMULATE_DESIGN.md`, a survey of MD front ends and the proposed Simulate workspace (flow, data
+  model, engines, force fields, templates, build order, open questions). It waits for Brandon's approval before SIM-1.
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use
