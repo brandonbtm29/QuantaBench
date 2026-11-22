@@ -61,7 +61,14 @@ class BuildDefaults:
     ph: float = 7.0
     protonate: bool = True
     keep_largest_fragment: bool = True
+    # build filters (science settings, SETTINGS-1; Spartan's Import Filters): removed before the largest-fragment rule
+    strip_water: bool = False
+    strip_acids: bool = False         # HCl, HBr, HI, HF and other small neutral inorganic fragments
+    strip_counterions: str = ""       # names of chem.standardize.NAMED_COUNTERIONS, comma-separated: "sodium,potassium"
     max_conformers: int = 50
+    # ring conformers of the RDKit search (Spartan's Conformer Rules): "normal" | "thorough" (also twist-boats of
+    # saturated six-membered rings; chem.conformers.twist_boats)
+    ring_conformers: str = "normal"
     energy_window_kcal: float = 6.0
     rmsd_threshold: float = 0.5
     refine_method: str = "auto"       # "none" | "mmff" | "gfn1-xtb" | "gfn2-xtb" | "aimnet2" | "auto"

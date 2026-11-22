@@ -1324,7 +1324,11 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
     a time, N) and the Expert box's lane spec edit this machine's one spec (`Settings.lanes_for`, as the Machines dock
     and the job dialog); the tab's per-machine changes are stamped for the SyncThing merge. Not science settings.
   - **Build defaults** (Settings > Import Filters, Conformer Rules): strip water, HCl and named counter-ions
-    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search.
+    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search. In PR
+    (`feat/settings-1-build-defaults`, 2026-11-22): `strip_water`, `strip_acids`, `strip_counterions` (names of
+    `standardize.NAMED_COUNTERIONS`) and `ring_conformers` ("normal" | "thorough": twist-boats of six-membered rings,
+    Spartan's "Thorough"), all science fields, off/normal by default; `build --strip`, `--ring-conformers`. Open:
+    whether salts should keep their counter-ion as a separate entry (the settings plan's question).
   - **Lookups** (Databases, URLs): URL templates with `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`
     (PubChem, NIST WebBook by CAS, nmrshiftdb, EPA CompTox), opened from the molecule list; PubChem cache folder
     and maximum age; a folder of reference tables with experimental values.
