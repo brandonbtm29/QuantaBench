@@ -1,7 +1,7 @@
 """The geometry builder pipeline.
 
     input (SMILES / name / file / CSV)
-      -> standardize (largest fragment, neutral parent)
+      -> standardize (build filters: water, acids, named counter-ions; largest fragment, neutral parent)
       -> protonation state at pH
       -> 3D embedding, conformer search: ETKDGv3 + MMFF94s pre-optimization, or CREST iMTD-GC (``chem.crest``)
       -> energy-window + RMSD pruning
@@ -37,7 +37,14 @@ from . import descriptors as desc
 from . import import_options as imp
 from .inputs import ID_NOTE, MoleculeInput
 from .optimize import Cancelled, optimize
-from .standardize import UnsupportedStructure, formal_charge, inchikey, prepare, spin_multiplicity
+from .standardize import (
+    FragmentStrip,
+    UnsupportedStructure,
+    formal_charge,
+    inchikey,
+    prepare,
+    spin_multiplicity,
+)
 
 KCAL_PER_EV = confs.KCAL_PER_EV
 
@@ -49,7 +56,16 @@ class BuildConfig:
     protonate: bool = True
     protonation_method: str = "rules"     # "rules" | "dimorphite"
     keep_largest_fragment: bool = True
+    # build filters (SETTINGS-1; Spartan's Import Filters): fragments removed before the largest-fragment rule
+    # (standardize.FragmentStrip): water, small neutral inorganic acids (HCl, HBr, HI, HF, ...), and the counter-ions
+    # named here (standardize.NAMED_COUNTERIONS, comma-separated and sorted: "potassium,sodium")
+    strip_water: bool = False
+    strip_acids: bool = False
+    strip_counterions: str = ""
     max_conformers: int = 50
+    # ring conformers of the RDKit search (Spartan's Conformer Rules; conformers.RING_CONFORMERS): "normal" | "thorough"
+    # (also twist-boats of saturated six-membered rings)
+    ring_conformers: str = "normal"
     refine_top: int = 20                  # refine at most this many force-field conformers
     # the refinement level's window: the force-field pool keeps this + 4 kcal/mol, and with rank_method "refine" the
     # refined conformers are pruned with it; a rank step prunes with rank_window_kj instead (chem.rank)
@@ -130,7 +146,12 @@ class BuildConfig:
     @classmethod
     def from_settings(cls, s: Settings, **overrides) -> BuildConfig:
         b, r = s.build, s.resources
+        from .standardize import canonical_counterions
+
         cfg = cls(method=b.refine_method, ph=b.ph, protonate=b.protonate, keep_largest_fragment=b.keep_largest_fragment,
+                  strip_water=b.strip_water, strip_acids=b.strip_acids,
+                  strip_counterions=canonical_counterions(b.strip_counterions, strict=False),
+                  ring_conformers=b.ring_conformers if b.ring_conformers in confs.RING_CONFORMERS else "normal",
                   max_conformers=b.max_conformers, energy_window_kcal=b.energy_window_kcal,
                   rank_method=b.rank_method, rank_window_kj=b.rank_window_kj,
                   rmsd_threshold=b.rmsd_threshold, fmax=b.fmax, max_steps=b.max_steps, temperature_k=b.temperature_k,
@@ -706,14 +727,14 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
             if should_stop():
                 raise Cancelled()
             rd = confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,
-                                cfg.seed, threads, seeds=seeds)
+                                cfg.seed, threads, seeds=seeds, ring_conformers=cfg.ring_conformers)
             both = search_rule.merge_pools(cs, rd, cfg.refine_top, cfg.rmsd_threshold)
             result.conformer_search = search_rule.MERGED
             return both                     # its notes, the merge note among them, are logged with the pool's
     result.conformer_search = "rdkit"
     # Keep a wider force-field window: the refined ranking can differ from MMFF's.
     return confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,
-                          cfg.seed, threads, seeds=seeds)
+                          cfg.seed, threads, seeds=seeds, ring_conformers=cfg.ring_conformers)
 
 
 def _engine_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,
@@ -988,7 +1009,7 @@ def run_molecule(inp: MoleculeInput, cfg: BuildConfig, device: str = "cpu", thre
         if why:
             result.notes.append(f"no input InChIKey: {why}")
         prepared, notes = prepare(drawn, cfg.ph if cfg.protonate else None, cfg.keep_largest_fragment,
-                                  cfg.protonation_method, info=info)
+                                  cfg.protonation_method, info=info, strip=FragmentStrip.of(cfg))
         # fragments the import filters removed count as removed, and the charge as drawn is the file's
         result.input_charge = inp.meta.get(imp.FILE_CHARGE, info.get("input_charge"))
         result.removed_fragments = list(inp.meta.get(imp.REMOVED) or []) + list(info.get("removed_fragments") or [])

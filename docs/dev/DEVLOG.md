@@ -510,6 +510,58 @@ Newest entries at the bottom. One entry per working session or nightly run.
   stopped (cancel, time limit); CREST-LOG-1's time-limit test caught it. `wait $p 2>/dev/null` keeps that line out;
   the exit code is unchanged.
 
+## 2026-11-22: Settings > Compute, Spartan's Jobs tab (SETTINGS-1, branch `feat/settings-1-compute`)
+- **What Spartan's Jobs tab has that the Compute tab lacked:** the "12 cores detected (24 logical)" line, and a short
+  front page. The tab now opens with "This computer: N cores, M logical" (`settings_dialog.cores_line`: the
+  detection report's `cores_text`, so Apple Silicon shows its performance cores; psutil before the report arrives).
+- **The Expert box** (a folding section, closed by default and remembered per machine like the others) holds the lane
+  spec, GPU linear algebra and dxtb on the GPU. Its header counts the ones not at their defaults ("2 changed", the
+  tooltip names them), so a hidden non-default is still visible.
+- **Lanes without the spec syntax:** *Molecules at once* lists Automatic, one at a time and 2 to the physical cores;
+  any other spec (GPU lanes, threads per lane, more lanes than cores) shows as *Custom*, and choosing Custom opens the
+  Expert box. Both controls edit the one value, this machine's `dist.machine_lanes` entry.
+- **Same values as the job dialog and the Machines dock** (checked): the job dialog starts from
+  `BuildConfig.from_settings` (`priority_for`, `free_threads_for`), the Machines dock and `machines set` from
+  `priority_for(machine)` / `lanes_for(machine)` and save through `update_machine`, which stamps each change in
+  `dist.machine_updated` for the SyncThing conflict merge. The dialog did not stamp, and it wrote the lane spec back
+  on every OK: a lane change the Machines dock saved while the dialog was open was lost. Now the dialog writes the
+  spec only when it changed, and stamps its per-machine changes the way `update_machine` does.
+- The job dialog's note pointed at "Settings > Resources" (the tab's old name).
+- Tests: `tests/test_gui_settings_compute.py` (5: the cores line, the Expert box and its count, the two lane
+  controls as one value, a round trip read back through `BuildConfig`, `control.machine_lines` and a new dialog, and
+  the Machines dock's newer values kept). Screenshots: `docs/dev/screenshots/SETTINGS-1/compute_*.png`.
+
+## 2026-11-22: Settings > Build defaults, Spartan's Import Filters and Conformer Rules (SETTINGS-1, branch `feat/settings-1-build-defaults`)
+- **Spartan's two settings** (from its manual): the Import Filters remove water from PDB and SD files and HCl from SD
+  files; the Conformer Rules are Normal, Skeletal or Thorough, and Thorough "considers twist-boat conformers of
+  six-membered rings (in addition to chair conformers)". The Import tab (UI-4) already filters files; these are the
+  build's own, for every input, and science settings.
+- **Build filters** (`standardize.FragmentStrip`, `standardize(strip=...)`): after the cleanup (ionic metal bonds
+  disconnected, reionized), before the largest-fragment rule. Water and acids are the import filters' own
+  categories (`import_options.fragment_kind`). Counter-ions are named (`NAMED_COUNTERIONS`, 34: alkali and
+  alkaline-earth cations, ammonium and alkylammoniums, ethanolammoniums, halides, oxyanions, BF4-, PF6-, acetate,
+  formate, trifluoroacetate, mesylate, tosylate) and match by the neutral parent, so triethylamine drawn neutral next
+  to an acid is triethylammonium. Other metals are left to the metal-complex rule. The last fragment is never stripped.
+- **Where they change a result:** with *Keep largest fragment* on, sodium PFOA hydrate gives the PFOA anion either
+  way (only the notes differ); off, the build computes O + PFOA- + Na+ without filters, PFOA- + Na+ with water
+  stripped, PFOA- with water and sodium stripped (`tests/test_build_filters.py`). With it on, a named counter-ion
+  that is the larger ion is still removed: tetrabutylammonium trifluoroacetate computes the trifluoroacetate.
+- **Twist-boats** (`conformers.twist_boats`): each saturated six-membered ring of the 5 lowest MMFF94s conformers is
+  held at the twist-boat torsions (30, -65, 30, 30, -65, 30; three rotations and their mirror images) and optimized,
+  then optimized freely. Cyclohexane: +5.9 kcal/mol (MMFF94s). ETKDG already makes some twist-boats at random
+  (methylcyclohexane: three within 10 kcal/mol); on trans-decalin-1-ol the thorough pool has 17 conformers against 16
+  and more non-chair rings; PFECHS keeps the same five conformers (its twist-boats fall back to chairs or lie
+  above the window). Max conformers caps the thorough pool; an acyclic molecule's pool is unchanged.
+- **Science fields** `strip_water`, `strip_acids`, `strip_counterions`, `ring_conformers`: defaults are the old
+  behaviour, so a run stored before them resumes without a difference (`config_differences` compares a missing field
+  with the default). `strip_counterions` is one sorted string ("potassium,sodium"): `BuildConfig.from_settings`
+  sorts it and drops unknown names, the worker refuses unknown or unsorted ones, so two machines never differ by
+  spelling. A worker from before this change refuses the fields as unknown rather than computing without them.
+- The review (advisor) prepares molecules with the same filters (its cache key includes them) and lists them.
+- Tests: `tests/test_build_filters.py` (12), `tests/test_gui_settings_build.py`, and
+  `test_worker.py::test_build_filters_travel_to_a_worker` (a worker over HTTP). Screenshot:
+  `docs/dev/screenshots/SETTINGS-1/build_defaults_tab.png`.
+
 ## 2026-11-22: the lifeline guard for native programs on macOS and Linux (ENG-3b, branch `feat/eng-3b-posix-lifeline`)
 - **Why:** Brandon asked for the same watchdog on the MacBook. Until now a GUI or CLI killed outright there (SIGKILL,
   a crash) left its xtb, CREST, MOPAC or Psi4 running until they ended; only cancels, time limits and dead lanes were

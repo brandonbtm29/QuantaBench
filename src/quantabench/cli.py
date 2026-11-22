@@ -233,6 +233,20 @@ def _read_inputs(args) -> list:
     return items
 
 
+def strip_options(text: str) -> dict:
+    """``--strip water,acids,sodium`` as BuildConfig fields (exactly these filters on; "none": all off)."""
+    from .chem.standardize import canonical_counterions
+
+    names = [p.strip().lower() for p in text.replace(";", ",").split(",") if p.strip()]
+    rest = [n for n in names if n not in ("water", "acids", "acid", "hcl", "none")]
+    try:
+        counterions = canonical_counterions(rest)
+    except ValueError as exc:
+        raise SystemExit(f"--strip: {exc}") from None
+    return {"strip_water": "water" in names, "strip_acids": bool({"acids", "acid", "hcl"} & set(names)),
+            "strip_counterions": counterions}
+
+
 def _config(args, base=None, **extra):
     from .chem.pipeline import BuildConfig
 
@@ -256,7 +270,10 @@ def _config(args, base=None, **extra):
         "memory_budget_gb": getattr(args, "memory_budget", None),
         "molecule_timeout_s": getattr(args, "molecule_timeout", None),
         "priority": getattr(args, "priority", None), "free_threads": getattr(args, "free_threads", None),
+        "ring_conformers": getattr(args, "ring_conformers", None),
     }.items() if v is not None}
+    if getattr(args, "strip", None) is not None:
+        overrides.update(strip_options(args.strip))
     if getattr(args, "crest_full", False):
         overrides["crest_quick"] = False
     if overrides.get("crest_min_rotors", 0) < 0:
@@ -989,6 +1006,14 @@ def add_build_science_args(q: argparse.ArgumentParser) -> None:
     q.add_argument("--protonate", action=argparse.BooleanOptionalAction, default=None,
                    help="assign the charge state at --ph (--no-protonate keeps the input's; default from settings)")
     q.add_argument("--protonation", choices=["rules", "dimorphite"])
+    q.add_argument("--strip", metavar="LIST",
+                   help="build filters: fragments removed before the largest-fragment rule, comma-separated: water, "
+                        "acids (HCl, HBr, HI, HF, ...) and counter-ion names (sodium, potassium, ammonium, chloride, "
+                        "tetrabutylammonium, ...; Settings > Build defaults lists them); 'none' for no filter "
+                        "(default from settings)")
+    q.add_argument("--ring-conformers", choices=["normal", "thorough"],
+                   help="RDKit search: thorough also makes twist-boat conformers of saturated six-membered rings "
+                        "(Spartan's Conformer Rules; default from settings: normal)")
     q.add_argument("--max-confs", type=int)
     q.add_argument("--refine-top", type=int)
     q.add_argument("--window", type=float, help="energy window at the refinement level, kcal/mol (the force-field "
