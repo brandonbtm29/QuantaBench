@@ -283,6 +283,9 @@ class MainWindow(QMainWindow):
         find.addWidget(self.status_filter)
         lay.addLayout(find)
         self.mol_list = MoleculeListView(self.model)
+        from . import lookup_menu
+
+        lookup_menu.install(self)                  # right-click: Look up in PubChem, NIST, ... (Settings > Lookups)
         self.mol_list.currentIdChanged.connect(self._on_molecule_selected)
         self.mol_list.currentIdChanged.connect(self._sync_molecule_playback)
         shown = self.mol_list.model()                # the filtered, sorted rows: what the Molecules mode steps

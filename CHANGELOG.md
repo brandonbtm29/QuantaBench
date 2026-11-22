@@ -2,6 +2,14 @@
 
 ## Unreleased (after 0.3.0)
 
+### Settings > Lookups and the molecule list's Look up menu (SETTINGS-1, 2026-11-22)
+- Spartan's Preferences > URLs: right-click a molecule for **Look up** in PubChem (by InChIKey), the NIST WebBook (by
+  CAS RN), nmrshiftdb2 (13C spectrum by InChI, JCAMP-DX) and EPA CompTox (by InChIKey). Settings > Lookups edits the
+  templates (`%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`, percent-encoded); a template whose value a molecule
+  lacks is greyed out with the reason. The CAS RN comes from a posted CAS field, the id or the name.
+- PubChem's cache: a folder (`lookups.pubchem_cache_dir`) and a maximum age (`lookups.pubchem_max_age_days`, 0 = no
+  limit): an older answer is asked again and replaced; `--offline` still reads it. Not science settings.
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use

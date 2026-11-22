@@ -1,5 +1,5 @@
 """Settings dialog: compute resources, build defaults, import options, surfaces and radii, display (energy units),
-engines, folders."""
+lookups (web lookup templates, PubChem's cache), engines, folders."""
 
 from __future__ import annotations
 
@@ -66,6 +66,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._import_tab(), "Import")
         tabs.addTab(self._surfaces_tab(), "Surfaces && radii")    # "&&": a literal & (not a shortcut)
         tabs.addTab(self._display_tab(), "Display")
+        tabs.addTab(self._lookups_tab(), "Lookups")
         tabs.addTab(self._engines_tab(), "Engines")
         tabs.addTab(self._folders_tab(), "Folders")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -579,6 +580,177 @@ class SettingsDialog(QDialog):
                                      f"ΔE = {d.with_unit(de_kcal, units.KCAL, 'relative', 2)}")
         self.window.set_unit(d.relative)          # Build defaults' energy window follows the relative unit
 
+    #: the molecule the Lookups tab's preview expands a template for: PFOA (its record, CAS RN and InChI)
+    LOOKUP_EXAMPLE = {"name": "PFOA", "smiles": "OC(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F",
+                      "ident": "335-67-1"}
+
+    def _lookups_tab(self) -> QWidget:
+        """Spartan's Preferences > URLs and Databases: the molecule list's Look up templates, PubChem's cache."""
+        from .. import lookups
+        from .collapsible import InfoLabel, with_info
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lk = self.s.lookups
+        box = QGroupBox("Look up in a web database (the molecule list's right-click menu)")
+        bl = QVBoxLayout(box)
+        tokens = ", ".join(f"<code>{p}</code> ({what})" for p, what in lookups.PLACEHOLDER_HELP.items())
+        self.lookup_note = InfoLabel(
+            f"Each URL may use {tokens}. The structure keys are of the record as drawn (a salt's own InChIKey); the "
+            "CAS RN comes from a posted CAS field, the id or the name. A template whose value a molecule lacks is "
+            "greyed out for it. Not science settings: no computed value depends on them.")
+        hint = QLabel("Placeholders: " + " ".join(lookups.PLACEHOLDER_HELP))
+        hint.setStyleSheet("color: gray;")
+        bl.addWidget(with_info(hint, self.lookup_note))
+        self.lookup_table = QTableWidget(0, 2)
+        self.lookup_table.setObjectName("lookup_table")
+        self.lookup_table.setHorizontalHeaderLabels(["Name", "URL template"])
+        self.lookup_table.verticalHeader().setVisible(False)
+        self.lookup_table.horizontalHeader().setStretchLastSection(True)
+        self.lookup_table.setColumnWidth(0, 170)
+        self._fill_lookups(lk.urls)
+        self.lookup_table.itemChanged.connect(self._lookup_edited)
+        self.lookup_table.currentCellChanged.connect(self._update_lookup_preview)
+        bl.addWidget(self.lookup_table, 1)
+        row = QHBoxLayout()
+        self.lookup_preview = QLabel()
+        self.lookup_preview.setWordWrap(True)
+        self.lookup_preview.setStyleSheet("color: gray;")
+        self.lookup_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        row.addWidget(self.lookup_preview, 1)
+        for text, fn in (("Add", self._add_lookup), ("Remove", self._remove_lookup),
+                         ("Reset to defaults", self._reset_lookups)):
+            btn = QPushButton(text)
+            btn.clicked.connect(fn)
+            row.addWidget(btn)
+        bl.addLayout(row)
+        lay.addWidget(box, 1)
+
+        cbox = QGroupBox("PubChem cache")
+        cf = QFormLayout(cbox)
+        from ..chem import pubchem
+
+        self.pubchem_cache = QLineEdit(lk.pubchem_cache_dir)
+        self.pubchem_cache.setPlaceholderText("this computer's cache folder")
+        self.pubchem_cache.setToolTip("Where PubChem's answers are kept (name lookups, quantabench-cli pubchem), so a "
+                                      "rerun asks PubChem nothing twice.\nBlank: this computer's cache folder. A path "
+                                      "under ~ works on every machine; keep it out of a synced folder (SQLite).")
+        browse = QPushButton("...")
+        browse.setFixedWidth(32)
+        browse.clicked.connect(self._browse_pubchem_cache)
+        crow = QHBoxLayout()
+        crow.addWidget(self.pubchem_cache, 1)
+        crow.addWidget(browse)
+        cf.addRow("Folder", crow)
+        self.pubchem_age = QDoubleSpinBox()
+        self.pubchem_age.setObjectName("pubchem_max_age")
+        self.pubchem_age.setRange(0, 3650)
+        self.pubchem_age.setDecimals(0)
+        self.pubchem_age.setSuffix(" days")
+        self.pubchem_age.setSpecialValueText("No limit")
+        self.pubchem_age.setValue(float(lk.pubchem_max_age_days or 0.0))
+        self.pubchem_age.setToolTip("A cached answer older than this is asked again (and replaced). Offline runs "
+                                    "(--offline) still use old answers. No limit: kept until deleted.")
+        cf.addRow("Maximum age", self.pubchem_age)
+        try:
+            where = str(pubchem.default_cache_path())
+        except Exception:  # noqa: BLE001 - only a label
+            where = ""
+        self.pubchem_where = QLabel(f"In use now: {where}" if where else "")
+        self.pubchem_where.setStyleSheet("color: gray;")
+        self.pubchem_where.setWordWrap(True)
+        self.pubchem_where.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        cf.addRow("", self.pubchem_where)
+        lay.addWidget(cbox)
+        if self.lookup_table.rowCount():
+            self.lookup_table.setCurrentCell(0, 1)
+        self._update_lookup_preview()
+        return w
+
+    def _fill_lookups(self, entries) -> None:
+        self.lookup_table.blockSignals(True)
+        try:
+            self.lookup_table.setRowCount(0)
+            for e in entries or ():
+                if isinstance(e, dict):
+                    self._append_lookup(str(e.get("name") or ""), str(e.get("url") or ""))
+        finally:
+            self.lookup_table.blockSignals(False)
+        for r in range(self.lookup_table.rowCount()):
+            self._mark_lookup(r)
+
+    def _append_lookup(self, name: str, url: str) -> int:
+        r = self.lookup_table.rowCount()
+        self.lookup_table.insertRow(r)
+        self.lookup_table.setItem(r, 0, QTableWidgetItem(name))
+        self.lookup_table.setItem(r, 1, QTableWidgetItem(url))
+        return r
+
+    def _mark_lookup(self, r: int) -> None:
+        """A row whose URL is not an http(s) address is red, with the reason: it is not saved."""
+        from .. import lookups
+
+        item = self.lookup_table.item(r, 1)
+        if item is None:
+            return
+        why = lookups.check(item.text()) if item.text().strip() else ""
+        item.setForeground(Qt.GlobalColor.red if why else self.lookup_table.palette().text().color())
+        item.setToolTip(f"{why}: not saved" if why else item.text())
+
+    def _lookup_edited(self, item) -> None:
+        if item.column() == 1:
+            self._mark_lookup(item.row())
+        self._update_lookup_preview()
+
+    def _add_lookup(self) -> None:
+        r = self._append_lookup("", "https://")
+        self.lookup_table.setCurrentCell(r, 0)
+        self.lookup_table.editItem(self.lookup_table.item(r, 0))
+
+    def _remove_lookup(self) -> None:
+        for r in sorted({i.row() for i in self.lookup_table.selectedIndexes()}, reverse=True):
+            self.lookup_table.removeRow(r)
+        self._update_lookup_preview()
+
+    def _reset_lookups(self) -> None:
+        self._fill_lookups([dict(u) for u in settings_mod.DEFAULT_LOOKUP_URLS])
+        self._update_lookup_preview()
+
+    def lookup_entries(self) -> list[dict]:
+        """The table's templates as ``settings.lookups.urls`` keeps them: rows with a name and a valid URL."""
+        from .. import lookups
+
+        out = []
+        for r in range(self.lookup_table.rowCount()):
+            name, url = (self.lookup_table.item(r, c).text().strip() if self.lookup_table.item(r, c) else ""
+                         for c in (0, 1))
+            if name and not lookups.check(url):
+                out.append({"name": name, "url": url})
+        return out
+
+    def _update_lookup_preview(self, *_args) -> None:
+        """The selected template expanded for PFOA."""
+        from .. import lookups
+
+        r = self.lookup_table.currentRow()
+        item = self.lookup_table.item(r, 1) if r >= 0 else None
+        if item is None or not item.text().strip():
+            self.lookup_preview.setText("")
+            return
+        why = lookups.check(item.text())
+        if why:
+            self.lookup_preview.setText(f"Not usable: {why}.")
+            return
+        ex = self.LOOKUP_EXAMPLE
+        url, missing = lookups.expand(item.text().strip(), lookups.values_for(**ex))
+        self.lookup_preview.setText(f"{ex['name']}: {url}" + (f" (no {', '.join(missing)})" if missing else ""))
+
+    def _browse_pubchem_cache(self) -> None:
+        start = self.pubchem_cache.text() or str(Path.home())
+        path = QFileDialog.getExistingDirectory(self, "PubChem cache folder", str(Path(start).expanduser()))
+        if path:
+            self.pubchem_cache.setText(settings_mod.portable(path))
+
     #: (settings key, label, file-dialog title) of the external programs QuantaBench can run
     PROGRAM_FIELDS = (("xtb", "xtb", "xtb executable"), ("crest", "CREST", "crest executable"),
                       ("mopac", "MOPAC", "MOPAC executable"), ("psi4_python", "Psi4 Python", "Python with psi4"),
@@ -836,6 +1008,10 @@ class SettingsDialog(QDialog):
         d.relative_energy_unit = self.relative_unit.currentData()
         d.significant_digits = self.sig_digits.value()
         d.number_style = self.number_style.currentData()
+        lk = s.lookups
+        lk.urls = self.lookup_entries()
+        lk.pubchem_cache_dir = self.pubchem_cache.text().strip()
+        lk.pubchem_max_age_days = float(self.pubchem_age.value())
         s.output_dir = self.output.text().strip()
         e = s.engines
         for key, ed in self.program_paths.items():   # this machine only: other machines keep their own paths

@@ -146,6 +146,10 @@ quantabench-cli build --file conformers.sdf --same-structures conformers --label
 quantabench-cli build --file set.sdf --import-options "post_fields=true,id_field=CAS_RN"
 ```
 
+Right-click a molecule in the list for **Look up**: PubChem, the NIST WebBook, nmrshiftdb2 and EPA CompTox open in the
+browser with its InChIKey, InChI or CAS RN. Settings > Lookups edits the URL templates (`%inchikey`, `%inchi`, `%cas`,
+`%smiles`, `%name`) and PubChem's cache folder and maximum age.
+
 ## Workspaces
 
 The activity bar on the left switches between five workspaces, each an arrangement of docks around the
