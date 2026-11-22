@@ -326,8 +326,8 @@ not tried again in the run; `--retry-failed` (with a higher limit, or 0) redoes 
 - **dxtb.** `chem/torch_compat.py` runs the dense linear algebra a GPU build lacks (Cholesky and solve
   on AMD's Windows ROCm wheel; everything, in float64, on MPS) on the CPU inside a dxtb call. Results
   match the CPU, but dxtb 0.4 is 5-8x slower on the workstation's GPU than on its CPU (host synchronizations in its
-  overlap integrals), so `dxtb_device()` keeps dxtb on the CPU unless Settings > Compute > "dxtb on the
-  GPU" (or `QUANTABENCH_DXTB_GPU`) is `on`. `QUANTABENCH_LINALG=auto|cpu|device` chooses what is routed.
+  overlap integrals), so `dxtb_device()` keeps dxtb on the CPU unless Settings > Compute > Expert > "dxtb on
+  the GPU" (or `QUANTABENCH_DXTB_GPU`) is `on`. `QUANTABENCH_LINALG=auto|cpu|device` chooses what is routed.
 
 ## Finding programs
 

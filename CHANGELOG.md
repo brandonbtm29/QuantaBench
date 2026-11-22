@@ -27,6 +27,16 @@
 - Fixed: the Results dock could undo a resize by hand when the event loop was slow (the fold recorded the user's
   height as its own and restored the old one when unfolding).
 
+### Settings > Compute: an Expert box and this computer's cores (SETTINGS-1, 2026-11-22)
+- Spartan's Preferences > Jobs: a line with this computer's cores ("12 cores, 24 logical"), *Molecules at once*
+  (Automatic, one at a time, or N lanes) in Parallel lanes, and a folded **Expert** box with the full lane spec, GPU
+  linear algebra and dxtb on the GPU; its header counts the ones not at their defaults. Same settings as before
+  (`dist.machine_lanes`, `resources.linalg`, `resources.dxtb_gpu`), none of them science.
+- The tab's changes to this machine's priority, free threads and lanes are stamped like the Machines dock's, and an
+  unchanged lane spec is no longer written back (it overwrote a change the Machines dock saved while the dialog was
+  open).
+
+
 ### Programs never outlive QuantaBench; probes can't hang (ENG-3, 2026-11-22)
 - Windows: xtb, CREST (wsl.exe), MOPAC, Psi4, g-xTB and tblite's CPCM helper run in kill-on-close job objects, and the
   lanes in one of their parent's, so a crashed or killed GUI or CLI takes them along; a cancel ends the whole job.
