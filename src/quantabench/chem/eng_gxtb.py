@@ -164,19 +164,20 @@ def starts(program) -> tuple[bool, str]:
         return True, ""
     if program.path in _RUNS:
         return _RUNS[program.path]
-    import subprocess
-    import tempfile
+    if external.probes_deferred():
+        return True, ""                  # the GUI's start-up: the probe runs in a worker, then the lists are relabelled
+    from .. import proctree
 
-    try:
-        cp = subprocess.run([program.path, "--version"], capture_output=True, text=True, errors="replace", timeout=30,
-                            cwd=tempfile.gettempdir(), env=environment(program, 1), stdin=subprocess.DEVNULL,
-                            creationflags=external._NO_WINDOW)
-        text = (cp.stdout or "") + (cp.stderr or "")
-        ok = cp.returncode == 0 and "xtb version" in text
-        first = next((ln.strip() for ln in text.splitlines() if ln.strip()), f"exit code {cp.returncode}")
+    probe = proctree.run_probe([program.path, "--version"], timeout=30, env=environment(program, 1))
+    if probe.error:
+        out = (False, f"g-xTB at {program.path} does not start ({probe.error})")
+    elif probe.timed_out:
+        out = (False, f"g-xTB at {program.path} does not start (no answer to --version within 30 s)")
+    else:
+        text = probe.text
+        ok = probe.returncode == 0 and "xtb version" in text
+        first = next((ln.strip() for ln in text.splitlines() if ln.strip()), f"exit code {probe.returncode}")
         out = (True, "") if ok else (False, f"g-xTB at {program.path} does not start ({first[:200]})")
-    except (OSError, subprocess.SubprocessError) as exc:
-        out = (False, f"g-xTB at {program.path} does not start ({type(exc).__name__}: {exc})")
     _RUNS[program.path] = out
     return out
 

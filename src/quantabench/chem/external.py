@@ -18,7 +18,8 @@ This module is the shared contract every external engine uses:
                             limit, a crashed or killed run (each folder names its owner process)
 ``run_program(cmd, cwd)``   run, stream output to a log file, honour cancellation and timeouts,
                             raise ``ExternalProgramError`` with the log tail on failure; the program runs at the
-                            run priority in force (``quantabench.priority``; ``popen_args`` builds the call)
+                            run priority in force (``quantabench.priority``; ``popen_args`` builds the call) and
+                            cannot outlive this process on Windows (a kill-on-close job, ``quantabench.proctree``)
 
 Engines pass **file names relative to ``cwd``** in ``cmd``, so the same command works natively and
 through WSL (where ``cwd`` is translated to ``/mnt/c/...``, or the program runs in a folder inside WSL:
@@ -42,7 +43,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
-from .. import priority
+from .. import priority, proctree
 from .optimize import Cancelled
 
 IS_WINDOWS = sys.platform == "win32"
@@ -51,9 +52,23 @@ WSL_PREFIX = "wsl:"
 #: overflow the default 8 MB on larger molecules), then exec the program (same PID, same process group).
 #: This replaces a Python ``preexec_fn``, which is unsafe in the forked child of a multi-threaded GUI.
 STACK_WRAPPER = 'ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" 2>/dev/null; exec "$0" "$@"'
-#: The same inside WSL, plus the Linux PID in .qb_pid (taskkill on wsl.exe does not reach the Linux side).
+#: The same inside WSL, plus the Linux PID in .qb_pid (a cancel kills it through ``wsl.exe``: ``_kill_wsl_side``).
 WSL_WRAPPER = ('ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" 2>/dev/null; echo $$ > .qb_pid; '
                'exec "$0" "$@"')
+#: ``run_program`` starts a ``wsl:`` program as ``wsl.exe ... -e sh -c WSL_GUARD sh -c WSL_WRAPPER prog args``, with
+#: wsl.exe's stdin a pipe that QuantaBench holds open and never writes (the lifeline; ENG-3). The guard runs the
+#: program in the background in its own process group (WSL makes the guard a session and group leader) and waits for
+#: it; a watchdog subshell kills the whole group (SIGTERM, then SIGKILL 2 s later) when the lifeline reaches EOF
+#: (QuantaBench died while wsl.exe lived on) or when WSL hangs up the session (wsl.exe was ended: its kill-on-close
+#: job, a cancel, End task). WSL's hang-up alone ends a program that does not ignore SIGHUP; the watchdog also ends
+#: those that do, and CREST's xtb children. When the program ends, the guard stops the watchdog, sends SIGTERM to
+#: what the program left in the group and exits with the program's code. ``kill -TERM -$$`` can only reach the guard's
+#: own group (a group's id is its leader's PID).
+WSL_GUARD = ('exec 3<&0 </dev/null; g=$$; '
+             'k() { trap "" TERM; kill -TERM -$g 2>/dev/null; sleep 2; kill -KILL -$g 2>/dev/null; exit 0; }; '
+             '(trap "" INT TERM; trap k HUP; while read -r _ <&3; do :; done; k) >/dev/null 2>&1 & w=$!; '
+             '"$0" "$@" 3<&- & p=$!; wait $p; rc=$?; kill -KILL $w 2>/dev/null; '
+             'trap "" TERM; kill -TERM -$g 2>/dev/null; exit $rc')
 
 
 class ExternalProgramError(RuntimeError):
@@ -68,6 +83,7 @@ class ProgramSpec:
     version_regex: str = r"(\d+\.\d+(?:\.\d+)?)"
     install_hint: str = ""
     engine: bool = True                # a compute engine (machine profiles list these); False for file tools
+    conda_package: str = ""            # its conda package, when not ``name`` (the conda scan reads its version)
 
 
 PROGRAMS: dict[str, ProgramSpec] = {
@@ -90,7 +106,7 @@ PROGRAMS: dict[str, ProgramSpec] = {
     # program, never imported or bundled
     "obabel": ProgramSpec("obabel", ("obabel",), ("-V",), r"Open Babel (\d+\.\d+(?:\.\d+)?)",
                           "conda install -c conda-forge openbabel (GPL-2.0: QuantaBench runs it as a separate program)",
-                          engine=False),
+                          engine=False, conda_package="openbabel"),
     # liquid MD setups (md.liquid, md.forcefield; MD-2). Packmol (MIT) packs the box; without it a lattice start is
     # used. antechamber marks the AmberTools environment whose Python runs md/ff_driver.py (GAFF2, OpenFF Sage)
     "packmol": ProgramSpec("packmol", ("packmol",), ("--version",), r"Version (\d+\.\d+(?:\.\d+)?)",
@@ -98,7 +114,8 @@ PROGRAMS: dict[str, ProgramSpec] = {
                            engine=False),
     "antechamber": ProgramSpec("antechamber", ("antechamber",), ("-h",), r"antechamber (\d+(?:\.\d+)*)",
                                "conda create -n qbmd -c conda-forge python=3.12 ambertools packmol openff-toolkit-base "
-                               "openff-interchange-base openff-forcefields (Linux, macOS, WSL)", engine=False),
+                               "openff-interchange-base openff-forcefields (Linux, macOS, WSL)", engine=False,
+                               conda_package="ambertools"),
     # LAMMPS (GPL-2.0) as the user's own program: md.liquid's and md.lammps' folders run with it, and the MD benchmark
     # (md.bench, `machines --bench md`) times it. `lmp -h` prints the version, the packages and the accelerators.
     # The Windows installer's lmp.exe has the GPU package (OpenCL); the PyPI wheel's lmp has OPENMP but no GPU
@@ -206,17 +223,14 @@ def conda_env_prefixes() -> list[Path]:
 
 
 def _probe_version(info: ProgramInfo, spec: ProgramSpec, timeout: float = 15.0) -> str:
+    """The version ``spec.version_args`` prints, "" when it prints none. Bounded by ``timeout`` whatever the program's
+    children do with its output (``proctree.run_probe``: output to files, the whole tree killed at the end)."""
     if not spec.version_args:
         return ""
     # no wrapper here: the WSL one writes .qb_pid into the working directory, and a probe has no job folder
     cmd = ["wsl.exe", "-e", info.path[len(WSL_PREFIX):]] if info.via_wsl else [info.path]
-    try:
-        cp = subprocess.run([*cmd, *spec.version_args], capture_output=True, text=True, cwd=tempfile.gettempdir(),
-                            timeout=timeout, stdin=subprocess.DEVNULL, errors="replace",
-                            creationflags=_NO_WINDOW)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    m = re.search(spec.version_regex, (cp.stdout or "") + (cp.stderr or ""))
+    probe = proctree.run_probe([*cmd, *spec.version_args], timeout=timeout, cwd=tempfile.gettempdir())
+    m = re.search(spec.version_regex, probe.text)
     return m.group(1) if m else ""
 
 
@@ -259,22 +273,66 @@ def _locate(spec: ProgramSpec) -> tuple[str, str] | None:
     return hit
 
 
+def _in_env(prefix: Path, names: Sequence[str]) -> str | None:
+    for d in _env_bin_dirs(prefix):
+        for n in names:
+            if (d / n).is_file():
+                return str(d / n)
+    return None
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    """'6.7.1' -> (6, 7, 1), '2.0.1 (abc)' -> (2, 0, 1); '' -> () (below every known version)."""
+    return tuple(int(x) for x in re.findall(r"\d+", version.split(" ")[0] if version else "")[:6])
+
+
+def conda_package_version(prefix: str | Path, package: str) -> str:
+    """The version of ``package`` installed in the conda/mamba environment at ``prefix``, from its
+    ``conda-meta/<package>-<version>-<build>.json`` record (nothing runs); "" when it has none."""
+    pattern = re.compile(rf"^{re.escape(package)}-([^-]+)-[^-]+\.json$")
+    best = ""
+    with contextlib.suppress(OSError):
+        for f in (Path(prefix) / "conda-meta").glob(f"{package}-*.json"):
+            m = pattern.match(f.name)
+            if m and _version_key(m.group(1)) > _version_key(best):
+                best = m.group(1)
+    return best
+
+
+def _disk_cached_version(path: str) -> str:
+    """The version ``_cached_version`` stored for this executable (by path, size, mtime), "" if none (nothing runs)."""
+    try:
+        st = Path(path).stat()
+        data = json.loads(_version_cache_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    value = data.get(f"{path}|{st.st_size}|{st.st_mtime_ns}") if isinstance(data, dict) else None
+    return value if isinstance(value, str) else ""
+
+
 def _search(spec: ProgramSpec) -> tuple[str, str] | None:
+    """PATH, then the running environment, then the conda/mamba environments (``conda_env_prefixes``). Several
+    environments with the program: the newest version wins (from the environment's conda-meta record, else the
+    version cache; nothing runs), the first in the scan's order among equals or when no version is known."""
     names = _exe_names(spec)
     for n in names:
         found = shutil.which(n)
         if found:
             return found, "PATH"
-    for d in _env_bin_dirs(Path(sys.prefix)):
-        for n in names:
-            if (d / n).is_file():
-                return str(d / n), "this environment"
-    for prefix in conda_env_prefixes():
-        for d in _env_bin_dirs(prefix):
-            for n in names:
-                if (d / n).is_file():
-                    return str(d / n), f"conda env {prefix.name}"
-    return None
+    here = _in_env(Path(sys.prefix), names)
+    if here:
+        return here, "this environment"
+    hits = [(prefix, path) for prefix in conda_env_prefixes() if (path := _in_env(prefix, names))]
+    if not hits:
+        return None
+    if len(hits) == 1:
+        return hits[0][1], f"conda env {hits[0][0].name}"
+    package = spec.conda_package or spec.name
+    versions = [conda_package_version(prefix, package) or _disk_cached_version(path) for prefix, path in hits]
+    best = max(range(len(hits)), key=lambda i: (_version_key(versions[i]), -i))
+    prefix, path = hits[best]
+    note = f" (newest of {len(hits)} environments: {versions[best]})" if versions[best] else ""
+    return path, f"conda env {prefix.name}{note}"
 
 
 def _version_cache_file() -> Path:
@@ -316,6 +374,59 @@ def _cached_version(info: ProgramInfo, spec: ProgramSpec, refresh: bool) -> str:
     return version
 
 
+class _Deferred(threading.local):
+    on = False
+
+
+_deferred = _Deferred()
+
+
+def probes_deferred() -> bool:
+    """Whether this thread is inside ``deferred_probes``."""
+    return _deferred.on
+
+
+@contextlib.contextmanager
+def deferred_probes() -> Iterator[None]:
+    """In this thread, inside the block, ``find_program`` runs no version probe: a local program whose version is
+    not in the cache on disk comes back with version "" (and is not cached that way: a later call outside the block
+    probes it). The GUI builds its window like this (ENG-3), then ``probe_versions`` fills the cache in a worker and
+    the engine lists are relabelled. Engines whose availability needs a version treat an unknown one as available
+    meanwhile (``eng_mopac.available``, ``eng_gxtb.starts``)."""
+    before = _deferred.on
+    _deferred.on = True
+    try:
+        yield
+    finally:
+        _deferred.on = before
+
+
+def _probe_candidates(names: Sequence[str] | None) -> list[tuple[str, str]]:
+    out = []
+    for name in names or [n for n, sp in PROGRAMS.items() if sp.engine]:
+        spec = PROGRAMS[name]
+        hit = _locate(spec) if spec.version_args else None
+        if hit is not None and not hit[0].startswith(WSL_PREFIX):
+            out.append((name, hit[0]))
+    return out
+
+
+def uncached_versions(names: Sequence[str] | None = None) -> list[str]:
+    """The local programs among ``names`` (default: the engines) that are installed but have no version in the cache
+    on disk (the first start, a new or updated program). Runs nothing."""
+    return [name for name, path in _probe_candidates(names) if not _disk_cached_version(path)]
+
+
+def probe_versions(names: Sequence[str] | None = None) -> list[str]:
+    """Probe and cache (on disk and in this process) the versions ``uncached_versions`` lists; returns those names.
+    For a worker thread: each probe can take seconds."""
+    todo = uncached_versions(names)
+    for name in todo:
+        _CACHE.pop(name, None)
+        find_program(name)
+    return todo
+
+
 def find_program(name: str, *, version: bool = True, refresh: bool = False,
                  probe_wsl: bool = False) -> ProgramInfo | None:
     """Locate an external program. ``None`` if it is not installed anywhere QuantaBench looks.
@@ -340,7 +451,11 @@ def find_program(name: str, *, version: bool = True, refresh: bool = False,
     info = None
     if hit is not None:
         info = ProgramInfo(name, hit[0], hit[1])
-        if version and not info.via_wsl:
+        if version and not info.via_wsl and _deferred.on:
+            info = ProgramInfo(name, hit[0], hit[1], _disk_cached_version(hit[0]))   # no probe on this thread
+            if not info.version and spec.version_args:
+                want = "none"                    # probed by the next call outside deferred_probes
+        elif version and not info.via_wsl:
             info = ProgramInfo(name, hit[0], hit[1], _cached_version(info, spec, refresh))
         elif version and probe_wsl:
             info = ProgramInfo(name, hit[0], hit[1], _probe_version(info, spec, timeout=60.0))
@@ -363,15 +478,11 @@ def inspect_path(name: str, path: str) -> ProgramInfo | None:
 
 
 def python_module_version(python: str, module: str, timeout: float = 60.0) -> str | None:
-    """``module.__version__`` as seen by interpreter ``python`` (None if it cannot import it)."""
-    try:
-        cp = subprocess.run([python, "-I", "-c", f"import {module}; print({module}.__version__)"],
-                            capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
-                            errors="replace", creationflags=_NO_WINDOW)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    out = (cp.stdout or "").strip().splitlines()
-    return out[-1] if cp.returncode == 0 and out else None
+    """``module.__version__`` as seen by interpreter ``python`` (None if it cannot import it, or not within
+    ``timeout``: ``proctree.run_probe``)."""
+    probe = proctree.run_probe([python, "-I", "-c", f"import {module}; print({module}.__version__)"], timeout=timeout)
+    out = probe.stdout.strip().splitlines()
+    return out[-1] if probe.returncode == 0 and out else None
 
 
 def require_program(name: str) -> ProgramInfo:
@@ -763,9 +874,10 @@ CREATE_NO_WINDOW = 0x08000000           # subprocess has the constant only on Wi
 
 
 def popen_args(cmd: Sequence[str], *, via_wsl: bool = False, prio: priority.ChildPriority | None = None,
-               system: str | None = None) -> tuple[list[str], dict]:
+               system: str | None = None, guard: bool = False) -> tuple[list[str], dict]:
     """(argv, Popen keywords besides cwd/env/stdio) with which ``run_program`` starts ``cmd`` on ``system`` (default
-    this one) at the run priority ``prio`` (``priority.options_here``; None = unchanged).
+    this one) at the run priority ``prio`` (``priority.options_here``; None = unchanged). ``guard``: a ``wsl:``
+    program runs under ``WSL_GUARD`` (after ``-e``), whose lifeline is wsl.exe's stdin.
 
     Windows: no console window, and the priority class as a creation flag (``BELOW_NORMAL_PRIORITY_CLASS`` /
     ``IDLE_PRIORITY_CLASS``; whatever the program starts inherits it); a ``wsl:`` program's wrapper gets ``nice`` and
@@ -778,6 +890,9 @@ def popen_args(cmd: Sequence[str], *, via_wsl: bool = False, prio: priority.Chil
     argv = [str(c) for c in cmd]
     if via_wsl:
         argv = [prio.wrap(a) if a == WSL_WRAPPER else a for a in argv]
+        if guard and "-e" in argv[1:]:
+            at = argv.index("-e", 1) + 1
+            argv = [*argv[:at], "sh", "-c", WSL_GUARD, *argv[at:]]
     if system == "win32":
         return argv, {"creationflags": CREATE_NO_WINDOW | prio.creationflags}
     if not via_wsl:
@@ -813,18 +928,22 @@ def _kill_wsl_side(cwd: Path, linux_cwd: str | None = None) -> None:
     script = ('p=$(cat .qb_pid 2>/dev/null); [ -n "$p" ] || exit 0; kill -TERM "$p" 2>/dev/null; '
               'for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$p" 2>/dev/null || exit 0; sleep 0.5; done; '
               'kill -KILL "$p" 2>/dev/null; true')
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run(["wsl.exe", "--cd", linux_cwd, "-e", "sh", "-c", script],
-                       capture_output=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+    # run_probe, not subprocess.run(capture_output=...): wsl.exe's own helpers (a second wsl.exe, wslhost.exe) inherit
+    # its pipes, and a timed-out run would wait for them
+    proctree.run_probe(["wsl.exe", "--cd", linux_cwd, "-e", "sh", "-c", script], timeout=30)
 
 
 def _kill_tree(proc: subprocess.Popen, cwd: Path | None = None, via_wsl: bool = False,
                linux_cwd: str | None = None) -> None:
     """Stop ``proc`` and everything it started: the process group on POSIX (SIGTERM, then SIGKILL for
-    whatever is left), ``taskkill /T`` on Windows, and the Linux side of a WSL program (which ran in ``linux_cwd``
-    inside WSL, or in ``cwd``)."""
+    whatever is left), its kill-on-close job on Windows (``proctree``; ``taskkill /T`` without one), and the Linux
+    side of a WSL program (which ran in ``linux_cwd`` inside WSL, or in ``cwd``)."""
     if via_wsl and cwd is not None:
         _kill_wsl_side(cwd, linux_cwd)
+    job = proctree.job_of(proc)
+    if IS_WINDOWS and job is not None and job.terminate():     # everything in the job, also what outlived its parent
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(10)
     if proc.poll() is not None:
         return
     try:
@@ -998,71 +1117,27 @@ def _k32():
     from ctypes import wintypes
 
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
-    k32.CreateJobObjectW.restype = wintypes.HANDLE
-    k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-    k32.AssignProcessToJobObject.restype = wintypes.BOOL
-    k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
-                                              ctypes.POINTER(wintypes.DWORD)]
-    k32.QueryInformationJobObject.restype = wintypes.BOOL
-    k32.CloseHandle.argtypes = [wintypes.HANDLE]
-    k32.CloseHandle.restype = wintypes.BOOL
     k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
     k32.GetProcessTimes.restype = wintypes.BOOL
     return k32
 
 
-def _windows_job(proc: subprocess.Popen):
-    """A job object holding the program, so its CPU time counts the processes it starts (a venv's python.exe
-    launcher, a conda wrapper), as getrusage(RUSAGE_CHILDREN) does on POSIX. No limits are set, and closing the
-    handle leaves the processes alone. None when it cannot be made (the program then counts alone)."""
-    k32 = _k32()
-    job = k32.CreateJobObjectW(None, None)
-    if not job:
-        return None
-    if not k32.AssignProcessToJobObject(job, int(proc._handle)):     # noqa: SLF001 - Popen's process handle
-        k32.CloseHandle(job)
-        return None
-    return job
-
-
-def _windows_usage(proc: subprocess.Popen, job=None) -> tuple[float | None, float | None]:
-    """(CPU s, peak memory MB) of a finished program (Windows). With its job object: the CPU time of every
-    process in the job, and when it started others, the largest one's peak private memory; otherwise the process
-    handle's own times and peak working set (Popen keeps the handle open, so they are there after the end)."""
+def _windows_usage(proc: subprocess.Popen, job: proctree.Job | None = None) -> tuple[float | None, float | None]:
+    """(CPU s, peak memory MB) of a finished program (Windows). With its job object (``proctree.start``): the CPU time
+    of every process in the job (a venv's python.exe launcher, a conda wrapper and what they start, as
+    getrusage(RUSAGE_CHILDREN) counts them on POSIX), and when it started others, the largest one's peak private
+    memory; otherwise the process handle's own times and peak working set (Popen keeps the handle open, so they are
+    there after the end)."""
     import ctypes
     from ctypes import wintypes
 
     k32 = _k32()
     handle = wintypes.HANDLE(int(proc._handle))           # noqa: SLF001 - Popen's process handle on Windows
     cpu = peak = None
-    n_processes = 1
     if job:
-        class Accounting(ctypes.Structure):               # JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
-            _fields_ = [("TotalUserTime", ctypes.c_int64), ("TotalKernelTime", ctypes.c_int64),
-                        ("ThisPeriodTotalUserTime", ctypes.c_int64), ("ThisPeriodTotalKernelTime", ctypes.c_int64),
-                        ("TotalPageFaultCount", wintypes.DWORD), ("TotalProcesses", wintypes.DWORD),
-                        ("ActiveProcesses", wintypes.DWORD), ("TotalTerminatedProcesses", wintypes.DWORD)]
-
-        class BasicLimits(ctypes.Structure):
-            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
-                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
-                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
-                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
-                        ("SchedulingClass", wintypes.DWORD)]
-
-        class ExtendedLimits(ctypes.Structure):           # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-            _fields_ = [("Basic", BasicLimits), ("IoInfo", ctypes.c_uint64 * 6),
-                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
-                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
-
-        acc = Accounting()
-        if k32.QueryInformationJobObject(job, 1, ctypes.byref(acc), ctypes.sizeof(acc), None):
-            cpu = (acc.TotalUserTime + acc.TotalKernelTime) * 1e-7          # 100 ns units
-            n_processes = int(acc.TotalProcesses)
-        ext = ExtendedLimits()
-        if n_processes > 1 and k32.QueryInformationJobObject(job, 9, ctypes.byref(ext), ctypes.sizeof(ext), None):
-            peak = ext.PeakProcessMemoryUsed / 2**20 or None
+        cpu, n_processes, job_peak = job.usage()
+        if n_processes > 1:
+            peak = job_peak
     if cpu is None:
         times = [wintypes.FILETIME() for _ in range(4)]
         if k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
@@ -1092,8 +1167,9 @@ class _UsageMeter:
     None. POSIX: the change of ``getrusage(RUSAGE_CHILDREN)`` across the run, exact for the program and the
     children it waited for, unless another ``run_program`` ran in this process at the same time (then None);
     the peak memory is sampled about once a second, and taken from ``ru_maxrss`` when this program set a new
-    maximum. Windows: a job object's times (the program and the processes it starts) and peak memory; nothing
-    for ``wsl.exe`` (the work runs in the Linux VM) or a batch-file launcher."""
+    maximum. Windows: the times (the program and the processes it starts) and peak memory of its kill-on-close job
+    (``proctree.start``; ``run_program`` closes it); nothing for ``wsl.exe`` (the work runs in the Linux VM) or a
+    batch-file launcher."""
 
     SAMPLE_EVERY_S = 1.0
 
@@ -1121,10 +1197,7 @@ class _UsageMeter:
         if not self.ok:
             return
         if IS_WINDOWS:
-            try:
-                self.job = _windows_job(proc)
-            except Exception:  # noqa: BLE001 - measuring must never stop a program
-                self.job = None
+            self.job = proctree.job_of(proc)
             return
         try:
             import psutil
@@ -1165,12 +1238,7 @@ class _UsageMeter:
         except Exception:  # noqa: BLE001
             return None, None
         finally:
-            if self.job:
-                job, self.job = self.job, None
-                try:
-                    _k32().CloseHandle(job)
-                except Exception:  # noqa: BLE001
-                    pass
+            self.job = None                   # the job is the program's (run_program releases it)
 
 
 def program_name(cmd: Sequence[str]) -> str:
@@ -1198,6 +1266,10 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
 
     ``program_cwd``: the folder the program runs in when it is not ``cwd`` (which then holds only the log): for a
     WSL program a Linux path inside WSL (``chem.wsl_scratch``), so its files never cross to the Windows disk.
+
+    The program cannot outlive this process on Windows: it runs in a kill-on-close job of its own
+    (``proctree.start``), closed when it ends (which also ends what it left running). A ``wsl:`` program also runs
+    under ``WSL_GUARD``, with wsl.exe's stdin as its lifeline (unless ``stdin_text`` is given).
     """
     cwd = Path(cwd)
     cwd.mkdir(parents=True, exist_ok=True)
@@ -1213,7 +1285,8 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
         timeout = limit if limit > 0 else None
     shown = cmd
     prio = priority.options_here(via_wsl)          # the run priority in force in this thread (never raised)
-    cmd, start_kwargs = popen_args(cmd, via_wsl=via_wsl, prio=prio)
+    guard = via_wsl and stdin_text is None         # WSL_GUARD, whose lifeline is wsl.exe's stdin (held, never written)
+    cmd, start_kwargs = popen_args(cmd, via_wsl=via_wsl, prio=prio, guard=guard)
     log_file = cwd / log_name
     t0 = time.perf_counter()
     if log:
@@ -1224,12 +1297,13 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
         # a native program's own folder (program_cwd), else cwd (also for wsl.exe, which takes its folder from --cd)
         kwargs: dict = {"cwd": str(program_cwd if program_cwd and not via_wsl else cwd), "env": env, "stdout": out,
                         "stderr": subprocess.STDOUT,
-                        "stdin": subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL, **start_kwargs}
+                        "stdin": subprocess.PIPE if stdin_text is not None or guard else subprocess.DEVNULL,
+                        **start_kwargs}
         if not IS_WINDOWS and not Path(shown[0]).is_file() and shutil.which(shown[0]) is None:
             raise ExternalProgramError(f"could not start {shown[0]}: no such program")
         meter = _UsageMeter(via_wsl, launcher=IS_WINDOWS and Path(shown[0]).suffix.lower() in (".bat", ".cmd"))
         try:
-            proc = subprocess.Popen(cmd, **kwargs)
+            proc = proctree.start(cmd, **kwargs)  # Windows: in a kill-on-close job (proctree.job_of)
         except OSError as exc:
             meter.finish()
             raise ExternalProgramError(f"could not start {shown[0]}: {exc}") from exc
@@ -1267,6 +1341,10 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
                 with contextlib.suppress(OSError):
                     record.unlink()
             usage = meter.finish()            # also for a program that was stopped: the time it used counts
+            if guard and proc.stdin is not None:
+                with contextlib.suppress(OSError):
+                    proc.stdin.close()
+            proctree.release(proc)            # after the meter read the job's accounting
             with contextlib.suppress(Exception):
                 _note_program(name, threads, time.perf_counter() - t0, *usage)
     run = ProgramRun(proc.returncode, time.perf_counter() - t0, log_file, *usage)

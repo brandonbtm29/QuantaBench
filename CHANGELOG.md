@@ -2,6 +2,14 @@
 
 ## Unreleased (after 0.3.0)
 
+### Programs never outlive QuantaBench; probes can't hang (ENG-3, 2026-11-22)
+- Windows: xtb, CREST (wsl.exe), MOPAC, Psi4, g-xTB and tblite's CPCM helper run in kill-on-close job objects, and the
+  lanes in one of their parent's, so a crashed or killed GUI or CLI takes them along; a cancel ends the whole job.
+- CREST through WSL runs under a guard that kills its process group when wsl.exe ends or QuantaBench dies, and what it
+  left behind when it ends (CREST's xtb after a cancel).
+- Version probes write to files and kill their process tree: bounded by their timeout. The conda scan takes the newest
+  version, not the first environment alphabetically. The GUI's first start probes versions in a worker.
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use

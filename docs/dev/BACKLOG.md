@@ -928,7 +928,7 @@ not try to match Spartan exactly.
 - Follow-ups: an entry for each new engine or QM list item (the tests ask for it); entries for the frequency and
   thermochemistry choices (qRRHO, symmetry number) and the Properties page if those raise questions.
 
-## ENG-3: Engine follow-ups · ready
+## ENG-3: Engine follow-ups · ready (the robustness part: in-PR 2026-11-22, branch `feat/eng-3-process-robustness`)
 - `vibrations.from_hessian(...)`: make the second half of `analyze()` public so `qm.vibrations_from_hessian`
   stops duplicating it (see the QM builder's suggested signature in DEVLOG 2026-11-01).
 - QM charges (MBIS/Löwdin) as an option for the exported conformer charges (extxyz, LAMMPS data).
@@ -942,11 +942,23 @@ not try to match Spartan exactly.
   Spartan's surface, recorded as `qm_surf_iso_au`). Water HF/6-31G*: σ²tot 478 (0.002) vs 345 (0.001).
 - Psi4 log: write the MBIS free-atom and finite-field SCFs to a second output file, so cclib can re-import
   `<id>_qm_log.out` (today it stops at the free-atom UKS "Beta Occupied" block).
-- Review 2026-11-01 leftovers (robustness): a Windows Job Object (kill-on-close) so a hard GUI crash cannot
-  orphan xtb/CREST/Psi4; `subprocess.run(timeout=...)` in version probes can still block on Windows if a
-  launcher's child keeps the pipe open (use Popen + kill); the conda scan takes the first env alphabetically,
-  not the newest program version; failed-run scratch folders are kept by design but never pruned; the first
-  GUI start still probes local program versions on the GUI thread (cached on disk afterwards).
+- Review 2026-11-01 leftovers (robustness) · in-PR 2026-11-22 (branch `feat/eng-3-process-robustness`;
+  `quantabench.proctree`, docs/ENGINES.md "Programs never outlive QuantaBench"):
+  - Windows: every program `run_program` starts (and tblite's CPCM helper) is created suspended, put in a
+    kill-on-close job object of its own, then resumed; lanes are in a kill-on-close job of their parent. A hard GUI
+    or CLI crash ends them all; a cancel ends the whole job (also children whose parent has exited).
+  - `wsl:` programs: wsl.exe (and its helpers) are in the job; inside WSL a guard script kills the program's process
+    group on WSL's hang-up or when wsl.exe's stdin (the lifeline) reaches EOF, and what the program left in its group
+    when it ends (CREST's xtb after a cancel; ENG-2's note).
+  - Version probes (`--version`, `python -c "import psi4"`, g-xTB's start check, `lmp -h`) write to temporary files and
+    kill the whole tree: bounded by their timeout whatever a launcher's child does with the output.
+  - The conda scan takes the newest version (conda-meta, nothing runs), not the first environment alphabetically.
+  - The GUI builds its window without probing (`external.deferred_probes`); a worker probes the versions not cached
+    on disk yet and relabels the engine lists.
+  - Already done by SCRATCH-1 (2026-11-13): failed-run scratch folders go 3 days after their process ended.
+  - Still open: POSIX has no job objects: a GUI or CLI killed outright (SIGKILL, a crash) leaves a running native
+    program running there until it ends (cancels, time limits and dead lanes are covered). A Linux process inside WSL
+    that starts its own session (setsid, a daemon) is outside the guard's group (neither CREST nor xtb does).
 - MOPAC COSMO: energies step as surface segments switch (CF3COO⁻ in water: finite-difference forces off by
   0.3 eV/Å at h = 1 mÅ); consider running MOPAC frequencies in the gas phase automatically.
 

@@ -77,6 +77,9 @@ How a parallel run works (``run_parallel``):
   before the kill wins.
 * memory: ``cfg.memory_budget_gb`` 0 (auto) is resolved once, here, to the available memory divided by the
   lanes (``chem.memory_guard``); every lane's dxtb steps are guarded against that share.
+* Windows: the lanes are in one kill-on-close job object of the parent (``proctree.Job``), so they end with the
+  GUI or CLI process however it ends, and each program a lane starts is in a job of its own (``proctree.start``,
+  nested in the lanes' job), which ends with the lane.
 * external programs a lane starts (xtb, CREST, Psi4: own process group/session) are recorded by
   ``external.run_program`` in a per-lane folder; when a lane dies or is killed the parent kills what it
   left running (``LanePool.kill_programs``; on Windows with ``taskkill /T`` and, for ``wsl:`` programs, on
@@ -906,6 +909,11 @@ class LanePool:
         # outlive a lane that dies or is killed): kill_programs() ends them
         self.programs_dir = Path(tempfile.mkdtemp(prefix="qb_lane_programs_"))
         self.lane_pids: set[int] = set()        # every lane process started: close() sweeps their scratch
+        # Windows: every lane in one kill-on-close job held by this process, so a crash of the GUI or the CLI ends the
+        # lanes at once, and with them their programs (each in a job of its own, nested in this one; ENG-3)
+        from .. import proctree
+
+        self.job = proctree.Job.create()
 
     # -- processes
     def start(self, w: _LaneProcess) -> None:
@@ -915,6 +923,8 @@ class LanePool:
                                       self.fractions.get(w.lane.device, 0.0), str(self.programs_of(w))))
         with _child_env(w.lane.threads):
             proc.start()
+        if self.job:
+            self.job.adopt(proc.pid)            # before it is sent work, so before it starts any program
         child_conn.close()
         w.proc, w.conn, w.ready, w.busy, w.pid = proc, parent_conn, False, None, proc.pid
         self.lane_pids.add(proc.pid)
@@ -988,6 +998,8 @@ class LanePool:
             if n:
                 self.log(f"[{w.lane.name}] stopped {n} external program(s) the lane left running")
         shutil.rmtree(self.programs_dir, ignore_errors=True)
+        if self.job:
+            self.job.close()                # the lanes have ended: this ends anything still in their job
         if self.lane_pids:                  # what lanes killed at the end (a deadline, a cancel) left in scratch
             from ..chem import external
 
