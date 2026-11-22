@@ -527,6 +527,36 @@ def test_surface_options_travel_to_a_worker():
             worker_mod.validate_config(bad)
 
 
+def test_build_filters_travel_to_a_worker(make_worker):
+    """SETTINGS-1: the build filters and ring conformers of the client's settings reach the worker's build (a
+    hydrate's ion pair is computed without water and sodium there too) and its run record; a value the worker cannot
+    compute the same way is refused before the job starts."""
+    import sqlite3
+
+    hydrate = "O.[Na+].[O-]C(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"
+    w = make_worker("w1")
+    c = WorkerClient(w.url, TOKEN)
+    config = {**CONFIG, "rank_method": "refine", "keep_largest_fragment": False, "strip_water": True,
+              "strip_counterions": "sodium", "ring_conformers": "thorough"}
+    j = c.submit([from_smiles(hydrate, id="napfoa")], config, "filters")
+    st = c.wait(j, poll=0.1, timeout=120)
+    assert st["state"] == "done" and st["counts"]["ok"] == 1, st
+    run_dir = Path(st["run_dir"])
+    with open(run_dir / "summary.csv", newline="", encoding="utf-8") as f:
+        row = next(csv.DictReader(f))
+    assert row["smiles"] == "O=C([O-])C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"
+    assert row["removed_fragments"] == "O.[Na+]"
+    with sqlite3.connect(run_dir / jobs.DB_NAME) as con:
+        stored = json.loads(con.execute("SELECT config FROM run").fetchone()[0])
+    assert (stored["strip_water"], stored["strip_counterions"], stored["ring_conformers"]) == (True, "sodium", "thorough")
+    good = client_mod.job_body([from_smiles(hydrate, id="napfoa")], config, "bad")
+    for change, message in (({"strip_counterions": "natrium"}, "unknown counter-ion"),
+                            ({"strip_counterions": "sodium,potassium"}, "sorted"),
+                            ({"ring_conformers": "skeletal"}, "ring_conformers")):
+        status, data = raw(w.url + "/v1/jobs", "POST", {**good, "config": {**good["config"], **change}})
+        assert status == 400 and message in data["error"], data
+
+
 def test_follow_stops_on_a_lost_job_and_retries_an_unreachable_one(make_worker, tmp_path):
     w = make_worker("w1")
     share = client_mod.Share(machine="w1", url=w.url, n=1, job_id="0123456789ab", state="running")

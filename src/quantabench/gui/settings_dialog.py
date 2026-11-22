@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -20,6 +20,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -303,9 +306,21 @@ class SettingsDialog(QDialog):
             else f"{self.molecule_timeout.value()} s per molecule"
         sec["compute_limits"].set_summary(f"{mem} · {limit}")
 
+    #: (value, label) of Build defaults > Ring conformers (``conformers.RING_CONFORMERS``)
+    RING_CHOICES = (("normal", "Normal (the rings ETKDG and the force field give)"),
+                    ("thorough", "Thorough (also twist-boats of six-membered rings)"))
+
     def _build_tab(self) -> QWidget:
+        """Build defaults: the method, protonation and conformer settings, Spartan's Conformer Rules (ring conformers)
+        and its Import Filters as build filters (water, acids, named counter-ions stripped before the largest-fragment
+        rule). Every value here is a science setting (``jobs.SCIENCE_FIELDS``) except the method's label."""
+        from ..chem import standardize
+        from .collapsible import InfoLabel, with_info
+
         w = QWidget()
-        form = QFormLayout(w)
+        outer = QVBoxLayout(w)
+        form = QFormLayout()
+        outer.addLayout(form)
         b = self.s.build
         self.method = QComboBox()
         methods = method_keys()
@@ -321,13 +336,21 @@ class SettingsDialog(QDialog):
         self.protonate = QCheckBox("Assign protonation state at this pH")
         self.protonate.setChecked(b.protonate)
         form.addRow(self.protonate)
-        self.desalt = QCheckBox("Keep largest fragment (strip counter-ions)")
-        self.desalt.setChecked(b.keep_largest_fragment)
-        form.addRow(self.desalt)
         self.max_confs = QSpinBox()
         self.max_confs.setRange(1, 1000)
         self.max_confs.setValue(b.max_conformers)
         form.addRow("Max conformers", self.max_confs)
+        self.ring_conformers = QComboBox()
+        self.ring_conformers.setObjectName("build_ring_conformers")
+        for key, label in self.RING_CHOICES:
+            self.ring_conformers.addItem(label, key)
+        self.ring_conformers.setCurrentIndex(max(0, self.ring_conformers.findData(b.ring_conformers)))
+        self.ring_conformers.setToolTip(
+            "Spartan's Conformer Rules for the RDKit search. Normal: the ring shapes ETKDG embeds and MMFF94s keeps\n"
+            "(chairs; a twist-boat only where the embedding happens to make one). Thorough: for every saturated\n"
+            "six-membered ring, the 5 lowest conformers are also held at each twist-boat and optimized, so twist-boat\n"
+            "conformers within the window join the pool (Max conformers still caps it). CREST makes its own.")
+        form.addRow("Ring conformers", self.ring_conformers)
         # stored in kcal/mol (a science setting), shown in the relative-energy unit of the Display tab
         self.window = EnergySpinBox(0.5, 50, units.KCAL, units.EnergyDisplay.of(self.s).relative)
         self.window.set_stored(b.energy_window_kcal)
@@ -347,7 +370,75 @@ class SettingsDialog(QDialog):
         self.fmax.setSuffix(" eV/Å")
         self.fmax.setValue(b.fmax)
         form.addRow("Force convergence", self.fmax)
+
+        # Spartan's Import Filters (water, HCl) as build filters, with named counter-ions; then the largest fragment
+        box = QGroupBox("Fragments")
+        box.setObjectName("build_fragments")
+        fl = QVBoxLayout(box)
+        self.strip_note = InfoLabel(
+            "Applied to every molecule a build computes (SMILES, names, PubChem, files), before the largest-fragment "
+            "rule, in this order: the fragments ticked here are removed, then <i>Keep the largest fragment</i> "
+            "keeps one of the rest. Without it the rest is computed together (a hydrate's ion pair without its "
+            "water). A named counter-ion is removed even where it is the larger ion (tetrabutylammonium "
+            "trifluoroacetate). Science settings: stored with each run, sent to grid workers, and a run resumes only "
+            "with the same ones. File &gt; Open's own filters (Settings &gt; Import) act on files first.")
+        self.strip_water = QCheckBox("Strip water (hydrates)")
+        self.strip_water.setChecked(b.strip_water)
+        fl.addWidget(with_info(self.strip_water, self.strip_note))
+        self.strip_acids = QCheckBox("Strip acids: HCl, HBr, HI, HF and other small neutral inorganic fragments")
+        self.strip_acids.setChecked(b.strip_acids)
+        fl.addWidget(self.strip_acids)
+        fl.addWidget(QLabel("Strip these counter-ions:"))
+        self.strip_list = QListWidget()
+        self.strip_list.setObjectName("build_strip_counterions")
+        self.strip_list.setFlow(QListView.Flow.LeftToRight)
+        self.strip_list.setWrapping(True)
+        self.strip_list.setResizeMode(QListView.ResizeMode.Adjust)
+        fm = self.fontMetrics()
+        longest = max(fm.horizontalAdvance(name) for name in standardize.NAMED_COUNTERIONS)
+        self.strip_list.setGridSize(QSize(longest + 34, fm.lineSpacing() + 6))   # whole names, in columns
+        self.strip_list.setFixedHeight((fm.lineSpacing() + 6) * 7 + 2 * self.strip_list.frameWidth())
+        chosen = set(standardize.counterion_names(b.strip_counterions, strict=False))
+        for name, smiles in standardize.NAMED_COUNTERIONS.items():
+            item = QListWidgetItem(name)
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if name in chosen else Qt.CheckState.Unchecked)
+            item.setToolTip(f"{smiles} (also its neutral form)")
+            self.strip_list.addItem(item)
+        fl.addWidget(self.strip_list)
+        self.desalt = QCheckBox("Then keep the largest fragment (removes the remaining counter-ions)")
+        self.desalt.setChecked(b.keep_largest_fragment)
+        fl.addWidget(self.desalt)
+        self.strip_summary = QLabel()
+        self.strip_summary.setWordWrap(True)
+        self.strip_summary.setStyleSheet("color: gray;")
+        fl.addWidget(self.strip_summary)
+        outer.addWidget(box)
+        outer.addStretch(1)
+        for check in (self.strip_water, self.strip_acids, self.desalt):
+            check.toggled.connect(self._update_strip_summary)
+        self.strip_list.itemChanged.connect(self._update_strip_summary)
+        self._update_strip_summary()
         return w
+
+    def strip_counterions(self) -> str:
+        """The ticked counter-ions, as ``BuildDefaults.strip_counterions`` stores them ("potassium,sodium")."""
+        from ..chem import standardize
+
+        names = [self.strip_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.strip_list.count())
+                 if self.strip_list.item(i).checkState() == Qt.CheckState.Checked]
+        return standardize.canonical_counterions(names)
+
+    def _update_strip_summary(self, *_args) -> None:
+        from ..chem import standardize
+
+        strip = standardize.FragmentStrip(water=self.strip_water.isChecked(), acids=self.strip_acids.isChecked(),
+                                          counterions=standardize.counterion_names(self.strip_counterions()))
+        then = ("then the largest fragment is kept" if self.desalt.isChecked()
+                else "then the remaining fragments are computed together")
+        self.strip_summary.setText(f"Stripped first: {strip.label()}; {then}." if strip
+                                   else f"Nothing stripped first; {then}.")
 
     def _import_tab(self) -> QWidget:
         """The stored choices of File > Open's Import Options dialog (``Settings.import_``), also the defaults of
@@ -821,7 +912,11 @@ class SettingsDialog(QDialog):
         b.ph = self.ph.value()
         b.protonate = self.protonate.isChecked()
         b.keep_largest_fragment = self.desalt.isChecked()
+        b.strip_water = self.strip_water.isChecked()
+        b.strip_acids = self.strip_acids.isChecked()
+        b.strip_counterions = self.strip_counterions()
         b.max_conformers = self.max_confs.value()
+        b.ring_conformers = self.ring_conformers.currentData() or "normal"
         b.energy_window_kcal = self.window.stored()
         b.rmsd_threshold = self.rmsd.value()
         b.fmax = self.fmax.value()

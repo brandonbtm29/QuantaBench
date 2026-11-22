@@ -123,6 +123,7 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "radii_set": ("bondi", "spartan"),
     "priority": ("normal", "low", "background"),
     "rank_method": ("auto", "refine", "gxtb+cpcm", "gxtb", "aimnet2", "aimnet2+cpcm", "qm"),   # chem.rank
+    "ring_conformers": ("normal", "thorough"),                     # chem.conformers.RING_CONFORMERS
 }
 # Inclusive ranges of numeric BuildConfig fields; other numbers only need to be finite.
 RANGES: dict[str, tuple[float, float]] = {
@@ -297,6 +298,23 @@ def _check_radii_overrides(value) -> dict[str, float]:
     return out
 
 
+def _check_counterions(value) -> str:
+    """``config.strip_counterions``: known counter-ion names, comma-separated and sorted as ``BuildConfig.from_settings``
+    stores them (a resume and every machine of a grid compare the run's settings by this string)."""
+    from ..chem import standardize
+
+    if not isinstance(value, str) or len(value) > 2000 or _CONTROL.search(value):
+        raise RequestError(400, "config.strip_counterions must be a string of counter-ion names")
+    try:
+        canonical = standardize.canonical_counterions(value)
+    except ValueError as exc:
+        raise RequestError(400, f"config.strip_counterions: {exc}") from None
+    if canonical != value:
+        raise RequestError(400, f"config.strip_counterions must be the names sorted and comma-separated, "
+                                f"{canonical!r}, not {value!r}")
+    return value
+
+
 def validate_config(data) -> dict:
     """Check a ``BuildConfig`` as sent by a client (``dataclasses.asdict``, usually without ``output_dir``
     and the resource fields). Returns the accepted fields; raises ``RequestError`` (400) otherwise."""
@@ -334,6 +352,9 @@ def validate_config(data) -> dict:
             continue
         if name == "radii_overrides":            # {element symbol or Z: Å}, as chem.radii reads it
             out[name] = _check_radii_overrides(value)
+            continue
+        if name == "strip_counterions":          # names of chem.standardize.NAMED_COUNTERIONS, sorted
+            out[name] = _check_counterions(value)
             continue
         if isinstance(default, (bool, int, float)):
             out[name] = _check_number(name, value, type(default))

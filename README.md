@@ -146,6 +146,16 @@ quantabench-cli build --file conformers.sdf --same-structures conformers --label
 quantabench-cli build --file set.sdf --import-options "post_fields=true,id_field=CAS_RN"
 ```
 
+**Settings > Build defaults** has the build's own filters, for every input (SMILES, names and files alike): water,
+acids and counter-ions picked by name are stripped before *Keep largest fragment*, so a hydrate's ion pair can be
+computed dry, or a salt's anion kept where the cation is larger. Its *Ring conformers: Thorough* (Spartan's Conformer
+Rules) also searches twist-boats of six-membered rings. Both are science settings, stored with each run:
+
+```bash
+quantabench-cli build "O.[Na+].[O-]C(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --strip water,sodium
+quantabench-cli build "OC1CCCC2CCCCC12" --ring-conformers thorough
+```
+
 ## Workspaces
 
 The activity bar on the left switches between five workspaces, each an arrangement of docks around the
