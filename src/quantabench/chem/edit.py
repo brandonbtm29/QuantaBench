@@ -763,6 +763,10 @@ class EditableMolecule:
         bond. A bond in a ring is refused."""
         return self.do(SetDihedral(i, j, k, m, value))
 
+    def set_positions(self, positions) -> None:
+        """Replace every atom's coordinates (Å), e.g. after the atoms were dragged in the 3D view's Move mode."""
+        return self.do(SetPositions(np.array(positions, float).reshape(-1, 3)))
+
     def fill_hydrogens(self) -> list[int]:
         """Put hydrogens on every open valence (Spartan does this when you leave the builder)."""
         return self.do(FillHydrogens())
@@ -1312,6 +1316,11 @@ class EditableMolecule:
         else:
             self._rotate(side_j, axis, -delta, self._pos(j))
 
+    def _op_set_positions(self, positions: np.ndarray) -> None:
+        if positions.shape != (self.n_atoms, 3) or not np.all(np.isfinite(positions)):
+            raise EditError(f"Expected {self.n_atoms} finite positions, got an array of shape {positions.shape}")
+        self._set_positions(positions)
+
     def _op_fill(self) -> list[int]:
         added = [h for i in range(self.n_atoms) for h in self._fill(i)]
         if added:
@@ -1604,6 +1613,15 @@ class SetDihedral(Command):
 
     def _run(self, model):
         return model._op_set_dihedral(self.i, self.j, self.k, self.m, self.value)
+
+
+@dataclass(eq=False)
+class SetPositions(Command):
+    positions: np.ndarray
+    text = "Move atoms"
+
+    def _run(self, model):
+        return model._op_set_positions(self.positions)
 
 
 @dataclass(eq=False)

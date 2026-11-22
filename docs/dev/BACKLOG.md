@@ -390,6 +390,14 @@ project database and search (UI-2), point group in the status bar, a properties 
 for trajectory frames and molecules. Needs-Brandon: a look on Windows and macOS (HiDPI icons, the dock
 layout at his window sizes).
 Depends on: none (everything else in the UI plugs into this, so it goes first).
+
+## UI-1b: A dock tab bar left over the view after a workspace switch · ready
+Seen 2026-11-22 (UI-7) on `main` too: after the start-up switch from Calculate to Build, a `QTabBar` of the main
+window with the tabs "Pipeline" and "Surfaces" stays visible at the right edge of the 3D view (about 420 x 27 px at
+1079, 231 in a 1560 x 940 window under xvfb; behind the right dock area except for a few pixels). It is the "empty
+strips over the view" `WorkspaceManager.apply_default` already works around: a tab group re-formed while its docks are
+still tabified elsewhere. Reproduce by listing the visible `QTabBar` children of the window after
+`set_workspace("build")`, find which tab group leaves it, and hide or remove it in `apply_default`.
 - Left activity bar switching workspaces: **Build, Calculate, Simulate, Analyze, Library**. Each is a
   page/dock set. Map the existing panels: molecule list + inputs → Build; pipeline stages → Calculate;
   surface builder / LAMMPS export → Simulate (stub page with what exists); conformer table, descriptors
@@ -601,15 +609,29 @@ Depends on: UI-4 for the MOL/CDXML plumbing; the spike can start any time.
   from SMILES and templates; the hand-off matches canonical SMILES); works offline; screenshots on
   Windows and macOS.
 
-## UI-7: 3D model kit (Spartan-style builder in the 3D view) · core done 2026-11-07; build mode ready
+## UI-7: 3D model kit (Spartan-style builder in the 3D view) · core done 2026-11-07; build mode in-PR 2026-11-22 (branch `feat/ui-7-build-mode`)
 Depends on: none to start (the 3D view exists); UI-1 places it in Build.
 - **Done (core, branch `feat/model-kit-core`):** `chem/edit.py` (the edit model, commands, `History`) and
   `chem/fragments.py` (the fragment library). Every operation below is a plain function with tests;
   PFOA, PFOS, GenX and 6:2 FTS build with kit operations and match MMFF94 within 0.03 Å.
-- **Left:** the GUI build mode (stubs, picking, palette dock, QUndoStack wrapper, Ctrl+Z / Ctrl+Y,
-  screenshot). Start from `docs/dev/MODEL_KIT_GUI.md`. Also left: the InChI and Clipboard buttons (the
-  SMILES path exists: `fragments.from_smiles`), the Peptide / Nucleotide tabs, and sharing the fragment
-  list with the UI-6 sketcher.
+- **In PR (branch `feat/ui-7-build-mode`, 2026-11-22):** the GUI build mode, as `docs/dev/MODEL_KIT_GUI.md`
+  designed it. `gui/model_kit.py` (the Model Kit dock and the controller), Build mode in `gui/viewer3d.py`
+  (`set_stubs`, `buildClicked`, stubs picked before atoms when nearer), View > Build (Ctrl+4), Edit > Undo / Redo
+  (Ctrl+Z, Ctrl+Y; `UndoAdaptor` puts each `chem.edit.Command` on a `QUndoStack`), the dock in the Build workspace
+  (`workspaces.STATE_VERSION` 4). Palette: the 19 Organic atom types with drawn icons, Groups (+ CF3), Rings,
+  Substituents, PFAS (with an n box for `(CF2)n` and `CnF2n+1`), More atoms (charged, hypervalent), a SMILES or InChI
+  box. Edit tools on the selection: Delete (atoms or the whole piece), bond order cycle, charge ±, make and break a
+  bond, a value box that sets the selected distance / angle / dihedral, Add H, Minimize (MMFF94, UFF fallback, Freeze
+  selected), Relax after each edit (on: `model.auto_relax`). A Move-mode drag during an edit is one undoable step
+  (`EditableMolecule.set_positions`, a new `SetPositions` command). Add to list / Replace <id> hand the structure to
+  the molecule list with its 3D coordinates (source "model kit"; the project file keeps them as a MOL block).
+  Tests: `tests/test_gui_model_kit.py` (11); smoke script `scripts/model_kit_smoke.py`; screenshots
+  `docs/dev/screenshots/UI-7/`.
+- **Left:** the Clipboard button (UI-4's parser), the Peptide / Nucleotide / Inorganic tabs, sharing the fragment
+  list with the UI-6 sketcher, dragging a dihedral in the view (today: type the value), a hover highlight on stubs
+  (needs a mouse-move observer outside a gesture), two parallel stubs for a double free valence as Spartan draws them
+  (today: a colour), a Delete key in the 3D view. Needs-Brandon: a hand check on Windows and macOS (build PFOA by
+  clicking, Ctrl+Z / Ctrl+Y, Minimize, Add to list, then Run).
 - **Build mode** in the PyVista view (next to select and move): a palette of atom types with their
   hybridization, as in Spartan's Organic tab (C sp3 / sp2 / sp, N sp3 / sp2 / sp, O, S, P, Si, H, F, Cl,
   Br, I, =O, =S, ≡N). Free valences are drawn as short stubs; clicking a stub attaches the chosen atom at

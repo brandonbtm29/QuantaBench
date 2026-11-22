@@ -2,6 +2,20 @@
 
 ## Unreleased (after 0.3.0)
 
+### The 3D model kit's Build mode (UI-7, 2026-11-22)
+- **Build mode** in the 3D view (View toolbar *Build*, Ctrl+4) and a **Model Kit** dock in the Build workspace, as in
+  Spartan: pick an atom type (C sp3 / sp2 / sp, N, O, P, S, Si, H, halogens, =O, =S, ≡N, drawn with their
+  geometry), a group, ring or PFAS piece, or type a SMILES or InChI. Free valences are drawn as stubs; click one to
+  attach the choice at its ideal bond length and direction, click an atom to replace it, click in empty space to
+  place the first atom (Shift+click: a separate piece). A drag still rotates; Ctrl+click selects.
+- **Edit tools** on the selected atoms: delete (atoms or a whole piece), bond order, charge ±, make / break a bond,
+  a box that sets the selected distance, angle or dihedral, Add H, and **Minimize** (MMFF94, UFF fallback, selected
+  atoms frozen on request). A quick local relax follows each edit.
+- **Edit > Undo / Redo** (Ctrl+Z, Ctrl+Y) for every Model Kit edit, Move-mode drags during an edit included.
+- **Add to list** puts the structure in the molecule list with its 3D coordinates (source "model kit"); **Replace**
+  updates the molecule the edit started from. Entering Build mode edits the selected molecule.
+- The Build workspace's default layout changed: saved window layouts of an older version are reset once.
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use

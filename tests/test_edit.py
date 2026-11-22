@@ -461,6 +461,20 @@ def test_history_texts_listeners_and_external_stack():
     assert len(own) == 2
 
 
+def test_set_positions_is_one_undoable_step():
+    m = EditableMolecule.from_smiles("CCO")
+    before = m.positions.copy()
+    m.set_positions(before + [0.5, -1.0, 2.0])
+    assert np.allclose(m.positions, before + [0.5, -1.0, 2.0]) and m.history.undo_text == "Move atoms"
+    m.history.undo()
+    assert np.array_equal(m.positions, before)
+    with pytest.raises(EditError):
+        m.set_positions(before[:-1])
+    with pytest.raises(EditError):
+        m.set_positions(np.full_like(before, np.nan))
+    assert np.array_equal(m.positions, before) and not m.history.can_undo
+
+
 # ====================================================================== import and export
 def test_import_and_export():
     m = EditableMolecule.from_smiles("c1ccccc1O")

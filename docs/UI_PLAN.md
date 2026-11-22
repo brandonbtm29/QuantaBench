@@ -99,7 +99,8 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
 - **3D model kit (UI-7).** Built into the PyVista view, like Spartan's: pick an atom type with its
   hybridization (or a group, ring or PFAS fragment) and click a free valence to attach it; set bond
   lengths, angles and dihedrals; minimize with MMFF. Every edit is an undoable command on one edit model
-  shared with the sketcher.
+  shared with the sketcher. Built 2026-11-22: the 3D view's Build mode (Ctrl+4) and the Model Kit dock in
+  the Build workspace, with Edit > Undo / Redo (`docs/dev/MODEL_KIT_GUI.md`).
 
 ## Job model: level of theory × task × resources
 

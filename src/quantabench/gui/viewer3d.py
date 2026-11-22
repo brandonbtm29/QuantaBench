@@ -26,6 +26,13 @@ Shift+left-drag translates them in the view plane. Pressing on an atom grabs its
 space grabs the selection, else the adsorbate, else everything, so a PFAS molecule can be oriented
 above a graphite slab without touching the slab. A click in move mode never changes the selection.
 
+``set_mode('build')`` is the Model Kit's mode (UI-7, ``gui.model_kit``): a drag still rotates the camera, as in
+Spartan, but a click builds instead of selecting (Ctrl+click still selects). The view stays a view: the kit gives it
+the free valences to draw (``set_stubs``) and gets ``buildClicked(kind, index, point, shift)`` back, where ``kind``
+is ``"stub"`` (``index`` is the row of the stubs given), ``"atom"`` or ``"space"`` (``point`` is the clicked point on
+the focal plane, where a first atom goes). In build mode hydrogens are drawn as stubs, not atoms. A stub and an atom
+under the cursor: the one nearer to the viewer wins.
+
 Rendering: atoms are one instanced glyph actor (``vtkGlyph3DMapper``: one sphere mesh, drawn once per
 atom on the GPU) and bonds are one instanced cylinder actor (two half-cylinders per bond, each in its
 atom's color). Moving atoms therefore only rewrites a few NumPy arrays, never rebuilds meshes, and a
@@ -57,7 +64,7 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from .selection import ACCENT_RGB, SelectionModel, format_measurement, measure
 
 STYLES = ("Ball and stick", "Licorice", "Space filling", "Wireframe")
-MODES = ("rotate", "select", "move")
+MODES = ("rotate", "select", "move", "build")
 LABEL_MODES = ("none", "element", "index", "element+index", "charge")
 COLOR_MODES = ("element", "charge", "tag")
 
@@ -70,6 +77,11 @@ HALO_COLOR = ACCENT_RGB              # same amber as the 2D view's highlights
 MEASURE_COLOR = (1.0, 0.80, 0.20)
 DASH, GAP = 0.16, 0.10            # Å, dashed measurement lines
 MAX_LABELS = 5000                 # beyond this, labels are unreadable and slow; they are skipped
+STUB_LENGTH = 0.6                 # Å, a free valence drawn in build mode, from the atom's surface
+STUB_RADIUS = 0.08                # Å
+STUB_PICK_RADIUS = 0.3            # Å around a stub's tip
+#: stub colours by the bond order a free valence takes (Spartan draws a double free valence differently)
+STUB_RGB = {1: (0, 168, 150), 2: (205, 80, 200), 3: (235, 120, 30)}
 
 # ColorBrewer RdBu stops (Brewer 2003), reversed so negative charge is red as in ESP maps
 _DIVERGING_STOPS = np.array([-1.0, -0.5, 0.0, 0.5, 1.0])
@@ -277,6 +289,9 @@ class MoleculeViewer3D(QWidget):
     #: The scene was rebuilt (new structure, style, colors, hydrogens) or cleared. Actors added by others
     #: (e.g. the Surfaces panel's "qb_surface") are kept; listeners check whether they still fit ``atoms``.
     sceneRebuilt = Signal()
+    #: A click in build mode: (kind "stub" | "atom" | "space", stub row or atom index (-1 for space), world point
+    #: (3,) of the stub tip, atom centre or the focal plane, Shift held).
+    buildClicked = Signal(str, int, object, bool)
 
     def __init__(self, parent=None, selection: SelectionModel | None = None):
         super().__init__(parent)
@@ -306,6 +321,8 @@ class MoleculeViewer3D(QWidget):
         self._camera_drag = False
         self._style_obj = None
         self._band_actor = None
+        self._stubs: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None   # build mode: atom, direction, order
+        self._stub_tips = np.zeros((0, 3))
         # One render per event-loop pass: a new molecule rebuilds the scene, clears the selection, and panels
         # add their actors, each asking for a render; under software OpenGL each costs ~65 ms (SCALE-1).
         self.renders = 0                   # renders done (tests count them)
@@ -386,10 +403,35 @@ class MoleculeViewer3D(QWidget):
         self._rebuild(False)
 
     def set_mode(self, mode: str) -> None:
-        """'rotate' (drag moves the camera), 'select' (drag draws a box), 'move' (drag moves atoms)."""
+        """'rotate' (drag moves the camera), 'select' (drag draws a box), 'move' (drag moves atoms), 'build' (a
+        click builds, see the module docstring)."""
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
+        was = self._build_view()
         self.mode = mode
+        if self._build_view() != was:
+            self._rebuild(False)             # hydrogens become stubs, or atoms again
+
+    def set_stubs(self, atoms=None, directions=None, orders=None, redraw: bool = True) -> None:
+        """Free valences to draw as stubs in build mode: the atom each one starts from, its unit direction and the
+        bond order it takes (1, 2 or 3; colour). None removes them. ``redraw=False`` when the structure is shown
+        next anyway (``show_rdkit``), so the scene is rebuilt once."""
+        if atoms is None:
+            self._stubs = None
+        else:
+            a = np.asarray(atoms, int).reshape(-1)
+            d = np.asarray(directions, float).reshape(-1, 3)
+            o = np.ones(len(a), int) if orders is None else np.asarray(orders, int).reshape(-1)
+            if not len(a) == len(d) == len(o):
+                raise ValueError("one direction and one order per stub")
+            self._stubs = (a, d, o)
+        if redraw:
+            self._rebuild(False)
+
+    @property
+    def stub_tips(self) -> np.ndarray:
+        """(S, 3) tips of the stubs drawn now (the points a click picks), in the order given to ``set_stubs``."""
+        return self._stub_tips
 
     def clear(self) -> None:
         self._atoms = None
@@ -400,13 +442,14 @@ class MoleculeViewer3D(QWidget):
         self._render()
         self.sceneRebuilt.emit()
 
-    def reset_camera(self) -> None:
-        """Default (isometric) orientation, zoomed to fit, rotating about the center of the structure."""
+    def reset_camera(self, min_extent: float = 0.0) -> None:
+        """Default (isometric) orientation, zoomed to fit, rotating about the center of the structure. The view
+        spans at least ``min_extent`` Å (the Model Kit's first atom is not blown up to fill the view)."""
         if self.plotter is not None:
-            self._reset_view()
+            self._reset_view(min_extent)
             self._render()
 
-    def _reset_view(self) -> None:
+    def _reset_view(self, min_extent: float = 0.0) -> None:
         p = self.plotter
         p.camera_position = p.get_default_cam_pos()
         if self._atoms is not None and len(self._atoms):
@@ -414,6 +457,8 @@ class MoleculeViewer3D(QWidget):
             pos = self._atoms.positions
             pad = (float(self._radii.max()) if len(self._radii) else 1.0) + 0.5
             lo, hi = pos.min(axis=0) - pad, pos.max(axis=0) + pad
+            grow = np.maximum(0.0, float(min_extent) - (hi - lo)) / 2
+            lo, hi = lo - grow, hi + grow
             # the renderer's, not the plotter's: Plotter.reset_camera renders whatever ``render`` says
             p.renderer.reset_camera(render=False, bounds=(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]))
         else:
@@ -589,6 +634,11 @@ class MoleculeViewer3D(QWidget):
         """Full-molecule index of the displayed atom under display pixel (x, y from the bottom), or None.
 
         Hidden hydrogens are not pickable, but the returned index always counts them."""
+        hit = self._atom_hit(display_x, display_y)
+        return None if hit is None else hit[0]
+
+    def _atom_hit(self, display_x: float, display_y: float) -> tuple[int, float] | None:
+        """(full index, distance along the ray) of the displayed atom under the pixel, or None."""
         if self.plotter is None or self._atoms is None or len(self._vis) == 0:
             return None
         origin, direction = self.display_ray(display_x, display_y)
@@ -596,7 +646,21 @@ class MoleculeViewer3D(QWidget):
         if self.style == "Wireframe":
             radii = np.full(len(self._vis), WIREFRAME_PICK_RADIUS)
         hit = ray_sphere_pick(origin, direction, self._atoms.positions[self._vis], radii)
-        return None if hit is None else int(self._vis[hit[0]])
+        return None if hit is None else (int(self._vis[hit[0]]), hit[1])
+
+    def pick_stub(self, display_x: float, display_y: float) -> tuple[int, float] | None:
+        """(row, distance along the ray) of the build-mode stub whose tip is under the pixel, or None."""
+        if self.plotter is None or not len(self._stub_tips):
+            return None
+        origin, direction = self.display_ray(display_x, display_y)
+        return ray_sphere_pick(origin, direction, self._stub_tips, np.full(len(self._stub_tips), STUB_PICK_RADIUS))
+
+    def focal_plane_point(self, display_x: float, display_y: float) -> np.ndarray:
+        """World point under the pixel at the depth of the camera's focal point (where a click in empty space
+        puts a new atom)."""
+        cam = self.plotter.renderer.GetActiveCamera()
+        depth = self.world_to_display(np.array(cam.GetFocalPoint()))[0, 2]
+        return self.display_to_world(display_x, display_y, depth)
 
     # ================================================================== mouse logic (VTK-free)
     def _mouse_press(self, x: float, y: float, shift: bool = False, ctrl: bool = False,
@@ -664,10 +728,13 @@ class MoleculeViewer3D(QWidget):
                 self.coordinatesChanged.emit(self._atoms.positions.copy())
             return True                  # a click in move mode does not change what is selected
         if not moved:
-            self._click(x, y, g.ctrl)
+            self._click(x, y, g.ctrl, g.shift)
         return g.kind != "camera"
 
-    def _click(self, x: float, y: float, ctrl: bool) -> None:
+    def _click(self, x: float, y: float, ctrl: bool, shift: bool = False) -> None:
+        if self.mode == "build" and not ctrl:
+            self._build_click(x, y, shift)
+            return
         idx = self.pick_atom(x, y)
         if idx is None:
             if not ctrl:
@@ -676,6 +743,19 @@ class MoleculeViewer3D(QWidget):
             self.selection.toggle(idx)
         else:
             self.selection.select([idx])
+
+    def _build_click(self, x: float, y: float, shift: bool) -> None:
+        """Build mode: say what was clicked (``buildClicked``); the selection does not change."""
+        if self.plotter is None:
+            return
+        stub = self.pick_stub(x, y)
+        atom = self._atom_hit(x, y)
+        if stub is not None and (atom is None or stub[1] <= atom[1]):
+            self.buildClicked.emit("stub", stub[0], self._stub_tips[stub[0]].copy(), shift)
+        elif atom is not None:
+            self.buildClicked.emit("atom", atom[0], self._atoms.positions[atom[0]].copy(), shift)
+        else:
+            self.buildClicked.emit("space", -1, self.focal_plane_point(x, y), shift)
 
     def _box_select(self, x0: float, y0: float, x1: float, y1: float, additive: bool) -> None:
         if self._atoms is None or len(self._vis) == 0:
@@ -840,6 +920,7 @@ class MoleculeViewer3D(QWidget):
         for name in list(self._names):
             self._remove(name)
         self._atom_pd = self._bond_pd = self._wire_pd = self._label_pd = None
+        self._stub_tips = np.zeros((0, 3))
         self._set_measure_text("")
 
     def _atom_colors(self) -> np.ndarray:
@@ -868,7 +949,7 @@ class MoleculeViewer3D(QWidget):
         atoms = self._atoms
         n = len(atoms)
         self._set_anti_aliasing(n)
-        keep = np.ones(n, bool) if self.show_hydrogens else atoms.numbers != 1
+        keep = np.ones(n, bool) if self.show_hydrogens and not self._build_view() else atoms.numbers != 1
         self._vis = np.where(keep)[0]
         self._radii = atom_radii(atoms.numbers, self.style)
         self._colors = self._atom_colors()
@@ -921,6 +1002,7 @@ class MoleculeViewer3D(QWidget):
 
         if self.color_mode == "charge" and self._charges is not None:
             self._add_charge_bar()
+        self._draw_stubs()
         self._update_labels()
         self._update_highlights()
         if reset_camera:
@@ -980,6 +1062,52 @@ class MoleculeViewer3D(QWidget):
         prop.SetOpacity(opacity)
         prop.LightingOff()
         return actor
+
+    def _build_view(self) -> bool:
+        """Build mode with stubs to draw: hydrogens are shown as stubs, not atoms."""
+        return self.mode == "build" and self._stubs is not None
+
+    def _stub_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Start points (on the atom's drawn surface), directions and orders of the stubs on atoms that exist."""
+        a, d, o = self._stubs
+        ok = (a >= 0) & (a < len(self._atoms))
+        a, d, o = a[ok], d[ok], o[ok]
+        r = self._radii[a] if len(a) else np.zeros(0)
+        starts = self._atoms.positions[a] + d * r[:, None]
+        return starts, d, o
+
+    def _draw_stubs(self) -> None:
+        """The free valences as short cylinders (build mode); their tips are what ``pick_stub`` hits."""
+        self._remove("build_stubs")
+        self._stub_tips = np.zeros((0, 3))
+        if not self._build_view() or self._atoms is None:
+            return
+        import pyvista as pv
+        import vtk
+
+        starts, dirs, orders = self._stub_arrays()
+        if len(self._stubs[0]) != len(starts):
+            return                           # stubs of another structure: drawn after the next show_rdkit
+        self._stub_tips = starts + dirs * STUB_LENGTH
+        if not len(starts):
+            return
+        cyl = vtk.vtkCylinderSource()            # along +y, centered; turn it into x in [0, 1] as for bonds
+        cyl.SetRadius(STUB_RADIUS)
+        cyl.SetHeight(1.0)
+        cyl.SetResolution(12)
+        tf = vtk.vtkTransform()
+        tf.Translate(0.5, 0, 0)
+        tf.RotateZ(-90)
+        tfp = vtk.vtkTransformPolyDataFilter()
+        tfp.SetTransform(tf)
+        tfp.SetInputConnection(cyl.GetOutputPort())
+        pd = pv.PolyData(starts)
+        pd.point_data["dir"] = dirs
+        pd.point_data["scale"] = np.column_stack([np.full(len(starts), STUB_LENGTH), np.ones(len(starts)),
+                                                  np.ones(len(starts))])
+        pd.point_data["rgb"] = np.array([STUB_RGB.get(int(k), STUB_RGB[1]) for k in orders], np.uint8)
+        material = {"specular": 0.2, "specular_power": 10.0, "diffuse": 0.8, "ambient": 0.25}
+        self._add("build_stubs", self._glyph_actor(pd, tfp.GetOutputPort(), "scale", material, orient="dir"))
 
     def _bond_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Two half-cylinders per bond: start points, directions and (length, 1, 1) scales."""
@@ -1178,6 +1306,8 @@ class MoleculeViewer3D(QWidget):
             self._wire_pd.points = np.vstack([a, 0.5 * (a + c), c]) if nb else self._wire_pd.points
         if self._label_pd is not None:
             self._label_pd.points = pos[self._vis].copy()
+        if "build_stubs" in self._names:
+            self._draw_stubs()
         self._update_highlights()
         self.plotter.renderer.ResetCameraClippingRange()
         self._render()

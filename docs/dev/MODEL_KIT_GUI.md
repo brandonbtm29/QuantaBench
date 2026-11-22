@@ -1,7 +1,22 @@
 # Model kit build mode (UI-7, GUI part): design note
 
-Written 2026-11-07, after the core (`chem/edit.py`, `chem/fragments.py`). Not implemented yet. This is the
-starting point for the task that adds the build mode to the 3D view.
+Written 2026-11-07, after the core (`chem/edit.py`, `chem/fragments.py`), as the starting point for the task that
+adds the build mode to the 3D view. **Implemented 2026-11-22** (branch `feat/ui-7-build-mode`: `gui/model_kit.py`,
+Build mode in `gui/viewer3d.py`, `tests/test_gui_model_kit.py`). Where the code differs from this note:
+
+- `buildClicked(kind, index, point, shift)` has a fourth argument: Shift+click in empty space adds a separate piece
+  to a model that is not empty (a plain click there only says what to click). An empty model takes a plain click.
+- A stub and an atom under the cursor: the one nearer to the viewer wins, not always the stub (a stub behind an
+  atom would otherwise take a click meant to replace the atom).
+- Stubs are coloured by `max_order` (teal single, magenta double, orange triple), not drawn as parallel pairs.
+- Entering Build mode opens an *edit*: of the molecule selected in the list (its shown conformer when it is built),
+  else of an empty model. The edit owns the 3D and 2D views until **Add to list**, **Replace <id>** (the two halves
+  of Done) or **Close**; selecting another molecule meanwhile does not change the views (as with the Surface
+  Builder). Rotate mode during an edit selects atoms of the model for the edit tools; a Move-mode drag is one
+  undoable step (`EditableMolecule.set_positions`).
+- After the first atom of a new model the view is reset to span 10 Å around it.
+- The text box takes SMILES and InChI; the Clipboard button and the Substituent tab as a tab (it is a menu) are
+  not there.
 
 ## What exists
 

@@ -338,3 +338,26 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Tests:** `tests/test_wsl_scratch.py` (23) runs the real scripts through a stand-in `wsl.exe` and `df` on
   Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
   check (BACKLOG CREST-SCRATCH-1).
+
+## 2026-11-22: the model kit's Build mode (UI-7, branch `feat/ui-7-build-mode`)
+- **Built as `MODEL_KIT_GUI.md` designed it**, with the differences listed at the top of that note. The view stays a
+  view: `MoleculeViewer3D` gained `set_stubs` and `buildClicked`, and `gui/model_kit.py` owns the
+  `EditableMolecule`, its `QUndoStack` and the palette. The handlers are plain methods (`click_stub`, `click_atom`,
+  `click_space`, `choose`, the tools); the tests call them directly, plus one test that goes through the view's
+  VTK-free mouse methods to a projected stub tip, in perspective and orthographic.
+- **Undo:** `UndoAdaptor.push` applies the command first and pushes only when it succeeded; the pushed
+  `QUndoCommand` skips the `redo()` that `QUndoStack.push` calls at once. A `chem.edit.Command` replays its stored
+  snapshot on redo, so undo/redo round trips give exactly the same coordinates (the test compares arrays with
+  `np.array_equal`). The stack emits `cleanChanged` while it is destroyed with the window, after its panel's buttons
+  are gone: the slot checks `shiboken6.isValid` first.
+- **Stub or atom:** the design said stubs first. A stub pointing away from the viewer projects onto its own atom,
+  so a click meant to replace the atom attached at the far side; the nearer hit along the ray wins now.
+- **Who owns the views:** an open edit, like the Surface Builder. `MainWindow.kit_owns_view()` guards
+  `_on_molecule_selected`, `_show_conformer` and `_preview_input`, so the list, the conformer table and the playback
+  bar leave the model alone; `end()` gives the views back and shows the selected (or new) molecule.
+- **Screenshots:** `QWidget.grab()` cannot read the VTK OpenGL widget offscreen (black). `scripts/model_kit_smoke.py`
+  builds PFBA atom by atom and GenX from groups in the real window and pastes the view's own VTK screenshot into the
+  window grab; `docs/dev/screenshots/UI-7/`.
+- **Seen on the way, also on `main`:** a "Pipeline / Surfaces" tab bar left at the right edge of the 3D view after
+  the start-up switch to Build (BACKLOG UI-1b); `test_gui_declutter.py::test_results_dock_folds_for_one_conformer`
+  fails in the cloud container under xvfb on `main` as well (dock heights).
