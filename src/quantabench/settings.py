@@ -166,7 +166,7 @@ class DisplaySettings:
 class ImportSettings:
     """Stored choices of the Import Options dialog (File > Open; ``chem.import_options.ImportOptions`` has the same
     fields and says what each does), also the defaults of the command line's ``--file`` inputs. ``ask``: show the
-    dialog when a file has choices (its "Don't ask again" box clears it; Settings > Import sets it back)."""
+    dialog when a file has choices (its "Don't ask again" box clears it; Tools > Settings > Import sets it back)."""
     ask: bool = True
     convert_2d: bool = True           # 2D structures (MOL/SDF 2D flag or every z = 0, ChemDraw) get 3D coordinates
     grow_hydrogens: bool = True       # explicit hydrogens with coordinates

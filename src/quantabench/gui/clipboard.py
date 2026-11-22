@@ -3,9 +3,14 @@
 CONTRACT:
 
     install(win: MainWindow) -> None
-        Adds an Edit menu (after File) with Paste (Ctrl+V) and a Copy as submenu, puts the same Copy as submenu and
-        Paste in the molecule list's right-click menu (``MoleculeListView.menu_hooks``), accepts drops on the window
-        and on the molecule list, and lets Ctrl+V in the Molecules box paste a structure (see below).
+        Adds an Edit menu (after File) with Paste (Ctrl+V), Copy molecules (Ctrl+Shift+C) and a Copy as submenu, puts
+        the same actions in the molecule list's right-click menu (``MoleculeListView.menu_hooks``), accepts drops on
+        the window and on the molecule list, and lets Ctrl+V in the Molecules box paste a structure (see below).
+
+    ACTIONS / DEFAULT_KEYS / default_shortcuts(name)
+        The actions are QActions named by ``objectName`` ("edit.paste", "edit.copy_molecules",
+        "edit.copy_as.<kind>"), kept in ``win.actions_by_name``; their default keys are in ``DEFAULT_KEYS``, the one
+        place they are set, so a keymap (UI-9, Settings > Controls) can rebind them by name. No ``QShortcut``.
 
 Paste reads the clipboard's formats in this order and uses the first one that gives molecules (the log says
 which): ChemDraw CDX, CDXML, an MDL molfile, file URLs, text. Format names are compared ignoring case:
@@ -32,6 +37,11 @@ so a table's columns can be posted to the molecule list as for a file. Paste wit
 into the field; Ctrl+V in the Molecules box adds molecules only when the clipboard holds a structure format or
 several lines of text (a single line goes into the box as usual). A clipboard with nothing readable gives a message
 that names its formats and what QuantaBench reads.
+
+Copy molecules (Ctrl+Shift+C with the focus in the Molecules dock, so the Analyze table keeps its own Ctrl+Shift+C;
+Ctrl+C stays Qt's copy of the current cell) puts the selected rows on the clipboard as a tab-separated table with a
+header: ID, SMILES, Name and the posted data-field columns that are shown. It pastes into a spreadsheet, and back
+into QuantaBench (``MOLECULES_MIME`` keeps the ID column the id when it comes straight back).
 
 Copy as puts the selected molecules (or the current one) on the clipboard: SMILES as entered (the list's own text,
 so any number of rows copies at once), canonical SMILES, InChI, InChIKey (one per line, with the id after it when
@@ -84,6 +94,43 @@ READS = ("QuantaBench reads SMILES, InChI, InChIKeys, names and CAS numbers (one
          "structure files.")
 #: Copy as of more molecules than this runs on a worker thread (canonical SMILES of 200 take ~20 ms, InChI ~50 ms)
 SYNC_LIMIT = 200
+#: Copy molecules' table, besides the text: Paste reads it with the ID and SMILES columns it was written with
+MOLECULES_MIME = "application/x-quantabench-molecules"
+MOLECULES_COLUMNS = ("ID", "SMILES", "Name")
+
+#: objectName -> (text, tooltip) of the actions this module adds; the Copy as actions are "edit.copy_as.<kind>"
+ACTIONS = {
+    "edit.paste": ("Paste", "Add the structures on the clipboard to the Molecules list: ChemDraw, MOL or SD, XYZ, "
+                   "CDXML, Marvin, a table with a SMILES column, SMILES, InChI, InChIKeys, names or CAS numbers "
+                   "(in a text field: paste the text)"),
+    "edit.copy_molecules": ("Copy molecules", "Copy the selected rows as a table (ID, SMILES, name and the data-field "
+                            "columns shown) for a spreadsheet, or to paste back here"),
+}
+#: objectName -> default key: a QKeySequence.StandardKey (the platform's keys) or a key string. The one place the
+#: keys are set; a keymap (UI-9) rebinds the actions by name (``win.actions_by_name``)
+DEFAULT_KEYS: dict[str, object] = {
+    "edit.paste": QKeySequence.StandardKey.Paste,
+    "edit.copy_molecules": "Ctrl+Shift+C",
+}
+
+
+def default_shortcuts(name: str) -> list[QKeySequence]:
+    """The default keys of action ``name`` (``DEFAULT_KEYS``), [] for none."""
+    spec = DEFAULT_KEYS.get(name)
+    if spec is None:
+        return []
+    if isinstance(spec, QKeySequence.StandardKey):
+        return list(QKeySequence.keyBindings(spec))
+    return [QKeySequence(spec)]
+
+
+def triggers(action, event) -> bool:
+    """Whether key ``event`` is one of ``action``'s keys as they are now (after any rebinding)."""
+    try:
+        pressed = QKeySequence(event.keyCombination())
+    except (AttributeError, TypeError):
+        return False
+    return any(seq == pressed for seq in action.shortcuts())
 
 
 def _clipboard():
@@ -99,6 +146,8 @@ def format_name(fmt: str) -> str:
 
 def _kind(fmt: str) -> str | None:
     name = format_name(fmt)
+    if name == MOLECULES_MIME:
+        return "molecules"
     if name in CDX_NAMES or "chemdraw interchange" in name:
         return "cdx"
     if name in CDXML_NAMES:
@@ -110,12 +159,12 @@ def _kind(fmt: str) -> str | None:
     return None
 
 
-_ORDER = ("cdx", "cdxml", "mdlct", "mol")
+_ORDER = ("molecules", "cdx", "cdxml", "mdlct", "mol")
 
 
 def candidates(mime: QMimeData) -> list[tuple[str, str, object]]:
-    """(format as named, kind, data) of the structures in ``mime``, in the order they are tried: ChemDraw CDX,
-    CDXML, MDLCT, MOL, then text. Plain Python data (bytes, str), so a worker thread can parse them."""
+    """(format as named, kind, data) of the structures in ``mime``, in the order they are tried: QuantaBench's own
+    molecule table (Copy molecules), ChemDraw CDX, CDXML, MDLCT, MOL, then text. Plain Python data (bytes, str), so a worker thread can parse them."""
     found: list[tuple[str, str, object]] = []
     for fmt in mime.formats():
         kind = _kind(fmt)
@@ -155,7 +204,7 @@ def _decode(data) -> str:
 
 #: what ``interchange.detect_format`` found in pasted text, for the log line ("Paste: 3 molecule(s) from text/plain
 #: (XYZ text)")
-_TEXT_KINDS = {"mol": "MOL text", "sdf": "SD text", "xyz": "XYZ text", "table": "table", "cdxml": "CDXML text",
+_TEXT_KINDS = {"molecules": "QuantaBench molecules", "mol": "MOL text", "sdf": "SD text", "xyz": "XYZ text", "table": "table", "cdxml": "CDXML text",
                "mrv": "Marvin text", "text": "text"}
 
 
@@ -168,10 +217,16 @@ def read_candidates(cands: list[tuple[str, str, object]], table: dict | None = N
     table = {k: v for k, v in (table or {}).items() if v}
     errors = []
     for fmt, kind, data in cands:
-        label = f"{format_name(fmt)} ({kind.upper() if kind != 'text' else 'text'})"
+        label = f"{format_name(fmt)} ({ {'text': 'text', 'molecules': 'QuantaBench molecules'}.get(kind, kind.upper()) })"
         messages: list[str] = []
         try:
-            if kind == "cdx":
+            if kind == "molecules":                 # Copy molecules: its ID column is the id
+                items = interchange.read_table_text(_decode(data), source, smiles_col="SMILES", id_col="ID",
+                                                    log=messages.append)
+                for it in items:                    # the id and the name, not data fields to post
+                    for k in ("ID", "Name"):
+                        it.meta.pop(k, None)
+            elif kind == "cdx":
                 items = interchange.parse_cdx_bytes(data, source=source)
             elif kind == "mdlct":
                 items = interchange.parse_structure_text(interchange.mdlct_decode(data), source, messages.append)
@@ -278,9 +333,26 @@ def _table_options(win) -> dict:
                 smiles_preference=pref.currentData() if pref is not None else None)
 
 
+def asks_import_options(win, items: list) -> bool:
+    """Whether ``import_items`` will show the Import Options dialog for ``items``."""
+    from ..chem.import_options import survey
+
+    return bool(win.s.import_.ask) and survey(items).has_choices()
+
+
+def import_note(asks: bool) -> str:
+    """How the Import Options were chosen and where to change them (the paste log line ends with it)."""
+    from .import_options import SETTINGS_PATH
+
+    if asks:
+        return f"Import Options asked; you can change them later in {SETTINGS_PATH}"
+    return f"stored Import Options applied; you can change them later in {SETTINGS_PATH}"
+
+
 def import_items(win, items: list, what: str = TITLE) -> bool:
     """Molecules read from the clipboard or a drop into the list through File > Open's Import Options (the dialog
-    when they have choices and Settings > Import says to ask). False when the user cancels the dialog."""
+    when they have choices and Tools > Settings > Import says to ask, until its "Don't ask again" is ticked). False
+    when the user cancels the dialog."""
     from . import import_options as import_gui
 
     options = import_gui.choose(win, win.s, items, [f"the {_where(what)}"])
@@ -303,7 +375,7 @@ def add_from(win, cands, what: str = TITLE) -> None:
         for m in messages:
             win.log(m)
         _log.info("%s: %d molecule(s) from %s", what, len(items), label)
-        win.log(f"{what}: {len(items)} molecule(s) from {label}")
+        win.log(f"{what}: {len(items)} molecule(s) from {label}; {import_note(asks_import_options(win, items))}")
         import_items(win, items, what)
 
     def failed(msg):
@@ -471,7 +543,8 @@ class _EventFilter(QObject):
             return True
         entry = getattr(self.win, "entry", None)
         if obj is entry and t in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
-            if event.matches(QKeySequence.StandardKey.Paste) and \
+            a_paste = getattr(self.win, "a_paste", None)
+            if a_paste is not None and triggers(a_paste, event) and \
                     structure_on_clipboard(_clipboard().mimeData()):
                 if t == QEvent.Type.KeyPress:
                     paste(self.win)
@@ -754,6 +827,48 @@ def copy_as(win, kind: str) -> bool:
     return True
 
 
+def _cell(value) -> str:
+    from .molecule_list import _field_text
+
+    return " ".join(_field_text(value).split()) if isinstance(value, str) else _field_text(value)
+
+
+def molecules_table(win, rows) -> str:
+    """``rows`` as a tab-separated table with a header: ID, SMILES (as entered), Name, then the posted data-field
+    columns the list shows (hidden ones left out). Tabs and line breaks inside a cell become spaces."""
+    import csv
+    import io
+
+    from .molecule_list import COLUMNS
+
+    taken = {c.lower() for c in MOLECULES_COLUMNS}
+    fields = [name for k, name in enumerate(win.model.extra_columns())
+              if not win.mol_list.isColumnHidden(len(COLUMNS) + k) and name.strip().lower() not in taken]
+    out = io.StringIO()
+    w = csv.writer(out, delimiter="\t", lineterminator="\n")
+    w.writerow(MOLECULES_COLUMNS + tuple(fields))
+    for r in rows:
+        smiles = r.smiles or (getattr(r.input, "smiles", "") if r.input is not None else "")
+        w.writerow([_cell(r.id), _cell(smiles), _cell(r.name)] + [_cell((r.fields or {}).get(f)) for f in fields])
+    return out.getvalue()
+
+
+def copy_molecules(win) -> bool:
+    """Edit > Copy molecules (Ctrl+Shift+C in the Molecules dock): the selected rows as a table (``molecules_table``),
+    as text for spreadsheets and as ``MOLECULES_MIME`` for a paste back into QuantaBench."""
+    rows = selected_rows(win)
+    if not rows:
+        win.statusBar().showMessage("Select a molecule to copy", 4000)
+        return False
+    text = molecules_table(win, rows)
+    mime = QMimeData()
+    mime.setText(text)
+    mime.setData(MOLECULES_MIME, text.encode("utf-8"))
+    _clipboard().setMimeData(mime)
+    win.statusBar().showMessage(f"Copied {len(rows):,} molecule(s) as a table (ID, SMILES, name, fields)", 5000)
+    return True
+
+
 # ================================================================== install
 
 
@@ -776,40 +891,58 @@ def _edit_menu(win):
 def _update_copy_actions(win) -> None:
     on = bool(win.mol_list.selected_ids() or win.mol_list.current_id())
     win.copy_as_menu.setEnabled(on)
+    win.a_copy_molecules.setEnabled(on)
 
 
 def _list_menu(win, menu: QMenu) -> None:
-    """The molecule list's right-click menu: Copy as, Paste."""
+    """The molecule list's right-click menu: Copy molecules, Copy as, Paste."""
     _update_copy_actions(win)
+    menu.addAction(win.a_copy_molecules)
     menu.addMenu(win.copy_as_menu)
     menu.addAction(win.a_paste)
 
 
+def _named_action(win, name: str, slot, text: str = "", tip: str = "") -> QAction:
+    """A QAction named ``name`` (its objectName) with its default keys (``DEFAULT_KEYS``), in
+    ``win.actions_by_name``, where a keymap finds it."""
+    a = QAction(text or ACTIONS[name][0], win)
+    a.setObjectName(name)
+    a.setToolTip(tip or ACTIONS.get(name, ("", ""))[1])
+    keys = default_shortcuts(name)
+    if keys:
+        a.setShortcuts(keys)
+    a.triggered.connect(lambda _checked=False: slot())
+    if not hasattr(win, "actions_by_name"):
+        win.actions_by_name = {}
+    win.actions_by_name[name] = a
+    return a
+
+
 def install(win) -> None:
     menu = _edit_menu(win)
-    a_paste = QAction("Paste", win)
-    a_paste.setShortcut(QKeySequence(QKeySequence.StandardKey.Paste))
+    a_paste = _named_action(win, "edit.paste", lambda: edit_paste(win))
     a_paste.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-    a_paste.setToolTip("Add the structures on the clipboard to the Molecules list: ChemDraw, MOL or SD, XYZ, CDXML, "
-                       "Marvin, a table with a SMILES column, SMILES, InChI, InChIKeys, names or CAS numbers "
-                       "(in a text field: paste the text)")
-    a_paste.triggered.connect(lambda _checked=False: edit_paste(win))
     menu.addAction(a_paste)
     menu.addSeparator()
+    # Ctrl+Shift+C in the Molecules dock only: the Analyze table's own Ctrl+Shift+C (copy with column titles) stays
+    a_copy = _named_action(win, "edit.copy_molecules", lambda: copy_molecules(win))
+    a_copy.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+    win.mol_dock.addAction(a_copy)
+    menu.addAction(a_copy)
     copy_menu = QMenu("Copy as", win)
+    copy_menu.setObjectName("edit.copy_as")
     copy_menu.setToolTipsVisible(True)
     copy_menu.setToolTip("Put the selected molecules on the clipboard")
     win.a_copy_as = {}
     for kind, label in COPY_LABELS.items():
-        a = QAction(label, win)
-        a.setToolTip(COPY_TIPS[kind])
-        a.triggered.connect(lambda _checked=False, k=kind: copy_as(win, k))
+        a = _named_action(win, f"edit.copy_as.{kind}", lambda k=kind: copy_as(win, k), label, COPY_TIPS[kind])
         copy_menu.addAction(a)
         win.a_copy_as[kind] = a
     menu.addMenu(copy_menu)
     menu.aboutToShow.connect(lambda: _update_copy_actions(win))
     win.copy_as_menu = copy_menu
     win.a_paste = a_paste
+    win.a_copy_molecules = a_copy
     win.mol_list.menu_hooks.append(lambda m: _list_menu(win, m))
     win.setAcceptDrops(True)
     filt = _EventFilter(win)

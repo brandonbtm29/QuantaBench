@@ -373,4 +373,20 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Tests:** `tests/test_gui_clipboard.py` (29) and `tests/test_interchange.py` (+6). A `_FakeClipboard` stands in
   for the system clipboard (`gui.clipboard._clipboard`), so the copy tests also run where a Windows session has no
   clipboard; the two tests on the real clipboard still skip there.
+- **Brandon's answers (same day, second commit):**
+  - A ChemDraw paste keeps asking (Import Options) until "Don't ask again". The dialog has a note next to that
+    box and the paste log line ends with where to change it: **Tools > Settings > Import** (the Settings action is
+    in the Tools menu; its tab is "Import"), one constant `gui.import_options.SETTINGS_PATH`.
+  - **Copy molecules** (Ctrl+Shift+C): the selected rows as a tab-separated table (ID, SMILES as entered, Name, the
+    posted field columns the list shows), as text and as `application/x-quantabench-molecules`. Paste tries that
+    format first and reads it with ID and SMILES as the id and structure columns (a plain table would take a
+    posted DTXSID column as the id: `inputs.ID_COLUMNS` puts it first). A copy that went through Excel is text
+    only and reads as any table.
+  - The key: the Analyze table already uses Ctrl+Shift+C (copy with column titles, in `SheetView.keyPressEvent`).
+    A window-wide action would take the key from it, so Copy molecules is a `WidgetWithChildrenShortcut` on the
+    Molecules dock. Checked under xvfb with QTest key clicks: Ctrl+Shift+C in the list copies molecules, in the
+    Analyze table it still copies cells with titles, Ctrl+C in the list is still Qt's cell copy.
+  - For UI-9's keymap: every action is a QAction with an `objectName` (`edit.paste`, `edit.copy_molecules`,
+    `edit.copy_as.<kind>`), in `win.actions_by_name`, default keys in `clipboard.DEFAULT_KEYS` only. The Molecules
+    box's Ctrl+V check now compares the key with the paste action's current shortcuts, so a rebinding moves it too.
 

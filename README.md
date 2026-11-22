@@ -114,8 +114,10 @@ files and lists. **Edit > Paste** (Ctrl+V) adds what is on the clipboard: a stru
 (its own format), a MOL or SD block, XYZ, CDXML, Marvin, cells copied from a spreadsheet (or CSV text) with a
 SMILES column, or lines of SMILES, InChI, InChIKeys and names. A paste takes the same Import Options as File >
 Open, so a table's other columns can become columns of the molecule list. The log says which format was used.
-In a text field, Ctrl+V pastes text as usual. **Edit > Copy as** (also on the molecule list's right-click
-menu) goes the other way, for the selected molecules: SMILES as entered, canonical SMILES, InChI, InChIKey,
+In a text field, Ctrl+V pastes text as usual. The Import Options choices, and whether the dialog asks, can be
+changed later in Tools > Settings > Import. **Edit > Copy molecules** (Ctrl+Shift+C in the Molecules list) copies
+the selected rows as a table (ID, SMILES, name and the data-field columns shown) for Excel, or to paste back.
+**Edit > Copy as** (also on the molecule list's right-click menu) goes the other way, for the selected molecules: SMILES as entered, canonical SMILES, InChI, InChIKey,
 MOL (an SD file for several), XYZ of the conformer shown, or CDXML; in ChemDraw, paste with Ctrl+V or Edit >
 Paste Special. You can also drop files on the window or the molecule list (several at once; a run folder opens
 as one, a project folder as a project, any other folder as the files in it), or drop text on it.

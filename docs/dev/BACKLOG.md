@@ -505,14 +505,21 @@ Depends on: none (goes into today's File menu and Molecules box; UI-1 later move
     molecules; input 3D or the preview geometry otherwise), CDXML. SMILES of 14,000 rows copies at once (0.25 s
     with the selection, cloud VM); other formats above 200 molecules run on a worker thread (14,000: canonical
     SMILES 1.8 s, SDF 3.8 s, InChI 4.8 s; the window blocks ~0.2 s).
+  - Brandon's answers (2026-11-22): a ChemDraw paste keeps asking until "Don't ask again"; the dialog and the
+    paste log line name **Tools > Settings > Import**. **Copy molecules** (Ctrl+Shift+C in the Molecules dock, Edit
+    menu, right-click menu): the selected rows as a TSV table (ID, SMILES, Name, the posted fields shown) for
+    Excel and back (`application/x-quantabench-molecules` keeps the ID column the id). Ctrl+C stays Qt's cell
+    copy; the Analyze table keeps its own Ctrl+Shift+C. Actions are named QActions (`edit.paste`,
+    `edit.copy_molecules`, `edit.copy_as.<kind>`) with their default keys in `gui.clipboard.DEFAULT_KEYS`, in
+    `win.actions_by_name`, for UI-9's keymap; no `QShortcut`.
   - Tests: `tests/test_gui_clipboard.py`, `tests/test_interchange.py`. Screenshots: `docs/dev/screenshots/UI-4/`.
 - **Left:** Needs-Brandon: open a few real
   ChemDraw `.cdx` files (the CDX reader is tested on hand-built files only; RDKit's own Python reader takes
   every file as CDXML). Follow-ups: *keep coordinates* is not used with CREST (it makes its own start
   geometry); posted fields show for molecules opened in this session, not for rows of an opened run folder;
   ORCA `%coords` and Z-matrix blocks and CIF disorder are not read; `.xyz` files (File > Open) do not take stereo
-  from the 3D coordinates as pasted XYZ now does; Ctrl+C in the molecule list still copies the current cell's
-  text (Qt's default), not the molecules; XYZ text of a charged structure needs a MOL block or SMILES (bonds are
+  from the 3D coordinates as pasted XYZ now does; a spreadsheet copy of Copy molecules (text only) posts its ID and
+  Name columns as data fields, as File > Open does for a table's columns; XYZ text of a charged structure needs a MOL block or SMILES (bonds are
   assigned for charge 0).
 - **Formats** (all through `chem.inputs.read_file`, so the CLI gets them too): SDF/MOL V2000 and V3000,
   MOL2, PDB, XYZ (bonds by `rdDetermineBonds`), SMILES lists, CSV/XLSX, InChI lists (`.inchi`, one per

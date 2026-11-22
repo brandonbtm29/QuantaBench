@@ -392,6 +392,7 @@ def test_paste_takes_the_import_options_and_posts_fields(tmp_path, monkeypatch):
 
     def accept(dlg):
         shown.append(dlg.findChildren(gui_imp.QLabel)[0].text())       # what the paste holds
+        assert "You can change this later in Tools > Settings > Import" in dlg.where.text()
         dlg.form.post_fields.setChecked(True)
         return 1
 
@@ -400,6 +401,8 @@ def test_paste_takes_the_import_options_and_posts_fields(tmp_path, monkeypatch):
     assert cb.paste(w, _mime(text=cells))
     assert _wait(app, lambda: w.model.rowCount() == 2)
     assert len(shown) == 1 and shown[0].startswith("2 structure(s) in the clipboard: 3 data field(s)")
+    assert ("Paste: 2 molecule(s) from text/plain (table); Import Options asked; you can change them later in "
+            "Tools > Settings > Import") in _log(w)
     rows = {r.id: r for r in w.model.rows()}
     assert rows["DTXSID0"].smiles == "CCN"                                   # the HCl filter, as for a file
     assert w.model.extra_columns() == ["DTXSID", "PREFERRED_NAME", "logKow"]
@@ -449,8 +452,8 @@ def test_molecule_list_context_menu_and_edit_menu(tmp_path, fake_clipboard):
     app = _app()
     w = _window(tmp_path)
     menu = w.mol_list.context_menu()
-    assert [a.text() for a in menu.actions()] == ["Copy as", "Paste"]
-    assert not w.copy_as_menu.isEnabled()                                  # nothing to copy yet
+    assert [a.text() for a in menu.actions()] == ["Copy molecules", "Copy as", "Paste"]
+    assert not w.copy_as_menu.isEnabled() and not w.a_copy_molecules.isEnabled()      # nothing to copy yet
     labels = [a.text() for a in w.copy_as_menu.actions()]
     assert labels == ["SMILES", "Canonical SMILES", "InChI", "InChIKey", "MOL / SDF", "XYZ (current conformer)",
                       "CDXML"]
@@ -465,7 +468,7 @@ def test_molecule_list_context_menu_and_edit_menu(tmp_path, fake_clipboard):
     w.a_copy_as["canonical"].trigger()
     assert fake_clipboard.text().splitlines()[0] == "CCO ethanol"
     edit = next(a.menu() for a in w.menuBar().actions() if a.text().replace("&", "") == "Edit")
-    assert [a.text() for a in edit.actions() if not a.isSeparator()] == ["Paste", "Copy as"]
+    assert [a.text() for a in edit.actions() if not a.isSeparator()] == ["Paste", "Copy molecules", "Copy as"]
     _close(app, w)
 
 
@@ -686,4 +689,139 @@ def test_drop_each_file_kind(tmp_path, monkeypatch):
     assert _drag(app, w, _urls(tmp_path / "photo.png"))
     assert _wait(app, lambda: bool(said))
     assert "photo.png" in said[0] and "Unsupported file type .png" in said[0]
+    _close(app, w)
+
+
+# ------------------------------------------------------------------ Copy molecules and the named actions (UI-9 keymap)
+
+
+def _three(w):
+    from quantabench.chem.import_options import FIELDS
+    from quantabench.chem.inputs import from_smiles
+
+    items = [from_smiles(GENX, id="GenX"), from_smiles(PFOA, id="PFOA"), from_smiles("C(O)C", id="ethanol")]
+    for it, (logkow, note) in zip(items, ((3.4, "one\tstereocenter"), (4.81, "C8"), (-0.31, ""))):
+        it.meta[FIELDS] = {"logKow": logkow, "note": note}
+    w.add_inputs(items)
+    return items
+
+
+@needs_display
+def test_copy_molecules_round_trip(tmp_path, fake_clipboard, monkeypatch):
+    from quantabench.gui import clipboard as cb
+    from quantabench.gui import import_options as gui_imp
+    from quantabench.gui.molecule_list import COLUMNS
+
+    app = _app()
+    w = _window(tmp_path)
+    items = _three(w)
+    w.mol_list.selectAll()
+    w.a_copy_molecules.trigger()
+    lines = fake_clipboard.text().splitlines()
+    assert lines[0].split("\t") == ["ID", "SMILES", "Name", "logKow", "note"]
+    assert lines[1].split("\t") == ["GenX", GENX, "GenX", "3.4", "one stereocenter"]     # no tab inside a cell
+    assert lines[3].split("\t")[:2] == ["ethanol", "C(O)C"]                          # SMILES as entered
+    assert cb.MOLECULES_MIME in fake_clipboard.mime.formats()
+    copied = fake_clipboard.mime
+
+    # back into QuantaBench: same ids and structures (the stored options: no fields posted, no dialog)
+    w.clear_all()
+    assert cb.paste(w, copied)
+    assert _wait(app, lambda: w.model.rowCount() == 3)
+    assert w.model.ids() == ["GenX", "PFOA", "ethanol"]
+    assert _smiles_in(w) == [canon(i.smiles) for i in items]
+    assert "QuantaBench molecules" in _log(w) and "Tools > Settings > Import" in _log(w)
+
+    # a spreadsheet's copy (text only) reads as a table too; posting the fields brings the columns back
+    w.clear_all()
+    w.s.import_.ask = True
+    monkeypatch.setattr(gui_imp.ImportOptionsDialog, "exec",
+                        lambda dlg: dlg.form.post_fields.setChecked(True) or 1)
+    assert cb.paste(w, _mime(text=copied.text()))
+    assert _wait(app, lambda: w.model.rowCount() == 3)
+    assert w.model.ids() == ["GenX", "PFOA", "ethanol"] and _smiles_in(w) == [canon(i.smiles) for i in items]
+    assert w.model.extra_columns() == ["ID", "Name", "logKow", "note"]    # as File > Open posts a table's columns
+
+    # a hidden field column is left out
+    w.mol_list.setColumnHidden(len(COLUMNS) + w.model.extra_columns().index("note"), True)
+    w.mol_list.selectRow(0)
+    w.a_copy_molecules.trigger()
+    assert fake_clipboard.text().splitlines()[0].split("\t") == ["ID", "SMILES", "Name", "logKow"]   # no "ID" twice
+    _close(app, w)
+
+
+@needs_display
+def test_actions_are_named_with_their_default_keys(tmp_path, fake_clipboard):
+    """UI-9's keymap rebinds the actions by objectName; the Molecules box's Ctrl+V follows the paste action."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent, QKeySequence, QShortcut
+
+    from quantabench.gui import clipboard as cb
+
+    app = _app()
+    w = _window(tmp_path)
+    names = w.actions_by_name
+    assert {"edit.paste", "edit.copy_molecules", "edit.copy_as.smiles", "edit.copy_as.xyz"} <= set(names)
+    for name, action in names.items():
+        assert action.objectName() == name and w.findChild(type(action), name) is action
+        assert action.shortcuts() == cb.default_shortcuts(name)
+    assert names["edit.paste"].shortcuts() == QKeySequence.keyBindings(QKeySequence.StandardKey.Paste)
+    assert [k.toString() for k in names["edit.copy_molecules"].shortcuts()] == ["Ctrl+Shift+C"]
+    assert names["edit.copy_molecules"].shortcutContext() == Qt.ShortcutContext.WidgetWithChildrenShortcut
+    assert names["edit.copy_molecules"] in w.mol_dock.actions()
+    assert not cb.default_shortcuts("edit.copy_as.smiles")
+    assert not [s for s in w.findChildren(QShortcut) if s.key().toString() in ("Ctrl+V", "Ctrl+Shift+C")]
+
+    def ctrl(key, mods=Qt.KeyboardModifier.ControlModifier):     # does the Molecules box hand the paste on?
+        return w._clipboard_filter.eventFilter(w.entry, QKeyEvent(QEvent.Type.ShortcutOverride, key, mods))
+
+    fake_clipboard.setMimeData(_mime(text=_block(PFOA, "PFOA")))       # several lines: the box hands them on
+    assert ctrl(Qt.Key.Key_V)
+    names["edit.paste"].setShortcut(QKeySequence("Ctrl+Alt+V"))           # rebound (Settings > Controls)
+    assert not ctrl(Qt.Key.Key_V)
+    assert ctrl(Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
+    _close(app, w)
+
+
+@needs_display
+def test_ctrl_shift_c_in_the_list_and_in_the_analyze_table(tmp_path, fake_clipboard):
+    """Ctrl+Shift+C copies molecules from the Molecules dock; the Analyze table keeps its own Ctrl+Shift+C (copy with
+    column titles); Ctrl+C in the list stays Qt's copy of the current cell."""
+    import warnings
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    app = _app()
+    w = _window(tmp_path)
+    w.show()
+    w.activateWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        QApplication.setActiveWindow(w)
+    _wait(app, lambda: QApplication.activeWindow() is w, timeout=3)
+    if QApplication.activeWindow() is not w:
+        _close(app, w)
+        pytest.skip("this session cannot activate a window, so no shortcut reaches it")
+    _three(w)
+    w.mol_list.selectAll()
+    w.mol_list.setFocus()
+    app.processEvents()
+    both = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+    QTest.keyClick(w.mol_list, Qt.Key.Key_C, both)
+    assert fake_clipboard.text().startswith("ID\tSMILES\tName\n") or fake_clipboard.text().startswith("ID\tSMILES")
+    fake_clipboard.mime = None
+    QTest.keyClick(w.mol_list, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    assert fake_clipboard.mime is None                       # Qt's cell copy: the system clipboard, not ours
+    sheets = [v for v in w.findChildren(object) if type(v).__name__ == "SheetView"]
+    if sheets:
+        called = []
+        sheets[0].copy = lambda headers=False: called.append(headers)
+        sheets[0].setFocus()
+        app.processEvents()
+        QTest.keyClick(sheets[0], Qt.Key.Key_C, both)
+        assert called == [True] and fake_clipboard.mime is None
+    assert QGuiApplication.clipboard() is not None
     _close(app, w)
