@@ -562,6 +562,109 @@ Newest entries at the bottom. One entry per working session or nightly run.
   `test_worker.py::test_build_filters_travel_to_a_worker` (a worker over HTTP). Screenshot:
   `docs/dev/screenshots/SETTINGS-1/build_defaults_tab.png`.
 
+## 2026-11-22: Settings > Lookups, Spartan's URLs and Databases (SETTINGS-1, branch `feat/settings-1-lookups`)
+- **Templates** (`quantabench.lookups`): `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`, replaced longest first
+  (`%inchikey` before `%inchi`) and percent-encoded. The structure keys are of the record as drawn, all fragments
+  (potassium PFOS has its own InChIKey), which is what the databases index. The CAS RN comes from a posted field named
+  like CAS, then any field, the id or the name that is a CAS RN as a whole (`pubchem.cas_numbers`, check digit).
+- **Defaults**, checked where the site allowed it: NIST `cbook.cgi?ID=335-67-1` shows PFOA; CompTox
+  `dsstoxdb/results?search=` is the dashboard's own search link; PubChem `#query=` is its search page. nmrshiftdb2
+  documents InChI only for its data export (`exportcmlbyinchi`, 13C, `format/jcamp`), and its site refuses robots,
+  so that template (in Turbine's query form) is unverified: Spartan's own NMR template would settle it.
+- **Menu** (`gui.lookup_menu`): the molecule list's right-click menu has *Look up* with one action per template
+  (the URL as tooltip), greyed out with "(no CAS RN)" where a value is missing, and *Edit lookups...*.
+- **PubChem cache:** `ResponseCache.max_age_s` makes an answer older than the maximum age a miss (fetched again and
+  replaced); offline mode reads it anyway (`stale_ok`). `default_cache_path` takes Settings > Lookups' folder after
+  `QUANTABENCH_CACHE_DIR` (the tests' own) and before the platform's. A client made with its own `ResponseCache`
+  keeps that cache's age unless given one.
+- Tests: `tests/test_lookups.py` (6), `tests/test_gui_settings_lookups.py` (2). Screenshots:
+  `docs/dev/screenshots/SETTINGS-1/lookups_tab.png`, `lookup_menu_*.png`.
+
+## 2026-11-22: the Simulate workspace design (RES-1, branch `feat/res-1-simulate-design`)
+- **Survey** of LAMMPS-GUI, VMD + QwikMD, CHARMM-GUI, OpenMM-Setup, Materials Studio (Forcite, Amorphous Cell),
+  MAPS, SAMSON, Packmol/moltemplate and OVITO, plus OpenFF Interchange/NAGL and RadonPy, over system building,
+  force fields, protocols, run control, live monitoring and analysis. Sources are the tools' own pages, fetched on
+  2026-11-22. The commercial tools' vendor pages give feature lists only.
+- **The design** (`docs/SIMULATE_DESIGN.md`) keeps the runnable folder as the product and makes MD runs jobs of
+  their own kind, made of segments: one engine process each, ended by a pause, a time window, a move to the GPU or a
+  crash. Pilot B's hand-written resume and the MacBook's deadline stop were the reason. LAMMPS first, OpenMM with
+  OpenMM-ML in v2/v3. The lessons table uses the final reports of pilots A, B and C (2026-11-22).
+- **Found on the way:**
+  - LAMMPS' `fix halt` with `is_file()` and `error soft` stops a run cleanly when a file appears, so a pause can
+    write a restart file without killing the process.
+  - LAMMPS marks `fix smd` as unmaintained and recommends `fix colvars` or `fix plumed`: the flexible steered MD
+    should be written on Colvars.
+  - Binary restart files are meant for the same executable and platform only, so moving a run between machines
+    needs a data file.
+- **Open:** 12 questions for Brandon in the doc (DEC-1). SIM-1 stays blocked until he approves.
+- **Brandon's first answers (same day), now in the doc:**
+  - Splitting across machines (§6): replicas, hand-offs through data files, or GPU + CPU in one machine, with the
+    trade-offs. It is v2, gated on a consistency test with pilot A; v1 stays on this computer.
+  - A resource-aware scheduler (§7, SCHED-3). The pilots' LAMMPS timing breakdowns show GPU MD is not GPU-only:
+    PPPM and the bonded terms on the CPU took 75-86 % of the loop time.
+  - A COMSOL-like parameterization builder (§9.1): nodes per component with a resolution, global physics nodes
+    with the cutoff as the "screening length", compatibility checks (combining rules, 1-4 scaling, units, a
+    cutoff without a tail). Its minimal version goes into SIM-1 v1.
+  - LigParGen allowed; σ by default 16 Å + tail on the GPU, with the C6F14 target Freire 2006 and no offsets.
+  - Where MD runs live stays open, with the facts: run folders of 131-182 MB, and `.stignore` lines for restart
+    files, the STOP file and frames.
+  - New BACKLOG items BUILD-CLEAN (a "Clean up" for 2D and 3D) and SCHED-3.
+
+## 2026-11-22: paste, drag-and-drop and Copy as (UI-4, branch `feat/ui-4-clipboard-dnd`)
+- **Starting point:** the backlog said "clipboard, drag-and-drop and Copy as: another branch". That branch
+  (`feat/clipboard`) was merged on 2026-11-07 (`fa9c962`): ChemDraw CDX/CDXML/MOL/MDLCT paste, Copy as SMILES /
+  MOL / CDXML, drops of files and text. This branch builds on it; nothing was started over.
+- **Paste takes File > Open's path.** Pasted molecules used to go straight into the list. Now `read_candidates`
+  (worker thread) gives `read_raw`-style inputs (`meta` with the reader, 2D/3D and data fields as text), then
+  `import_options.choose` and `MainWindow._import_inputs` (worker thread), as for a file. Consequences:
+  - A ChemDraw drawing is 2D, so it is converted to 3D on paste (default on), and the Import Options dialog shows
+    on such a paste until "Don't ask again". Same as opening a `.cdx` file; a question for Brandon in the PR.
+  - A table's other columns can be posted to the molecule list (screenshot `paste_table.png`).
+- **New text kinds** (`chem.interchange.detect_format` order: CDXML, MRV, SD, MOL, XYZ, table, lines):
+  - XYZ: standard frames (several in a row) or bare `element x y z` lines (an ORCA `* xyz` block), atomic numbers
+    allowed, extra columns ignored. Bonds by `rdDetermineBonds` for charge 0 (a radical or ion fails with a
+    message); stereo from the 3D coordinates. The id is the comment's first word unless it is a number.
+  - Tables: a first line with a SMILES column name (`inputs.SMILES_COLUMNS` or the Pipeline dock's SMILES column)
+    split by tab, comma or semicolon; one column with a `SMILES` header works too. `_rows_to_inputs` does the
+    rest, so the ID column, the SMILES preference (QSAR-ready, MS-ready) and skipped-row reports match CSV files.
+- **Copy as** has seven kinds. "SMILES" is the list's own text (as entered), so it needs no structure: 14,000 rows
+  copy in 0.25 s including the selection. The others read structures (`gather_inputs`: inputs in memory, else one
+  job-table query per run folder) and run on a worker thread above 200 molecules. Measured for 14,000 PFOA rows
+  on the cloud VM: canonical SMILES 1.8 s, SDF 3.8 s (29 MB), InChI 4.8 s, InChIKey 5.6 s.
+  - XYZ: the conformer the views show for the current molecule (the conformer table's row), the best conformer
+    of other built molecules (read from their folders on the worker), else the input's 3D coordinates, else the
+    same ETKDG + MMFF preview the 3D view shows (said in the comment line).
+  - Copy as gives extra MIME types where they exist (`chemical/x-daylight-smiles`, `-inchi`, `-xyz`, ...).
+- **Right-click menu:** `MoleculeListView.menu_hooks`, a list of callables that fill the menu, so the 3D build
+  mode (UI-7) or others can add entries without touching the same lines. Main window untouched.
+- **Drops:** the list's viewport now takes drops itself (a `QTableView` takes none by default; the window got
+  them through the parent chain before). A folder is a run folder (`jobs.sqlite` or `summary.csv`), a project
+  (`.qbproj`), or else the readable files directly in it. Unknown file types go to `open_files`, whose worker
+  gives the "Unsupported file type" message (or Open Babel reads them).
+- **Tests:** `tests/test_gui_clipboard.py` (29) and `tests/test_interchange.py` (+6). A `_FakeClipboard` stands in
+  for the system clipboard (`gui.clipboard._clipboard`), so the copy tests also run where a Windows session has no
+  clipboard; the two tests on the real clipboard still skip there.
+- **Brandon's answers (same day, second commit):**
+  - A ChemDraw paste keeps asking (Import Options) until "Don't ask again". The dialog has a note next to that
+    box and the paste log line ends with where to change it: **Tools > Settings > Import** (the Settings action is
+    in the Tools menu; its tab is "Import"), one constant `gui.import_options.SETTINGS_PATH`.
+  - **Copy molecules** (Ctrl+Shift+C): the selected rows as a tab-separated table (ID, SMILES as entered, Name, the
+    posted field columns the list shows), as text and as `application/x-quantabench-molecules`. Paste tries that
+    format first and reads it with ID and SMILES as the id and structure columns (a plain table would take a
+    posted DTXSID column as the id: `inputs.ID_COLUMNS` puts it first). A copy that went through Excel is text
+    only and reads as any table.
+  - The key: the Analyze table already uses Ctrl+Shift+C (copy with column titles, in `SheetView.keyPressEvent`).
+    A window-wide action would take the key from it, so Copy molecules is a `WidgetWithChildrenShortcut` on the
+    Molecules dock. Checked under xvfb with QTest key clicks: Ctrl+Shift+C in the list copies molecules, in the
+    Analyze table it still copies cells with titles, Ctrl+C in the list is still Qt's cell copy.
+  - For UI-9's keymap: every action is a QAction with an `objectName` (`edit.paste`, `edit.copy_molecules`,
+    `edit.copy_as.<kind>`), in `win.actions_by_name`, default keys in `clipboard.DEFAULT_KEYS` only. The Molecules
+    box's Ctrl+V check now compares the key with the paste action's current shortcuts, so a rebinding moves it too.
+- **Merged after SETTINGS-1's Lookups tab** (#46): `test_ctrl_shift_c_in_the_list_and_in_the_analyze_table` left Shift
+  in `QGuiApplication.keyboardModifiers()` (QTest's Ctrl+Shift clicks), so `test_lookups_tab_round_trip`'s
+  `selectRow` extended a selection instead of making one and removed nothing. The clipboard test now releases Shift
+  and Control before it closes its window.
+
 ## 2026-11-22: the model kit's Build mode (UI-7, branch `feat/ui-7-build-mode`)
 - **Built as `MODEL_KIT_GUI.md` designed it**, with the differences listed at the top of that note. The view stays a
   view: `MoleculeViewer3D` gained `set_stubs` and `buildClicked`, and `gui/model_kit.py` owns the

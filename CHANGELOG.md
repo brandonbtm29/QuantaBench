@@ -27,6 +27,34 @@
 - Fixed: the Results dock could undo a resize by hand when the event loop was slow (the fold recorded the user's
   height as its own and restored the old one when unfolding).
 
+### Paste, drag-and-drop and Copy as (UI-4, 2026-11-22)
+- Edit > Paste (Ctrl+V) now takes XYZ, CSV and spreadsheet cells with a SMILES column, InChI and InChIKeys besides
+  ChemDraw, MOL/SD, CDXML, Marvin and SMILES, and goes through File > Open's Import Options (filters, 2D → 3D,
+  data fields posted as molecule-list columns). An unreadable clipboard gives a message.
+- Copy molecules (Ctrl+Shift+C in the Molecules dock): the selected rows as a table (ID, SMILES, name, the data
+  fields shown) for Excel, and back with Ctrl+V. The Import Options dialog and the paste log name Tools > Settings
+  > Import.
+- Copy as (Edit menu and the molecule list's new right-click menu): SMILES, canonical SMILES, InChI, InChIKey,
+  MOL/SDF, XYZ of the conformer shown, CDXML. 14,000 rows copy as SMILES in a quarter second; other formats run on a
+  worker thread for large selections.
+- Drops on the window and the molecule list: several files at once in every File > Open format, run folders,
+  project folders, and plain folders (the files in them).
+
+### The Simulate workspace design (RES-1, 2026-11-22)
+- Docs only: `docs/SIMULATE_DESIGN.md`, a survey of MD front ends and the proposed Simulate workspace (flow, data
+  model, engines, force fields, templates, build order, open questions). It waits for Brandon's approval before SIM-1.
+  With Brandon's first answers: splitting across machines (v2, after a pilot A consistency test), a resource-aware
+  scheduler (SCHED-3), a COMSOL-like parameterization builder, 16 Å + tail on the GPU as the σ default. New backlog
+  items BUILD-CLEAN and SCHED-3.
+
+### Settings > Lookups and the molecule list's Look up menu (SETTINGS-1, 2026-11-22)
+- Spartan's Preferences > URLs: right-click a molecule for **Look up** in PubChem (by InChIKey), the NIST WebBook (by
+  CAS RN), nmrshiftdb2 (13C spectrum by InChI, JCAMP-DX) and EPA CompTox (by InChIKey). Settings > Lookups edits the
+  templates (`%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`, percent-encoded); a template whose value a molecule
+  lacks is greyed out with the reason. The CAS RN comes from a posted CAS field, the id or the name.
+- PubChem's cache: a folder (`lookups.pubchem_cache_dir`) and a maximum age (`lookups.pubchem_max_age_days`, 0 = no
+  limit): an older answer is asked again and replaced; `--offline` still reads it. Not science settings.
+
 ### Settings > Build defaults: build filters and ring conformers (SETTINGS-1, 2026-11-22)
 - Spartan's Import Filters as build filters, for every input: water, acids (HCl, HBr, HI, HF, ...) and counter-ions
   picked by name (sodium, potassium, ammonium, tetrabutylammonium, chloride, ... 34 in all) are stripped before the
@@ -38,7 +66,6 @@
   `strip_water` (false), `strip_acids` (false), `strip_counterions` ("", sorted names), `ring_conformers`
   ("normal"). The defaults are the behaviour before, so existing runs resume unchanged.
 
-
 ### Settings > Compute: an Expert box and this computer's cores (SETTINGS-1, 2026-11-22)
 - Spartan's Preferences > Jobs: a line with this computer's cores ("12 cores, 24 logical"), *Molecules at once*
   (Automatic, one at a time, or N lanes) in Parallel lanes, and a folded **Expert** box with the full lane spec, GPU
@@ -48,7 +75,6 @@
   unchanged lane spec is no longer written back (it overwrote a change the Machines dock saved while the dialog was
   open).
 
-
 ### Programs never outlive QuantaBench; probes can't hang (ENG-3, 2026-11-22)
 - Windows: xtb, CREST (wsl.exe), MOPAC, Psi4, g-xTB and tblite's CPCM helper run in kill-on-close job objects, and the
   lanes in one of their parent's, so a crashed or killed GUI or CLI takes them along; a cancel ends the whole job.
@@ -56,7 +82,6 @@
   left behind when it ends (CREST's xtb after a cancel).
 - Version probes write to files and kill their process tree: bounded by their timeout. The conda scan takes the newest
   version, not the first environment alphabetically. The GUI's first start probes versions in a worker.
-
 
 ### CREST through WSL: one BLAS thread per CREST thread, and its output kept inside WSL (CREST-LOG-1, 2026-11-22)
 - CREST now gets `OPENBLAS_NUM_THREADS=1` (CREST's install notes). The WSL CREST links a pthreads OpenBLAS, which
@@ -81,7 +106,6 @@
   framework python re-execs itself into Python.app right after it starts.
 - `priority.apply_to_pids` (POSIX) looks again at the processes it lowered after 0.25 s and lowers once more those an
   exec put back; the log line says how many. The test now waits until its child runs.
-
 
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
