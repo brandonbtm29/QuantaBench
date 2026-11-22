@@ -789,9 +789,11 @@ machine's thread count: 12 of 24 on the workstation) store another machine's val
 of the settings file. A worker reads its machine's values at job start and re-reads them every 15 s while a job
 runs. A changed **run priority** is applied to the job's running lanes and the programs they started at once
 (`priority.apply_to_pids`): lowering works everywhere, raising only on Windows (on macOS and Linux it applies from the
-next worker start). **Lanes and free threads** apply with the machine's next job (a pause and resume restarts the
-job's lanes too). A job that `grid build --priority` gave its own priority keeps it. docs/WORKERS.md, "Pausing a
-machine, a closing laptop", has the rest.
+next worker start). macOS loses a nice value set while a process is inside exec() (a lane or a program that is just
+starting), so on macOS and Linux the lowered processes are looked at again a quarter of a second later and lowered
+once more if an exec put the old value back (FIX-6). **Lanes and free threads** apply with the machine's next job (a
+pause and resume restarts the job's lanes too). A job that `grid build --priority` gave its own priority keeps it.
+docs/WORKERS.md, "Pausing a machine, a closing laptop", has the rest.
 
 **Free threads.** With CPU threads = Auto (0, the default), the run's thread budget is the logical threads minus the
 free threads. The `auto` lane plan stays inside that budget, as do `1` (one process) and `N` lanes. Dynamic CREST

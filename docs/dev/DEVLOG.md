@@ -339,6 +339,64 @@ Newest entries at the bottom. One entry per working session or nightly run.
   Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
   check (BACKLOG CREST-SCRATCH-1).
 
+## 2026-11-22: FIX-6, the flaky macOS test of run priority (branch `fix/fix-6-macos-priority-test`)
+- **CI's failure** (#25's macOS run, 2026-11-17): `apply_to_pids([child], "low")` changed 1 process and the next
+  read gave 10; the following `apply_to_pids(..., "normal")` found the child at -10 ("already there"). Nothing in the
+  test can make a nice value smaller, so -10 had to be the value before the change: inherited from pytest, which
+  therefore runs at -10 on the runner (inferred; the test's message now says this process's nice).
+- **The race, shown on the MacBook (macOS 27, M3 Max):** a scratch script forks, execs a target and calls
+  setpriority(10) once at a delay swept over 0-6 ms; 80 ms later it reads the child's nice. 297 of 1,200 changes were
+  lost: those that landed 0.25-3 ms after the fork (the exec), and with a re-exec launcher also those at 4-6 ms (its
+  second exec). The read right after the change gave 10 in every case but one. So macOS drops a nice value set while
+  the process is inside exec(), and it reports the new value until the exec ends. Probably the exec builds the new
+  image's process from a copy taken when the exec starts (not checked in XNU's source).
+- **Why only CI showed it:** the failing child was named "Python". python.org's framework `bin/python3.12` (what
+  setup-python installs) starts and then re-execs `Python.app/Contents/MacOS/Python` with posix_spawn(SETEXEC).
+  `Popen` returns after the first exec, so the test's change could land in the second. Homebrew's python3.12 and
+  python.org's 3.13 on the MacBook do not re-exec, and a change right after `Popen` held in 60 of 60 tries with each.
+- **The CI failure reproduced:** a C copy of that launcher (posix_spawn with SETEXEC into Homebrew's Python.app) set
+  as `sys.executable` by a scratch plugin, its re-exec delayed 6-9 ms (a slower machine). pytest ran at `nice -n 5`,
+  so that a lost change shows. 6 of 1,000 runs failed with CI's message, 5 in place of -10.
+- **Fix:** the test waits for its child's "up" line before changing its priority. `apply_to_pids` looks again after
+  0.25 s (POSIX only: Windows has no exec) and lowers again the processes an exec put back. A live priority change can
+  reach a lane or a program that is just starting, and the `sh -c` wrappers of `external.run_program` exec two or
+  three times. psutil keeps the same process across an exec (same pid and start time), so lowering again works.
+- **After:** 0 of 500 runs failed in the same setup. The old test (no wait) with the new `apply_to_pids` failed 0 of
+  300 times, so the second look fixes it in the product too. A new test with a fake process covers the second look and
+  Windows' single set.
+- Found on the way: `apply_to_pids` on Linux lowers only the main thread of each process (PRIO-2).
+
+## 2026-11-22: FIX-7, the Windows worker test that leaves jobs.sqlite-wal behind (branch `fix/fix-7-windows-worker-wal`)
+- **CI:** `test_archive_manifest_sync_temp_files_and_failed_streams` failed on #34's Windows run (2026-11-20), as
+  before on #15, #20 and #21. The job said "done" and its run folder still had `jobs.sqlite-wal`.
+- **Reproduced on the workstation:** the test alone, 1,200 runs in a worktree: 16 failed (1 of 200, then 15 of 1,000),
+  all on -wal (and -shm).
+- **Found with a logging copy of the test** (scratch, not in the repo; 14 of 800 failed). It records every
+  `JobStore` open and close with its thread and whether -wal exists, `_checkpoint`'s start and end, and each status
+  poll's `finishing` check. When -wal is found it also lists every open connection (`gc.get_objects`), the process's
+  file handles and its threads. Every failure looked the same:
+  - an HTTP poll checks `finishing` (False) and opens the table read-only while the job runs, 8-13 ms before the
+    checkpoint;
+  - the run closes its store, the worker writes the final counts and tables, and `_checkpoint`'s writable close
+    removes -wal (it is gone at the checkpoint's end);
+  - the poll closes its connection 2-18 ms later, and -wal and -shm are back.
+  No connection was left open afterwards and no handle was on the files, so it was not a leaked connection, a
+  background thread or Windows locking a temp folder. The poll's read took 12-33 ms because it shared the GIL with
+  the worker's thread, which was writing the final tables.
+- **Why FIX-2's `finishing` was not enough:** it stops polls that start after it is set. A poll that checked it just
+  before, and was still reading, kept its connection open across the checkpoint. A read-only connection recreates
+  -wal (DEVLOG 2026-11-12) and cannot remove it. On Linux the writer's close leaves -wal while another connection is
+  open and `_checkpoint` tries again; on Windows the close removed it under the open reader, so nothing was left to
+  retry.
+- **Fix:** `Job.table_lock`. The poll's check and read are one step under it (`JobManager._live_counts`), and the
+  end of the run sets `finishing` under it, so the end waits for a read in progress. Polls only wait on each other for
+  the few ms a read takes.
+- **After:** 0 of 1,000 runs failed, and 0 of 800 for the logging copy. The new test passed 30 of 30 times on the
+  workstation.
+- **Test:** `test_the_end_of_a_run_waits_for_a_status_poll_reading_the_job_table`. It holds a poll inside `open_run`'s
+  last query after the run ended and checks that the checkpoint does not begin until the poll lets go. Without the
+  lock it fails on Linux too.
+
 ## 2026-11-22: CREST through WSL: one BLAS thread and a bounded log (CREST-LOG-1, branch `fix/crest-log-1-openblas`)
 - **The problem** (the ops agent, ~02:50 at the resume of CREST-RUN-1 with 2 lanes x 5 threads): the workstation's
   disk writes went back to 14-24 MB/s though CREST now runs inside WSL. WSL's disks wrote 6 KB/s; one lane's

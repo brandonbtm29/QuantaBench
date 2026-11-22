@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 
 PRIORITIES = ("normal", "low", "background")
@@ -78,6 +79,9 @@ IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_SCOPE_THREAD = 0, 0, 1
 QOS_CLASS_UTILITY = 0x11                           # sys/qos.h: the GUI's build thread on macOS
 #: the end of every ``sh -c`` wrapper ``external.run_program`` uses (``external.STACK_WRAPPER``, ``WSL_WRAPPER``)
 EXEC_TAIL = 'exec "$0" "$@"'
+#: POSIX: seconds after a live priority change before ``apply_to_pids`` looks again at the processes it lowered
+#: (FIX-6: an exec that was under way when the change landed puts the old nice value back on macOS)
+RECHECK_S = 0.25
 
 
 # ------------------------------------------------------------------------------------- the settings
@@ -330,7 +334,13 @@ def apply_to_pids(pids, level, *, children: bool = True, system: str | None = No
 
     Lowering works everywhere. Raising works on Windows (a process may raise its own children's class up to its own),
     not on POSIX without privileges (a nice value only goes up): there a raised level is reported and takes effect
-    for the next lanes the batch starts. Returns a line for the log; never raises."""
+    for the next lanes the batch starts. Returns a line for the log; never raises.
+
+    A process that is inside exec() when its nice value is set keeps the value from before on macOS: the image that
+    comes out of the exec does not see the change, although getpriority() reports it until the exec ends (FIX-6).
+    Processes that are just starting go through one or more execs: a lane, python.org's framework python (it
+    re-execs itself into Python.app), the ``sh -c`` wrappers of ``external.run_program``. So on POSIX the processes
+    lowered here are looked at again ``RECHECK_S`` later and lowered once more if an exec put them back."""
     system = system or sys.platform
     want = normalize(level)
     try:
@@ -348,7 +358,14 @@ def apply_to_pids(pids, level, *, children: bool = True, system: str | None = No
             with contextlib.suppress(psutil.Error):
                 for c in p.children(recursive=True):
                     procs[c.pid] = c
-    changed = kept = failed = 0
+    def lower(p) -> None:
+        p.nice(NICE[want])
+        if system.startswith("linux") and want != "normal":
+            with contextlib.suppress(Exception):
+                _linux_io_lower(p.pid, want)
+
+    changed = kept = failed = again = 0
+    lowered = []
     for p in procs.values():
         try:
             now = _pid_level(p, system)
@@ -363,16 +380,23 @@ def apply_to_pids(pids, level, *, children: bool = True, system: str | None = No
                 with contextlib.suppress(Exception):
                     p.ionice(WINDOWS_IO[want])
             else:
-                p.nice(NICE[want])
-                if system.startswith("linux") and want != "normal":
-                    with contextlib.suppress(Exception):
-                        _linux_io_lower(p.pid, want)
+                lower(p)
+                lowered.append(p)
             changed += 1
         except (psutil.Error, OSError, ValueError):
             failed += 1
+    if lowered:                                 # POSIX: an exec under way may have put the old value back
+        time.sleep(RECHECK_S)
+        for p in lowered:
+            with contextlib.suppress(psutil.Error, OSError, ValueError):
+                if _RANK[_pid_level(p, system)] < _RANK[want]:
+                    lower(p)
+                    again += 1
     if not procs:
         return f"{want}: no running lane to change"
     out = f"{want}: {changed} process(es) changed, {kept} already there"
+    if again:
+        out += f" ({again} lowered again: an exec under way had put the old value back)"
     if failed:
         out += (f", {failed} left as they are (a priority cannot be raised on this OS without privileges; the next "
                 "lanes start at the new level)" if system != "win32" else f", {failed} could not be changed")
