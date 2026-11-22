@@ -562,7 +562,7 @@ calculation output reads cclib outputs and `.spartan` documents; the 2D view (RD
   installed, never bundled or imported. The embedded editors need QtWebEngine, which is in
   `PySide6-Addons`, not the `PySide6-Essentials` QuantaBench depends on: an optional `[editor]` extra.
 
-## UI-4: Import from many formats, with Spartan-style import options · ready (formats and options done)
+## UI-4: Import from many formats, with Spartan-style import options · in-PR (formats and options done; paste, drag-and-drop and Copy as in PR, branch `feat/ui-4-clipboard-dnd`)
 Depends on: none (goes into today's File menu and Molecules box; UI-1 later moves it into Build).
 - **Done 2026-11-07 (branch `feat/import-formats`):** the formats, the Open Babel fallback, the Import Options
   dialog with Settings > Import and `Settings.import_`, the text box (InChI, InChIKey), the CLI flags
@@ -571,11 +571,38 @@ Depends on: none (goes into today's File menu and Molecules box; UI-1 later move
   search). Code: `chem/formats.py`, `chem/import_options.py`, `gui/import_options.py`; tests:
   `tests/test_import_formats.py`, `tests/test_import_options.py`, `tests/test_gui_import_options.py`.
   Screenshot: `docs/img/import_options_dialog.png`.
-- **Left:** clipboard, drag-and-drop and Copy as (below; another branch). Needs-Brandon: open a few real
+- **Paste, drag-and-drop and Copy as · in-PR 2026-11-22 (branch `feat/ui-4-clipboard-dnd`):** built on the
+  2026-11-07 clipboard work (`feat/clipboard`, merged; bullet below).
+  - Paste now goes through File > Open's path: read on a worker thread, then the Import Options (dialog when the
+    paste has choices and Settings > Import says to ask; filters, 2D → 3D, posted fields as list columns). Text
+    adds XYZ (frames or bare `element x y z` lines, bonds by `rdDetermineBonds`, stereo from 3D), tables with a
+    SMILES column (CSV, `;`, or tab-separated cells copied from a spreadsheet; the Pipeline dock's SMILES/ID
+    column and SMILES preference apply), and InChI / InChIKeys (already in `parse_text`). Nothing readable → a
+    message naming the formats found and what QuantaBench reads.
+  - Drops on the window and the molecule list: any number of files through `open_files` (every `read_file`
+    format; unknown types get File > Open's message, or Open Babel), outputs through Import calculation output,
+    a run folder, a `.qbproj` project, any other folder as the files directly in it.
+  - Copy as (Edit menu and the molecule list's right-click menu, `MoleculeListView.menu_hooks`): SMILES as
+    entered, canonical SMILES, InChI, InChIKey, MOL/SDF, XYZ (the conformer shown; best conformer of other built
+    molecules; input 3D or the preview geometry otherwise), CDXML. SMILES of 14,000 rows copies at once (0.25 s
+    with the selection, cloud VM); other formats above 200 molecules run on a worker thread (14,000: canonical
+    SMILES 1.8 s, SDF 3.8 s, InChI 4.8 s; the window blocks ~0.2 s).
+  - Brandon's answers (2026-11-22): a ChemDraw paste keeps asking until "Don't ask again"; the dialog and the
+    paste log line name **Tools > Settings > Import**. **Copy molecules** (Ctrl+Shift+C in the Molecules dock, Edit
+    menu, right-click menu): the selected rows as a TSV table (ID, SMILES, Name, the posted fields shown) for
+    Excel and back (`application/x-quantabench-molecules` keeps the ID column the id). Ctrl+C stays Qt's cell
+    copy; the Analyze table keeps its own Ctrl+Shift+C. Actions are named QActions (`edit.paste`,
+    `edit.copy_molecules`, `edit.copy_as.<kind>`) with their default keys in `gui.clipboard.DEFAULT_KEYS`, in
+    `win.actions_by_name`, for UI-9's keymap; no `QShortcut`.
+  - Tests: `tests/test_gui_clipboard.py`, `tests/test_interchange.py`. Screenshots: `docs/dev/screenshots/UI-4/`.
+- **Left:** Needs-Brandon: open a few real
   ChemDraw `.cdx` files (the CDX reader is tested on hand-built files only; RDKit's own Python reader takes
   every file as CDXML). Follow-ups: *keep coordinates* is not used with CREST (it makes its own start
   geometry); posted fields show for molecules opened in this session, not for rows of an opened run folder;
-  ORCA `%coords` and Z-matrix blocks and CIF disorder are not read.
+  ORCA `%coords` and Z-matrix blocks and CIF disorder are not read; `.xyz` files (File > Open) do not take stereo
+  from the 3D coordinates as pasted XYZ now does; a spreadsheet copy of Copy molecules (text only) posts its ID and
+  Name columns as data fields, as File > Open does for a table's columns; XYZ text of a charged structure needs a MOL block or SMILES (bonds are
+  assigned for charge 0).
 - **Formats** (all through `chem.inputs.read_file`, so the CLI gets them too): SDF/MOL V2000 and V3000,
   MOL2, PDB, XYZ (bonds by `rdDetermineBonds`), SMILES lists, CSV/XLSX, InChI lists (`.inchi`, one per
   line), ChemDraw `.cdx` / `.cdxml` (RDKit), Marvin `.mrv`, CML (small reader, or Open Babel), CIF of

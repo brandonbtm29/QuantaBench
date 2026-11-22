@@ -2,6 +2,19 @@
 
 ## Unreleased (after 0.3.0)
 
+### Paste, drag-and-drop and Copy as (UI-4, 2026-11-22)
+- Edit > Paste (Ctrl+V) now takes XYZ, CSV and spreadsheet cells with a SMILES column, InChI and InChIKeys besides
+  ChemDraw, MOL/SD, CDXML, Marvin and SMILES, and goes through File > Open's Import Options (filters, 2D → 3D,
+  data fields posted as molecule-list columns). An unreadable clipboard gives a message.
+- Copy molecules (Ctrl+Shift+C in the Molecules dock): the selected rows as a table (ID, SMILES, name, the data
+  fields shown) for Excel, and back with Ctrl+V. The Import Options dialog and the paste log name Tools > Settings
+  > Import.
+- Copy as (Edit menu and the molecule list's new right-click menu): SMILES, canonical SMILES, InChI, InChIKey,
+  MOL/SDF, XYZ of the conformer shown, CDXML. 14,000 rows copy as SMILES in a quarter second; other formats run on a
+  worker thread for large selections.
+- Drops on the window and the molecule list: several files at once in every File > Open format, run folders,
+  project folders, and plain folders (the files in them).
+
 ### The Simulate workspace design (RES-1, 2026-11-22)
 - Docs only: `docs/SIMULATE_DESIGN.md`, a survey of MD front ends and the proposed Simulate workspace (flow, data
   model, engines, force fields, templates, build order, open questions). It waits for Brandon's approval before SIM-1.

@@ -451,7 +451,6 @@ Newest entries at the bottom. One entry per working session or nightly run.
   1e6 times; 1e6 numbered lines; long lines and the byte bound; the time limit; no folder inside WSL; a CREST that
   prints the warning 1e6 times (123 MB) and fails: the kept `crest.log` has 4 lines and `crest.out` stays behind).
   The scripts ran against the real WSL too (mawk; 122 MB summarized in 0.3 s).
-
 ## 2026-11-22: programs never outlive QuantaBench; probes can't hang (ENG-3, branch `feat/eng-3-process-robustness`)
 - **The problem** (the 2026-11-01 review's leftovers): a GUI or CLI that crashed or was ended in Task Manager left
   xtb, CREST, MOPAC or Psi4 running, with nobody to stop them; on Windows `subprocess.run(timeout=...)` in the version
@@ -609,3 +608,58 @@ Newest entries at the bottom. One entry per working session or nightly run.
   - Where MD runs live stays open, with the facts: run folders of 131-182 MB, and `.stignore` lines for restart
     files, the STOP file and frames.
   - New BACKLOG items BUILD-CLEAN (a "Clean up" for 2D and 3D) and SCHED-3.
+
+## 2026-11-22: paste, drag-and-drop and Copy as (UI-4, branch `feat/ui-4-clipboard-dnd`)
+- **Starting point:** the backlog said "clipboard, drag-and-drop and Copy as: another branch". That branch
+  (`feat/clipboard`) was merged on 2026-11-07 (`fa9c962`): ChemDraw CDX/CDXML/MOL/MDLCT paste, Copy as SMILES /
+  MOL / CDXML, drops of files and text. This branch builds on it; nothing was started over.
+- **Paste takes File > Open's path.** Pasted molecules used to go straight into the list. Now `read_candidates`
+  (worker thread) gives `read_raw`-style inputs (`meta` with the reader, 2D/3D and data fields as text), then
+  `import_options.choose` and `MainWindow._import_inputs` (worker thread), as for a file. Consequences:
+  - A ChemDraw drawing is 2D, so it is converted to 3D on paste (default on), and the Import Options dialog shows
+    on such a paste until "Don't ask again". Same as opening a `.cdx` file; a question for Brandon in the PR.
+  - A table's other columns can be posted to the molecule list (screenshot `paste_table.png`).
+- **New text kinds** (`chem.interchange.detect_format` order: CDXML, MRV, SD, MOL, XYZ, table, lines):
+  - XYZ: standard frames (several in a row) or bare `element x y z` lines (an ORCA `* xyz` block), atomic numbers
+    allowed, extra columns ignored. Bonds by `rdDetermineBonds` for charge 0 (a radical or ion fails with a
+    message); stereo from the 3D coordinates. The id is the comment's first word unless it is a number.
+  - Tables: a first line with a SMILES column name (`inputs.SMILES_COLUMNS` or the Pipeline dock's SMILES column)
+    split by tab, comma or semicolon; one column with a `SMILES` header works too. `_rows_to_inputs` does the
+    rest, so the ID column, the SMILES preference (QSAR-ready, MS-ready) and skipped-row reports match CSV files.
+- **Copy as** has seven kinds. "SMILES" is the list's own text (as entered), so it needs no structure: 14,000 rows
+  copy in 0.25 s including the selection. The others read structures (`gather_inputs`: inputs in memory, else one
+  job-table query per run folder) and run on a worker thread above 200 molecules. Measured for 14,000 PFOA rows
+  on the cloud VM: canonical SMILES 1.8 s, SDF 3.8 s (29 MB), InChI 4.8 s, InChIKey 5.6 s.
+  - XYZ: the conformer the views show for the current molecule (the conformer table's row), the best conformer
+    of other built molecules (read from their folders on the worker), else the input's 3D coordinates, else the
+    same ETKDG + MMFF preview the 3D view shows (said in the comment line).
+  - Copy as gives extra MIME types where they exist (`chemical/x-daylight-smiles`, `-inchi`, `-xyz`, ...).
+- **Right-click menu:** `MoleculeListView.menu_hooks`, a list of callables that fill the menu, so the 3D build
+  mode (UI-7) or others can add entries without touching the same lines. Main window untouched.
+- **Drops:** the list's viewport now takes drops itself (a `QTableView` takes none by default; the window got
+  them through the parent chain before). A folder is a run folder (`jobs.sqlite` or `summary.csv`), a project
+  (`.qbproj`), or else the readable files directly in it. Unknown file types go to `open_files`, whose worker
+  gives the "Unsupported file type" message (or Open Babel reads them).
+- **Tests:** `tests/test_gui_clipboard.py` (29) and `tests/test_interchange.py` (+6). A `_FakeClipboard` stands in
+  for the system clipboard (`gui.clipboard._clipboard`), so the copy tests also run where a Windows session has no
+  clipboard; the two tests on the real clipboard still skip there.
+- **Brandon's answers (same day, second commit):**
+  - A ChemDraw paste keeps asking (Import Options) until "Don't ask again". The dialog has a note next to that
+    box and the paste log line ends with where to change it: **Tools > Settings > Import** (the Settings action is
+    in the Tools menu; its tab is "Import"), one constant `gui.import_options.SETTINGS_PATH`.
+  - **Copy molecules** (Ctrl+Shift+C): the selected rows as a tab-separated table (ID, SMILES as entered, Name, the
+    posted field columns the list shows), as text and as `application/x-quantabench-molecules`. Paste tries that
+    format first and reads it with ID and SMILES as the id and structure columns (a plain table would take a
+    posted DTXSID column as the id: `inputs.ID_COLUMNS` puts it first). A copy that went through Excel is text
+    only and reads as any table.
+  - The key: the Analyze table already uses Ctrl+Shift+C (copy with column titles, in `SheetView.keyPressEvent`).
+    A window-wide action would take the key from it, so Copy molecules is a `WidgetWithChildrenShortcut` on the
+    Molecules dock. Checked under xvfb with QTest key clicks: Ctrl+Shift+C in the list copies molecules, in the
+    Analyze table it still copies cells with titles, Ctrl+C in the list is still Qt's cell copy.
+  - For UI-9's keymap: every action is a QAction with an `objectName` (`edit.paste`, `edit.copy_molecules`,
+    `edit.copy_as.<kind>`), in `win.actions_by_name`, default keys in `clipboard.DEFAULT_KEYS` only. The Molecules
+    box's Ctrl+V check now compares the key with the paste action's current shortcuts, so a rebinding moves it too.
+- **Merged after SETTINGS-1's Lookups tab** (#46): `test_ctrl_shift_c_in_the_list_and_in_the_analyze_table` left Shift
+  in `QGuiApplication.keyboardModifiers()` (QTest's Ctrl+Shift clicks), so `test_lookups_tab_round_trip`'s
+  `selectRow` extended a selection instead of making one and removed nothing. The clipboard test now releases Shift
+  and Control before it closes its window.
