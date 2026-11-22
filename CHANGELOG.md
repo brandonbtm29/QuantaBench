@@ -2,6 +2,13 @@
 
 ## Unreleased (after 0.3.0)
 
+### A finished worker job no longer leaves jobs.sqlite-wal behind on Windows (FIX-7, 2026-11-22)
+- A status poll that was reading the job table when the run ended kept its read-only connection open across the
+  worker's checkpoint, so -wal and -shm came back after the checkpoint had removed them. This was the flaky
+  `test_archive_manifest_sync_temp_files_and_failed_streams` on Windows CI.
+- `Job.table_lock`: a poll checks whether the job is finishing and reads the table in one step, and the end of the run
+  waits for a read in progress before it writes the final tables and checkpoints.
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use
