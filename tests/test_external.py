@@ -61,6 +61,86 @@ def test_conda_envs_outside_the_usual_folders_are_found(tmp_path, monkeypatch):
     assert external.conda_env_prefixes() == []
 
 
+def _fake_env(root: Path, name: str, package: str, version: str | None, exe: str = "xtb") -> Path:
+    """A conda environment folder with ``exe`` in its bin folder and, unless ``version`` is None, the package's
+    conda-meta record (``<package>-<version>-<build>.json``)."""
+    prefix = root / name
+    bindir = external._env_bin_dirs(prefix)[0]
+    bindir.mkdir(parents=True)
+    (bindir / external._exe_names(external.PROGRAMS[exe])[0]).write_text("stand-in", encoding="utf-8")
+    if version is not None:
+        (prefix / "conda-meta").mkdir()
+        (prefix / "conda-meta" / f"{package}-{version}-h1234567_0.json").write_text("{}", encoding="utf-8")
+        (prefix / "conda-meta" / f"{package}-python-20.2-py_0.json").write_text("{}", encoding="utf-8")  # not xtb's
+    return prefix
+
+
+def test_conda_scan_takes_the_newest_version(tmp_path, monkeypatch):
+    """ENG-3: several environments with xtb: the newest version wins, not the first environment alphabetically; the
+    version comes from conda-meta (nothing runs), an environment without a record ranks below known versions, and
+    equal versions keep the scan's order."""
+    envs = tmp_path / "miniforge3"
+    base = _fake_env(tmp_path, "miniforge3", "xtb", "6.6.0")
+    aaa = _fake_env(envs / "envs", "aaa", "xtb", "6.5.1")
+    bbb = _fake_env(envs / "envs", "bbb", "xtb", None)
+    qb = _fake_env(envs / "envs", "qb-tools", "xtb", "6.7.1")
+    zzz = _fake_env(envs / "envs", "zzz", "xtb", "6.7.1")
+    monkeypatch.setattr(external.shutil, "which", lambda name: None)              # nothing on PATH
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "this-venv"))               # nor in this environment
+    monkeypatch.delenv("QUANTABENCH_XTB", raising=False)
+    monkeypatch.setattr(external, "_probe_version", lambda *a, **k: pytest.fail("the scan must not run programs"))
+    monkeypatch.setattr(external, "conda_env_prefixes", lambda: [base, aaa, bbb, qb, zzz])
+    assert external.conda_package_version(qb, "xtb") == "6.7.1"
+    assert external.conda_package_version(bbb, "xtb") == ""
+    path, source = external._search(external.PROGRAMS["xtb"])
+    assert Path(path).is_relative_to(qb), source           # 6.7.1, first of the two that have it
+    assert source == "conda env qb-tools (newest of 5 environments: 6.7.1)"
+    monkeypatch.setattr(external, "conda_env_prefixes", lambda: [bbb, aaa])
+    path, source = external._search(external.PROGRAMS["xtb"])
+    assert Path(path).is_relative_to(aaa) and source.startswith("conda env aaa")
+    monkeypatch.setattr(external, "conda_env_prefixes", lambda: [bbb])
+    path, source = external._search(external.PROGRAMS["xtb"])
+    assert Path(path).is_relative_to(bbb) and source == "conda env bbb"
+
+
+def test_conda_scan_package_names_differ_from_program_names(tmp_path, monkeypatch):
+    old = _fake_env(tmp_path, "aaa-babel", "openbabel", "3.1.0", exe="obabel")
+    new = _fake_env(tmp_path, "zzz-babel", "openbabel", "3.1.1", exe="obabel")
+    monkeypatch.setattr(external.shutil, "which", lambda name: None)
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "this-venv"))
+    monkeypatch.setattr(external, "conda_env_prefixes", lambda: [old, new])
+    path, _source = external._search(external.PROGRAMS["obabel"])
+    assert Path(path).is_relative_to(new)
+
+
+def test_deferred_probes_run_nothing_and_cache_nothing(tmp_path, monkeypatch):
+    """ENG-3: the GUI builds its window inside deferred_probes; probe_versions later does the probe (in a worker)."""
+    import threading
+
+    exe = _fake_program(tmp_path, "xtb", 'print("* xtb version 6.7.1 (x)")\n')
+    monkeypatch.setenv("QUANTABENCH_XTB", str(exe))
+    calls = []
+    real = external._probe_version
+    monkeypatch.setattr(external, "_probe_version",
+                        lambda *a, **k: calls.append(threading.current_thread().name) or real(*a, **k))
+    with external.deferred_probes():
+        assert external.probes_deferred()
+        info = external.find_program("xtb")
+        assert info.path == str(exe) and info.version == ""
+        assert external.uncached_versions(["xtb"]) == ["xtb"]
+    assert not external.probes_deferred() and calls == []
+    done = []
+    t = threading.Thread(target=lambda: done.append(external.probe_versions(["xtb"])), name="probe-worker")
+    t.start()
+    t.join(30)
+    assert done == [["xtb"]] and calls == ["probe-worker"]
+    assert external.uncached_versions(["xtb"]) == []
+    with external.deferred_probes():
+        assert external.find_program("xtb").version == "6.7.1"          # from the cache, still nothing run here
+    assert calls == ["probe-worker"]
+    assert external.probe_versions(["xtb"]) == []                        # cached: nothing to do
+
+
 def test_find_program_from_env_var_with_version(tmp_path, monkeypatch):
     exe = _fake_program(tmp_path, "xtb", 'print("      * xtb version 6.7.1 (edcfbbe) compiled by x")\n')
     monkeypatch.setenv("QUANTABENCH_XTB", str(exe))

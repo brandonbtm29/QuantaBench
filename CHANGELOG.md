@@ -2,6 +2,14 @@
 
 ## Unreleased (after 0.3.0)
 
+### Programs never outlive QuantaBench; probes can't hang (ENG-3, 2026-11-22)
+- Windows: xtb, CREST (wsl.exe), MOPAC, Psi4, g-xTB and tblite's CPCM helper run in kill-on-close job objects, and the
+  lanes in one of their parent's, so a crashed or killed GUI or CLI takes them along; a cancel ends the whole job.
+- CREST through WSL runs under a guard that kills its process group when wsl.exe ends or QuantaBench dies, and what it
+  left behind when it ends (CREST's xtb after a cancel).
+- Version probes write to files and kill their process tree: bounded by their timeout. The conda scan takes the newest
+  version, not the first environment alphabetically. The GUI's first start probes versions in a worker.
+
 ### CREST through WSL: one BLAS thread per CREST thread, and its output kept inside WSL (CREST-LOG-1, 2026-11-22)
 - CREST now gets `OPENBLAS_NUM_THREADS=1` (CREST's install notes). The WSL CREST links a pthreads OpenBLAS, which
   printed "OpenBLAS Warning : Detect OpenMP Loop and this application may hang" on every BLAS call inside CREST's

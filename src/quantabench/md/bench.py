@@ -79,9 +79,7 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -227,10 +225,6 @@ def parse_lmp_help(text: str) -> dict:
             "gpu_present": None if g is None else g.group(1).lower() == "yes"}
 
 
-def _no_window() -> int:
-    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-
-
 def find_lammps(refresh: bool = False) -> tuple[LammpsInfo | None, str]:
     """(LAMMPS, "") or (None, why not): the executable ``chem.external`` finds (this machine's ``lammps`` path in
     the settings, ``QUANTABENCH_LAMMPS``, PATH, this environment, conda environments), described by ``lmp -h``."""
@@ -244,15 +238,15 @@ def find_lammps(refresh: bool = False) -> tuple[LammpsInfo | None, str]:
         return None, "LAMMPS not found (" + external.PROGRAMS["lammps"].install_hint + ")"
     if info.via_wsl:
         return None, f"LAMMPS {info.path} runs through WSL; the MD benchmark times native programs only"
-    try:
-        cp = subprocess.run([info.path, "-h"], capture_output=True, text=True, timeout=120,  # noqa: S603
-                            cwd=tempfile.gettempdir(), stdin=subprocess.DEVNULL, errors="replace",
-                            creationflags=_no_window())
-    except (OSError, subprocess.SubprocessError) as exc:
-        return None, f"{info.path} -h failed ({type(exc).__name__}: {exc})"
-    h = parse_lmp_help((cp.stdout or "") + (cp.stderr or ""))
+    from .. import proctree
+
+    probe = proctree.run_probe([info.path, "-h"], timeout=120)       # bounded whatever lmp's children do (ENG-3)
+    if probe.error:
+        return None, f"{info.path} -h failed ({probe.error})"
+    h = parse_lmp_help(probe.text)
     if not h["version"] and not h["packages"]:
-        return None, f"{info.path} -h did not print a LAMMPS version (exit {cp.returncode})"
+        why = "no answer within 120 s" if probe.timed_out else f"exit {probe.returncode}"
+        return None, f"{info.path} -h did not print a LAMMPS version ({why})"
     return LammpsInfo(info.path, info.source, h["version"], h["packages"], h["accelerators"], h["gpu_present"]), ""
 
 
