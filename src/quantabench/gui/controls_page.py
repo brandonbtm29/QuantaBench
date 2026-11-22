@@ -221,7 +221,8 @@ class ControlsPage(QWidget):
         t = text.strip().lower()
         for r, name in enumerate(self.names):
             spec = km.BY_NAME[name]
-            hay = " ".join((spec.category, spec.title, name, self.keys_text(name))).lower()
+            portable = ", ".join(km.portable(k) for k in self.state.keys(name))   # "Ctrl+O" also finds ⌘O
+            hay = " ".join((spec.category, spec.title, name, self.keys_text(name), portable)).lower()
             self.table.setRowHidden(r, bool(t) and t not in hay)
 
     def visible_names(self) -> list[str]:

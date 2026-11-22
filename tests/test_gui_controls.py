@@ -47,6 +47,19 @@ def _key(a) -> str:
     return keymap.portable(a.shortcut())
 
 
+def _pk(page, name) -> str:
+    """An action's keys on the page in Qt's portable text ("Ctrl+O" on every system; the page shows ⌘O on macOS)."""
+    from quantabench.gui import keymap
+
+    return ", ".join(keymap.portable(k) for k in page.state.keys(name))
+
+
+def _native(text) -> str:
+    from quantabench.gui import keymap
+
+    return ", ".join(keymap.native(keymap.seq(t)) for t in text.split(", "))
+
+
 @pytest.fixture
 def window(tmp_path):
     app = _app()
@@ -191,8 +204,9 @@ def test_tooltips_follow_the_keys(window):
     from quantabench.gui import keymap as km
 
     w = window
-    assert w.a_cancel.toolTip() == "Stop the build after the current step (Shift+Esc)"
-    assert w.review_btn.toolTip().endswith("(F6)") and w.new_job_btn.toolTip().endswith("(Ctrl+J)")
+    cancel_keys = ", ".join(km.native(k) for k in km.default_keys("build.cancel"))      # + ⌘. on macOS
+    assert w.a_cancel.toolTip() == f"Stop the build after the current step ({cancel_keys})"
+    assert w.review_btn.toolTip().endswith("(F6)") and w.new_job_btn.toolTip().endswith(f"({_native('Ctrl+J')})")
     st = km.KeymapState()
     st.set_keys("build.review", ["F7"])
     st.set_keys("build.cancel", [])
@@ -282,12 +296,12 @@ def test_conflict_is_detected_and_swapped_or_cleared(window, monkeypatch):
     # Ctrl+O is Open's: swap gives Open the Export key
     assert page.assign("file.export", "Ctrl+O")
     assert asked == [("file.export", "Ctrl+O", ["file.open"])]
-    assert page.keys_text("file.export") == "Ctrl+O" and page.keys_text("file.open") == "Ctrl+E"
+    assert _pk(page, "file.export") == "Ctrl+O" and _pk(page, "file.open") == "Ctrl+E"
     assert "Swapped" in page.message and km.all_conflicts(page.state, page.names) == {}
     # clear takes the key away from the other action
     choice[0] = "clear"
     assert page.assign("build.run", "Ctrl+E")
-    assert page.keys_text("file.open") == "" and page.keys_text("build.run") == "Ctrl+E"
+    assert _pk(page, "file.open") == "" and _pk(page, "build.run") == "Ctrl+E"
     # cancel changes nothing
     choice[0] = "cancel"
     before = page.result_state()
@@ -298,7 +312,7 @@ def test_conflict_is_detected_and_swapped_or_cleared(window, monkeypatch):
     asked.clear()
     choice[0] = "swap"
     page.assign("view.reset", "X")
-    assert asked[-1][2] == ["view3d.along_x"] and page.keys_text("view3d.along_x") == "R"
+    assert asked[-1][2] == ["view3d.along_x"] and _pk(page, "view3d.along_x") == "R"
     asked.clear()
     assert page.assign("view3d.projection", "F") and asked == []
 
@@ -313,17 +327,17 @@ def test_reset_this_action_and_reset_all(window):
     page.select("file.export")
     assert page.selected() == "file.export"
     page.clear_selected()
-    assert page.keys_text("file.export") == "" and page.state.is_changed("file.export")
+    assert _pk(page, "file.export") == "" and page.state.is_changed("file.export")
     page.reset_selected()
-    assert page.keys_text("file.export") == "Ctrl+E" and not page.state.is_changed("file.export")
+    assert _pk(page, "file.export") == "Ctrl+E" and not page.state.is_changed("file.export")
     page.select("molecules.next")
     page.assign("molecules.next", "N")
     page.reset_selected()                                     # back to the preset's key, not the default's
-    assert page.keys_text("molecules.next") == "PgDown"
+    assert _pk(page, "molecules.next") == "PgDown"
     page.assign("build.run", "F9")
     page.reset_all()
     assert page.state == km.KeymapState() and page.preset_box.currentData() == "quantabench"
-    assert page.keys_text("build.run") == "F5"
+    assert _pk(page, "build.run") == "F5"
 
 
 @needs_display
@@ -336,7 +350,7 @@ def test_page_table_search_and_marks(window):
     page.search.setText("zoom")
     shown = page.visible_names()
     assert shown and all("zoom" in n for n in shown)
-    page.search.setText("ctrl+shift+o")                       # by key too
+    page.search.setText("ctrl+shift+o")                       # by key too (as written here or as the system does)
     assert page.visible_names() == ["file.open_project"]
     page.search.setText("")
     page.assign("file.export", "F9")
@@ -348,7 +362,7 @@ def test_page_table_search_and_marks(window):
     assert page.capture.keySequence() == QKeySequence("F5")
     page.capture.setKeySequence(QKeySequence("F8"))
     page.capture.editingFinished.emit()
-    assert page.keys_text("build.run") == "F8"
+    assert _pk(page, "build.run") == "F8"
     assert page.table.item(page.row_of("file.open"), 0).data(Qt.ItemDataRole.UserRole) == "file.open"
 
 
@@ -368,14 +382,14 @@ def test_export_import_round_trip(window, tmp_path):
     assert other.state.preset == "quantabench"
     assert other.import_from(path) == []
     assert other.result_state() == page.result_state()
-    assert other.preset_box.currentData() == "vmd" and other.keys_text("build.cancel") == ""
+    assert other.preset_box.currentData() == "vmd" and _pk(other, "build.cancel") == ""
     # a file with problems: the unknown action and the bad key are left out and named
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"quantabench_keymap": 1, "preset": "spartan",
                                "overrides": {"no.such": ["F2"], "build.run": ["Ctrl+Nope+Q", "F4"]}}))
     problems = other.import_from(bad)
     assert any("no.such" in p for p in problems) and any("Ctrl+Nope+Q" in p for p in problems)
-    assert other.state.preset == "spartan" and other.keys_text("build.run") == "F4"
+    assert other.state.preset == "spartan" and _pk(other, "build.run") == "F4"
     with pytest.raises(ValueError):
         km.KeymapState.from_dict({"preset": "vmd"})
     notjson = tmp_path / "x.json"
