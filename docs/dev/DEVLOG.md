@@ -724,3 +724,5 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Shortcuts.** `gui/action_ids.py` names the actions (`view.mode_*`, `edit.undo`, `edit.redo`, `build.model_kit`)
   and holds their default keys. Undo and Redo are the platform's standard keys (plus Ctrl+Y). None of the keys were
   chosen to match another program; Ctrl+4 continues QuantaBench's Ctrl+1 to Ctrl+3 mouse modes.
+- **Merged after UI-4** (#39): Edit > Undo / Redo now come before UI-4's Paste, Copy molecules and Copy as, so
+  `test_molecule_list_context_menu_and_edit_menu` expects them first.
