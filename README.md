@@ -195,7 +195,10 @@ Plot has a ⧉ button for it), and **View > Dock all panels** (Ctrl+Shift+D) bri
 - **Every panel's title bar** has ⧉ (pop out and back) and ✕ (close).
 - **Surfaces** and **Spectra** panels: their settings and explanations fold the same way; the Spectra panel's Normal
   modes table folds so the plot takes the width.
-- **Settings > Compute:** the same folding sections.
+- **Settings > Compute:** the same folding sections, under a line with this computer's cores ("12 cores, 24
+  logical"). *Molecules at once* sets the lanes (Automatic, one at a time, or N); the full lane spec (GPU
+  lanes, threads per lane), GPU linear algebra and dxtb on the GPU are in a folded **Expert** box whose header
+  counts what is not at its default.
 - **The Results dock** shrinks to one row for a molecule with one conformer.
 
 **Build > New job...** (Ctrl+J) submits molecules as a job:

@@ -648,6 +648,58 @@ def test_archive_manifest_sync_temp_files_and_failed_streams(make_worker, tmp_pa
         c.download_archive(j, tmp_path / "dl2")
 
 
+def test_the_end_of_a_run_waits_for_a_status_poll_reading_the_job_table(make_worker, monkeypatch):
+    """FIX-7: a status poll that began reading the job table before ``Job.finishing`` was set, and was still reading
+    when the worker checkpointed the table, left jobs.sqlite-wal and -shm behind on Windows: its read-only connection
+    was open across the checkpoint. The end of the run now waits for such a read."""
+    run_ended, go_on, reading, done_reading, checkpoint_began = (threading.Event() for _ in range(5))
+    real_run, real_fallbacks = jobs.run_resumable, jobs.JobStore.fallbacks
+    real_checkpoint = worker_mod.JobManager._checkpoint
+
+    def run_resumable(*a, **kw):
+        out = real_run(*a, **kw)
+        run_ended.set()
+        assert go_on.wait(60)
+        return out
+
+    def fallbacks(self):                        # the last read of ``open_run``
+        if threading.current_thread().name == "test-poll":
+            reading.set()
+            assert done_reading.wait(60)
+        return real_fallbacks(self)
+
+    def checkpoint(run_dir, *a, **kw):
+        checkpoint_began.set()
+        return real_checkpoint(run_dir, *a, **kw)
+
+    monkeypatch.setattr(jobs, "run_resumable", run_resumable)
+    monkeypatch.setattr(jobs.JobStore, "fallbacks", fallbacks)
+    monkeypatch.setattr(worker_mod.JobManager, "_checkpoint", staticmethod(checkpoint))
+    w = make_worker("w1")
+    c = WorkerClient(w.url, TOKEN)
+    j = c.submit(inputs(["ethanol"]), dict(CONFIG), "poll")
+    assert run_ended.wait(120)
+    job = w.manager.get(j)
+    got: dict = {}
+    poll = threading.Thread(target=lambda: got.update(w.manager.public(job, tail=0)), name="test-poll")
+    poll.start()
+    try:
+        assert reading.wait(30)                 # a status poll is reading the job table; the run has ended
+        go_on.set()
+        # without the lock the worker went on to checkpoint the table while the poll still had it open
+        checkpointed_while_reading = checkpoint_began.wait(0.5)
+        state_while_reading = job.state
+    finally:
+        go_on.set()
+        done_reading.set()
+        poll.join(30)
+    end = c.wait(j, poll=0.1, timeout=120)
+    assert not checkpointed_while_reading and state_while_reading == "running"
+    assert checkpoint_began.is_set() and got["counts"]["ok"] == 1
+    assert end["state"] == "done" and end["counts"]["ok"] == 1
+    assert not list(Path(end["run_dir"]).glob("jobs.sqlite-*"))
+
+
 def test_stale_worker_lock_with_a_reused_pid(tmp_path):
     import os
 
