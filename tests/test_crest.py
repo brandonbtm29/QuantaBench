@@ -60,8 +60,14 @@ args = sys.argv[1:]
 if "--version" in args:
     print("       Version 3.0.2, fake")
     sys.exit(0)
-_log_call({"argv": args, "path": os.environ.get("PATH", ""),
-           "threads": os.environ.get("OMP_NUM_THREADS"), "cwd": os.getcwd(), "pid": os.getpid()})
+def _stdout_file():
+    """The file in the working folder that is this process's stdout ('' for a pipe or a file elsewhere)."""
+    out = os.fstat(1)
+    return next((p.name for p in Path(".").iterdir() if p.is_file() and (os.stat(p).st_ino, os.stat(p).st_dev)
+                 == (out.st_ino, out.st_dev)), "")
+_log_call({"argv": args, "path": os.environ.get("PATH", ""), "threads": os.environ.get("OMP_NUM_THREADS"),
+           "blas_threads": os.environ.get("OPENBLAS_NUM_THREADS"), "stdout": _stdout_file(), "cwd": os.getcwd(),
+           "pid": os.getpid()})
 lines = Path(args[0]).read_text().splitlines()
 n = int(lines[0])
 sym = [ln.split()[0] for ln in lines[2:2 + n]]
@@ -90,6 +96,14 @@ if mode == "macfail":   # conda-forge's osx-arm64 CREST 3.0.2 on 19+ atoms (docs
     print("  Initial geometry optimization failed!")
     print("  Please check your input and, if present, crestopt.log.")
     sys.stderr.write("ERROR STOP\n")
+    sys.exit(1)
+if mode == "chatty":    # a pthreads OpenBLAS inside CREST's OpenMP threads (CREST-LOG-1), then a failure
+    print(" CREST banner")
+    warning = ("OpenBLAS Warning : Detect OpenMP Loop and this application may hang. Please rebuild the library with "
+               "USE_OPENMP=1 option.")
+    for _ in range(int(os.environ.get("FAKE_CREST_LINES", "1000000")) // 10000):
+        sys.stdout.write((warning + "\n") * 10000)
+    print("  Initial geometry optimization failed!")
     sys.exit(1)
 if mode == "zeroopt":   # exits 0, but no structure was optimized (crest-lab/crest#412)
     print("> 0 of 12 structures successfully optimized (0.0% success)")
@@ -191,7 +205,22 @@ def test_generate_with_fake_crest(fake_crest, _scratch):
                             "--uhf", "0", "-T", "2"]
     assert call["path"].split(os.pathsep)[0] == fake_crest["xtb_dir"]     # the found xtb comes first on PATH
     assert call["threads"] == "2"
+    assert call["blas_threads"] == "1"                                  # one BLAS thread per CREST thread
+    assert call["stdout"] == "crest.log"                                # natively: straight into its log, as before
     assert not any(_scratch.iterdir())                                  # job folder removed
+
+
+def test_crest_env_has_one_blas_thread_per_crest_thread(monkeypatch):
+    """CREST-LOG-1: a pthreads OpenBLAS inside CREST's OpenMP threads warns on every call ("Detect OpenMP Loop"), so
+    CREST gets OPENBLAS_NUM_THREADS=1, natively and through WSL; its OpenMP threads stay as many as -T."""
+    monkeypatch.setattr(external, "find_program", lambda name, **kw: None)
+    for path, via_wsl in (("/opt/crest/bin/crest", False), ("wsl:/home/u/qb-tools/bin/crest", True)):
+        env = crest.child_env(external.ProgramInfo("crest", path, "settings"), 5)
+        assert env["OPENBLAS_NUM_THREADS"] == "1" and env["OMP_NUM_THREADS"] == "5" == env["MKL_NUM_THREADS"]
+        assert env["OMP_MAX_ACTIVE_LEVELS"] == "1"                     # no nested OpenMP (external.program_env)
+        assert ("OPENBLAS_NUM_THREADS/u" in env.get("WSLENV", "").split(":")) is via_wsl
+    # other programs keep a BLAS thread per thread (xtb's and tblite's BLAS runs outside their OpenMP loops)
+    assert external.program_env(5)["OPENBLAS_NUM_THREADS"] == "5"
 
 
 def test_generate_caps_conformers(fake_crest):
@@ -241,8 +270,10 @@ def test_wsl_crest_command_and_environment(monkeypatch, tmp_path):
     env = seen["env"]
     assert "OMP_NUM_THREADS/u" in env["WSLENV"] and "PATH/u" not in env["WSLENV"]
     assert env["PATH"] == os.environ["PATH"] and env["OMP_NUM_THREADS"] == "4"
+    assert env["OPENBLAS_NUM_THREADS"] == "1" and "OPENBLAS_NUM_THREADS/u" in env["WSLENV"]
     assert cs.forcefield == "CREST/gfn2//gfnff" and cs.energies_kcal == pytest.approx([-11.5 * KCAL])
     assert seen["kw"]["program_cwd"] is None                           # off: CREST runs in the Windows job folder
+    assert seen["kw"]["program_log"] == crest.OUTPUT_FILE              # (run_program ignores it without a WSL folder)
     assert cs.notes == ["CREST scratch: the Windows job folder through /mnt (crest_wsl_scratch = off)"]
 
 

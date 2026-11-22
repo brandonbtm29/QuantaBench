@@ -519,11 +519,16 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
       a generous guess). WSL's memory is capped (by default half the PC's), and several lanes run at once, so each
       job checks when it starts;
     - otherwise `~/.cache/quantabench/scratch/<job>` (`$XDG_CACHE_HOME` if set) on WSL's ext4 disk.
-  - The input is copied in, and CREST runs there (`wsl.exe --cd <that folder>`). CREST's output is the log QuantaBench
-    writes through the pipe, in the Windows job folder, as before. What comes back:
+  - The input is copied in, and CREST runs there (`wsl.exe --cd <that folder>`). Its stdout and stderr go to
+    `crest.out` there too, not through wsl.exe's pipe, which wrote them to NTFS as thousands of small writes a second
+    (CREST-LOG-1, 2026-11-22). When CREST ends, `crest.log` in the Windows job folder gets a bounded copy: the first
+    200 and the last 2,000 lines, 1 MiB at most, lines cut at 2,000 characters, each run of identical lines as one
+    line and a count, and a line saying how much was left out. A CREST that writes more than 16 MB gets a WARNING
+    in the run's log. What comes back:
     - success: `crest_conformers.xyz` (what the pipeline reads), `crest.energies` and `crest_best.xyz`;
-    - a failure or the time limit: the folder's top-level files up to 8 MB (CREST's small logs, `crestopt.log`), next
-      to its log in the kept Windows job folder; trajectories and subfolders stay behind;
+    - a failure or the time limit: the folder's top-level files up to 8 MB (`crest.out` when it is that small,
+      CREST's small logs, `crestopt.log`), next to `crest.log` in the kept Windows job folder; trajectories and
+      subfolders stay behind;
     - Settings > Engines > Keep job folders: everything;
     - a cancel: nothing.
   - The folder inside WSL is removed in every case. A killed process cannot do that: the clean-up of left-behind job
@@ -537,6 +542,20 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     --crest-wsl-scratch auto|shm|disk|off`. `engines.crest_wsl_shm_min_gb` is in the settings file only. When no
     folder can be made inside WSL, the job runs in the Windows folder, with a warning and a note.
   - Native CREST (Linux, macOS) is not affected: it runs in its job folder on a local disk, as always.
+- **BLAS threads** (CREST-LOG-1, 2026-11-22). CREST gets `OPENBLAS_NUM_THREADS=1`, as CREST's install notes ask;
+  its OpenMP threads stay as many as `-T` (the molecule's threads), with `OMP_MAX_ACTIVE_LEVELS=1` as for every
+  program.
+  - Why: CREST 3 runs its calculations in its own OpenMP threads. conda-forge's CREST links a pthreads OpenBLAS
+    (`libopenblas-*-pthreads_*`, the workstation's WSL CREST), which, called inside them with more than one thread,
+    prints `OpenBLAS Warning : Detect OpenMP Loop and this application may hang. Please rebuild the library with
+    USE_OPENMP=1 option.` on each call: 27,000 lines in 45 s at `-T 5`, a 368 MB log in 11 minutes in the CREST
+    rebuild. One BLAS thread per CREST thread is the layout CREST wants anyway (the xtb that `--legacy` starts
+    inherits it).
+  - An OpenMP OpenBLAS (the fork's macOS build: `USE_OPENMP`) or Accelerate never warns, and inside CREST's threads
+    it already uses one thread.
+  - Other programs keep a BLAS thread per thread: xtb (`--opt`, `--grad`) and tblite call BLAS outside their OpenMP
+    loops and print no such warning with 5 BLAS threads (checked with conda-forge's xtb 6.7.1 and tblite 0.6.0 in
+    WSL), and xtb's documentation recommends `OPENBLAS_NUM_THREADS=<ncores>` for them.
 - **Levels.** `--crest-method gfn2 | gfnff | gfn2//gfnff | gfn1`; `--quick` is the default
   (`--crest-full` for a full run). gfn2, gfn1 and gfnff run inside CREST 3. `gfn2//gfnff` needs
   CREST's `--legacy` mode (added automatically) and an `xtb` on the PATH CREST sees.
@@ -770,9 +789,11 @@ machine's thread count: 12 of 24 on the workstation) store another machine's val
 of the settings file. A worker reads its machine's values at job start and re-reads them every 15 s while a job
 runs. A changed **run priority** is applied to the job's running lanes and the programs they started at once
 (`priority.apply_to_pids`): lowering works everywhere, raising only on Windows (on macOS and Linux it applies from the
-next worker start). **Lanes and free threads** apply with the machine's next job (a pause and resume restarts the
-job's lanes too). A job that `grid build --priority` gave its own priority keeps it. docs/WORKERS.md, "Pausing a
-machine, a closing laptop", has the rest.
+next worker start). macOS loses a nice value set while a process is inside exec() (a lane or a program that is just
+starting), so on macOS and Linux the lowered processes are looked at again a quarter of a second later and lowered
+once more if an exec put the old value back (FIX-6). **Lanes and free threads** apply with the machine's next job (a
+pause and resume restarts the job's lanes too). A job that `grid build --priority` gave its own priority keeps it.
+docs/WORKERS.md, "Pausing a machine, a closing laptop", has the rest.
 
 **Free threads.** With CPU threads = Auto (0, the default), the run's thread budget is the logical threads minus the
 free threads. The `auto` lane plan stays inside that budget, as do `1` (one process) and `N` lanes. Dynamic CREST

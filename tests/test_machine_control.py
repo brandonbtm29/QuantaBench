@@ -859,20 +859,66 @@ def test_priority_applied_to_running_processes():
         pytest.skip("POSIX nice values")
     import os
 
-    if os.nice(0) >= priority.NICE["low"]:          # e.g. the suite itself runs under `nice -n 10`
+    here = os.nice(0)
+    if here >= priority.NICE["low"]:          # e.g. the suite itself runs under `nice -n 10`
         pytest.skip("this process is already at or below the 'low' nice value")
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    # a running process: the child says when its Python runs. Until then it may still be inside an exec (python.org's
+    # macOS framework python re-execs itself into Python.app), where macOS loses a nice value set (FIX-6; the
+    # next test covers how apply_to_pids handles that)
+    proc = subprocess.Popen([sys.executable, "-c", "import time; print('up', flush=True); time.sleep(30)"],
+                            stdout=subprocess.PIPE, text=True)
     try:
+        assert proc.stdout.readline().strip() == "up"
         note = priority.apply_to_pids([proc.pid], "low")
         import psutil
 
-        assert psutil.Process(proc.pid).nice() == priority.NICE["low"] and "1 process(es) changed" in note
+        assert psutil.Process(proc.pid).nice() == priority.NICE["low"] and "1 process(es) changed" in note, note
         note = priority.apply_to_pids([proc.pid], "normal")       # raising: not possible here without privileges
-        assert "cannot be raised" in note or psutil.Process(proc.pid).nice() == 0
+        assert "cannot be raised" in note or psutil.Process(proc.pid).nice() == 0, (note, f"this process: nice {here}")
         assert "no running lane" in priority.apply_to_pids([], "low")
     finally:
         proc.kill()
         proc.wait(10)
+        proc.stdout.close()
+
+
+class _Lowered:
+    """A process for ``priority.apply_to_pids``. ``in_exec``: it is inside an exec when it is lowered, as a lane or a
+    program that is just starting can be; macOS then shows the new nice value until the exec ends and the old one
+    after it (FIX-6)."""
+
+    def __init__(self, pid, in_exec):
+        self.pid, self.value, self.sets, self.in_exec = pid, 0, [], in_exec
+
+    def children(self, recursive=False):
+        return []
+
+    def nice(self, value=None):
+        if value is not None:
+            self.sets.append(value)
+            self.value = value
+            return None
+        if self.in_exec and len(self.sets) == 1:
+            self.value, self.in_exec = 0, False        # the exec ended: the image kept the value from before
+        return self.value
+
+
+def test_a_priority_lost_in_an_exec_is_set_again(monkeypatch):
+    import psutil
+
+    from quantabench import priority
+
+    procs = {1: _Lowered(1, in_exec=True), 2: _Lowered(2, in_exec=False)}
+    monkeypatch.setattr(psutil, "Process", lambda pid: procs[pid])
+    monkeypatch.setattr(priority, "RECHECK_S", 0.0)
+    note = priority.apply_to_pids([1, 2], "low", system="darwin")
+    assert procs[1].sets == [10, 10] and procs[1].nice() == 10        # looked at again and lowered once more
+    assert procs[2].sets == [10] and procs[2].nice() == 10
+    assert "2 process(es) changed" in note and "1 lowered again" in note, note
+    # Windows has no exec: a priority class set is not looked at again
+    procs = {1: _Lowered(1, in_exec=True)}
+    note = priority.apply_to_pids([1], "low", system="win32")
+    assert procs[1].sets == [priority.BELOW_NORMAL_PRIORITY_CLASS] and "lowered again" not in note
 
 
 def test_status_file_of_a_worker(make_worker):

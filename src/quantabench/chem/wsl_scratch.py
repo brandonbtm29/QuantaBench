@@ -15,8 +15,11 @@ Now the program runs in a folder of WSL's own file system, and only what the pip
 ``engines.crest_wsl_scratch``: "auto" (the above), "shm", "disk", or "off" (the Windows folder through /mnt, as
 before). A native program (Linux, macOS, Windows) is not affected: it runs in its job folder, as always.
 
-The Windows job folder still exists. It holds the inputs, the program's output (stdout, which QuantaBench writes
-through the pipe, not 9P), and what is copied back:
+The Windows job folder still exists. It holds the inputs, the program's log, and what is copied back. The program's
+stdout and stderr go to a file in the folder inside WSL (``external.run_program(program_log=...)``; CREST:
+``crest.out``), not through wsl.exe's pipe, which wrote them to NTFS as thousands of small writes a second (a 368 MB
+log of one repeated OpenBLAS warning in 11 minutes, CREST-LOG-1). When the program ends, the log gets a bounded copy
+(``output_tail``: the first 200 and last 2,000 lines, 1 MiB at most, repeated lines collapsed). What else comes back:
 
 - success: the files the caller fetches (``Place.fetch``; CREST: crest_conformers.xyz, crest.energies, crest_best.xyz);
 - failure or timeout: the folder's top-level files up to ``external.KEEP_FAILED_MAX_BYTES``, for diagnosis;
@@ -63,6 +66,13 @@ COPY_ALL_TIMEOUT_S = 900.0       # keep_scratch: the whole folder comes back
 GB = 1e9
 #: files a program writes that never come back (the WSL wrapper's PID file)
 NEVER_COPIED = (".qb_pid",)
+#: what of a program's output file inside WSL comes back into its Windows log (``output_tail``; CREST-LOG-1): the first
+#: OUTPUT_HEAD_LINES and the last OUTPUT_TAIL_LINES lines, OUTPUT_MAX_BYTES in all, each line cut at OUTPUT_LINE_CHARS
+OUTPUT_HEAD_LINES = 200
+OUTPUT_TAIL_LINES = 2000
+OUTPUT_MAX_BYTES = 2**20
+OUTPUT_LINE_CHARS = 2000
+TAIL_TIMEOUT_S = 300.0           # awk reads the whole file once: seconds for hundreds of MB
 
 
 class WslScratchError(RuntimeError):
@@ -141,6 +151,31 @@ done;
 exit $rc
 ''')
 
+#: a bounded copy of a program's output file (``output_tail``): first ``qb_output_bytes=<size>``, then the output with
+#: runs of identical lines collapsed to one line and a count (compared as strings), lines cut at W characters, the first H lines (at most a
+#: quarter of B bytes) and the last T lines (B bytes in all), and one line saying what was left out between them.
+#: Args: file, H, T, B, W. Nothing when the file does not exist.
+TAIL_SCRIPT = _one_line(r'''
+f=$1;
+[ -f "$f" ] || exit 0;
+size=$(wc -c < "$f" | tr -d ' ');
+echo "qb_output_bytes=$size";
+awk -v H="$2" -v T="$3" -v B="$4" -v W="$5" -v S="$size" -v F="${f##*/}" '
+function cut(s) { if (length(s) > W) return substr(s, 1, W) " [QuantaBench: " (length(s) - W) " more characters]"; return s }
+function add(s) { n++; if (!full && n <= H && hb + length(s) + 1 <= B / 4) { print s; hb += length(s) + 1; h = n; return } full = 1; ring[n % T] = s }
+function flush() { if (rep > 0) add("    [QuantaBench: the line above repeated " rep " more time" (rep > 1 ? "s" : "") "]"); rep = 0 }
+NR > 1 && ($0 "") == prev { rep++; next }
+{ flush(); prev = $0 ""; add(cut($0)) }
+END {
+  flush();
+  first = n - T + 1; if (first <= h) first = h + 1;
+  k = n + 1; used = 0;
+  while (k - 1 >= first && used + length(ring[(k - 1) % T]) + 1 <= B - hb) { k--; used += length(ring[k % T]) + 1 }
+  if (k > h + 1) print "    [QuantaBench: " (k - h - 1) " lines left out here; the whole output, " F " inside WSL, has " NR " lines and " S " bytes]";
+  for (i = k; i <= n; i++) print ring[i % T]
+}' "$f"
+''')
+
 #: remove job folders; only paths with a quantabench folder above them (never a root, never anything else)
 REMOVE_SCRIPT = _one_line(r'''
 rc=0;
@@ -168,6 +203,19 @@ def run_sh(script: str, *args: str, timeout: float = SH_TIMEOUT_S) -> subprocess
         why = ((cp.stderr or "") + (cp.stdout or "")).replace("\x00", "").strip()
         raise WslScratchError(f"exit code {cp.returncode}" + (f": {why[-300:]}" if why else ""))
     return cp
+
+
+def output_tail(linux_dir: str, name: str) -> tuple[str, int]:
+    """(bounded copy, size in bytes) of the output file ``name`` a program wrote in ``linux_dir`` inside WSL
+    (``external.run_program(program_log=...)``): ``TAIL_SCRIPT`` with the ``OUTPUT_*`` limits. ("", 0) when there is
+    no such file. ``WslScratchError`` when WSL cannot read it."""
+    cp = run_sh(TAIL_SCRIPT, f"{linux_dir.rstrip('/')}/{name}", str(OUTPUT_HEAD_LINES), str(OUTPUT_TAIL_LINES),
+                str(OUTPUT_MAX_BYTES), str(OUTPUT_LINE_CHARS), timeout=TAIL_TIMEOUT_S)
+    first, _, rest = (cp.stdout or "").partition("\n")
+    if not first.startswith("qb_output_bytes="):
+        return "", 0
+    size = first.partition("=")[2].strip()
+    return rest, int(size) if size.isdigit() else 0
 
 
 # --------------------------------------------------------------------------------------- settings
