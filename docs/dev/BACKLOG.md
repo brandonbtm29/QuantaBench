@@ -64,7 +64,7 @@ with USE_OPENMP=1 option.", written by wsl.exe to the Windows job folder as thou
   the branch's, 272 vs 184 s and 157 vs 123 s; main's 5-thread lane kept about 8.5 cores busy (OpenBLAS's threads on
   top of CREST's) and wrote its log at 0.6 MB/s in about 3,500 writes a second; the branch's wrote nothing to NTFS
   while CREST ran. Same best energies. The smoke job through QuantaBench: CREST 107 s, `crest.log` 0 bytes while CREST
-  ran, its whole output 23 KB (527 lines), the lowest GFN2 conformer 0.17 kcal/mol below the batch's.
+  ran (no warning in `crest.out`), the lowest GFN2 conformer 0.17 kcal/mol below the batch's.
 - Later: switch the WSL environment to conda-forge's OpenMP OpenBLAS (`libopenblas=*=openmp*`) as well, if a profile
   ever shows CREST's serial BLAS calls matter (not needed for the warning).
 

@@ -382,8 +382,9 @@ Newest entries at the bottom. One entry per working session or nightly run.
     found -4150.225. Same spread either way: single-threaded BLAS does not slow CREST or change what it finds.
   - The smoke job through QuantaBench with the branch (one lane of 5 threads, the batch's protocol, background
     priority): CREST 107 s (the batch: 140 s with a second lane running), 1,130 conformers, `crest.log` 0 bytes while
-    CREST ran, its whole output 23 KB (527 lines, no warning), the note "CREST scratch: WSL /dev/shm". The lowest GFN2
-    conformer: -1426.75296 eV, 0.17 kcal/mol below the batch's (-1426.74561).
+    CREST ran (`crest.out` inside WSL: 23 KB, 527 lines, no warning, at the last look before CREST ended), the note
+    "CREST scratch: WSL /dev/shm". The lowest GFN2 conformer: -1426.75296 eV, 0.17 kcal/mol below the batch's
+    (-1426.74561).
   - The machine's total disk writes could not isolate CREST: other work wrote 2-400 MB/s while these ran. One lane at a time:
     4.9 MB/s on average with the flood through NTFS, 4.3 with the same flood inside WSL, 2-4 idle; during the smoke
     job 4.1 MB/s (317 writes/s). The per-process numbers above are the clean measure.
