@@ -151,6 +151,14 @@ What the standardization does with research records (every step is in the molecu
   `removed_fragments` column (`[Na+]`, `2 x [Br-]`, a second copy of the parent, a co-crystallized acid).
   Bonds to alkali and alkaline-earth metals are ionic and are disconnected first (`CC(=O)O[Na]` is
   sodium acetate). Turn off *keep largest fragment* to compute the whole record instead.
+- **Build filters** (Settings > Build defaults > Fragments, `build --strip`; Spartan's Import Filters): water, small
+  neutral inorganic acids (HCl, HBr, HI, HF, ...) and counter-ions picked by name (`sodium`, `tetrabutylammonium`,
+  `chloride`, ... in `standardize.NAMED_COUNTERIONS`; a name also matches the neutral form, triethylamine for
+  triethylammonium) are removed before the largest-fragment rule, for every input. They matter where that rule would
+  not remove the fragment: with *keep largest fragment* off (a hydrate's ion pair is computed without its water), or
+  where the counter-ion is the larger ion (tetrabutylammonium trifluoroacetate computes the trifluoroacetate). The
+  notes say "stripped before the largest-fragment rule (build filters): O (water), [Na+] (sodium)", and
+  `removed_fragments` lists them first. Off by default; science settings (stored with the run, sent to workers).
 - **Metal salts.** A bondless Al³⁺, Zn²⁺, Fe²⁺/Fe³⁺ or Cu²⁺ cation (as well as Na⁺, K⁺, Ca²⁺, Mg²⁺,
   Ba²⁺, Sr²⁺) is a counter-ion when the rest of the record is an organic ion and counter-ions: fosetyl-Al
   (`[Al+3]` + 3 ethyl phosphonates) computes one ethyl phosphonate anion, and `removed_fragments` lists
@@ -326,8 +334,8 @@ not tried again in the run; `--retry-failed` (with a higher limit, or 0) redoes 
 - **dxtb.** `chem/torch_compat.py` runs the dense linear algebra a GPU build lacks (Cholesky and solve
   on AMD's Windows ROCm wheel; everything, in float64, on MPS) on the CPU inside a dxtb call. Results
   match the CPU, but dxtb 0.4 is 5-8x slower on the workstation's GPU than on its CPU (host synchronizations in its
-  overlap integrals), so `dxtb_device()` keeps dxtb on the CPU unless Settings > Compute > "dxtb on the
-  GPU" (or `QUANTABENCH_DXTB_GPU`) is `on`. `QUANTABENCH_LINALG=auto|cpu|device` chooses what is routed.
+  overlap integrals), so `dxtb_device()` keeps dxtb on the CPU unless Settings > Compute > Expert > "dxtb on
+  the GPU" (or `QUANTABENCH_DXTB_GPU`) is `on`. `QUANTABENCH_LINALG=auto|cpu|device` chooses what is routed.
 
 ## Finding programs
 

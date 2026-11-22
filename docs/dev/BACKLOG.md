@@ -1279,7 +1279,7 @@ Open (needs-Brandon):
   Spartan's geometries would compare those (needs ESP/density-surface pairs in `validate`: QSAR_ELPOT_MIN/MAX,
   QSAR_ELPOT_AREA/VOLUME, polar areas vs `qm_surf_*`).
 
-## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · ready (Surfaces & radii, Display done 2026-11-06)
+## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · in-PR (Surfaces & radii, Display done 2026-11-06; the next tabs in SETTINGS-1 PRs)
 Review of Spartan '24's eleven tabs: Brandon's Claude Doc "Spartan Preferences review and QuantaBench settings plan".
 Rule: a setting that changes a computed value is a science setting (`jobs.SCIENCE_FIELDS`, sent to grid
 workers by `dist.worker.validate_config`); display settings never rename or rescale exported columns.
@@ -1293,9 +1293,15 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
   raw descriptor list keep the column units; orbital energies stay in eV.
 - Next, one tab per change, each with a GUI test like `tests/test_gui_settings_surfaces.py`:
   - **Compute** (Spartan's Jobs): an Expert box hiding the lane spec, GPU linear algebra and dxtb-on-GPU; a
-    "N cores, M logical" line.
+    "N cores, M logical" line. In PR (`feat/settings-1-compute`, 2026-11-22): *Molecules at once* (Automatic, one at
+    a time, N) and the Expert box's lane spec edit this machine's one spec (`Settings.lanes_for`, as the Machines dock
+    and the job dialog); the tab's per-machine changes are stamped for the SyncThing merge. Not science settings.
   - **Build defaults** (Settings > Import Filters, Conformer Rules): strip water, HCl and named counter-ions
-    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search.
+    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search. In PR
+    (`feat/settings-1-build-defaults`, 2026-11-22): `strip_water`, `strip_acids`, `strip_counterions` (names of
+    `standardize.NAMED_COUNTERIONS`) and `ring_conformers` ("normal" | "thorough": twist-boats of six-membered rings,
+    Spartan's "Thorough"), all science fields, off/normal by default; `build --strip`, `--ring-conformers`. Open:
+    whether salts should keep their counter-ion as a separate entry (the settings plan's question).
   - **Lookups** (Databases, URLs): URL templates with `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`
     (PubChem, NIST WebBook by CAS, nmrshiftdb, EPA CompTox), opened from the molecule list; PubChem cache folder
     and maximum age; a folder of reference tables with experimental values.

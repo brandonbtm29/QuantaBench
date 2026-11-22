@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -20,6 +20,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -41,6 +44,14 @@ from .energy_widgets import EnergySpinBox
 def method_keys() -> list[str]:
     """'auto' and every registered engine (plugins included), grouped by family."""
     return engines.method_keys()
+
+
+def cores_line(report: resources.HardwareReport | None = None) -> str:
+    """'12 cores, 24 logical' (Spartan's Jobs tab: "12 cores detected (24 logical)"), from the detection report when
+    there is one ('14 cores (10 performance), 14 logical' on Apple Silicon), else from psutil."""
+    if report is not None and report.physical_cores and report.logical_cores:
+        return f"{report.cores_text()}, {report.logical_cores} logical"
+    return f"{resources.physical_cores()} cores, {resources.logical_cores()} logical"
 
 
 def method_label(key: str) -> str:
@@ -84,8 +95,12 @@ class SettingsDialog(QDialog):
         self.method.currentIndexChanged.connect(self._update_lane_plan)
         self._update_priority()
 
-    #: suggestions in the editable "Parallel lanes" box
+    #: suggestions in the editable "Lane spec" box (Compute > Expert)
     LANE_PRESETS = ("1", "auto", "2", "4", "6", "gpu:1x4,cpu:5x2")
+    #: the "Molecules at once" choice of a lane spec that only the Expert box shows (GPU lanes, threads per lane)
+    CUSTOM_LANES = "custom"
+    #: the Expert box's settings that are not this machine's lane spec, and their defaults (``ResourceSettings``)
+    EXPERT_DEFAULTS = {"linalg": "auto", "dxtb_gpu": "auto"}
 
     def _lane_config(self):
         from ..chem.pipeline import BuildConfig
@@ -131,8 +146,11 @@ class SettingsDialog(QDialog):
         return sec, form
 
     def _resources_tab(self, report) -> QWidget:
-        """Compute: threads and priority, GPU, parallel lanes, limits and this computer's report, each a folding
-        section (UI-8b) with a one-line summary; the priority's explanation is behind an ⓘ."""
+        """Compute (Spartan's Preferences > Jobs): this computer's cores, then threads and priority, GPU, parallel
+        lanes, limits, an Expert box (the lane spec in full, GPU linear algebra, dxtb on the GPU) and this computer's
+        report, each a folding section (UI-8b) with a one-line summary; the priority's explanation is behind an ⓘ.
+        The lanes, the priority and the free threads are this machine's own (``Settings.lanes_for``, ``priority_for``,
+        ``free_threads_for``): the same values the Machines dock edits and the job dialog starts from."""
         from .collapsible import InfoLabel, with_info
 
         w = QWidget()
@@ -147,10 +165,22 @@ class SettingsDialog(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(inner)
         outer.addWidget(scroll)
+        self.cores_label = QLabel(f"This computer: {cores_line(report)}")
+        self.cores_label.setObjectName("compute_cores")
+        self.cores_label.setContentsMargins(6, 4, 4, 6)
+        self.cores_label.setToolTip("Physical cores and logical threads (two per core with SMT). CPU threads and Leave "
+                                    "free count logical threads;\nthe 'auto' lane plan gives each lane a physical core, "
+                                    "the fastest layout measured for batches.")
+        col.addWidget(self.cores_label)
         threads_sec, form = self._section_form("Threads and priority", "compute_threads", True)
         gpu_sec, gpu_form = self._section_form("GPU", "compute_gpu", False)
         lanes_sec, lanes_form = self._section_form("Parallel lanes", "compute_lanes", True)
         limits_sec, limits_form = self._section_form("Limits", "compute_limits", False)
+        expert_sec, expert_form = self._section_form(
+            "Expert", "compute_expert", False,
+            info="Settings most runs leave alone: this machine's lane spec in full (GPU lanes, threads per lane), "
+                 "where dxtb's dense linear algebra runs on a GPU, and whether dxtb uses the GPU at all. The header "
+                 "counts those that differ from the defaults.")
         r = self.s.resources
         logical = resources.logical_cores()
         self.threads = QSpinBox()
@@ -205,16 +235,31 @@ class SettingsDialog(QDialog):
         self.dxtb_gpu.setToolTip("auto: dxtb (GFN1/GFN2-xTB) uses the GPU only where it has the linear algebra dxtb\n"
                                  "needs (CUDA); on AMD's Windows ROCm build and Apple GPUs it measured 5-8x slower\n"
                                  "than the CPU, so it stays on the CPU. on: use the GPU anyway; off: always the CPU.")
-        gpu_form.addRow("dxtb on the GPU", self.dxtb_gpu)
         self.linalg = QComboBox()
         self.linalg.addItems(["auto", "cpu", "device"])
         self.linalg.setCurrentText(getattr(r, "linalg", "auto") or "auto")
         self.linalg.setToolTip("Dense linear algebra a GPU build lacks (Cholesky on Windows ROCm, most of it on MPS):\n"
                                "auto: run just those operations on the CPU; cpu: all of them on the CPU;\n"
                                "device: never route (errors where the GPU lacks them).")
-        gpu_form.addRow("GPU linear algebra", self.linalg)
         self._report = report
+        # Molecules at once: the lane specs "auto", "1" and "N" as a list; any other spec (GPU lanes, threads per lane)
+        # is "Custom" and typed in the Expert box. Both edit this machine's one spec (Settings.lanes_for).
+        self._syncing_lanes = False
+        self.lane_count = QComboBox()
+        self.lane_count.setObjectName("compute_lane_count")
+        self.lane_count.addItem("Automatic (from the hardware and the method)", "auto")
+        self.lane_count.addItem("One at a time (one process, all threads)", "1")
+        for n in range(2, max(2, resources.physical_cores()) + 1):
+            self.lane_count.addItem(f"{n} at once ({n} CPU lanes)", str(n))
+        self.lane_count.addItem("Custom lane spec (Expert)", self.CUSTOM_LANES)
+        self.lane_count.setToolTip("How many molecules of a batch run at once, each in its own worker process (lane).\n"
+                                   "Automatic: from the cores, the GPU and the method (one lane per physical core\n"
+                                   "for CPU methods). One at a time: one process with all the threads. Custom: a\n"
+                                   "lane spec with GPU lanes or threads per lane, typed under Expert.\n"
+                                   "Saved for this machine only, like the Machines dock's lanes.")
+        lanes_form.addRow("Molecules at once", self.lane_count)
         self.lanes = QComboBox()
+        self.lanes.setObjectName("compute_lane_spec")
         self.lanes.setEditable(True)
         self.lanes.addItems(self.LANE_PRESETS)
         self.lanes.setCurrentText(self.s.lanes_for())         # this machine's spec (the file is shared)
@@ -222,7 +267,12 @@ class SettingsDialog(QDialog):
                               "1 = one process with all threads; auto = from the hardware and the method;\n"
                               "N = N CPU lanes sharing the threads; or a list such as gpu:1x4,cpu:5x2\n"
                               "(1 GPU lane with 4 threads + 5 CPU lanes with 2 threads)")
-        lanes_form.addRow("Parallel lanes", self.lanes)
+        expert_form.addRow("Lane spec", self.lanes)
+        expert_form.addRow("GPU linear algebra", self.linalg)
+        expert_form.addRow("dxtb on the GPU", self.dxtb_gpu)
+        self.lanes.currentTextChanged.connect(self._lane_spec_typed)
+        self.lane_count.currentIndexChanged.connect(self._lane_count_chosen)
+        self._lane_spec_typed(self.lanes.currentText())
         self.lane_plan = QLabel()
         self.lane_plan.setWordWrap(True)
         self.lane_plan.setStyleSheet("color: gray;")
@@ -265,7 +315,7 @@ class SettingsDialog(QDialog):
                                          "embedding gets a quarter of it and keeps the conformers it has by then.\n"
                                          "Off = no limit.")
         limits_form.addRow("Time limit per molecule", self.molecule_timeout)
-        for sec in (threads_sec, gpu_sec, lanes_sec, limits_sec):
+        for sec in (threads_sec, gpu_sec, lanes_sec, limits_sec, expert_sec):
             col.addWidget(sec)
         if report:
             this_sec, this_form = self._section_form("This computer", "compute_hardware", False)
@@ -293,19 +343,81 @@ class SettingsDialog(QDialog):
         sec["compute_threads"].set_summary(f"{threads} · priority {self.priority.currentData()} · "
                                            f"{self.free_threads.value()} free")
         sec["compute_gpu"].set_summary(f"GPU {self.gpu.currentText()} · device {self.gpu_index.currentData() or 0} · "
-                                       f"cap {self.mem.value():.2f} · dxtb {self.dxtb_gpu.currentText()}")
+                                       f"cap {self.mem.value():.2f}")
         extras = [n for n, b in (("speed-aware", self.speed_aware), ("dynamic CREST threads", self.dynamic_threads))
                   if b.isChecked()]
-        sec["compute_lanes"].set_summary(" · ".join([self.lanes.currentText().strip() or "1", *extras]))
+        spec = self.lanes.currentText().strip() or "1"
+        sec["compute_lanes"].set_summary(" · ".join([spec, *extras]))
+        sec["compute_expert"].set_summary(f"lane spec {spec} · GPU linear algebra {self.linalg.currentText()} · "
+                                          f"dxtb on the GPU {self.dxtb_gpu.currentText()}")
+        changed = self.expert_changes()
+        sec["compute_expert"].set_status(f"{len(changed)} changed" if changed else "")
+        sec["compute_expert"].status.setToolTip(", ".join(changed))
         mem = self.memory_budget.specialValueText() if self.memory_budget.value() == self.memory_budget.minimum() \
             else ("auto memory" if self.memory_budget.value() == 0 else f"{self.memory_budget.value():g} GB per lane")
         limit = self.molecule_timeout.specialValueText() if self.molecule_timeout.value() == 0 \
             else f"{self.molecule_timeout.value()} s per molecule"
         sec["compute_limits"].set_summary(f"{mem} · {limit}")
 
+    def _simple_lanes(self, spec: str) -> bool:
+        """``spec`` is one of the "Molecules at once" choices ("auto", "1", "2", ...), not a custom lane spec."""
+        key = spec.strip().lower() or "1"
+        return key != self.CUSTOM_LANES and self.lane_count.findData(key) >= 0
+
+    def _lane_spec_typed(self, text: str) -> None:
+        """The Expert box's lane spec changed: "Molecules at once" shows the same spec, or Custom."""
+        if self._syncing_lanes:
+            return
+        self._syncing_lanes = True
+        try:
+            key = text.strip().lower() or "1"
+            idx = self.lane_count.findData(key if self._simple_lanes(key) else self.CUSTOM_LANES)
+            self.lane_count.setCurrentIndex(idx)
+        finally:
+            self._syncing_lanes = False
+
+    def _lane_count_chosen(self, *_args) -> None:
+        """A "Molecules at once" choice: its spec goes into the lane spec; Custom opens the Expert box to type one."""
+        if self._syncing_lanes:
+            return
+        key = self.lane_count.currentData()
+        if key == self.CUSTOM_LANES:
+            self.sections["compute_expert"].set_open(True)
+            self.lanes.setFocus()
+            return
+        self._syncing_lanes = True
+        try:
+            self.lanes.setCurrentText(key)
+        finally:
+            self._syncing_lanes = False
+
+    def expert_changes(self) -> list[str]:
+        """The Expert box's settings that are not at their defaults, as the header counts them."""
+        out = []
+        spec = self.lanes.currentText().strip() or "1"
+        if not self._simple_lanes(spec):
+            out.append(f"lane spec {spec}")
+        for name, combo, label in (("linalg", self.linalg, "GPU linear algebra"),
+                                   ("dxtb_gpu", self.dxtb_gpu, "dxtb on the GPU")):
+            if combo.currentText() != self.EXPERT_DEFAULTS[name]:
+                out.append(f"{label} {combo.currentText()}")
+        return out
+
+    #: (value, label) of Build defaults > Ring conformers (``conformers.RING_CONFORMERS``)
+    RING_CHOICES = (("normal", "Normal (the rings ETKDG and the force field give)"),
+                    ("thorough", "Thorough (also twist-boats of six-membered rings)"))
+
     def _build_tab(self) -> QWidget:
+        """Build defaults: the method, protonation and conformer settings, Spartan's Conformer Rules (ring conformers)
+        and its Import Filters as build filters (water, acids, named counter-ions stripped before the largest-fragment
+        rule). Every value here is a science setting (``jobs.SCIENCE_FIELDS``) except the method's label."""
+        from ..chem import standardize
+        from .collapsible import InfoLabel, with_info
+
         w = QWidget()
-        form = QFormLayout(w)
+        outer = QVBoxLayout(w)
+        form = QFormLayout()
+        outer.addLayout(form)
         b = self.s.build
         self.method = QComboBox()
         methods = method_keys()
@@ -321,13 +433,21 @@ class SettingsDialog(QDialog):
         self.protonate = QCheckBox("Assign protonation state at this pH")
         self.protonate.setChecked(b.protonate)
         form.addRow(self.protonate)
-        self.desalt = QCheckBox("Keep largest fragment (strip counter-ions)")
-        self.desalt.setChecked(b.keep_largest_fragment)
-        form.addRow(self.desalt)
         self.max_confs = QSpinBox()
         self.max_confs.setRange(1, 1000)
         self.max_confs.setValue(b.max_conformers)
         form.addRow("Max conformers", self.max_confs)
+        self.ring_conformers = QComboBox()
+        self.ring_conformers.setObjectName("build_ring_conformers")
+        for key, label in self.RING_CHOICES:
+            self.ring_conformers.addItem(label, key)
+        self.ring_conformers.setCurrentIndex(max(0, self.ring_conformers.findData(b.ring_conformers)))
+        self.ring_conformers.setToolTip(
+            "Spartan's Conformer Rules for the RDKit search. Normal: the ring shapes ETKDG embeds and MMFF94s keeps\n"
+            "(chairs; a twist-boat only where the embedding happens to make one). Thorough: for every saturated\n"
+            "six-membered ring, the 5 lowest conformers are also held at each twist-boat and optimized, so twist-boat\n"
+            "conformers within the window join the pool (Max conformers still caps it). CREST makes its own.")
+        form.addRow("Ring conformers", self.ring_conformers)
         # stored in kcal/mol (a science setting), shown in the relative-energy unit of the Display tab
         self.window = EnergySpinBox(0.5, 50, units.KCAL, units.EnergyDisplay.of(self.s).relative)
         self.window.set_stored(b.energy_window_kcal)
@@ -347,7 +467,75 @@ class SettingsDialog(QDialog):
         self.fmax.setSuffix(" eV/Å")
         self.fmax.setValue(b.fmax)
         form.addRow("Force convergence", self.fmax)
+
+        # Spartan's Import Filters (water, HCl) as build filters, with named counter-ions; then the largest fragment
+        box = QGroupBox("Fragments")
+        box.setObjectName("build_fragments")
+        fl = QVBoxLayout(box)
+        self.strip_note = InfoLabel(
+            "Applied to every molecule a build computes (SMILES, names, PubChem, files), before the largest-fragment "
+            "rule, in this order: the fragments ticked here are removed, then <i>Keep the largest fragment</i> "
+            "keeps one of the rest. Without it the rest is computed together (a hydrate's ion pair without its "
+            "water). A named counter-ion is removed even where it is the larger ion (tetrabutylammonium "
+            "trifluoroacetate). Science settings: stored with each run, sent to grid workers, and a run resumes only "
+            "with the same ones. File &gt; Open's own filters (Settings &gt; Import) act on files first.")
+        self.strip_water = QCheckBox("Strip water (hydrates)")
+        self.strip_water.setChecked(b.strip_water)
+        fl.addWidget(with_info(self.strip_water, self.strip_note))
+        self.strip_acids = QCheckBox("Strip acids: HCl, HBr, HI, HF and other small neutral inorganic fragments")
+        self.strip_acids.setChecked(b.strip_acids)
+        fl.addWidget(self.strip_acids)
+        fl.addWidget(QLabel("Strip these counter-ions:"))
+        self.strip_list = QListWidget()
+        self.strip_list.setObjectName("build_strip_counterions")
+        self.strip_list.setFlow(QListView.Flow.LeftToRight)
+        self.strip_list.setWrapping(True)
+        self.strip_list.setResizeMode(QListView.ResizeMode.Adjust)
+        fm = self.fontMetrics()
+        longest = max(fm.horizontalAdvance(name) for name in standardize.NAMED_COUNTERIONS)
+        self.strip_list.setGridSize(QSize(longest + 34, fm.lineSpacing() + 6))   # whole names, in columns
+        self.strip_list.setFixedHeight((fm.lineSpacing() + 6) * 7 + 2 * self.strip_list.frameWidth())
+        chosen = set(standardize.counterion_names(b.strip_counterions, strict=False))
+        for name, smiles in standardize.NAMED_COUNTERIONS.items():
+            item = QListWidgetItem(name)
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if name in chosen else Qt.CheckState.Unchecked)
+            item.setToolTip(f"{smiles} (also its neutral form)")
+            self.strip_list.addItem(item)
+        fl.addWidget(self.strip_list)
+        self.desalt = QCheckBox("Then keep the largest fragment (removes the remaining counter-ions)")
+        self.desalt.setChecked(b.keep_largest_fragment)
+        fl.addWidget(self.desalt)
+        self.strip_summary = QLabel()
+        self.strip_summary.setWordWrap(True)
+        self.strip_summary.setStyleSheet("color: gray;")
+        fl.addWidget(self.strip_summary)
+        outer.addWidget(box)
+        outer.addStretch(1)
+        for check in (self.strip_water, self.strip_acids, self.desalt):
+            check.toggled.connect(self._update_strip_summary)
+        self.strip_list.itemChanged.connect(self._update_strip_summary)
+        self._update_strip_summary()
         return w
+
+    def strip_counterions(self) -> str:
+        """The ticked counter-ions, as ``BuildDefaults.strip_counterions`` stores them ("potassium,sodium")."""
+        from ..chem import standardize
+
+        names = [self.strip_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.strip_list.count())
+                 if self.strip_list.item(i).checkState() == Qt.CheckState.Checked]
+        return standardize.canonical_counterions(names)
+
+    def _update_strip_summary(self, *_args) -> None:
+        from ..chem import standardize
+
+        strip = standardize.FragmentStrip(water=self.strip_water.isChecked(), acids=self.strip_acids.isChecked(),
+                                          counterions=standardize.counterion_names(self.strip_counterions()))
+        then = ("then the largest fragment is kept" if self.desalt.isChecked()
+                else "then the remaining fragments are computed together")
+        self.strip_summary.setText(f"Stripped first: {strip.label()}; {then}." if strip
+                                   else f"Nothing stripped first; {then}.")
 
     def _import_tab(self) -> QWidget:
         """The stored choices of File > Open's Import Options dialog (``Settings.import_``), also the defaults of
@@ -796,6 +984,20 @@ class SettingsDialog(QDialog):
         QMessageBox.information(self, "Settings folder", f"Settings now live in:\n{new}\n\n"
                                 "Settings already in that folder are used from now on.")
 
+    #: the per-machine values the Compute tab sets (``settings.MACHINE_VALUE_FIELDS``)
+    MACHINE_FIELDS = tuple(settings_mod.MACHINE_VALUE_FIELDS[k] for k in ("priority", "free_threads", "lanes"))
+
+    @classmethod
+    def _machine_values(cls, s: settings_mod.Settings) -> dict[str, list]:
+        """This machine's entries of the per-machine tables the Compute tab sets ("section.field" -> entries)."""
+        key = settings_mod.this_machine()
+        out = {}
+        for name in cls.MACHINE_FIELDS:
+            sec, _, attr = name.partition(".")
+            table = getattr(getattr(s, sec), attr)
+            out[name] = [v for k, v in table.items() if settings_mod.machine_key(k) == key]
+        return out
+
     def result_settings(self) -> settings_mod.Settings:
         s = self.s
         s.resources.threads = self.threads.value()
@@ -809,19 +1011,31 @@ class SettingsDialog(QDialog):
         budget = float(self.memory_budget.value())
         s.resources.memory_budget_gb = -1.0 if budget < 0 else budget       # below 0 is off
         s.resources.molecule_timeout_s = float(self.molecule_timeout.value())
+        before = self._machine_values(s)
         s.set_priority_for(self.priority.currentData() or "low")   # this machine only, as the lanes below
         s.set_free_threads_for(self.free_threads.value())
         from ..dist import lanes as lanes_mod
 
         lanes = self.lanes.currentText().strip().lower() or "1"
-        if not lanes_mod.spec_error(lanes):       # a malformed spec keeps the previous one (the plan line says why)
+        # a malformed spec keeps the previous one (the plan line says why); an unchanged one is not written, so a
+        # change the Machines dock saved while this dialog was open stands (settings.save merges entry by entry)
+        if not lanes_mod.spec_error(lanes) and lanes != s.lanes_for():
             s.set_lanes_for(lanes)                # this machine only: other machines keep their own spec
+        # stamped like the Machines dock's changes (settings.update_machine), so a SyncThing conflict copy holding an
+        # older value for this machine does not win over this change when the settings are next loaded
+        changed = [f for f, v in self._machine_values(s).items() if before[f] != v]
+        if changed:
+            s.stamp_machine(None, changed)
         b = s.build
         b.refine_method = self.method.currentData()
         b.ph = self.ph.value()
         b.protonate = self.protonate.isChecked()
         b.keep_largest_fragment = self.desalt.isChecked()
+        b.strip_water = self.strip_water.isChecked()
+        b.strip_acids = self.strip_acids.isChecked()
+        b.strip_counterions = self.strip_counterions()
         b.max_conformers = self.max_confs.value()
+        b.ring_conformers = self.ring_conformers.currentData() or "normal"
         b.energy_window_kcal = self.window.stored()
         b.rmsd_threshold = self.rmsd.value()
         b.fmax = self.fmax.value()
