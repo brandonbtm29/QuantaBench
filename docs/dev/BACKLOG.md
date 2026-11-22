@@ -35,6 +35,38 @@ on the workstation (not in the repository).
   the rest of the run records full timings for killed attempts.
 - **After the gas phase:** rerun the molecules that ran out of time with wider lanes and a 3 h limit; then water;
   then a decision on the 173 molecules left out.
+- **2026-11-22 resume (2 lanes x 5 threads), paused again at ~02:50:** the workstation's disk writes went back to
+  14-24 MB/s although CREST ran inside WSL (CREST-SCRATCH-1). The cause was CREST's own output: one lane's `crest.log`
+  reached 368 MB in 11 minutes, almost all one repeated line, "OpenBLAS Warning : Detect OpenMP Loop and this
+  application may hang". The WSL CREST links a pthreads OpenBLAS and got `OPENBLAS_NUM_THREADS=5`, and wsl.exe wrote
+  its stdout to NTFS. Fixed in CREST-LOG-1 (one BLAS thread per CREST thread; the output stays inside WSL). Resume
+  with that merged.
+
+## CREST-LOG-1: CREST through WSL: one BLAS thread and a bounded log · in-PR 2026-11-22 (branch `fix/crest-log-1-openblas`)
+Found by the ops agent at the 2026-11-22 resume of CREST-RUN-1 (above): one lane's `crest.log` grew to 368 MB in 11
+minutes, nearly all "OpenBLAS Warning : Detect OpenMP Loop and this application may hang. Please rebuild the library
+with USE_OPENMP=1 option.", written by wsl.exe to the Windows job folder as thousands of small writes a second.
+- Cause, confirmed on the workstation: conda-forge's CREST 3.0.2 in WSL links libgomp and
+  `libopenblas-0.3.34-pthreads`; `program_env` gave it `OPENBLAS_NUM_THREADS` = the molecule's threads. A pthreads
+  OpenBLAS called inside CREST's OpenMP threads with more than one thread warns on every call. 45 s of CREST at
+  `-T 5`: 27,192 warning lines (3.3 MB) with 5 BLAS threads, none (11 KB of output) with 1. xtb `--opt`/`--grad` and
+  tblite with 5 BLAS threads print none (their BLAS runs outside their OpenMP loops). The Mac's CREST (the fork's
+  build) links an OpenBLAS built with `USE_OPENMP`, which never warns.
+- Done: `crest.child_env` sets `OPENBLAS_NUM_THREADS=1` (CREST's install notes ask for it; `OMP_MAX_ACTIVE_LEVELS=1`
+  was already set; `GOTO_NUM_THREADS` is not needed, `OPENBLAS_NUM_THREADS` comes first). Other programs are
+  unchanged. Through WSL, CREST's stdout and stderr go to `crest.out` in its folder inside WSL (the WSL wrapper,
+  `QUANTABENCH_WSL_LOG`; `run_program(program_log=...)`), and `crest.log` gets a bounded copy when CREST ends or is
+  killed at the time limit (`wsl_scratch.output_tail`: the first 200 and last 2,000 lines, 1 MiB, lines cut at 2,000
+  characters, repeated lines collapsed to one line and a count); more than 16 MB gets a WARNING in the run's log.
+  Tests: `tests/test_crest.py`, `tests/test_wsl_scratch.py` (the same line 1e6 times, 1e6 numbered lines, long lines,
+  the time limit, a chatty CREST that fails).
+- Measured on the workstation (544-63-8, 12 rotatable bonds; DEVLOG 2026-11-22): two lanes at once, main's way vs
+  the branch's, 272 vs 184 s and 157 vs 123 s; main's 5-thread lane kept about 8.5 cores busy (OpenBLAS's threads on
+  top of CREST's) and wrote its log at 0.6 MB/s in about 3,500 writes a second; the branch's wrote nothing to NTFS
+  while CREST ran. Same best energies. The smoke job through QuantaBench: CREST 107 s, `crest.log` 0 bytes while CREST
+  ran, its whole output 23 KB (527 lines), the lowest GFN2 conformer 0.17 kcal/mol below the batch's.
+- Later: switch the WSL environment to conda-forge's OpenMP OpenBLAS (`libopenblas=*=openmp*`) as well, if a profile
+  ever shows CREST's serial BLAS calls matter (not needed for the warning).
 
 ## CREST-SCRATCH-1: CREST through WSL in a folder inside WSL · done 2026-11-20 (branch `fix/crest-wsl-scratch`)
 On the workstation CREST runs as `wsl:.../bin/crest` and used to run in its Windows job folder through `/mnt/c`: every
