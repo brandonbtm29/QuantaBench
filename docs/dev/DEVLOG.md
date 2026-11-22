@@ -338,3 +338,30 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Tests:** `tests/test_wsl_scratch.py` (23) runs the real scripts through a stand-in `wsl.exe` and `df` on
   Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
   check (BACKLOG CREST-SCRATCH-1).
+
+## 2026-11-22: FIX-6, the flaky macOS test of run priority (branch `fix/fix-6-macos-priority-test`)
+- **CI's failure** (#25's macOS run, 2026-11-17): `apply_to_pids([child], "low")` changed 1 process and the next
+  read gave 10; the following `apply_to_pids(..., "normal")` found the child at -10 ("already there"). Nothing in the
+  test can make a nice value smaller, so -10 had to be the value before the change: inherited from pytest, which
+  therefore runs at -10 on the runner (inferred; the test's message now says this process's nice).
+- **The race, shown on the MacBook (macOS 27, M3 Max):** a scratch script forks, execs a target and calls
+  setpriority(10) once at a delay swept over 0-6 ms; 80 ms later it reads the child's nice. 297 of 1,200 changes were
+  lost: those that landed 0.25-3 ms after the fork (the exec), and with a re-exec launcher also those at 4-6 ms (its
+  second exec). The read right after the change gave 10 in every case but one. So macOS drops a nice value set while
+  the process is inside exec(), and it reports the new value until the exec ends. Probably the exec builds the new
+  image's process from a copy taken when the exec starts (not checked in XNU's source).
+- **Why only CI showed it:** the failing child was named "Python". python.org's framework `bin/python3.12` (what
+  setup-python installs) starts and then re-execs `Python.app/Contents/MacOS/Python` with posix_spawn(SETEXEC).
+  `Popen` returns after the first exec, so the test's change could land in the second. Homebrew's python3.12 and
+  python.org's 3.13 on the MacBook do not re-exec, and a change right after `Popen` held in 60 of 60 tries with each.
+- **The CI failure reproduced:** a C copy of that launcher (posix_spawn with SETEXEC into Homebrew's Python.app) set
+  as `sys.executable` by a scratch plugin, its re-exec delayed 6-9 ms (a slower machine). pytest ran at `nice -n 5`,
+  so that a lost change shows. 6 of 1,000 runs failed with CI's message, 5 in place of -10.
+- **Fix:** the test waits for its child's "up" line before changing its priority. `apply_to_pids` looks again after
+  0.25 s (POSIX only: Windows has no exec) and lowers again the processes an exec put back. A live priority change can
+  reach a lane or a program that is just starting, and the `sh -c` wrappers of `external.run_program` exec two or
+  three times. psutil keeps the same process across an exec (same pid and start time), so lowering again works.
+- **After:** 0 of 500 runs failed in the same setup. The old test (no wait) with the new `apply_to_pids` failed 0 of
+  300 times, so the second look fixes it in the product too. A new test with a fake process covers the second look and
+  Windows' single set.
+- Found on the way: `apply_to_pids` on Linux lowers only the main thread of each process (PRIO-2).
