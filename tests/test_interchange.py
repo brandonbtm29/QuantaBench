@@ -326,3 +326,93 @@ def test_cdxml_of_several_molecules():
     assert smiles == sorted([canon(PFOA), canon("OCCO")])
     with pytest.raises(ValueError):
         ix.to_cdxml([])
+
+
+# ------------------------------------------------------------------ more text kinds (UI-4 paste) and writers
+
+
+def _embedded(smiles: str, seed: int = 7):
+    m = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    AllChem.EmbedMolecule(m, randomSeed=seed)
+    return m
+
+
+def test_xyz_text_frames_bare_lines_and_atomic_numbers():
+    from quantabench.chem.formats import COORDS, READER
+
+    tfa, eth = _embedded("OC(=O)C(F)(F)F"), _embedded("CCO")
+    two = ix.to_xyz(tfa, comment="TFA conformer 1 of 3, E = -1.0 eV") + ix.to_xyz(eth, comment="-153.2")
+    assert ix.detect_format(two) == "xyz"
+    items = ix.parse_structure_text(two)
+    assert [canon(i.smiles) for i in items] == [canon("OC(=O)C(F)(F)F"), canon("CCO")]
+    assert items[0].id == "TFA" and items[1].id == "clipboard_2"          # an energy is not a name
+    assert items[0].meta[COORDS] == "3d" and "XYZ" in items[0].meta[READER]
+    bare = "\n".join(two.splitlines()[2:2 + tfa.GetNumAtoms()])         # copied from an ORCA input's * xyz block
+    assert ix.detect_format(bare) == "xyz" and canon(ix.parse_structure_text(bare)[0].smiles) == canon("OC(=O)C(F)(F)F")
+    conf = eth.GetConformer()
+    numbers = "\n".join(f"{a.GetAtomicNum()} {conf.GetAtomPosition(a.GetIdx()).x:.5f} "
+                        f"{conf.GetAtomPosition(a.GetIdx()).y:.5f} {conf.GetAtomPosition(a.GetIdx()).z:.5f}"
+                        for a in eth.GetAtoms())
+    assert canon(ix.parse_structure_text(numbers)[0].smiles) == canon("CCO")
+
+
+def test_xyz_text_that_cannot_get_bonds_is_reported():
+    with pytest.raises(ValueError, match="bond orders"):
+        ix.parse_structure_text("2\nradical\nC 0 0 0\nH 0 0 1.09\n")
+
+
+def test_tables_csv_tsv_semicolon_and_one_column():
+    tsv = f"DTXSID\tPREFERRED_NAME\tSMILES\tlogKow\nDTXSID8031865\tPFOA\t{PFOA}\t4.81\nDTXSID0\tglycol\tOCCO\t-1.36\n"
+    assert ix.detect_format(tsv) == "table"
+    items = ix.parse_structure_text(tsv)
+    assert [i.id for i in items] == ["DTXSID8031865", "DTXSID0"] and [i.name for i in items] == ["PFOA", "glycol"]
+    assert items[0].meta["logKow"] == "4.81" and items[0].source == "clipboard:2"
+    csv_text = 'name,"SMILES",note\nethanol,CCO,"a, comma"\n'
+    [eth] = ix.parse_structure_text(csv_text)
+    assert eth.id == "ethanol" and eth.meta["note"] == "a, comma"
+    assert [i.smiles for i in ix.parse_structure_text("id;smiles\na;CCO\nb;OCCO\n")] == ["CCO", "OCCO"]
+    assert [i.smiles for i in ix.parse_structure_text("SMILES\nCCO\nOCCO\n")] == ["CCO", "OCCO"]
+    # a column named in the Pipeline dock's SMILES column field, and the SMILES preference
+    assert [i.smiles for i in ix.parse_structure_text("ID,Structure\na,CCO\n", smiles_col="Structure")] == ["CCO"]
+    pref = "id\tsmiles\tqsar_ready_smiles\na\t[Na+].CC(=O)[O-]\tCC(=O)O\n"
+    assert ix.parse_structure_text(pref, smiles_preference="qsar")[0].smiles == "CC(=O)O"
+    with pytest.raises(ValueError):
+        ix.parse_structure_text("id\tsmiles\na\t\n")
+    assert ix.detect_format("CCO, ethanol") == "text"                      # no header: lines of SMILES
+
+
+def test_inchi_and_inchikey_text(monkeypatch):
+    from quantabench.chem import pubchem
+
+    monkeypatch.setattr(pubchem, "lookup", lambda key, timeout=15.0, client=None, namespace="name":
+                        {"cid": 9554, "smiles": PFOA, "title": "Perfluorooctanoic acid"})
+    inchi = ix.to_inchi(Chem.MolFromSmiles(GENX))
+    key = ix.to_inchikey(Chem.MolFromSmiles(PFOA))
+    assert inchi.startswith("InChI=1S/") and key == "SNGREZUHAYWORS-UHFFFAOYSA-N"
+    items = ix.parse_structure_text(f"{inchi} GenX\n{key}\n")
+    assert [canon(i.smiles) for i in items] == [canon(GENX), canon(PFOA)]
+    assert items[0].id == "GenX" and items[1].source == "pubchem"
+
+
+def test_mol_text_meta_for_the_import_options():
+    from quantabench.chem.formats import COORDS, READER
+
+    m = _with_name(PFOA, "PFOA")
+    m.SetProp("CAS", "007")
+    rdDepictor.Compute2DCoords(m)
+    [it] = ix.parse_structure_text(Chem.MolToMolBlock(m) + ">  <CAS>\n007\n\n$$$$\n")
+    assert it.meta[COORDS] == "2d" and it.meta[READER] == "RDKit (SD/MOL text)"
+    assert it.meta["CAS"] == "007"                                          # text as written, not 7
+    [c] = ix.parse_structure_text(ix.to_cdxml(m))
+    assert c.meta[COORDS] == "2d" and "CDXML" in c.meta[READER]
+
+
+def test_to_xyz_needs_3d():
+    with pytest.raises(ValueError):
+        ix.to_xyz(Chem.MolFromSmiles("CCO"))
+    flat = Chem.MolFromSmiles("CCO")
+    rdDepictor.Compute2DCoords(flat)
+    with pytest.raises(ValueError, match="2D"):
+        ix.to_xyz(flat)
+    lines = ix.to_xyz(_embedded("O"), comment="water\nsecond line").splitlines()
+    assert lines[0] == "3" and lines[1] == "water second line" and lines[2].split()[0] == "O"

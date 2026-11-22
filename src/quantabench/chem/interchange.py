@@ -1,15 +1,19 @@
 """Structures in and out as text and bytes: the clipboard, drag and drop, and other editors (ChemDraw, Marvin).
 
-In: ``parse_structure_text`` reads a MOL block (V2000 or V3000), SD text (several records), CDXML, Marvin MRV,
-or else lines of SMILES, names or CAS numbers (``inputs.parse_text``). ``parse_cdx_bytes`` reads binary
+In: ``parse_structure_text`` reads a MOL block (V2000 or V3000), SD text (several records), CDXML, Marvin MRV, XYZ
+(one or several frames, or bare ``element x y z`` lines), a CSV or tab-separated table with a SMILES column (cells
+copied from Excel are tab-separated), or else lines of SMILES, InChI, InChIKeys, names or CAS numbers
+(``inputs.parse_text``). The molecules come back as ``inputs.read_raw`` gives a file's (``meta[formats.READER]``,
+``meta[formats.COORDS]``, data fields in ``meta``), so ``chem.import_options`` treats a paste like a file.
+``parse_cdx_bytes`` reads binary
 ChemDraw CDX, ChemDraw's own clipboard format. RDKit 2026.09's Python wrapper reads CDX only as CDXML (its
 C++ reader handles CDX), so ``cdx_to_cdxml`` translates the CDX objects that describe molecules into CDXML
 and RDKit's CDXML reader does the chemistry (nicknames, stereo, charges). A newer RDKit that reads CDX
 bytes is used first.
 
-Out: ``to_smiles``, ``to_molblock`` (V3000 only when needed), ``to_sdf`` and ``to_cdxml``, from a molecule, a
-``MoleculeInput`` or a ``MoleculeResult``. MOL and CDXML get 2D coordinates (a depiction), since ChemDraw and
-other 2D editors read them.
+Out: ``to_smiles`` (canonical), ``to_inchi``, ``to_inchikey``, ``to_molblock`` (V3000 only when needed), ``to_sdf``
+and ``to_cdxml``, from a molecule, a ``MoleculeInput`` or a ``MoleculeResult``; ``to_xyz`` writes one conformer.
+MOL and CDXML get 2D coordinates (a depiction), since ChemDraw and other 2D editors read them.
 
 ``mdlct_decode`` and ``mdlct_encode`` read and write Windows' "MDLCT" clipboard format (the MOL block's lines,
 each after one byte holding its length).
@@ -19,6 +23,8 @@ No Qt here: ``gui.clipboard`` reads the clipboard and calls these functions.
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import re
 import struct
@@ -29,6 +35,7 @@ from rdkit import Chem, rdBase
 from rdkit.Chem import rdDepictor
 
 from . import inputs
+from .formats import COORDS, READER, coord_kind
 from .inputs import MoleculeInput, safe_id
 
 _log = logging.getLogger(__name__)
@@ -42,8 +49,62 @@ _COORD = 65536.0             # CDX coordinates are 1/65536 point; CDXML uses poi
 # ================================================================== reading text
 
 
+#: one atom of an XYZ block: element symbol (or atomic number) and x y z; extended XYZ may add columns after them
+_XYZ_ATOM = re.compile(r"^\s*([A-Za-z]{1,3}|\d{1,3})\s+([-+]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][-+]?\d+)?)"
+                       r"\s+([-+]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][-+]?\d+)?)\s+([-+]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][-+]?\d+)?)"
+                       r"(?:\s+.*)?$")
+
+
+def _lines(text: str) -> list[str]:
+    return text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
+def _xyz_frames(text: str) -> list[tuple[str, list[str]]] | None:
+    """(comment, atom lines) of each frame of XYZ text, or None when the text is not XYZ. Takes standard XYZ (atom
+    count, comment, atoms; several frames one after another) and a bare block of ``element x y z`` lines."""
+    lines = _lines(text)
+    body = [ln for ln in lines if ln.strip()]
+    if not body:
+        return None
+    if all(_XYZ_ATOM.match(ln) for ln in body):
+        return [("", body)]
+    frames: list[tuple[str, list[str]]] = []
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip():
+            i += 1
+            continue
+        head = lines[i].strip()
+        if not head.isdigit() or int(head) < 1:
+            return None
+        n = int(head)
+        atoms = lines[i + 2:i + 2 + n]
+        if len(atoms) < n or not all(_XYZ_ATOM.match(ln) for ln in atoms):
+            return None
+        frames.append((lines[i + 1].strip() if i + 1 < len(lines) else "", atoms))
+        i += 2 + n
+    return frames or None
+
+
+def _table_delimiter(line: str) -> str | None:
+    return "\t" if "\t" in line else "," if "," in line else ";" if ";" in line else None
+
+
+def _table_header(text: str, smiles_col: str | None = None) -> str | None:
+    """The delimiter ("\t", "," or ";"; "\t" for a single column) when the first line of ``text`` is a table header
+    with a SMILES column (``inputs.SMILES_COLUMNS``, or ``smiles_col``), else None."""
+    first = next((ln for ln in _lines(text) if ln.strip()), "")
+    delim = _table_delimiter(first)
+    cells = [c.strip().strip('"').lower() for c in (first.split(delim) if delim else [first])]
+    wanted = set(inputs.SMILES_COLUMNS) | ({smiles_col.strip().lower()} if smiles_col else set())
+    if not any(c in wanted for c in cells):
+        return None
+    return delim or "\t"
+
+
 def detect_format(text: str) -> str:
-    """"cdxml", "mrv", "sdf", "mol" or "text" (lines of SMILES, names, CAS: ``inputs.parse_text``)."""
+    """"cdxml", "mrv", "sdf", "mol", "xyz", "table" (a CSV or tab-separated header with a SMILES column) or "text"
+    (lines of SMILES, InChI, InChIKeys, names, CAS: ``inputs.parse_text``)."""
     head = text.lstrip("\ufeff \t\r\n")[:4096]
     if "<CDXML" in head:
         return "cdxml"
@@ -53,20 +114,29 @@ def detect_format(text: str) -> str:
         return "sdf"
     if re.search(r"^M  END\s*$", text, re.M):
         return "mol"
+    if _xyz_frames(text) is not None:
+        return "xyz"
+    if _table_header(text) is not None:
+        return "table"
     return "text"
 
 
-def _input_from_mol(mol: Chem.Mol, source: str, number: int = 0) -> MoleculeInput:
+def _input_from_mol(mol: Chem.Mol, source: str, number: int = 0, reader: str = "") -> MoleculeInput:
     """A ``MoleculeInput`` holding ``mol``, named like ``inputs.read_sdf`` names records (DTXSID or ID property,
-    else the title); without either, the SMILES is the id, as for SMILES typed in the Molecules box."""
+    else the title); without either, the SMILES is the id, as for SMILES typed in the Molecules box. ``meta`` holds
+    the data fields as text (as ``read_sdf`` keeps them), the reader and whether the coordinates are 2D or 3D, for
+    ``chem.import_options``."""
     title = mol.GetProp("_Name").strip() if mol.HasProp("_Name") else ""
-    props = {k: str(v) for k, v in mol.GetPropsAsDict().items() if not k.startswith("_") and k != "CDX_FRAG_ID"}
+    props = {k: mol.GetProp(k) for k in mol.GetPropNames() if k != "CDX_FRAG_ID"}
     with rdBase.BlockLogs():       # "not removing hydrogen atom without neighbors" for H- fragments
         smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
     ident = next((props[k].strip() for k in inputs.SDF_ID_PROPERTIES if props.get(k, "").strip()), "") or title
     fallback = f"{source}_{number}" if number else source
+    meta = {**props, COORDS: coord_kind(mol)}
+    if reader:
+        meta[READER] = reader
     return MoleculeInput(id=safe_id(ident or smiles, fallback=safe_id(fallback, "mol")), name=title or ident,
-                         source=f"{source}#{number}" if number else source, mol=mol, smiles=smiles, meta=props)
+                         source=f"{source}#{number}" if number else source, mol=mol, smiles=smiles, meta=meta)
 
 
 def _merge_ions(mols: Sequence[Chem.Mol]) -> list[Chem.Mol]:
@@ -89,15 +159,15 @@ def _merge_ions(mols: Sequence[Chem.Mol]) -> list[Chem.Mol]:
     return out
 
 
-def _chemdraw_inputs(mols: Sequence[Chem.Mol], source: str) -> list[MoleculeInput]:
+def _chemdraw_inputs(mols: Sequence[Chem.Mol], source: str, reader: str = "RDKit (ChemDraw CDXML)") -> list[MoleculeInput]:
     mols = _merge_ions([m for m in mols if m is not None and m.GetNumAtoms()])
     if not mols:
         raise ValueError(f"No molecule could be read from the {source} (ChemDraw) data")
-    items = [_input_from_mol(m, source, i if len(mols) > 1 else 0) for i, m in enumerate(mols, 1)]
+    items = [_input_from_mol(m, source, i if len(mols) > 1 else 0, reader) for i, m in enumerate(mols, 1)]
     return inputs.dedupe_ids(items)
 
 
-def read_cdxml(text: str, source: str = "CDXML") -> list[MoleculeInput]:
+def read_cdxml(text: str, source: str = "CDXML", reader: str = "RDKit (ChemDraw CDXML)") -> list[MoleculeInput]:
     from rdkit.Chem import rdChemDraw
 
     try:
@@ -106,7 +176,7 @@ def read_cdxml(text: str, source: str = "CDXML") -> list[MoleculeInput]:
     except RuntimeError as exc:      # RDKit invariant violations (e.g. a nickname it cannot attach)
         raise ValueError(f"RDKit could not read the {source} (ChemDraw) data: "
                          f"{str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__}") from exc
-    return _chemdraw_inputs(mols, source)
+    return _chemdraw_inputs(mols, source, reader)
 
 
 def _read_sd_text(text: str, source: str, log: Callable[[str], None] | None) -> list[MoleculeInput]:
@@ -119,7 +189,7 @@ def _read_sd_text(text: str, source: str, log: Callable[[str], None] | None) -> 
         if mol is None or not mol.GetNumAtoms():
             skipped.append(str(i))
             continue
-        out.append(_input_from_mol(mol, source, i if len(mols) > 1 else 0))
+        out.append(_input_from_mol(mol, source, i if len(mols) > 1 else 0, "RDKit (SD/MOL text)"))
     warnings: list[str] = []
     if skipped:
         warnings.append(f"{source}: skipped {len(skipped)} record(s) RDKit cannot read (record {', '.join(skipped)})")
@@ -131,13 +201,89 @@ def _read_sd_text(text: str, source: str, log: Callable[[str], None] | None) -> 
     return out
 
 
+_ELEMENT_OF = Chem.GetPeriodicTable()
+
+
+def read_xyz_text(text: str, source: str = "clipboard", charge: int = 0,
+                  log: Callable[[str], None] | None = None) -> list[MoleculeInput]:
+    """Molecules in XYZ text (``_xyz_frames``), bonds by RDKit's ``rdDetermineBonds`` (as for .xyz files) with total
+    charge ``charge``. A frame's id is the first word of its comment line (what Copy as XYZ writes there), else
+    ``<source>_<frame>``. Frames whose bonds cannot be assigned are reported through ``log`` and skipped."""
+    from rdkit.Chem import rdDetermineBonds
+
+    frames = _xyz_frames(text)
+    if not frames:
+        raise ValueError(f"The {source} text is not XYZ")
+    out, skipped = [], []
+    for k, (comment, atoms) in enumerate(frames, 1):
+        rows = []
+        for ln in atoms:
+            el, x, y, z = _XYZ_ATOM.match(ln).groups()[:4]
+            if el.isdigit():
+                el = _ELEMENT_OF.GetElementSymbol(int(el))
+            rows.append(f"{el.capitalize()} {x.replace('d', 'e').replace('D', 'e')} "
+                        f"{y.replace('d', 'e').replace('D', 'e')} {z.replace('d', 'e').replace('D', 'e')}")
+        word = (comment.split() or [""])[0].rstrip(":=,;")
+        try:
+            float(word)
+            word = ""                      # "-1234.5": an energy, not a name
+        except ValueError:
+            pass
+        label = word or (f"{source}_{k}" if len(frames) > 1 else source)
+        with rdBase.BlockLogs():
+            mol = Chem.MolFromXYZBlock(f"{len(rows)}\n{comment}\n" + "\n".join(rows) + "\n")
+        if mol is None:
+            skipped.append(f"frame {k} ({label}): RDKit could not read the atoms")
+            continue
+        try:
+            with rdBase.BlockLogs():
+                rdDetermineBonds.DetermineBonds(mol, charge=charge)
+        except (ValueError, RuntimeError) as exc:
+            why = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+            skipped.append(f"frame {k} ({label}): no bond orders for charge {charge} ({why}); a charged or open-shell "
+                           "structure reads better as a MOL block or SMILES")
+            continue
+        with rdBase.BlockLogs():
+            Chem.AssignStereochemistryFrom3D(mol)
+            smiles = Chem.MolToSmiles(Chem.RemoveHs(mol))
+        out.append(MoleculeInput(id=safe_id(label, fallback="xyz"), name=word, source=f"{source}#{k}"
+                                 if len(frames) > 1 else source, mol=mol, smiles=smiles,
+                                 meta={READER: "RDKit rdDetermineBonds (XYZ text)", COORDS: "3d"}))
+    for w in skipped:
+        (log or _log.warning)(f"{source}: skipped XYZ {w}")
+    if not out:
+        raise ValueError(f"No molecule could be read from the {source} (XYZ): " + "; ".join(skipped[:3]))
+    return inputs.dedupe_ids(out)
+
+
+def read_table_text(text: str, source: str = "clipboard", smiles_col: str | None = None, id_col: str | None = None,
+                    smiles_preference=None, log: Callable[[str], None] | None = None) -> list[MoleculeInput]:
+    """Rows of a CSV, semicolon- or tab-separated table with a header (cells copied from a spreadsheet), read as
+    ``inputs.read_csv`` reads a file: the SMILES column (``smiles_col``, else by ``smiles_preference``), the id and
+    name columns, every cell kept in ``meta`` (the Import Options post them as columns)."""
+    delim = _table_header(text, smiles_col)
+    if delim is None:
+        raise ValueError(f"The {source} text has no header with a SMILES column")
+    reader = csv.reader(io.StringIO(text.lstrip("\ufeff")), delimiter=delim)
+    columns, rows = inputs._header_and_rows(reader)
+    rep = inputs._rows_to_inputs(columns, rows, source, source, smiles_col, id_col, smiles_preference)
+    rep.emit(log)
+    if not rep.inputs:
+        raise ValueError(f"No molecule could be read from the {source} table ({rep.n_rows} row(s) without a structure)")
+    return rep.inputs
+
+
 def parse_structure_text(text: str, source: str = "clipboard",
-                         log: Callable[[str], None] | None = None) -> list[MoleculeInput]:
+                         log: Callable[[str], None] | None = None, smiles_col: str | None = None,
+                         id_col: str | None = None, smiles_preference=None) -> list[MoleculeInput]:
     """Molecules in ``text``, whatever its format (``detect_format``). Lines of SMILES and names go through
-    ``inputs.parse_text`` (names and CAS numbers are looked up on PubChem, so call this off the GUI thread);
-    a line that cannot be read is reported through ``log`` and skipped. Raises ``ValueError`` when nothing
-    could be read."""
+    ``inputs.parse_text`` (names, CAS numbers and InChIKeys are looked up on PubChem, so call this off the GUI
+    thread); a line that cannot be read is reported through ``log`` and skipped. ``smiles_col``, ``id_col`` and
+    ``smiles_preference`` are used for a table, as for a CSV file. Raises ``ValueError`` when nothing could be
+    read."""
     kind = detect_format(text)
+    if kind == "text" and smiles_col and _table_header(text, smiles_col) is not None:
+        kind = "table"
     if kind == "cdxml":
         return read_cdxml(text, source)
     if kind == "mrv":
@@ -145,11 +291,15 @@ def parse_structure_text(text: str, source: str = "clipboard",
             mol = Chem.MolFromMrvBlock(text, removeHs=False)
         if mol is None:
             raise ValueError(f"No molecule could be read from the {source} (Marvin MRV)")
-        return [_input_from_mol(mol, source)]
+        return [_input_from_mol(mol, source, reader="RDKit (Marvin MRV)")]
     if kind in ("sdf", "mol"):
         if kind == "mol" and not text.rstrip().endswith("$$$$"):
             text = text.rstrip("\r\n") + "\n$$$$\n"
         return _read_sd_text(text, source, log)
+    if kind == "xyz":
+        return read_xyz_text(text, source, log=log)
+    if kind == "table":
+        return read_table_text(text, source, smiles_col, id_col, smiles_preference, log)
     return inputs.parse_text(text, skip_errors=True, log=log, source=source)
 
 
@@ -409,12 +559,12 @@ def parse_cdx_bytes(data: bytes, source: str = "CDX") -> list[MoleculeInput]:
         return read_cdxml(data.decode("utf-8", "replace"), source)
     mols = _rdkit_reads_cdx(data) if data.startswith(CDX_HEADER) else None
     if mols:
-        return _chemdraw_inputs(mols, source)
+        return _chemdraw_inputs(mols, source, "RDKit (ChemDraw CDX)")
     try:
         xml = cdx_to_cdxml(data)
     except ValueError as exc:
         raise ValueError(f"The {source} data is not ChemDraw CDX that QuantaBench can read: {exc}") from exc
-    return read_cdxml(xml, source)
+    return read_cdxml(xml, source, "QuantaBench CDX + RDKit (ChemDraw CDX)")
 
 
 # ================================================================== writing
@@ -461,8 +611,49 @@ def _depiction(obj) -> tuple[Chem.Mol, str]:
 
 
 def to_smiles(obj) -> str:
+    """Canonical isomeric SMILES (RDKit)."""
     mol, _ = _plain(obj)
     return Chem.MolToSmiles(mol)
+
+
+def to_inchi(obj) -> str:
+    """Standard InChI (RDKit's InChI library). Raises ValueError when there is none (RDKit without InChI, or a
+    structure InChI cannot describe)."""
+    from rdkit.Chem import inchi
+
+    if not inchi.INCHI_AVAILABLE:
+        raise ValueError("RDKit was built without InChI support")
+    mol, _ = _plain(obj)
+    with rdBase.BlockLogs():
+        text = Chem.MolToInchi(mol)
+    if not text:
+        raise ValueError("no InChI for this structure")
+    return text
+
+
+def to_inchikey(obj) -> str:
+    from rdkit.Chem import inchi
+
+    with rdBase.BlockLogs():
+        key = inchi.InchiToInchiKey(to_inchi(obj))
+    if not key:
+        raise ValueError("no InChIKey for this structure")
+    return key
+
+
+def to_xyz(mol: Chem.Mol, conf_id: int = -1, comment: str = "") -> str:
+    """One XYZ frame (atom count, ``comment``, element and x y z in Å) of conformer ``conf_id``, every atom
+    (hydrogens included). Raises ValueError when the molecule has no 3D coordinates."""
+    if mol.GetNumConformers() == 0:
+        raise ValueError("no 3D coordinates")
+    conf = mol.GetConformer(conf_id)
+    if not conf.Is3D() and mol.GetNumAtoms() > 1:
+        raise ValueError("only 2D coordinates")
+    lines = [str(mol.GetNumAtoms()), comment.replace("\n", " ").strip()]
+    for a in mol.GetAtoms():
+        p = conf.GetAtomPosition(a.GetIdx())
+        lines.append(f"{a.GetSymbol():<2} {p.x:14.8f} {p.y:14.8f} {p.z:14.8f}")
+    return "\n".join(lines) + "\n"
 
 
 def _needs_v3000(mol: Chem.Mol) -> bool:

@@ -2,6 +2,16 @@
 
 ## Unreleased (after 0.3.0)
 
+### Paste, drag-and-drop and Copy as (UI-4, 2026-11-22)
+- Edit > Paste (Ctrl+V) now takes XYZ, CSV and spreadsheet cells with a SMILES column, InChI and InChIKeys besides
+  ChemDraw, MOL/SD, CDXML, Marvin and SMILES, and goes through File > Open's Import Options (filters, 2D → 3D,
+  data fields posted as molecule-list columns). An unreadable clipboard gives a message.
+- Copy as (Edit menu and the molecule list's new right-click menu): SMILES, canonical SMILES, InChI, InChIKey,
+  MOL/SDF, XYZ of the conformer shown, CDXML. 14,000 rows copy as SMILES in a quarter second; other formats run on a
+  worker thread for large selections.
+- Drops on the window and the molecule list: several files at once in every File > Open format, run folders,
+  project folders, and plain folders (the files in them).
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use

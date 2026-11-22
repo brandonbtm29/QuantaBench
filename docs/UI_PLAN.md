@@ -91,7 +91,9 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
   and Gaussian/ORCA inputs, and anything else Open Babel reads when the user has it installed. An Import
   Options dialog modeled on Spartan's (2D → 3D, grow hydrogens, post SD fields to the table, filters for
   water, HCl and counter-ions, atom label order) is shown when a file has choices. Ctrl+V pastes from
-  ChemDraw and other editors; Copy as SMILES / MOL / CDXML goes back.
+  ChemDraw, other editors, spreadsheets and text (through the same Import Options); Copy as SMILES, canonical
+  SMILES, InChI, InChIKey, MOL/SDF, XYZ or CDXML goes back (Edit menu and the molecule list's right-click menu);
+  files and folders can be dropped on the window or the list.
 - **2D sketcher (UI-6).** A mature open-source editor embedded in a dock (QtWebEngine): Schrödinger's
   Sketcher (BSD-3, RDKit-based), Brandon's choice on 2026-11-07 (Ketcher was the other candidate). It
   hands a MOL block to the pipeline; the 3D view follows. Writing a ChemDraw-class editor from scratch is

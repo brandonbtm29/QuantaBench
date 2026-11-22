@@ -338,3 +338,39 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Tests:** `tests/test_wsl_scratch.py` (23) runs the real scripts through a stand-in `wsl.exe` and `df` on
   Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
   check (BACKLOG CREST-SCRATCH-1).
+
+## 2026-11-22: paste, drag-and-drop and Copy as (UI-4, branch `feat/ui-4-clipboard-dnd`)
+- **Starting point:** the backlog said "clipboard, drag-and-drop and Copy as: another branch". That branch
+  (`feat/clipboard`) was merged on 2026-11-07 (`fa9c962`): ChemDraw CDX/CDXML/MOL/MDLCT paste, Copy as SMILES /
+  MOL / CDXML, drops of files and text. This branch builds on it; nothing was started over.
+- **Paste takes File > Open's path.** Pasted molecules used to go straight into the list. Now `read_candidates`
+  (worker thread) gives `read_raw`-style inputs (`meta` with the reader, 2D/3D and data fields as text), then
+  `import_options.choose` and `MainWindow._import_inputs` (worker thread), as for a file. Consequences:
+  - A ChemDraw drawing is 2D, so it is converted to 3D on paste (default on), and the Import Options dialog shows
+    on such a paste until "Don't ask again". Same as opening a `.cdx` file; a question for Brandon in the PR.
+  - A table's other columns can be posted to the molecule list (screenshot `paste_table.png`).
+- **New text kinds** (`chem.interchange.detect_format` order: CDXML, MRV, SD, MOL, XYZ, table, lines):
+  - XYZ: standard frames (several in a row) or bare `element x y z` lines (an ORCA `* xyz` block), atomic numbers
+    allowed, extra columns ignored. Bonds by `rdDetermineBonds` for charge 0 (a radical or ion fails with a
+    message); stereo from the 3D coordinates. The id is the comment's first word unless it is a number.
+  - Tables: a first line with a SMILES column name (`inputs.SMILES_COLUMNS` or the Pipeline dock's SMILES column)
+    split by tab, comma or semicolon; one column with a `SMILES` header works too. `_rows_to_inputs` does the
+    rest, so the ID column, the SMILES preference (QSAR-ready, MS-ready) and skipped-row reports match CSV files.
+- **Copy as** has seven kinds. "SMILES" is the list's own text (as entered), so it needs no structure: 14,000 rows
+  copy in 0.25 s including the selection. The others read structures (`gather_inputs`: inputs in memory, else one
+  job-table query per run folder) and run on a worker thread above 200 molecules. Measured for 14,000 PFOA rows
+  on the cloud VM: canonical SMILES 1.8 s, SDF 3.8 s (29 MB), InChI 4.8 s, InChIKey 5.6 s.
+  - XYZ: the conformer the views show for the current molecule (the conformer table's row), the best conformer
+    of other built molecules (read from their folders on the worker), else the input's 3D coordinates, else the
+    same ETKDG + MMFF preview the 3D view shows (said in the comment line).
+  - Copy as gives extra MIME types where they exist (`chemical/x-daylight-smiles`, `-inchi`, `-xyz`, ...).
+- **Right-click menu:** `MoleculeListView.menu_hooks`, a list of callables that fill the menu, so the 3D build
+  mode (UI-7) or others can add entries without touching the same lines. Main window untouched.
+- **Drops:** the list's viewport now takes drops itself (a `QTableView` takes none by default; the window got
+  them through the parent chain before). A folder is a run folder (`jobs.sqlite` or `summary.csv`), a project
+  (`.qbproj`), or else the readable files directly in it. Unknown file types go to `open_files`, whose worker
+  gives the "Unsupported file type" message (or Open Babel reads them).
+- **Tests:** `tests/test_gui_clipboard.py` (29) and `tests/test_interchange.py` (+6). A `_FakeClipboard` stands in
+  for the system clipboard (`gui.clipboard._clipboard`), so the copy tests also run where a Windows session has no
+  clipboard; the two tests on the real clipboard still skip there.
+
