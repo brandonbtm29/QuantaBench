@@ -729,6 +729,27 @@ def test_qm_memory_sizes_the_lanes_and_they_share_the_threads(monkeypatch):
         L.plan_auto(pipeline.BuildConfig(method="tblite-gfn2", threads=19), tower32)[0]
 
 
+def test_lanes_fit_the_memory_that_is_free(monkeypatch):
+    """MEM-1: the workstation (31.2 GB) with about 11 GB available at the plan (its desktop and other programs use the
+    rest): 4 GB Psi4 lanes fit the free memory less the 2 GB reserve, not 0.75 x the RAM (5 such lanes on 2026-11-13
+    left it under 1 GB); a report without the available memory plans as before."""
+    import dataclasses
+
+    tower32 = report(ram=31.2)
+    monkeypatch.setattr(resources, "logical_cores", lambda: 24)
+    cfg = pipeline.BuildConfig(method="tblite-gfn2", threads=19, qm_method="wb97x-d/6-31g*", qm_memory_gb=4.0)
+    before, _ = L.plan_auto(cfg, tower32)
+    busy, why = L.plan_auto(cfg, dataclasses.replace(tower32, ram_available_gb=11.0))
+    idle, _ = L.plan_auto(cfg, dataclasses.replace(tower32, ram_available_gb=30.0))
+    assert len(before) == 5 and len(idle) == 5                    # 0.75 x 31.2 GB / 4.6 GB: 5 lanes
+    assert len(busy) == 1 and "capped by memory (11 GB free of 31 GB)" in why   # (11 - 2) / 4.6 GB
+    assert L.lane_memory_gb(dataclasses.replace(tower32, ram_available_gb=1.0))[0] == 0.0
+    assert L.plan_auto(pipeline.BuildConfig(method="mmff", threads=19), dataclasses.replace(
+        tower32, ram_available_gb=11.0))[0] == L.plan_auto(pipeline.BuildConfig(method="mmff", threads=19), tower32)[0]
+    live = L.cpu_report()
+    assert 0 < live.ram_available_gb <= live.ram_gb
+
+
 def test_a_killed_lane_leaves_no_scratch_behind(tmp_path, monkeypatch):
     """A lane killed at the time limit cannot remove its Psi4 job folder (2026-11-13: 59 of them, 479 GB of DF
     integrals): the parent sweeps the killed lane's scratch at once, keeping the logs; the lanes that end with the

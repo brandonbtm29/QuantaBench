@@ -2,6 +2,11 @@
 
 ## Unreleased (after 0.3.0)
 
+### Lane plans fit the memory that is free (MEM-1, 2026-11-22)
+- `auto` lanes are capped by the memory available when the run starts (less 2 GB), not only by three quarters of the
+  RAM. On the workstation the desktop and other programs use about 20 of its 32 GB, and Psi4 lanes planned on the RAM
+  alone left it under 1 GB free (2026-11-12/13). The plan's reason says `capped by memory (N GB free of M GB)`.
+
 ### Programs never outlive QuantaBench; probes can't hang (ENG-3, 2026-11-22)
 - Windows: xtb, CREST (wsl.exe), MOPAC, Psi4, g-xTB and tblite's CPCM helper run in kill-on-close job objects, and the
   lanes in one of their parent's, so a crashed or killed GUI or CLI takes them along; a cancel ends the whole job.
