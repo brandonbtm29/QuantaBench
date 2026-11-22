@@ -726,3 +726,6 @@ Newest entries at the bottom. One entry per working session or nightly run.
   chosen to match another program; Ctrl+4 continues QuantaBench's Ctrl+1 to Ctrl+3 mouse modes.
 - **Merged after UI-4** (#39): Edit > Undo / Redo now come before UI-4's Paste, Copy molecules and Copy as, so
   `test_molecule_list_context_menu_and_edit_menu` expects them first.
+- **macOS CI after that merge:** `test_pipeline.py`'s tests with a stand-in gfn1-xtb failed twice at the memory guard
+  (2.4 GB in use against a 2.4 GB budget, the runner's free memory: more GUI tests run before them in one process).
+  They test conformer failures and the CPU fallback, not the guard, so they now run with it off (`NO_GUARD`).
