@@ -347,7 +347,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **The design** (`docs/SIMULATE_DESIGN.md`) keeps the runnable folder as the product and makes MD runs jobs of
   their own kind, made of segments: one engine process each, ended by a pause, a time window, a move to the GPU or a
   crash. Pilot B's hand-written resume and the MacBook's deadline stop were the reason. LAMMPS first, OpenMM with
-  OpenMM-ML in v2/v3.
+  OpenMM-ML in v2/v3. The lessons table uses the final reports of pilots A, B and C (2026-11-22).
 - **Found on the way:**
   - LAMMPS' `fix halt` with `is_file()` and `error soft` stops a run cleanly when a file appears, so a pause can
     write a restart file without killing the process.

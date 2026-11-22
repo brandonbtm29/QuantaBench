@@ -65,20 +65,23 @@ MD benchmark's ns/day per machine.
 
 ### What the MD pilots taught (2026-11-20 to 22)
 
-Pilot runs: `Runs/md-pilot-2026-11-20` in Brandon's output folder (pilot C's report; first analyses of pilots A and
-B written 2026-11-22, their reports still in progress). Each lesson below comes with what the design does about it.
+Pilot runs: `Runs/md-pilot-2026-11-20` in Brandon's output folder: C6F14 with OPLS-AA, 489 molecules, 2 ns settle and
+10 ns production, differing only in the dispersion. The reports of pilots A, B and C and their summary are dated
+2026-11-21 and 22. Each lesson below comes with what the design does about it.
 
 | # | Lesson | Consequence for the design |
 |---|---|---|
 | 1 | On the AMD RX 9060 XT (OpenCL), LAMMPS' default "AMD_GPU" tuning built empty neighbor lists: no nonbonded forces, no error. `device_type generic` fixes it (`md.liquid.gpu_switches`). | An engine *variant* carries its switches. Every input keeps the pair-energy guard. A new GPU, driver or build gets the `run 0` CPU/GPU check (`md.bench`) before a production run. |
-| 2 | The fastest setup was `-sf hybrid gpu omp -pk gpu 1 device_type generic pair/only on -pk omp N`: 15.2 against 10.2 ns/day with everything on the GPU (9,780 atoms). | The variant is chosen from measured ns/day, not guessed. Real runs report their speed back as a learned rate. |
+| 2 | The fastest setup was `-sf hybrid gpu omp -pk gpu 1 device_type generic pair/only on -pk omp N`: 15.2 against 10.2 ns/day with everything on the GPU (9,780 atoms). Pilot B's slab ran at 21.0 ns/day this way, 5.4 times its 3.9 on 4 CPU threads. | The variant is chosen from measured ns/day, not guessed. Real runs report their speed back as a learned rate. |
 | 3 | `lj/long/coul/long` and `pppm/disp` have no GPU styles. | The protocol's dispersion choice limits the engine variants. The review says why the GPU is greyed out. |
-| 4 | A plain 12 Å LJ cutoff read σ = 7.96 ± 0.32 mN/m for C6F14, about 30 % low (Tsige & Grest: 11.25 ([46](#sources))). The tail correction added 3.16, giving 11.12. The slab liquid was 4.7 % less dense than the bulk NPT. LAMMPS' own tail correction assumes a homogeneous bulk liquid and must not be used for a slab ([40](#sources)). First analyses: Ewald dispersion (pilot A) 10.70 ± 0.70; 16 Å (pilot B) 9.60 raw, 11.71 with the tail. | Cutoff variants always report raw σ, σ with the tail, and the plateau-vs-bulk density check. Ewald is the reference. The template offers "16 Å + tail on the GPU" as the fast route only with that label. |
-| 5 | Long runs need restart, resume and appended outputs. Pilot B moved from CPU to GPU at 3 ns through a hand-written resume input (`read_restart`, outputs cut at the restart step and appended, `run ... upto`). The MacBook's GAFF2 slab stopped at its window's deadline. The analysis could not read pilot B's speed, because its log was split. | Segments are first-class (section 5). Resume is a button. Outputs append. Telemetry and speed are kept per segment. |
+| 4 | The dispersion treatment decides σ. Against Tsige & Grest's 11.25 mN/m ([46](#sources)):<br>• C, 12 Å cutoff: 7.96 raw, 11.12 with the tail; slab 4.7 % below the bulk density; 16.1 ns/day on the GPU.<br>• B, 16 Å (Tsige & Grest's setup): 9.60 raw, 11.71 ± 0.30 with the tail, which reproduces their number (+4 %); slab 2.0 % below; 21 ns/day on the GPU + CPU.<br>• A, Ewald dispersion: 10.70 ± 0.70 with no correction needed; slab at the bulk density; 7.6 ns/day on 8 CPU threads.<br>LAMMPS' own tail correction assumes a homogeneous bulk and must not be used for a slab ([40](#sources)). | Cutoff variants always report raw σ, σ with the tail, and the plateau-vs-bulk density check, and the template labels them that way. "16 Å + tail on the GPU" and "Ewald on the CPU" are both offered; the default is Brandon's (question 7). |
+| 5 | Long runs need restart, resume and appended outputs. Pilot B moved from CPU to GPU at 3 ns through a hand-written resume input (`read_restart`, outputs cut at the restart step and appended, `run ... upto`). The join was checked: one continuous pressure-tensor series with no duplicate or missing steps, the same energies and pressures to the fifth digit, and the header lines written again at the join (the reader skips them). The MacBook's GAFF2 slab stopped at its window's deadline. The analysis could not read pilot B's slab speed, because its log was split. | Segments are first-class (section 5). Resume is a button. Outputs append, and every reader skips repeated headers. Telemetry and speed are kept per segment. |
 | 6 | The MacBook runs conda-forge LAMMPS (22 Jul 2025) with OpenMP, with restart files every 100 ps, `caffeinate` and a deadline script. | Each machine finds its own engine build. The restart interval follows the machine's window. A Mac GPU build of LAMMPS is FORK-8. |
-| 7 | GAFF2 + AM1-BCC gave too high a density for C6F14: 1.83 against about 1.68 g/cm³ (MacBook bulk NPT, 2026-11-21). | Force-field choice per class, with a warning on fluorocarbons. Refits (Träg & Zahn ([47](#sources))) go through the existing LJ overrides. |
+| 7 | GAFF2 + AM1-BCC gave too high a density for C6F14: 1.836 ± 0.001 against about 1.67-1.68 g/cm³, 10 % high (MacBook bulk NPT, 2026-11-21). | Force-field choice per class, with a warning on fluorocarbons. Refits (Träg & Zahn ([47](#sources))) go through the existing LJ overrides. |
 | 8 | OPLS-AA typing covers only alkanes, perfluoroalkanes and (fluoro)benzenes. | Coverage is checked before anything is written, with the alternatives offered. |
 | 9 | The pilots ran beside the paused CREST rebuild at below-normal priority on a thread budget. | MD jobs use the same priority and budget settings as builds. A GPU is a resource with its own lane. |
+| 10 | Pilot A's error bar (0.70) missed the 0.5 target, and its blocking curve kept rising. LAMMPS chose a 2 x 2 x 8 dispersion mesh for `force/disp/kspace 0.002`, which may not resolve the interface; a `rerun` of the saved frames with a finer mesh is the proposed check. | The σ result shows the blocking curve and says when it has not levelled off. The README and the review report the PPPM grids LAMMPS chose. Re-evaluating saved frames (`rerun`) becomes an analysis (v2). |
+| 11 | Every complete estimate (A, B + tail, C + tail) is 10.7-11.7 mN/m: on Tsige & Grest and the older experiments (11.25-11.44), 5-13 % below Freire 2006 (12.33). | The gap to Freire is the force field, not the method. Each result is shown against every reference the system has, with the target chosen per system. |
 
 ## 3. Survey: how other MD front ends do it
 
@@ -146,15 +149,15 @@ status (✓ done, ⚠ check, ● running). The left dock lists the project's **s
 |▣ | Systems & runs        | 3D view: the system, or the latest frame of a run    | 1 System        ✓  |
 |▣ | ▾ C6F14 slab (OPLS-AA)|                                                      |   C6F14 x 489, slab|
 |▣*|     run 1  done  σ    |                                                      | 2 Force field   ✓  |
-|▣ |     run 2  ● 7.4/12 ns|                                                      |   OPLS-AA (W&J)    |
+|▣ |     run 2  ● 7.4/13 ns|                                                      |   OPLS-AA (W&J)    |
 |▣ | ▸ C6F14 slab (OpenFF) |                                                      | 3 Protocol      ✓  |
 |  | ▸ PFOA on graphite    |                                                      |   Liquid slab (σ)  |
-|  | [+ New system]        |  |◀ ◀  ▶  ▶▶|  frame 74 / 120        ns 7.4        | 4 Engine        ✓  |
-|  |                       |                                                      |   LAMMPS cpu-ewald |
+|  | [+ New system]        |  |◀ ◀  ▶  ▶▶|  frame 74 / 120          ns 7.4        | 4 Engine        ✓  |
+|  |                       |                                                      |   LAMMPS gpu-cut16 |
 |  |                       |                                                      | 5 Telemetry     ●  |
 |  |                       |                                                      | 6 Analysis         |
 |  +-----------------------+------------------------------------------------------+--------------------+
-|  | Telemetry: [T] [P] [E] [ρ] [σ running] [pull force]   7.4 / 12 ns · 7.6 ns/day · ETA 14 h · CPU 66 % |
+|  | Telemetry: [T] [P] [E] [ρ] [σ running] [pull force]   7.4 / 13 ns · 21 ns/day · ETA 6 h · GPU 85% |
 +--+---------------------------------------------------------------------------------------------------+
 ```
 
@@ -180,7 +183,7 @@ Force field  (•) OPLS-AA + Watkins-Jorgensen 2001   ( ) OpenFF Sage 2.3.0 + AM
 Coverage     ✓ all 20 atoms typed                    (OpenFF, GAFF2: installed in the md environment ✓)
 Charges      fixed OPLS-AA charges        (OpenFF/GAFF2: AM1-BCC by sqm; NAGL in v2)
 Mixing       geometric · 1-4 scaling 0.5 / 0.5       Overrides: none [Load...]
-Notes        ⚠ GAFF2 gave 1.83 g/cm³ for C6F14 (measured ~1.68): use it for fluorocarbons only with a refit
+Notes        ⚠ GAFF2 gave 1.836 g/cm³ for C6F14 (measured ~1.68): use it for fluorocarbons only with a refit
 [Parameters...]  every type, charge and bonded term with its source (the setup JSON)
 ```
 
@@ -197,7 +200,8 @@ Template  [Liquid slab (surface tension) ▾]                                   
   4  Open the box        50 Å vacuum on each side
   5  Settle              NVT 2 ns
   6  Production          NVT 10 ns: pressure tensor every 10 fs, ρ(z) every 10 ps, a frame every 100 ps
-Dispersion  (•) Ewald for r⁻⁶ (CPU only)   ( ) 16 Å cutoff + tail correction (GPU)   ( ) 12 Å + tail (screen)
+Dispersion  ( ) Ewald for r⁻⁶ (CPU only)   (•) 16 Å cutoff + tail correction (GPU)   ( ) 12 Å + tail (screen)
+            (the default is question 7)
 Restart     every 100 ps
 Advanced    in.bulk / in.slab as written (read-only in v1; saved as a template of one's own in v2)
 ```
@@ -206,12 +210,12 @@ Advanced    in.bulk / in.slab as written (read-only in v1; saved as a template o
 
 ```
 Engine    (•) LAMMPS 4 Jul 2026 (OPENMP, GPU/OpenCL)       ( ) OpenMM (v2)
-Variant   [cpu-ewald, 8 threads ▾]   gpu-cutoff16: pair style on the GPU, PPPM on 4 threads (needs 16 Å)
-Run on    [This computer ▾]   7.6 ns/day (benchmark, verified) → 13 ns in 1 d 17 h
+Variant   [gpu-cutoff16: pair style on the GPU, PPPM on 6 threads ▾]   cpu-cutoff16, 4 threads
+Run on    [This computer ▾]   21 ns/day (benchmark, verified) → 13 ns in 15 h
           (v2: Auto and the workers, each with its estimate and its time window)
 Priority  below normal · threads within the machine's budget · time limit: none
 Review    ✓ every style is in this build   ✓ GPU switches include device_type generic
-          ✓ guard against a missing pair energy   ⚠ ewald: no GPU variant
+          ✓ guard against a missing pair energy   ⓘ the Ewald option would run on the CPU only
 [Write folder]   [Submit]
 ```
 
@@ -220,8 +224,8 @@ The review works like the build review (ADV-1): it never blocks, it explains, an
 **5. Telemetry.**
 
 ```
-Run 2 · C6F14 slab (OPLS-AA, ewald) · running on this computer · segment 2 (resumed at 3.0 ns)
-Step 7,412,000 / 13,000,000 · 7.4 ns/day · ETA 18 h · CPU 66 % · GPU —
+Run 2 · C6F14 slab (OPLS-AA, cutoff16) · running on this computer · segment 2 (resumed on the GPU at 3.0 ns)
+Step 7,412,000 / 13,000,000 · 21.0 ns/day · ETA 6 h 24 min · CPU 40 % · GPU 85 %
 Plots   T | P | E | bulk ρ | ρ(z), latest | σ, running mean with block error | pull force (steered runs)
         raw / smoothed · export CSV
 Alerts  none   (watched: QB_ERROR, T off target, density drift, lost atoms, the run stopped writing)
@@ -394,9 +398,9 @@ Notes:
 
 | Route | Covers | Charges | Where it runs | What we know |
 |---|---|---|---|---|
-| OPLS-AA + Watkins-Jorgensen (`oplsaa`) | Alkanes, perfluoroalkanes, (fluoro)benzenes | OPLS-AA's own | In process, any OS | Tsige & Grest's route ([46](#sources)). Bulk density of C6F14 1.664-1.672 g/cm³ in the pilots (measured about 1.67-1.68) |
+| OPLS-AA + Watkins-Jorgensen (`oplsaa`) | Alkanes, perfluoroalkanes, (fluoro)benzenes | OPLS-AA's own | In process, any OS | Tsige & Grest's route ([46](#sources)). C6F14 in the pilots: bulk density 1.664-1.672 g/cm³ (measured about 1.67-1.68); σ 10.7-11.7 mN/m, with 16 Å + tail reproducing Tsige & Grest's 11.25 within 4 % |
 | OpenFF Sage 2.3.0 (`openff`) | Organic molecules in Sage's coverage | AM1-BCC by AmberTools' sqm; **NAGL** in v2: graph-network charges, independent of the conformer, production model `openff-gnn-am1bcc-1.0.0` ([25](#sources), [26](#sources)) | The md conda env (Linux, macOS; WSL on Windows) through `md/ff_driver.py` | Exported with Interchange's LAMMPS writer. Interchange's LAMMPS input is a single point to be edited, and LAMMPS has no switching function, so energies differ from OpenMM/GROMACS ([24](#sources)). QuantaBench reads only the parameters and writes its own inputs. The C6F14 pilot folder is written, not run |
-| GAFF2 + AM1-BCC (`gaff2`) | Organic molecules | AM1-BCC by sqm | The md conda env | 1.83 against about 1.68 g/cm³ for C6F14 (lesson 7). For fluorocarbons, only with the Träg & Zahn refit ([47](#sources)) through `--overrides`, once its numbers are taken from the paper |
+| GAFF2 + AM1-BCC (`gaff2`) | Organic molecules | AM1-BCC by sqm | The md conda env | 1.836 against about 1.67-1.68 g/cm³ for C6F14 (lesson 7). For fluorocarbons, only with the Träg & Zahn refit ([47](#sources)) through `--overrides`, once its numbers are taken from the paper |
 | UFF, rigid (`md.lammps`) | Any molecule; no bonded terms | xTB or AIMNet2 charges from the pipeline | Any OS | Steered pull in vacuum; a gas-phase lower bound on the work |
 | Surfaces | Graphite (AMBER parm94, Steele 1973 in `md.params`), metal slabs | None (not polarizable) | Any | Sage is a small-molecule force field, so a surface always needs its own parameters and an explicit cross-term rule, recorded with sources. Ions: Joung-Cheatham (in `md.params`) |
 
@@ -510,7 +514,8 @@ Design points:
 - **Force fields:** NAGL charges; the Träg & Zahn GAFF2 overrides; more OPLS-AA types if Brandon allows LigParGen.
 - **OpenMM:** classical MD with OpenFF through Interchange's `to_openmm` ([24](#sources)), on the same Run and
   Segment model.
-- **Analysis:** RDF, MSD and bulk-density analyses; Advanced input editing saved as one's own template.
+- **Analysis:** RDF, MSD and bulk-density analyses; re-evaluating saved frames with other settings (`rerun`, lesson
+  10); Advanced input editing saved as one's own template.
 
 ### v3
 
@@ -524,7 +529,7 @@ Design points:
 ## 11. Risks
 
 - **The force field dominates the error.**
-  - GAFF2's density is 9 % high for C6F14.
+  - GAFF2's density is 10 % high for C6F14.
   - OPLS-AA covers few PFAS classes.
   - The other classes rely on charges nobody has tested for σ (the MD plan's main risk).
 
@@ -544,8 +549,9 @@ Design points:
 
   Moving a run between machines goes through a data file (or OpenMM's state XML), which continues statistically
   similar rather than exactly.
-- **The fast route is biased.** GPU variants need a cutoff, so σ depends on the tail correction and on the slab's
-  lower density (lesson 4).
+- **The fast route needs a correction, the exact one is slow.** GPU variants need a cutoff, so σ depends on the tail
+  correction and on the slab's lower density (lesson 4). The Ewald route is CPU-only, 2-3 times slower and, in pilot
+  A, noisier, with its mesh still to check (lesson 10).
 - **`fix smd` is unmaintained** ([41](#sources)): the steered-MD path has to move to Colvars or PLUMED.
 - **Disk and sync:**
   - The pressure tensor every 10 fs is 10⁶ lines per 10 ns.
@@ -570,9 +576,9 @@ Design points:
    or local routes only?
 6. **A run that meets the end of a machine's time window:** wait for the window to reopen on the same machine (an
    exact continuation), or move to a free machine through a data file (statistically similar)?
-7. **The σ default:** Ewald dispersion on the CPU (the reference, about 7 ns/day here), or 16 Å on the GPU with the
-   tail correction (faster, biased by the slab density)? And the C6F14 reference: Freire 2006 (12.33) or Caço 2003
-   (11.36)?
+7. **The σ default:** 16 Å on the GPU with the tail correction (pilot B: reproduced Tsige & Grest, 21 ns/day, slab 2 %
+   below the bulk density), or Ewald dispersion on the CPU (pilot A: no correction, 7.6 ns/day, its mesh still to
+   check)? And the C6F14 target: Freire 2006 (12.33), which OPLS-AA misses by 5-13 %, or Caço 2003 (11.36)?
 8. **OpenMM's place:** in v2 next to the workers, or after the workers and sweeps? Is AIMNet2 MD (a PFAS molecule
    in water or on graphite) worth a v2 spike?
 9. **Steered MD:** move to Colvars (needs the COLVARS package in every machine's LAMMPS), or keep `fix smd` for the
