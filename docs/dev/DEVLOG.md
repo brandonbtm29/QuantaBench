@@ -339,57 +339,6 @@ Newest entries at the bottom. One entry per working session or nightly run.
   Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
   check (BACKLOG CREST-SCRATCH-1).
 
-## 2026-11-22: paste, drag-and-drop and Copy as (UI-4, branch `feat/ui-4-clipboard-dnd`)
-- **Starting point:** the backlog said "clipboard, drag-and-drop and Copy as: another branch". That branch
-  (`feat/clipboard`) was merged on 2026-11-07 (`fa9c962`): ChemDraw CDX/CDXML/MOL/MDLCT paste, Copy as SMILES /
-  MOL / CDXML, drops of files and text. This branch builds on it; nothing was started over.
-- **Paste takes File > Open's path.** Pasted molecules used to go straight into the list. Now `read_candidates`
-  (worker thread) gives `read_raw`-style inputs (`meta` with the reader, 2D/3D and data fields as text), then
-  `import_options.choose` and `MainWindow._import_inputs` (worker thread), as for a file. Consequences:
-  - A ChemDraw drawing is 2D, so it is converted to 3D on paste (default on), and the Import Options dialog shows
-    on such a paste until "Don't ask again". Same as opening a `.cdx` file; a question for Brandon in the PR.
-  - A table's other columns can be posted to the molecule list (screenshot `paste_table.png`).
-- **New text kinds** (`chem.interchange.detect_format` order: CDXML, MRV, SD, MOL, XYZ, table, lines):
-  - XYZ: standard frames (several in a row) or bare `element x y z` lines (an ORCA `* xyz` block), atomic numbers
-    allowed, extra columns ignored. Bonds by `rdDetermineBonds` for charge 0 (a radical or ion fails with a
-    message); stereo from the 3D coordinates. The id is the comment's first word unless it is a number.
-  - Tables: a first line with a SMILES column name (`inputs.SMILES_COLUMNS` or the Pipeline dock's SMILES column)
-    split by tab, comma or semicolon; one column with a `SMILES` header works too. `_rows_to_inputs` does the
-    rest, so the ID column, the SMILES preference (QSAR-ready, MS-ready) and skipped-row reports match CSV files.
-- **Copy as** has seven kinds. "SMILES" is the list's own text (as entered), so it needs no structure: 14,000 rows
-  copy in 0.25 s including the selection. The others read structures (`gather_inputs`: inputs in memory, else one
-  job-table query per run folder) and run on a worker thread above 200 molecules. Measured for 14,000 PFOA rows
-  on the cloud VM: canonical SMILES 1.8 s, SDF 3.8 s (29 MB), InChI 4.8 s, InChIKey 5.6 s.
-  - XYZ: the conformer the views show for the current molecule (the conformer table's row), the best conformer
-    of other built molecules (read from their folders on the worker), else the input's 3D coordinates, else the
-    same ETKDG + MMFF preview the 3D view shows (said in the comment line).
-  - Copy as gives extra MIME types where they exist (`chemical/x-daylight-smiles`, `-inchi`, `-xyz`, ...).
-- **Right-click menu:** `MoleculeListView.menu_hooks`, a list of callables that fill the menu, so the 3D build
-  mode (UI-7) or others can add entries without touching the same lines. Main window untouched.
-- **Drops:** the list's viewport now takes drops itself (a `QTableView` takes none by default; the window got
-  them through the parent chain before). A folder is a run folder (`jobs.sqlite` or `summary.csv`), a project
-  (`.qbproj`), or else the readable files directly in it. Unknown file types go to `open_files`, whose worker
-  gives the "Unsupported file type" message (or Open Babel reads them).
-- **Tests:** `tests/test_gui_clipboard.py` (29) and `tests/test_interchange.py` (+6). A `_FakeClipboard` stands in
-  for the system clipboard (`gui.clipboard._clipboard`), so the copy tests also run where a Windows session has no
-  clipboard; the two tests on the real clipboard still skip there.
-- **Brandon's answers (same day, second commit):**
-  - A ChemDraw paste keeps asking (Import Options) until "Don't ask again". The dialog has a note next to that
-    box and the paste log line ends with where to change it: **Tools > Settings > Import** (the Settings action is
-    in the Tools menu; its tab is "Import"), one constant `gui.import_options.SETTINGS_PATH`.
-  - **Copy molecules** (Ctrl+Shift+C): the selected rows as a tab-separated table (ID, SMILES as entered, Name, the
-    posted field columns the list shows), as text and as `application/x-quantabench-molecules`. Paste tries that
-    format first and reads it with ID and SMILES as the id and structure columns (a plain table would take a
-    posted DTXSID column as the id: `inputs.ID_COLUMNS` puts it first). A copy that went through Excel is text
-    only and reads as any table.
-  - The key: the Analyze table already uses Ctrl+Shift+C (copy with column titles, in `SheetView.keyPressEvent`).
-    A window-wide action would take the key from it, so Copy molecules is a `WidgetWithChildrenShortcut` on the
-    Molecules dock. Checked under xvfb with QTest key clicks: Ctrl+Shift+C in the list copies molecules, in the
-    Analyze table it still copies cells with titles, Ctrl+C in the list is still Qt's cell copy.
-  - For UI-9's keymap: every action is a QAction with an `objectName` (`edit.paste`, `edit.copy_molecules`,
-    `edit.copy_as.<kind>`), in `win.actions_by_name`, default keys in `clipboard.DEFAULT_KEYS` only. The Molecules
-    box's Ctrl+V check now compares the key with the paste action's current shortcuts, so a rebinding moves it too.
-
 ## 2026-11-22: FIX-6, the flaky macOS test of run priority (branch `fix/fix-6-macos-priority-test`)
 - **CI's failure** (#25's macOS run, 2026-11-17): `apply_to_pids([child], "low")` changed 1 process and the next
   read gave 10; the following `apply_to_pids(..., "normal")` found the child at -10 ("already there"). Nothing in the
@@ -502,3 +451,211 @@ Newest entries at the bottom. One entry per working session or nightly run.
   1e6 times; 1e6 numbered lines; long lines and the byte bound; the time limit; no folder inside WSL; a CREST that
   prints the warning 1e6 times (123 MB) and fails: the kept `crest.log` has 4 lines and `crest.out` stays behind).
   The scripts ran against the real WSL too (mawk; 122 MB summarized in 0.3 s).
+## 2026-11-22: programs never outlive QuantaBench; probes can't hang (ENG-3, branch `feat/eng-3-process-robustness`)
+- **The problem** (the 2026-11-01 review's leftovers): a GUI or CLI that crashed or was ended in Task Manager left
+  xtb, CREST, MOPAC or Psi4 running, with nobody to stop them; on Windows `subprocess.run(timeout=...)` in the version
+  probes could block past its timeout when a launcher's child kept the pipe open; the conda scan took the first
+  environment in alphabetical order, not the newest program; the GUI's first start ran the `--version` probes on the
+  GUI thread.
+- **Windows** (`quantabench.proctree`, ctypes, no new dependency): `start` creates the program suspended, puts it in a
+  job object of its own with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, then resumes it (`NtResumeProcess`), so nothing it
+  starts escapes the job. `run_program` and tblite's CPCM helper start their programs this way; `release` closes the
+  job when the program has ended (ending what it left behind), `_kill_tree` terminates the job first (it also reaches
+  a child whose parent has exited, which `taskkill /T` misses). The usage meter reads the same job's accounting instead
+  of making one of its own. Lanes are adopted into one kill-on-close job of their parent (`Job.adopt`; each lane's
+  programs are in jobs nested in it). No other limit is set: the run priority is untouched.
+- **What WSL does** (measured on the workstation, WSL 2, kernel 6.18, `scratch/eng3/wsl_probe*.py`):
+  - wsl.exe starts helpers of its own: a second wsl.exe, wslhost.exe and two conhost.exe, all its children, so all in
+    the job (and the "launcher's child holds the pipe" case of the probes).
+  - When wsl.exe is ended, WSL hangs up the Linux session (SIGHUP): an ordinary program ends within a second or two;
+    one that ignores SIGHUP (`nohup`) or runs in another session (`setsid`) does not. So the old note that killing
+    wsl.exe never reaches the Linux side no longer holds, but it is not enough on its own.
+  - Closing wsl.exe's stdin pipe reaches the Linux side as EOF.
+- **The guard** (`external.WSL_GUARD`): a `wsl:` program runs as `sh -c WSL_GUARD sh -c WSL_WRAPPER prog args`, with
+  wsl.exe's stdin a pipe QuantaBench holds open and never writes. The program runs in the background in the guard's
+  process group; a watchdog subshell (ignoring INT/TERM) kills the whole group, SIGTERM then SIGKILL 2 s later, on
+  WSL's hang-up or at the lifeline's EOF (QuantaBench died but wsl.exe lived on: no job). When the program ends, the
+  guard stops the watchdog, sends SIGTERM to what is left in its group (CREST's xtb after a cancel: ENG-2's note) and
+  exits with the program's code. `kill -TERM -$$` can only reach the guard's own group. `.qb_pid`, the cancel through
+  it and the run priority's `nice`/`ionice` (in `WSL_WRAPPER`) are unchanged. `stdin_text` programs get no guard.
+- **Probes** (`proctree.run_probe`): output to temporary files (no pipe to wait for), the program started like
+  `start` (job on Windows, its own session on POSIX), the whole tree killed when it exits or times out. Used by
+  `_probe_version`, `python_module_version`, g-xTB's start check, `md.bench`'s `lmp -h` and the WSL cancel helper.
+  A program that prints its version and then hangs now gives its version.
+- **Conda scan:** every environment that has the program is a candidate; the newest version wins, read from
+  `conda-meta/<package>-<version>-<build>.json` (nothing runs; `ProgramSpec.conda_package` when the package name is not
+  the program's: openbabel, ambertools), else the version cache; the first in the old order among equals.
+- **GUI first start:** `MainWindow.__init__` builds the window inside `external.deferred_probes()` (no probe on this
+  thread; an uncached version comes back as "" and MOPAC/g-xTB treat it as available for now), then `_probe_programs`
+  runs `external.probe_versions` in a worker for xtb, CREST, g-xTB and MOPAC and relabels the engine lists. Every later
+  start has the versions on disk and runs nothing.
+- **Not done (POSIX):** no job objects there. Cancels, time limits and dead lanes were already covered (sessions, the
+  lanes' program registry); a GUI or CLI killed outright still leaves a running native program until it ends. A
+  lifeline guard like WSL's would work there too, but it changes which PID the usage meter samples; not needed now.
+- **Tests** (`tests/test_proctree.py`, `test_external.py`, `test_gui_engines.py`): probes bounded with a child that keeps
+  stdout open (all OSes); Windows: the job, a kill that reaches an orphan, a stand-in GUI killed outright with its
+  engine and grandchild ending, an adopted lane, and through the real WSL a program and child that ignore SIGHUP
+  ending when the GUI is killed, with the job and with only the lifeline; Linux: the guard's lifeline through a
+  stand-in wsl.exe, its exit code and leftovers; the conda scan; deferred probes and the GUI's start-up worker.
+- **On the workstation:** `tests/test_proctree.py` 10 passed (both real-WSL cases included); the real xtb tests (5)
+  and the real CREST GFN-FF search through WSL pass. A real CREST search through WSL (decanol, GFN-FF, 2 threads)
+  cancelled after 12 s, and again in a process killed outright after 12 s: nothing left running in its folder inside
+  WSL (5 s after the kill). With the job switched off (the stand-in GUI's `QBTEST_NO_JOB=1`, the behaviour before),
+  the stand-in engine and its grandchild outlive the killed GUI and the test fails. The full suite (offscreen Qt and VTK): 1,811 passed; the 22 failures also fail on `main` or
+  pass alone (BACKLOG TEST-WIN-1).
+- **Merged after CREST-LOG-1** (#47): a `wsl:` program now runs as `sh -c WSL_GUARD sh -c WSL_WRAPPER prog args`
+  where `WSL_WRAPPER` also sends the output to `$QUANTABENCH_WSL_LOG` when it is set; the guard's stdout and stderr
+  stay on wsl.exe's pipe. The guard's `wait` printed "Terminated" into the run's Windows log when a program was
+  stopped (cancel, time limit); CREST-LOG-1's time-limit test caught it. `wait $p 2>/dev/null` keeps that line out;
+  the exit code is unchanged.
+
+## 2026-11-22: Settings > Compute, Spartan's Jobs tab (SETTINGS-1, branch `feat/settings-1-compute`)
+- **What Spartan's Jobs tab has that the Compute tab lacked:** the "12 cores detected (24 logical)" line, and a short
+  front page. The tab now opens with "This computer: N cores, M logical" (`settings_dialog.cores_line`: the
+  detection report's `cores_text`, so Apple Silicon shows its performance cores; psutil before the report arrives).
+- **The Expert box** (a folding section, closed by default and remembered per machine like the others) holds the lane
+  spec, GPU linear algebra and dxtb on the GPU. Its header counts the ones not at their defaults ("2 changed", the
+  tooltip names them), so a hidden non-default is still visible.
+- **Lanes without the spec syntax:** *Molecules at once* lists Automatic, one at a time and 2 to the physical cores;
+  any other spec (GPU lanes, threads per lane, more lanes than cores) shows as *Custom*, and choosing Custom opens the
+  Expert box. Both controls edit the one value, this machine's `dist.machine_lanes` entry.
+- **Same values as the job dialog and the Machines dock** (checked): the job dialog starts from
+  `BuildConfig.from_settings` (`priority_for`, `free_threads_for`), the Machines dock and `machines set` from
+  `priority_for(machine)` / `lanes_for(machine)` and save through `update_machine`, which stamps each change in
+  `dist.machine_updated` for the SyncThing conflict merge. The dialog did not stamp, and it wrote the lane spec back
+  on every OK: a lane change the Machines dock saved while the dialog was open was lost. Now the dialog writes the
+  spec only when it changed, and stamps its per-machine changes the way `update_machine` does.
+- The job dialog's note pointed at "Settings > Resources" (the tab's old name).
+- Tests: `tests/test_gui_settings_compute.py` (5: the cores line, the Expert box and its count, the two lane
+  controls as one value, a round trip read back through `BuildConfig`, `control.machine_lines` and a new dialog, and
+  the Machines dock's newer values kept). Screenshots: `docs/dev/screenshots/SETTINGS-1/compute_*.png`.
+
+## 2026-11-22: Settings > Build defaults, Spartan's Import Filters and Conformer Rules (SETTINGS-1, branch `feat/settings-1-build-defaults`)
+- **Spartan's two settings** (from its manual): the Import Filters remove water from PDB and SD files and HCl from SD
+  files; the Conformer Rules are Normal, Skeletal or Thorough, and Thorough "considers twist-boat conformers of
+  six-membered rings (in addition to chair conformers)". The Import tab (UI-4) already filters files; these are the
+  build's own, for every input, and science settings.
+- **Build filters** (`standardize.FragmentStrip`, `standardize(strip=...)`): after the cleanup (ionic metal bonds
+  disconnected, reionized), before the largest-fragment rule. Water and acids are the import filters' own
+  categories (`import_options.fragment_kind`). Counter-ions are named (`NAMED_COUNTERIONS`, 34: alkali and
+  alkaline-earth cations, ammonium and alkylammoniums, ethanolammoniums, halides, oxyanions, BF4-, PF6-, acetate,
+  formate, trifluoroacetate, mesylate, tosylate) and match by the neutral parent, so triethylamine drawn neutral next
+  to an acid is triethylammonium. Other metals are left to the metal-complex rule. The last fragment is never stripped.
+- **Where they change a result:** with *Keep largest fragment* on, sodium PFOA hydrate gives the PFOA anion either
+  way (only the notes differ); off, the build computes O + PFOA- + Na+ without filters, PFOA- + Na+ with water
+  stripped, PFOA- with water and sodium stripped (`tests/test_build_filters.py`). With it on, a named counter-ion
+  that is the larger ion is still removed: tetrabutylammonium trifluoroacetate computes the trifluoroacetate.
+- **Twist-boats** (`conformers.twist_boats`): each saturated six-membered ring of the 5 lowest MMFF94s conformers is
+  held at the twist-boat torsions (30, -65, 30, 30, -65, 30; three rotations and their mirror images) and optimized,
+  then optimized freely. Cyclohexane: +5.9 kcal/mol (MMFF94s). ETKDG already makes some twist-boats at random
+  (methylcyclohexane: three within 10 kcal/mol); on trans-decalin-1-ol the thorough pool has 17 conformers against 16
+  and more non-chair rings; PFECHS keeps the same five conformers (its twist-boats fall back to chairs or lie
+  above the window). Max conformers caps the thorough pool; an acyclic molecule's pool is unchanged.
+- **Science fields** `strip_water`, `strip_acids`, `strip_counterions`, `ring_conformers`: defaults are the old
+  behaviour, so a run stored before them resumes without a difference (`config_differences` compares a missing field
+  with the default). `strip_counterions` is one sorted string ("potassium,sodium"): `BuildConfig.from_settings`
+  sorts it and drops unknown names, the worker refuses unknown or unsorted ones, so two machines never differ by
+  spelling. A worker from before this change refuses the fields as unknown rather than computing without them.
+- The review (advisor) prepares molecules with the same filters (its cache key includes them) and lists them.
+- Tests: `tests/test_build_filters.py` (12), `tests/test_gui_settings_build.py`, and
+  `test_worker.py::test_build_filters_travel_to_a_worker` (a worker over HTTP). Screenshot:
+  `docs/dev/screenshots/SETTINGS-1/build_defaults_tab.png`.
+
+## 2026-11-22: Settings > Lookups, Spartan's URLs and Databases (SETTINGS-1, branch `feat/settings-1-lookups`)
+- **Templates** (`quantabench.lookups`): `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`, replaced longest first
+  (`%inchikey` before `%inchi`) and percent-encoded. The structure keys are of the record as drawn, all fragments
+  (potassium PFOS has its own InChIKey), which is what the databases index. The CAS RN comes from a posted field named
+  like CAS, then any field, the id or the name that is a CAS RN as a whole (`pubchem.cas_numbers`, check digit).
+- **Defaults**, checked where the site allowed it: NIST `cbook.cgi?ID=335-67-1` shows PFOA; CompTox
+  `dsstoxdb/results?search=` is the dashboard's own search link; PubChem `#query=` is its search page. nmrshiftdb2
+  documents InChI only for its data export (`exportcmlbyinchi`, 13C, `format/jcamp`), and its site refuses robots,
+  so that template (in Turbine's query form) is unverified: Spartan's own NMR template would settle it.
+- **Menu** (`gui.lookup_menu`): the molecule list's right-click menu has *Look up* with one action per template
+  (the URL as tooltip), greyed out with "(no CAS RN)" where a value is missing, and *Edit lookups...*.
+- **PubChem cache:** `ResponseCache.max_age_s` makes an answer older than the maximum age a miss (fetched again and
+  replaced); offline mode reads it anyway (`stale_ok`). `default_cache_path` takes Settings > Lookups' folder after
+  `QUANTABENCH_CACHE_DIR` (the tests' own) and before the platform's. A client made with its own `ResponseCache`
+  keeps that cache's age unless given one.
+- Tests: `tests/test_lookups.py` (6), `tests/test_gui_settings_lookups.py` (2). Screenshots:
+  `docs/dev/screenshots/SETTINGS-1/lookups_tab.png`, `lookup_menu_*.png`.
+
+## 2026-11-22: the Simulate workspace design (RES-1, branch `feat/res-1-simulate-design`)
+- **Survey** of LAMMPS-GUI, VMD + QwikMD, CHARMM-GUI, OpenMM-Setup, Materials Studio (Forcite, Amorphous Cell),
+  MAPS, SAMSON, Packmol/moltemplate and OVITO, plus OpenFF Interchange/NAGL and RadonPy, over system building,
+  force fields, protocols, run control, live monitoring and analysis. Sources are the tools' own pages, fetched on
+  2026-11-22. The commercial tools' vendor pages give feature lists only.
+- **The design** (`docs/SIMULATE_DESIGN.md`) keeps the runnable folder as the product and makes MD runs jobs of
+  their own kind, made of segments: one engine process each, ended by a pause, a time window, a move to the GPU or a
+  crash. Pilot B's hand-written resume and the MacBook's deadline stop were the reason. LAMMPS first, OpenMM with
+  OpenMM-ML in v2/v3. The lessons table uses the final reports of pilots A, B and C (2026-11-22).
+- **Found on the way:**
+  - LAMMPS' `fix halt` with `is_file()` and `error soft` stops a run cleanly when a file appears, so a pause can
+    write a restart file without killing the process.
+  - LAMMPS marks `fix smd` as unmaintained and recommends `fix colvars` or `fix plumed`: the flexible steered MD
+    should be written on Colvars.
+  - Binary restart files are meant for the same executable and platform only, so moving a run between machines
+    needs a data file.
+- **Open:** 12 questions for Brandon in the doc (DEC-1). SIM-1 stays blocked until he approves.
+- **Brandon's first answers (same day), now in the doc:**
+  - Splitting across machines (§6): replicas, hand-offs through data files, or GPU + CPU in one machine, with the
+    trade-offs. It is v2, gated on a consistency test with pilot A; v1 stays on this computer.
+  - A resource-aware scheduler (§7, SCHED-3). The pilots' LAMMPS timing breakdowns show GPU MD is not GPU-only:
+    PPPM and the bonded terms on the CPU took 75-86 % of the loop time.
+  - A COMSOL-like parameterization builder (§9.1): nodes per component with a resolution, global physics nodes
+    with the cutoff as the "screening length", compatibility checks (combining rules, 1-4 scaling, units, a
+    cutoff without a tail). Its minimal version goes into SIM-1 v1.
+  - LigParGen allowed; σ by default 16 Å + tail on the GPU, with the C6F14 target Freire 2006 and no offsets.
+  - Where MD runs live stays open, with the facts: run folders of 131-182 MB, and `.stignore` lines for restart
+    files, the STOP file and frames.
+  - New BACKLOG items BUILD-CLEAN (a "Clean up" for 2D and 3D) and SCHED-3.
+
+## 2026-11-22: paste, drag-and-drop and Copy as (UI-4, branch `feat/ui-4-clipboard-dnd`)
+- **Starting point:** the backlog said "clipboard, drag-and-drop and Copy as: another branch". That branch
+  (`feat/clipboard`) was merged on 2026-11-07 (`fa9c962`): ChemDraw CDX/CDXML/MOL/MDLCT paste, Copy as SMILES /
+  MOL / CDXML, drops of files and text. This branch builds on it; nothing was started over.
+- **Paste takes File > Open's path.** Pasted molecules used to go straight into the list. Now `read_candidates`
+  (worker thread) gives `read_raw`-style inputs (`meta` with the reader, 2D/3D and data fields as text), then
+  `import_options.choose` and `MainWindow._import_inputs` (worker thread), as for a file. Consequences:
+  - A ChemDraw drawing is 2D, so it is converted to 3D on paste (default on), and the Import Options dialog shows
+    on such a paste until "Don't ask again". Same as opening a `.cdx` file; a question for Brandon in the PR.
+  - A table's other columns can be posted to the molecule list (screenshot `paste_table.png`).
+- **New text kinds** (`chem.interchange.detect_format` order: CDXML, MRV, SD, MOL, XYZ, table, lines):
+  - XYZ: standard frames (several in a row) or bare `element x y z` lines (an ORCA `* xyz` block), atomic numbers
+    allowed, extra columns ignored. Bonds by `rdDetermineBonds` for charge 0 (a radical or ion fails with a
+    message); stereo from the 3D coordinates. The id is the comment's first word unless it is a number.
+  - Tables: a first line with a SMILES column name (`inputs.SMILES_COLUMNS` or the Pipeline dock's SMILES column)
+    split by tab, comma or semicolon; one column with a `SMILES` header works too. `_rows_to_inputs` does the
+    rest, so the ID column, the SMILES preference (QSAR-ready, MS-ready) and skipped-row reports match CSV files.
+- **Copy as** has seven kinds. "SMILES" is the list's own text (as entered), so it needs no structure: 14,000 rows
+  copy in 0.25 s including the selection. The others read structures (`gather_inputs`: inputs in memory, else one
+  job-table query per run folder) and run on a worker thread above 200 molecules. Measured for 14,000 PFOA rows
+  on the cloud VM: canonical SMILES 1.8 s, SDF 3.8 s (29 MB), InChI 4.8 s, InChIKey 5.6 s.
+  - XYZ: the conformer the views show for the current molecule (the conformer table's row), the best conformer
+    of other built molecules (read from their folders on the worker), else the input's 3D coordinates, else the
+    same ETKDG + MMFF preview the 3D view shows (said in the comment line).
+  - Copy as gives extra MIME types where they exist (`chemical/x-daylight-smiles`, `-inchi`, `-xyz`, ...).
+- **Right-click menu:** `MoleculeListView.menu_hooks`, a list of callables that fill the menu, so the 3D build
+  mode (UI-7) or others can add entries without touching the same lines. Main window untouched.
+- **Drops:** the list's viewport now takes drops itself (a `QTableView` takes none by default; the window got
+  them through the parent chain before). A folder is a run folder (`jobs.sqlite` or `summary.csv`), a project
+  (`.qbproj`), or else the readable files directly in it. Unknown file types go to `open_files`, whose worker
+  gives the "Unsupported file type" message (or Open Babel reads them).
+- **Tests:** `tests/test_gui_clipboard.py` (29) and `tests/test_interchange.py` (+6). A `_FakeClipboard` stands in
+  for the system clipboard (`gui.clipboard._clipboard`), so the copy tests also run where a Windows session has no
+  clipboard; the two tests on the real clipboard still skip there.
+- **Brandon's answers (same day, second commit):**
+  - A ChemDraw paste keeps asking (Import Options) until "Don't ask again". The dialog has a note next to that
+    box and the paste log line ends with where to change it: **Tools > Settings > Import** (the Settings action is
+    in the Tools menu; its tab is "Import"), one constant `gui.import_options.SETTINGS_PATH`.
+  - **Copy molecules** (Ctrl+Shift+C): the selected rows as a tab-separated table (ID, SMILES as entered, Name, the
+    posted field columns the list shows), as text and as `application/x-quantabench-molecules`. Paste tries that
+    format first and reads it with ID and SMILES as the id and structure columns (a plain table would take a
+    posted DTXSID column as the id: `inputs.ID_COLUMNS` puts it first). A copy that went through Excel is text
+    only and reads as any table.
+  - The key: the Analyze table already uses Ctrl+Shift+C (copy with column titles, in `SheetView.keyPressEvent`).
+    A window-wide action would take the key from it, so Copy molecules is a `WidgetWithChildrenShortcut` on the
+    Molecules dock. Checked under xvfb with QTest key clicks: Ctrl+Shift+C in the list copies molecules, in the
+    Analyze table it still copies cells with titles, Ctrl+C in the list is still Qt's cell copy.
+  - For UI-9's keymap: every action is a QAction with an `objectName` (`edit.paste`, `edit.copy_molecules`,
+    `edit.copy_as.<kind>`), in `win.actions_by_name`, default keys in `clipboard.DEFAULT_KEYS` only. The Molecules
+    box's Ctrl+V check now compares the key with the paste action's current shortcuts, so a rebinding moves it too.

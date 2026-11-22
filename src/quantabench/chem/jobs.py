@@ -67,7 +67,8 @@ MAX_CRASHES = 2                    # a molecule that killed the process this oft
 # silently mix two protocols in one table, so it is refused unless forced. Threads, GPU, output
 # formats and the output folder only change speed or which files are written.
 SCIENCE_FIELDS = (
-    "method", "ph", "protonate", "protonation_method", "keep_largest_fragment", "max_conformers",
+    "method", "ph", "protonate", "protonation_method", "keep_largest_fragment", "strip_water", "strip_acids",
+    "strip_counterions", "ring_conformers", "max_conformers",
     "refine_top", "energy_window_kcal", "rmsd_threshold", "fmax", "max_steps", "optimizer",
     "temperature_k", "xtb_properties", "seed", "frequencies", "freq_hessian", "symmetry_number", "freq_qrrho",
     "freq_imag_retries", "solvent", "conformer_search", "crest_method", "crest_quick", "crest_min_rotors",

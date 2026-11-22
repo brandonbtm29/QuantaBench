@@ -139,6 +139,16 @@ def _then(first, then):
     return then(first())
 
 
+def _probe_program_versions(names) -> list[str]:
+    """Worker side of ``MainWindow._probe_programs``: probe and cache the versions, and g-xTB's start check."""
+    from ..chem import eng_gxtb, external
+
+    probed = external.probe_versions(names)
+    if "gxtb" in probed:
+        eng_gxtb.available()
+    return probed
+
+
 class MainWindow(QMainWindow):
     #: The selected molecule changed, or its results did (MoleculeResult, or None when not built).
     #: Panels (spectra, surfaces) listen to this instead of reaching into the molecule list.
@@ -152,6 +162,16 @@ class MainWindow(QMainWindow):
     runFolderOpened = Signal(object)
 
     def __init__(self, s: settings_mod.Settings):
+        # No program version probe on the GUI thread while the window is built (ENG-3): a program whose version is not
+        # in the cache on disk yet (the first start, a new or updated program) is probed in a worker, and the engine
+        # lists are relabelled then (_probe_programs).
+        from ..chem import external
+
+        with external.deferred_probes():
+            self._init_window(s)
+        QTimer.singleShot(60, self._probe_programs)
+
+    def _init_window(self, s: settings_mod.Settings) -> None:
         super().__init__()
         self.s = s
         self.report: resources.HardwareReport | None = None
@@ -283,6 +303,9 @@ class MainWindow(QMainWindow):
         find.addWidget(self.status_filter)
         lay.addLayout(find)
         self.mol_list = MoleculeListView(self.model)
+        from . import lookup_menu
+
+        lookup_menu.install(self)                  # right-click: Look up in PubChem, NIST, ... (Settings > Lookups)
         self.mol_list.currentIdChanged.connect(self._on_molecule_selected)
         self.mol_list.currentIdChanged.connect(self._sync_molecule_playback)
         shown = self.mol_list.model()                # the filtered, sorted rows: what the Molecules mode steps
@@ -1323,6 +1346,26 @@ class MainWindow(QMainWindow):
             self.optimizer_info.setText(text)
 
     # ================================================================== hardware
+    #: programs whose version the engine lists' labels need (xtb's minimum, MOPAC 22+, g-xTB's start check)
+    PROBED_PROGRAMS = ("xtb", "crest", "gxtb", "mopac")
+
+    def _probe_programs(self) -> None:
+        """The versions the window was built without (``external.deferred_probes``), in a worker; then the engine
+        lists are relabelled. Nothing runs when every version is cached on disk (every start after the first)."""
+        from ..chem import external
+
+        if self._closing or not external.uncached_versions(self.PROBED_PROGRAMS):
+            return
+        w = workers.FunctionWorker(_probe_program_versions, self.PROBED_PROGRAMS)
+        workers.start(w, self, on_done=self._on_programs_probed,
+                      on_failed=lambda msg: self.log(f"Program version check failed: {msg}"))
+
+    def _on_programs_probed(self, probed) -> None:
+        if probed and not self._closing:
+            self._refresh_engine_lists()
+            if hasattr(self, "rank_info"):
+                self._update_rank_info()
+
     def _detect_hardware(self) -> None:
         """GPU list and the checks that need torch (GFN2's libcint backend), in a child process: the window never
         imports torch just to label them (~500 MB). Engines import it when a run uses them."""

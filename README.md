@@ -152,6 +152,20 @@ quantabench-cli build --file conformers.sdf --same-structures conformers --label
 quantabench-cli build --file set.sdf --import-options "post_fields=true,id_field=CAS_RN"
 ```
 
+**Settings > Build defaults** has the build's own filters, for every input (SMILES, names and files alike): water,
+acids and counter-ions picked by name are stripped before *Keep largest fragment*, so a hydrate's ion pair can be
+computed dry, or a salt's anion kept where the cation is larger. Its *Ring conformers: Thorough* (Spartan's Conformer
+Rules) also searches twist-boats of six-membered rings. Both are science settings, stored with each run:
+
+```bash
+quantabench-cli build "O.[Na+].[O-]C(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --strip water,sodium
+quantabench-cli build "OC1CCCC2CCCCC12" --ring-conformers thorough
+```
+
+Right-click a molecule in the list for **Look up**: PubChem, the NIST WebBook, nmrshiftdb2 and EPA CompTox open in the
+browser with its InChIKey, InChI or CAS RN. Settings > Lookups edits the URL templates (`%inchikey`, `%inchi`, `%cas`,
+`%smiles`, `%name`) and PubChem's cache folder and maximum age.
+
 ## Workspaces
 
 The activity bar on the left switches between five workspaces, each an arrangement of docks around the
@@ -191,7 +205,10 @@ Plot has a ⧉ button for it), and **View > Dock all panels** (Ctrl+Shift+D) bri
 - **Every panel's title bar** has ⧉ (pop out and back) and ✕ (close).
 - **Surfaces** and **Spectra** panels: their settings and explanations fold the same way; the Spectra panel's Normal
   modes table folds so the plot takes the width.
-- **Settings > Compute:** the same folding sections.
+- **Settings > Compute:** the same folding sections, under a line with this computer's cores ("12 cores, 24
+  logical"). *Molecules at once* sets the lanes (Automatic, one at a time, or N); the full lane spec (GPU
+  lanes, threads per lane), GPU linear algebra and dxtb on the GPU are in a folded **Expert** box whose header
+  counts what is not at its default.
 - **The Results dock** shrinks to one row for a molecule with one conformer.
 
 **Build > New job...** (Ctrl+J) submits molecules as a job:

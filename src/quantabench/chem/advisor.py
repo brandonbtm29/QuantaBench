@@ -366,7 +366,8 @@ def _drawn_scan(mol: Chem.Mol) -> tuple[list[int], int, bool, bool]:
     return zs, radicals, isotope, query
 
 
-def _features(inp, ph: float, protonate: bool, method: str, keep_largest: bool) -> _Mol:
+def _features(inp, ph: float, protonate: bool, method: str, keep_largest: bool,
+              strip: standardize.FragmentStrip | None = None) -> _Mol:
     m = _Mol()
     try:
         with rdBase.BlockLogs():
@@ -389,7 +390,7 @@ def _features(inp, ph: float, protonate: bool, method: str, keep_largest: bool) 
                     m.drawn_tags = frozenset({"sulfonamide_nplus"})
                 info: dict = {}
                 prepared, _notes = standardize.prepare(Chem.Mol(drawn), ph if protonate else None, keep_largest,
-                                                       method, info=info)
+                                                       method, info=info, strip=strip)
                 sp = Chem.RemoveHs(prepared)
                 m.removed = tuple(info.get("removed_fragments") or ())
         formal = Chem.GetFormalCharge(sp)
@@ -461,14 +462,17 @@ def _key(inp, opts: tuple) -> tuple:
 
 
 def _options(cfg) -> tuple:
-    return (float(cfg.ph), bool(cfg.protonate), str(cfg.protonation_method or "rules"), bool(cfg.keep_largest_fragment))
+    """What the features depend on: pH, protonation, its method, keep largest fragment and the build filters (the
+    review then reports the species the build computes)."""
+    return (float(cfg.ph), bool(cfg.protonate), str(cfg.protonation_method or "rules"), bool(cfg.keep_largest_fragment),
+            standardize.FragmentStrip.of(cfg, strict=False))
 
 
 def molecule_features(inputs, cfg, progress: Callable[[int, int], None] | None = None,
                       should_stop: Callable[[], bool] | None = None) -> list[tuple[str, _Mol]]:
     """(id, features) of every input, from the cache when the same structure was profiled with the same settings."""
     opts = _options(cfg)
-    ph, protonate, method, keep = opts
+    ph, protonate, method, keep, strip = opts
     out = []
     n = len(inputs)
     for i, inp in enumerate(inputs):
@@ -477,7 +481,7 @@ def molecule_features(inputs, cfg, progress: Callable[[int, int], None] | None =
         key = _key(inp, opts)
         m = _CACHE.get(key)
         if m is None:
-            m = _features(inp, ph, protonate, method, keep)
+            m = _features(inp, ph, protonate, method, keep, strip)
             if len(_CACHE) >= _CACHE_MAX:
                 _CACHE.clear()
             _CACHE[key] = m
@@ -1984,7 +1988,9 @@ def review(inputs, cfg, *, available: Iterable[str] | None = None, max_ids: int 
 
     settings = {"phase": ctx.phase, "solvent": ctx.solvent, "method": cfg.method, "ph": cfg.ph,
                 "protonate": cfg.protonate, "keep_largest_fragment": cfg.keep_largest_fragment,
-                "conformer_search": cfg.conformer_search, "crest_method": cfg.crest_method,
+                "strip": standardize.FragmentStrip.of(cfg, strict=False).label(),
+                "conformer_search": cfg.conformer_search, "ring_conformers": cfg.ring_conformers,
+                "crest_method": cfg.crest_method,
                 "crest_min_rotors": cfg.crest_min_rotors, "crest_with_rdkit": cfg.crest_with_rdkit,
                 "max_conformers": cfg.max_conformers, "refine_top": cfg.refine_top,
                 "energy_window_kcal": cfg.energy_window_kcal, "rank_method": cfg.rank_method,

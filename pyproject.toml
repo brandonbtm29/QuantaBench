@@ -127,3 +127,5 @@ ignore = [
 # wsl.exe runs its shell steps; /dev/shm here is WSL's, and every job folder in it is made by mktemp -d
 "src/quantabench/chem/wsl_scratch.py" = ["S603", "S607", "S108"]
 "src/quantabench/chem/qm.py" = ["S603", "S607"]
+# starts those programs in kill-on-close jobs and probes them (ENG-3)
+"src/quantabench/proctree.py" = ["S603", "S607"]

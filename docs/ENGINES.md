@@ -151,6 +151,14 @@ What the standardization does with research records (every step is in the molecu
   `removed_fragments` column (`[Na+]`, `2 x [Br-]`, a second copy of the parent, a co-crystallized acid).
   Bonds to alkali and alkaline-earth metals are ionic and are disconnected first (`CC(=O)O[Na]` is
   sodium acetate). Turn off *keep largest fragment* to compute the whole record instead.
+- **Build filters** (Settings > Build defaults > Fragments, `build --strip`; Spartan's Import Filters): water, small
+  neutral inorganic acids (HCl, HBr, HI, HF, ...) and counter-ions picked by name (`sodium`, `tetrabutylammonium`,
+  `chloride`, ... in `standardize.NAMED_COUNTERIONS`; a name also matches the neutral form, triethylamine for
+  triethylammonium) are removed before the largest-fragment rule, for every input. They matter where that rule would
+  not remove the fragment: with *keep largest fragment* off (a hydrate's ion pair is computed without its water), or
+  where the counter-ion is the larger ion (tetrabutylammonium trifluoroacetate computes the trifluoroacetate). The
+  notes say "stripped before the largest-fragment rule (build filters): O (water), [Na+] (sodium)", and
+  `removed_fragments` lists them first. Off by default; science settings (stored with the run, sent to workers).
 - **Metal salts.** A bondless Al³⁺, Zn²⁺, Fe²⁺/Fe³⁺ or Cu²⁺ cation (as well as Na⁺, K⁺, Ca²⁺, Mg²⁺,
   Ba²⁺, Sr²⁺) is a counter-ion when the rest of the record is an organic ion and counter-ions: fosetyl-Al
   (`[Al+3]` + 3 ethyl phosphonates) computes one ethyl phosphonate anion, and `removed_fragments` lists
@@ -326,8 +334,8 @@ not tried again in the run; `--retry-failed` (with a higher limit, or 0) redoes 
 - **dxtb.** `chem/torch_compat.py` runs the dense linear algebra a GPU build lacks (Cholesky and solve
   on AMD's Windows ROCm wheel; everything, in float64, on MPS) on the CPU inside a dxtb call. Results
   match the CPU, but dxtb 0.4 is 5-8x slower on the workstation's GPU than on its CPU (host synchronizations in its
-  overlap integrals), so `dxtb_device()` keeps dxtb on the CPU unless Settings > Compute > "dxtb on the
-  GPU" (or `QUANTABENCH_DXTB_GPU`) is `on`. `QUANTABENCH_LINALG=auto|cpu|device` chooses what is routed.
+  overlap integrals), so `dxtb_device()` keeps dxtb on the CPU unless Settings > Compute > Expert > "dxtb on
+  the GPU" (or `QUANTABENCH_DXTB_GPU`) is `on`. `QUANTABENCH_LINALG=auto|cpu|device` chooses what is routed.
 
 ## Finding programs
 
@@ -335,6 +343,18 @@ QuantaBench looks, in this order, at: Settings > Engines (a path, or `wsl:/full/
 the `QUANTABENCH_XTB` / `QUANTABENCH_CREST` / `QUANTABENCH_MOPAC` / `QUANTABENCH_PSI4_PYTHON`
 environment variables, PATH, the running Python environment, and conda/mamba environments in the usual
 places (`~/miniforge3/envs/*`, `~/mambaforge`, `~/miniconda3`, `~/micromamba`, ...).
+
+**Several conda environments with the program:** the newest version wins, read from each environment's
+`conda-meta/<package>-<version>-<build>.json` record (nothing runs; the version cache for a program without one).
+Equal versions, or no known version, keep the order above. `doctor` says so: `conda env qb-tools (newest of 3
+environments: 6.7.1)`. Before ENG-3 (2026-11-22) the first environment in alphabetical order won.
+
+**Version probes** (`xtb --version`, `python -c "import psi4"`, g-xTB's start check, `lmp -h`) write their output to
+temporary files and end the whole process tree when they finish or time out, so a launcher's child that keeps the
+output open (a conda `.bat`, a venv's `python.exe`, wsl.exe's own helpers) cannot make them wait past their timeout.
+The versions are cached on disk by path, size and modification time. The GUI builds its window without probing: on
+the first start (or after a program changed) a background worker probes and relabels the engine lists; until then a
+program whose version is not known yet is not ruled out.
 
 **Paths per machine.** The settings file is shared by every machine (SyncThing), but a program's path
 usually belongs to one: the workstation runs CREST as `wsl:/home/<you>/micromamba/envs/qb-tools/bin/crest`, the Mac
@@ -720,6 +740,26 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     rotor count is RDKit's rotatable bonds of the structure with explicit hydrogens (O-H and N-H rotors count,
     methyl and CF3 rotors do not), as the timing rows record it.
 - **Run priority and free threads** apply to every lane and to the CREST threads they borrow (next section).
+
+## Programs never outlive QuantaBench (ENG-3)
+
+A run's programs end with the QuantaBench process that started them, however it ends: a crash, End task, a lane
+killed at its time limit, a closed terminal.
+
+| | how | what ends them |
+|---|---|---|
+| Windows | every program `run_program` starts (xtb, CREST's wsl.exe, MOPAC, Psi4, g-xTB) and tblite's CPCM helper is created suspended, put in a job object of its own with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, then resumed; whatever it starts joins the job. The lanes are in one such job of their parent (the GUI or the CLI), and each lane's programs in jobs nested in it | Windows, when the last handle to the job closes: only QuantaBench holds it. A cancel or a time limit ends the whole job, also a child whose parent has already exited (which `taskkill /T` misses) |
+| a `wsl:` program (CREST) | wsl.exe and its helpers (a second wsl.exe, wslhost.exe, conhost.exe) are in the job. Inside WSL the program runs under a guard script, with wsl.exe's stdin as its lifeline (a pipe QuantaBench holds open and never writes) | when wsl.exe ends, WSL hangs up the Linux session (SIGHUP), which ends an ordinary program. The guard's watchdog then kills the program's whole process group (SIGTERM, SIGKILL 2 s later): programs that ignore SIGHUP, CREST's xtb. It does the same when the lifeline reaches EOF (QuantaBench died but wsl.exe lived on). When the program ends, the guard sends SIGTERM to what it left in its group (CREST's xtb after a cancel) and exits with the program's code |
+| Linux, macOS | programs run in their own session | a cancel or a time limit kills the process group; a lane's programs are recorded and killed by its parent when the lane dies |
+
+- The job sets no other limit: priority, affinity and memory are as before (Run priority and free threads, below).
+- Measured on the workstation (WSL 2, kernel 6.18): ending wsl.exe ends the Linux processes of its session; a process
+  that ignores SIGHUP (`nohup`) or runs in another session (`setsid`) did not end before the guard. Through the guard,
+  a program and its child that both ignore SIGHUP end when the GUI is killed outright, with the job and with only the
+  lifeline (`tests/test_proctree.py`).
+- **Limits.** On Linux and macOS there are no job objects: a GUI or CLI killed outright (SIGKILL, a crash) still leaves
+  a program that is running there until it ends. Inside WSL, a process that starts a session of its own (`setsid`, a
+  daemon) is outside the guard's group; neither CREST nor xtb does.
 
 ## Run priority and free threads
 
@@ -1193,9 +1233,11 @@ quantabench-cli pubchem lookup 335-67-1 --experimental                          
   User-Agent is `QuantaBench/<version> (+https://github.com/brandonbtm29/QuantaBench)`, with no email.
   Requests are batched where PUG REST allows: properties 100 CIDs a request, synonyms and registry numbers 50.
 - **Cache:** every answer (200, 404, 400) goes into one SQLite file, by default the per-machine cache folder
-  (`QUANTABENCH_CACHE_DIR/pubchem/pubchem_cache.sqlite`; `--cache DIR` elsewhere). An interrupted run (Ctrl+C,
-  network loss: it stops after 10 failures in a row) resumes from where it stopped when run again, and
-  `--offline` never touches the network. Keep the cache out of SyncThing unless only one machine writes it.
+  (`QUANTABENCH_CACHE_DIR/pubchem/pubchem_cache.sqlite`; Settings > Lookups > PubChem cache > Folder, or
+  `--cache DIR`, elsewhere). An interrupted run (Ctrl+C, network loss: it stops after 10 failures in a row) resumes
+  from where it stopped when run again, and `--offline` never touches the network. Keep the cache out of SyncThing
+  unless only one machine writes it. Settings > Lookups > Maximum age (`lookups.pubchem_max_age_days`, 0 = no
+  limit) makes an older answer a miss: it is asked again and replaced; `--offline` still reads it.
 - **Requests for a list of N molecules** with an empty cache: about N lookups + N/100 + 2·N/50 batches, plus N
   PUG View records with `--experimental`. For 14,000 CAS RNs that is about 14,700 requests (1 h at 4/s) without
   `--experimental` and 28,700 (2 h) with it, while PubChem reports Green; up to 4x longer under Red.

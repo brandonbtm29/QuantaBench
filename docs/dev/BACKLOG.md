@@ -848,8 +848,23 @@ Follow-ups (ready):
 - Acceptance: tests that each preset produces the right `BuildConfig`; queue runs jobs in order with
   cancellation; screenshot.
 
-## RES-1: MD front-end survey and Simulate workspace design · ready
+## RES-1: MD front-end survey and Simulate workspace design · in-PR 2026-11-22 (branch `feat/res-1-simulate-design`)
 Depends on: none (research only; can run any night).
+- 2026-11-22: `docs/SIMULATE_DESIGN.md`: the survey of 9 tools plus OpenFF Interchange/NAGL and RadonPy (a table over
+  the six aspects, what to borrow and avoid), the workspace flow as text mockups, the data model (System,
+  Parameterization, Protocol/Stage, Run/Segment, Telemetry, Trajectory, Analysis) and how it fits UI-2, UI-5 and
+  the workers, engines with GPU support on AMD, Apple and NVIDIA, the force-field routes, protocol templates,
+  monitoring and analysis, v1/v2/v3, risks and 12 open questions. Grounded in the MD pilots' lessons.
+- 2026-11-22, Brandon's answers added to the doc (marked "(Brandon, 2026-11-22)"):
+  - v1 stays on this computer; splitting across machines (replicas, hand-offs through data files, GPU + CPU in one
+    machine) is v2, gated on a consistency test with pilot A (§6).
+  - A COMSOL-like parameterization builder: a force-field node and a resolution per component, global physics nodes
+    (the LJ cutoff or "screening length", long-range dispersion with the automatic tail, electrostatics),
+    compatibility checks, benchmark-backed defaults (§9.1).
+  - LigParGen is allowed.
+  - σ by default: 16 Å + tail on the GPU; the C6F14 target stays Freire 2006 with no offsets.
+  - A resource-aware scheduler (§7, SCHED-3).
+  - Where MD runs live is still open; the facts and a recommendation are in §5.
 - Survey how LAMMPS-GUI, VMD + QwikMD, CHARMM-GUI, OpenMM-Setup, Materials Studio Forcite/Amorphous
   Cell, MAPS, SAMSON, Packmol/moltemplate and OVITO handle: system building, force-field assignment,
   protocol setup, run control, live monitoring, trajectory analysis.
@@ -858,6 +873,43 @@ Depends on: none (research only; can run any night).
   No code. Cite sources.
 
 ## SIM-1: Simulate workspace v1 · blocked (needs RES-1 design approved by Brandon)
+- The design is `docs/SIMULATE_DESIGN.md` (RES-1); it waits for Brandon's approval and his answers to its open
+  questions (DEC-1). Proposed v1 there, two PRs: MD runs as jobs (a run supervisor with segments, pause through a
+  STOP file, resume, live telemetry, `md run/status/pause/resume`, the liquid slab's default dispersion `cutoff16`),
+  then the Simulate panel for the liquid slab and the rigid pull on this computer, with the parameterization
+  builder's minimal version (one component node, the cutoff and electrostatics nodes, the checks).
+
+## BUILD-CLEAN: "Clean up" for a molecule's 2D layout and 3D structure · ready
+Brandon (2026-11-22): "When a molecule is built, do we currently have an option where we can 'clean up' the structure
+like ChemDraw?"
+- Today:
+  - 3D: the model kit's edit model has Minimize (MMFF; `chem.edit.Minimize`, UI-7), and its GUI button comes with the
+    model kit's build mode (PR #44).
+  - 2D: the 2D view lays every molecule out automatically (CoordGen, or a pinned zig-zag for long chains;
+    `gui.viewer2d`), but no command redoes the layout of the molecule shown. The Schrödinger sketcher has its own
+    Clean Up (`chem.sketch` refers to it).
+- Add **Clean up** in three places:
+  - the Molecules dock's context menu;
+  - the model kit;
+  - next to the Sketch dock's buttons.
+
+  It offers 2D (re-run the layout with RDKit's CoordGen, the zig-zag rule kept) and 3D (MMFF minimize, UFF where MMFF
+  has no parameters, as one undoable command). Selected atoms can be held fixed.
+- Acceptance: tests that a messy 2D drawing and a distorted 3D geometry come back clean with the connectivity and
+  stereo unchanged; screenshot.
+
+## SCHED-3: A scheduler that runs GPU-bound and CPU-bound jobs side by side · ready (design: SIMULATE_DESIGN.md §7; MD jobs after SIM-1 PR 1)
+Brandon (2026-11-22): "Maybe we can include a job queue or scheduler? If one type of job is better suited for the CPU
+and another for a GPU, then we can tell the user that both jobs can run efficiently at the same time."
+- **A resource profile per job:** CPU threads and how busy they are, the GPU and its memory, RAM, disk I/O. It comes
+  from the run timings, MON-1's samples, MD-BENCH-1's ns/day and the method.
+- **A ledger per machine** (threads within the budget, one GPU-heavy job per GPU, RAM headroom, one heavy-disk job).
+  The queue starts a job when its profile fits beside the running ones, and says so ("can run side by side"), with
+  the measured slowdown once there is one.
+- **GPU MD is not GPU-only:** in the pilots' GPU runs, PPPM and the bonded terms on the CPU took 75-86 % of the loop
+  time (pilot B, 6 threads; pilot C, 4 threads), so its profile is the GPU plus 4-6 threads.
+- Acceptance: a GPU job (AIMNet2 batch or GPU MD) and a CPU job (CREST or xTB lanes) start together on one machine
+  within its budget; the Jobs dock shows each one's share and the note; tests of the ledger with stand-in profiles.
 
 ## FIX-1: Windows CI green · done 2026-11-05
 - 2026-11-05: first green CI on Windows, Linux and macOS (PLAT-2). The failures since then were separate bugs,
@@ -1037,7 +1089,7 @@ not try to match Spartan exactly.
 - Follow-ups: an entry for each new engine or QM list item (the tests ask for it); entries for the frequency and
   thermochemistry choices (qRRHO, symmetry number) and the Properties page if those raise questions.
 
-## ENG-3: Engine follow-ups · ready
+## ENG-3: Engine follow-ups · ready (the robustness part: in-PR 2026-11-22, branch `feat/eng-3-process-robustness`)
 - `vibrations.from_hessian(...)`: make the second half of `analyze()` public so `qm.vibrations_from_hessian`
   stops duplicating it (see the QM builder's suggested signature in DEVLOG 2026-11-01).
 - QM charges (MBIS/Löwdin) as an option for the exported conformer charges (extxyz, LAMMPS data).
@@ -1051,13 +1103,38 @@ not try to match Spartan exactly.
   Spartan's surface, recorded as `qm_surf_iso_au`). Water HF/6-31G*: σ²tot 478 (0.002) vs 345 (0.001).
 - Psi4 log: write the MBIS free-atom and finite-field SCFs to a second output file, so cclib can re-import
   `<id>_qm_log.out` (today it stops at the free-atom UKS "Beta Occupied" block).
-- Review 2026-11-01 leftovers (robustness): a Windows Job Object (kill-on-close) so a hard GUI crash cannot
-  orphan xtb/CREST/Psi4; `subprocess.run(timeout=...)` in version probes can still block on Windows if a
-  launcher's child keeps the pipe open (use Popen + kill); the conda scan takes the first env alphabetically,
-  not the newest program version; failed-run scratch folders are kept by design but never pruned; the first
-  GUI start still probes local program versions on the GUI thread (cached on disk afterwards).
+- Review 2026-11-01 leftovers (robustness) · in-PR 2026-11-22 (branch `feat/eng-3-process-robustness`;
+  `quantabench.proctree`, docs/ENGINES.md "Programs never outlive QuantaBench"):
+  - Windows: every program `run_program` starts (and tblite's CPCM helper) is created suspended, put in a
+    kill-on-close job object of its own, then resumed; lanes are in a kill-on-close job of their parent. A hard GUI
+    or CLI crash ends them all; a cancel ends the whole job (also children whose parent has exited).
+  - `wsl:` programs: wsl.exe (and its helpers) are in the job; inside WSL a guard script kills the program's process
+    group on WSL's hang-up or when wsl.exe's stdin (the lifeline) reaches EOF, and what the program left in its group
+    when it ends (CREST's xtb after a cancel; ENG-2's note).
+  - Version probes (`--version`, `python -c "import psi4"`, g-xTB's start check, `lmp -h`) write to temporary files and
+    kill the whole tree: bounded by their timeout whatever a launcher's child does with the output.
+  - The conda scan takes the newest version (conda-meta, nothing runs), not the first environment alphabetically.
+  - The GUI builds its window without probing (`external.deferred_probes`); a worker probes the versions not cached
+    on disk yet and relabels the engine lists.
+  - Already done by SCRATCH-1 (2026-11-13): failed-run scratch folders go 3 days after their process ended.
+  - Still open: POSIX has no job objects: a GUI or CLI killed outright (SIGKILL, a crash) leaves a running native
+    program running there until it ends (cancels, time limits and dead lanes are covered). A Linux process inside WSL
+    that starts its own session (setsid, a daemon) is outside the guard's group (neither CREST nor xtb does).
 - MOPAC COSMO: energies step as surface segments switch (CF3COO⁻ in water: finite-difference forces off by
   0.3 eV/Å at h = 1 mÅ); consider running MOPAC frequencies in the gas phase automatically.
+
+## TEST-WIN-1: The full suite on the workstation: failures that are not the code's · ready
+Found 2026-11-22 (ENG-3), each also on `main`:
+- `test_eng_mopac.py::test_real_pipeline_native_cosmo` leaves this process's tblite CPCM helper running (it lives
+  until exit, `chem.cpcm_worker`), so the 14 `test_lanes.py` tests that check for no child processes fail after it
+  when the real MOPAC is installed. Close the helpers at the end of that test, or count them out in `lane_processes`.
+- The same two real-MOPAC tests miss their reference values with MOPAC 23.2.5 (water dipole 1.347 vs 1.259 D; the
+  COSMO pipeline's 3.22 vs 3.0 ± 0.2).
+- With `QT_QPA_PLATFORM=offscreen`, `tests/test_gui.py` crashes the process (access violation in pyvistaqt's
+  `QtInteractor` initialize); with `PYVISTA_OFF_SCREEN=true` as well, 3 tests that need a rendered view fail. RUNBOOK
+  or conftest could say how to run the suite there.
+- `test_vibrations.py` (3) stop at the memory guard late in a full run (2.9 GB in use against a 2.8 GB budget); alone
+  they pass.
 
 ## VAL-1: Validation tooling against Spartan · done 2026-11-05 (the 300-molecule run is done; three data questions need-Brandon)
 Done (docs/VALIDATION.md):
@@ -1271,7 +1348,7 @@ Open (needs-Brandon):
   Spartan's geometries would compare those (needs ESP/density-surface pairs in `validate`: QSAR_ELPOT_MIN/MAX,
   QSAR_ELPOT_AREA/VOLUME, polar areas vs `qm_surf_*`).
 
-## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · ready (Surfaces & radii, Display done 2026-11-06)
+## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · in-PR (Surfaces & radii, Display done 2026-11-06; the next tabs in SETTINGS-1 PRs)
 Review of Spartan '24's eleven tabs: Brandon's Claude Doc "Spartan Preferences review and QuantaBench settings plan".
 Rule: a setting that changes a computed value is a science setting (`jobs.SCIENCE_FIELDS`, sent to grid
 workers by `dist.worker.validate_config`); display settings never rename or rescale exported columns.
@@ -1285,12 +1362,22 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
   raw descriptor list keep the column units; orbital energies stay in eV.
 - Next, one tab per change, each with a GUI test like `tests/test_gui_settings_surfaces.py`:
   - **Compute** (Spartan's Jobs): an Expert box hiding the lane spec, GPU linear algebra and dxtb-on-GPU; a
-    "N cores, M logical" line.
+    "N cores, M logical" line. In PR (`feat/settings-1-compute`, 2026-11-22): *Molecules at once* (Automatic, one at
+    a time, N) and the Expert box's lane spec edit this machine's one spec (`Settings.lanes_for`, as the Machines dock
+    and the job dialog); the tab's per-machine changes are stamped for the SyncThing merge. Not science settings.
   - **Build defaults** (Settings > Import Filters, Conformer Rules): strip water, HCl and named counter-ions
-    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search.
+    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search. In PR
+    (`feat/settings-1-build-defaults`, 2026-11-22): `strip_water`, `strip_acids`, `strip_counterions` (names of
+    `standardize.NAMED_COUNTERIONS`) and `ring_conformers` ("normal" | "thorough": twist-boats of six-membered rings,
+    Spartan's "Thorough"), all science fields, off/normal by default; `build --strip`, `--ring-conformers`. Open:
+    whether salts should keep their counter-ion as a separate entry (the settings plan's question).
   - **Lookups** (Databases, URLs): URL templates with `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`
     (PubChem, NIST WebBook by CAS, nmrshiftdb, EPA CompTox), opened from the molecule list; PubChem cache folder
-    and maximum age; a folder of reference tables with experimental values.
+    and maximum age; a folder of reference tables with experimental values. In PR (`feat/settings-1-lookups`,
+    2026-11-22): the templates (`settings.lookups.urls`, `quantabench.lookups`), the molecule list's right-click
+    *Look up* menu, the cache folder and maximum age (`lookups.pubchem_cache_dir`, `pubchem_max_age_days`). Left: the
+    folder of reference tables; the nmrshiftdb2 template (its documented 13C JCAMP export) is not checked against
+    the site.
   - **Machines** (Available Servers, Embedded Server): the `dist` settings (workers, port, bind, token), now
     only in settings.json.
 - Later: **Molecule display** (default 3D style, atom labels such as charges and exposed area, surface style; the

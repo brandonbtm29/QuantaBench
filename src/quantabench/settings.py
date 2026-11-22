@@ -61,7 +61,14 @@ class BuildDefaults:
     ph: float = 7.0
     protonate: bool = True
     keep_largest_fragment: bool = True
+    # build filters (science settings, SETTINGS-1; Spartan's Import Filters): removed before the largest-fragment rule
+    strip_water: bool = False
+    strip_acids: bool = False         # HCl, HBr, HI, HF and other small neutral inorganic fragments
+    strip_counterions: str = ""       # names of chem.standardize.NAMED_COUNTERIONS, comma-separated: "sodium,potassium"
     max_conformers: int = 50
+    # ring conformers of the RDKit search (Spartan's Conformer Rules): "normal" | "thorough" (also twist-boats of
+    # saturated six-membered rings; chem.conformers.twist_boats)
+    ring_conformers: str = "normal"
     energy_window_kcal: float = 6.0
     rmsd_threshold: float = 0.5
     refine_method: str = "auto"       # "none" | "mmff" | "gfn1-xtb" | "gfn2-xtb" | "aimnet2" | "auto"
@@ -198,6 +205,29 @@ class SensorSettings:
     machine: dict[str, dict] = field(default_factory=dict)   # machine name -> {enabled, interval_s, lhm_url}
 
 
+#: The web lookups a new settings file has (Settings > Lookups; ``quantabench.lookups`` expands the placeholders)
+DEFAULT_LOOKUP_URLS: tuple[dict[str, str], ...] = (
+    {"name": "PubChem", "url": "https://pubchem.ncbi.nlm.nih.gov/#query=%inchikey"},
+    {"name": "NIST WebBook", "url": "https://webbook.nist.gov/cgi/cbook.cgi?ID=%cas&Units=SI"},
+    {"name": "nmrshiftdb2 (13C spectrum, JCAMP-DX)",
+     "url": "https://www.nmrshiftdb.org/NmrshiftdbServlet?nmrshiftdbaction=exportcmlbyinchi&inchi=%inchi"
+            "&spectrumtype=13C&format=jcamp"},
+    {"name": "EPA CompTox", "url": "https://comptox.epa.gov/dashboard/dsstoxdb/results?search=%inchikey"},
+)
+
+
+@dataclass
+class LookupSettings:
+    """Web lookups (Spartan's Preferences > URLs and Databases; ``quantabench.lookups``): the URL templates of the
+    molecule list's *Look up* menu, with ``%inchikey``, ``%inchi``, ``%cas``, ``%smiles`` and ``%name``, and PubChem's
+    response cache (``chem.pubchem``). Not science settings: they change no computed value."""
+    urls: list[dict] = field(default_factory=lambda: [dict(u) for u in DEFAULT_LOOKUP_URLS])   # [{"name", "url"}]
+    # PubChem's response cache: "" = this machine's cache folder (QUANTABENCH_CACHE_DIR, else the platform's); a path
+    # under ~ works on every machine. SQLite: keep it out of a synced folder
+    pubchem_cache_dir: str = ""
+    pubchem_max_age_days: float = 0.0     # a cached response older than this is fetched again (0 = kept for ever)
+
+
 #: per-machine sensor keys and their types (``SensorSettings.machine`` entries)
 SENSOR_KEYS: dict[str, type] = {"enabled": bool, "interval_s": float, "lhm_url": str}
 #: per-machine machine-control keys (``DistSettings.machine_control`` entries, DIST-7) and their types
@@ -217,6 +247,7 @@ class Settings:
     display: DisplaySettings = field(default_factory=DisplaySettings)
     import_: ImportSettings = field(default_factory=ImportSettings)     # "import" is a Python keyword
     sensors: SensorSettings = field(default_factory=SensorSettings)
+    lookups: LookupSettings = field(default_factory=LookupSettings)
     recent_files: list[str] = field(default_factory=list)
     # the job dialog's own recipes (UI-5, chem.recipes): {"name", "description", "task", "changes": {BuildConfig field:
     # value}}; entries that are not recipes are skipped when read
