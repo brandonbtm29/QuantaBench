@@ -14,6 +14,7 @@ import time
 import numpy as np
 import pytest
 from conftest import HAS_DISPLAY, PFOA
+from PySide6.QtGui import QAction
 
 pytest.importorskip("PySide6")
 pytest.importorskip("pyvistaqt")
@@ -123,9 +124,21 @@ def test_dock_mode_action_and_undo_menu(win):
     assert "modelkit" in win.workspaces.visible_docks()
     edit = next(a.menu() for a in win.menuBar().actions() if a.text().replace("&", "") == "Edit")
     assert edit.actions()[:2] == [win.a_undo, win.a_redo]
-    assert win.a_undo.shortcut() == QKeySequence("Ctrl+Z") and QKeySequence("Ctrl+Y") in win.a_redo.shortcuts()
+    assert QKeySequence(QKeySequence.StandardKey.Undo) in win.a_undo.shortcuts()
+    assert QKeySequence("Ctrl+Y") in win.a_redo.shortcuts()
     assert not win.a_undo.isEnabled() and not win.model_kit.active and not win.model_kit.b_add.isEnabled()
-    assert len(win.model_kit.atom_buttons) == 19 and win.model_kit.atom_buttons["C sp3"].isChecked()
+    # named actions, with their default keys from one place (gui.action_ids), for a rebinding page
+    from quantabench.gui import action_ids
+
+    for name in action_ids.DEFAULTS:
+        a = win.findChild(QAction, name)
+        assert a is not None, name
+        assert a.shortcuts() == action_ids.shortcuts(name), name
+    assert win.mode_actions["build"].objectName() == "view.mode_build" and win.a_undo.objectName() == "edit.undo"
+    kit = win.model_kit
+    assert kit.element_buttons["C"].isChecked() and kit.choice.key == "C sp3"
+    assert [b.text() for b in kit.geometry_buttons] == ["tetrahedral", "trig. planar", "linear"]
+    assert kit.geometry_buttons[0].isChecked() and "Fe" in kit.table_buttons and not kit.table_buttons["Ar"].isEnabled()
 
 
 def test_build_mode_starts_an_edit_and_owns_the_views(win):
@@ -247,26 +260,27 @@ def test_groups_rings_pfas_and_text(win, dialogs):
     kit = win.model_kit
     kit.choose("C sp3")
     kit.click_space()
-    assert kit.atom_buttons["C sp3"].isChecked()
+    assert kit.element_buttons["C"].isChecked() and kit.geometry_buttons[0].isChecked()
     kit.choose("COOH")
     placed = kit.click_stub(_rows(kit, 0)[0])
-    assert placed is not None and not any(b.isChecked() for b in kit.atom_buttons.values())
+    assert placed is not None and not any(b.isChecked() for b in kit.geometry_buttons)
     assert kit.model.to_smiles() == "CC(=O)O"
     kit.choose("benzene")
     kit.click_stub(_rows(kit, 0)[0])
     kit.choose("trifluoromethyl")
     kit.click_stub(_rows(kit, 0)[0])
     assert kit.model.to_smiles(isomeric=False) == "O=C(O)C(c1ccccc1)C(F)(F)F"   # a stereocentre now
-    # the PFAS menu's (CF2)n uses the n box; the menus hold the library's groups and rings
+    # the PFAS pieces' (CF2)n uses the n box; the menus hold the library's groups, rings and PFAS pieces
     kit.n_box.setValue(3)
-    pfas = kit.menus["PFAS"]
+    pfas = kit.menus["PFAS pieces"]
     next(a for a in pfas.actions() if a.text().startswith("(CF2)n")).trigger()
     assert kit.choice.caption == "(CF2)3"
-    labels = {a.text().split("  ")[0] for a in kit.menus["Groups"].actions()}
-    assert {"COOH", "COO-", "SO3-", "SO2NH2", "COO", "CONH", "NO2", "OPO3H2", "CF3"} <= labels
-    rings = " ".join(a.text() for a in kit.menus["Rings"].actions())
+    assert set(kit.menus) == {"Functional groups", "Ring systems", "Small substituents", "PFAS pieces"}
+    labels = {a.text().split("  ")[0] for a in kit.menus["Functional groups"].actions()}
+    assert {"COOH", "COO-", "SO3-", "SO2NH2", "COO", "CONH", "NO2", "OPO3H2"} <= labels
+    assert "CF3" in {a.text().split("  ")[0] for a in pfas.actions()}
+    rings = " ".join(a.text() for a in kit.menus["Ring systems"].actions())
     assert all(r in rings for r in ("phenyl", "cyclohexyl", "pyridyl", "cyclopentyl", "furanyl", "thiophenyl"))
-    assert {a.text() for a in kit.menus["More"].actions()} >= {"N+ sp3", "O-", "S(VI)", "P(V)"}
     # SMILES and InChI from the text box
     frag = kit.use_text("[*:1]C#N")
     assert frag is not None and kit.choice is frag
@@ -277,6 +291,63 @@ def test_groups_rings_pfas_and_text(win, dialogs):
     assert kit.new() and dialogs and dialogs[-1][0] == "New"
     kit.choose("sulfonate")
     assert kit.click_space() is not None and "[O-]" in kit.model.to_smiles() and kit.model.problems() == []
+
+
+# ====================================================================== element and geometry pickers
+def test_element_geometry_charge_and_bond_pickers(win):
+    kit = win.model_kit
+    win.set_view_mode("build")
+    kit.element_buttons["N"].click()                       # element first ...
+    assert kit.element == "N" and [b.text() for b in kit.geometry_buttons] == ["pyramidal", "bent", "terminal"]
+    assert kit.choice.key == "N sp3"
+    kit.geometry_buttons[1].click()                        # ... then its geometry
+    assert kit.choice.key == "N sp2" and kit.geometry_buttons[1].isChecked()
+    kit.charge_box.setCurrentIndex(kit.charge_box.findData(1))     # N+: the geometries follow the charge
+    assert kit.choice.charge == 1 and kit.choice.hyb == "sp2"
+    assert [b.text() for b in kit.geometry_buttons] == ["tetrahedral", "trig. planar", "linear"]
+    kit.charge_box.setCurrentIndex(kit.charge_box.findData(0))
+    # a carbonyl O is O, terminal, by a double bond; the named "=O" sets the same pickers
+    kit.element_buttons["O"].click()
+    kit.choose_geometry("sp2")
+    kit.bond_box.setCurrentIndex(kit.bond_box.findData(2))
+    assert kit.choice.symbol == "O" and kit.choice.hyb == "sp2" and kit.choice.bond_order == 2
+    kit.choose("C sp2")
+    kit.click_space()
+    kit.choose("=O")
+    assert kit.element == "O" and kit.bond_box.currentData() == 2 and kit.geometry.hyb == "sp2"
+    kit.click_stub(_rows(kit, 0)[0])
+    kit.choose("S(VI)")                                     # a higher valence is a geometry of its own
+    assert kit.element == "S" and kit.geometry.valence == 6 and kit.geometry_buttons[5].isChecked()
+    assert kit.geometry_buttons[5].text() == "tetrahedral (6)"
+    kit.table_buttons["Se"].click()                         # from the periodic table: the shape is kept
+    assert kit.element == "Se" and kit.element_buttons["S"].isChecked() is False and kit.choice.valence == 6
+    kit.charge_box.setCurrentIndex(kit.charge_box.findData(1))
+    kit.element_buttons["H"].click()
+    assert kit.geometry is None and "no geometry" in kit.message                # H+: nothing to build
+    kit.charge_box.setCurrentIndex(kit.charge_box.findData(0))
+    assert kit.choice.key == "H"
+
+
+def test_metal_complex_built_in_the_gui_and_minimized_with_uff(win):
+    """Cisplatin from the periodic table: Pt square planar, two Cl and two N; Minimize uses UFF and says why."""
+    kit = win.model_kit
+    win.set_view_mode("build")
+    kit.table_section.set_open(True)
+    kit.table_buttons["Pt"].click()
+    assert [b.text() for b in kit.geometry_buttons][:4] == ["terminal", "linear", "trigonal", "tetrahedral"]
+    assert "square planar" in [b.text() for b in kit.geometry_buttons]
+    assert "coordination centre" in kit.element_label.text() and "UFF" in kit.element_label.text()
+    kit.choose_geometry("square planar")
+    pt = kit.click_space()
+    assert kit.model.symbol(pt) == "Pt" and len(kit.valences) == 4 and kit.model.n_atoms == 1   # open sites, no H
+    for ligand in ("Cl", "Cl", "N sp3", "N sp3"):
+        kit.choose(ligand)
+        kit.click_stub(next(r for r, v in enumerate(kit.valences) if v.atom == pt))
+    assert sorted(kit.model.symbol(n) for n in kit.model.neighbors(pt)) == ["Cl", "Cl", "N", "N"]
+    assert kit.model.problems() == [] and "UFF (MMFF94 has no parameters for Pt)" in kit.ff_label.text()
+    res = kit.minimize()
+    assert res is not None and res.forcefield == "UFF" and "MMFF94 has no parameters for Pt" in kit.message
+    assert kit.add_to_list() and win.model.rows()[-1].smiles.count("Pt") == 1
 
 
 # ====================================================================== the edit tools

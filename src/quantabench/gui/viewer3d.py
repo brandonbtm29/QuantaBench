@@ -26,8 +26,8 @@ Shift+left-drag translates them in the view plane. Pressing on an atom grabs its
 space grabs the selection, else the adsorbate, else everything, so a PFAS molecule can be oriented
 above a graphite slab without touching the slab. A click in move mode never changes the selection.
 
-``set_mode('build')`` is the Model Kit's mode (UI-7, ``gui.model_kit``): a drag still rotates the camera, as in
-Spartan, but a click builds instead of selecting (Ctrl+click still selects). The view stays a view: the kit gives it
+``set_mode('build')`` is the Model Kit's mode (UI-7, ``gui.model_kit``): a drag still rotates the camera, but a
+click builds instead of selecting (Ctrl+click still selects). The view stays a view: the kit gives it
 the free valences to draw (``set_stubs``) and gets ``buildClicked(kind, index, point, shift)`` back, where ``kind``
 is ``"stub"`` (``index`` is the row of the stubs given), ``"atom"`` or ``"space"`` (``point`` is the clicked point on
 the focal plane, where a first atom goes). In build mode hydrogens are drawn as stubs, not atoms. A stub and an atom
@@ -80,7 +80,7 @@ MAX_LABELS = 5000                 # beyond this, labels are unreadable and slow;
 STUB_LENGTH = 0.6                 # Å, a free valence drawn in build mode, from the atom's surface
 STUB_RADIUS = 0.08                # Å
 STUB_PICK_RADIUS = 0.3            # Å around a stub's tip
-#: stub colours by the bond order a free valence takes (Spartan draws a double free valence differently)
+#: stub colours by the bond order a free valence takes: teal single, magenta double, orange triple
 STUB_RGB = {1: (0, 168, 150), 2: (205, 80, 200), 3: (235, 120, 30)}
 
 # ColorBrewer RdBu stops (Brewer 2003), reversed so negative charge is red as in ESP maps

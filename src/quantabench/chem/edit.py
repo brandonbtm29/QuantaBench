@@ -1,23 +1,31 @@
 """Editable 3D molecule for the model kit (UI-7): an RDKit ``RWMol`` with one conformer, changed only through
 undoable commands. GUI-free: the 3D view's build mode and the 2D sketcher drive the same model.
 
-Building works as in Spartan's model kit. Pick an atom type (element and hybridization, ``PALETTE``) or a
-fragment (``chem.fragments``) and attach it at a *free valence* of an atom: the new atom sits at its ideal
-bond length along the valence direction, and its own open valences are filled with hydrogens (``fill_h``, the
-default; Spartan fills them when you leave the builder). A free valence is either a hydrogen (attaching
-replaces it, and the new atom takes over the hydrogen's index) or an open direction with no atom on it, which
-is what ``fill_h=False`` leaves. Clicking an atom with a type selected replaces it (``replace_atom``).
+An atom type is an element with a geometry (``AtomType``; ``geometry_options`` lists the ones an element can take,
+``atom_type`` reads a name such as ``"C sp2"`` or ``"Fe octahedral"``). Attach one, or a fragment
+(``chem.fragments``), at a *free valence* of an atom: the new atom sits at its ideal bond length along the valence
+direction, and its own open valences are filled with hydrogens (``fill_h``, the default). A free valence is either a
+hydrogen (attaching replaces it, and the new atom takes over the hydrogen's index) or an open direction with no atom
+on it, which is what ``fill_h=False`` leaves. Replacing an atom with another type keeps its place
+(``replace_atom``).
 
-Chemistry, VSEPR style:
+Main-group atoms follow VSEPR:
 
 - each atom stores its hybridization (``sp3``, ``sp2``, ``sp``: 4, 3 or 2 electron domains) and its valence
   V, the bond-order sum it has when complete (C 4, N 3, O 2; S 2, 4 or 6; P 3 or 5);
 - lone pairs LP = (valence electrons - formal charge - V) / 2 take domains, so an atom makes S = domains - LP
   sigma bonds, and the rest of its valence (V - S) goes into pi bonds;
-- a free valence can take a bond of order 1 + the atom's pi bonds still to make (Spartan's double free
-  valence on an sp2 carbon). Attaching an sp2 atom to an sp2 atom that still has a pi bond to make gives a
-  double bond (two sp atoms: a triple bond); ``=O``, ``=S`` and ``≡N`` always attach with a double or
-  triple bond. Attaching ``=O`` to S or P raises its valence (S 2 -> 4 -> 6, P 3 -> 5).
+- a free valence can take a bond of order 1 + the atom's pi bonds still to make (a *double free valence* on an
+  sp2 carbon). Attaching an sp2 atom to an sp2 atom that still has a pi bond to make gives a double bond (two sp
+  atoms: a triple bond); an ``AtomType`` with ``bond_order`` 2 or 3 (``"=O"``, ``"≡N"``) always attaches with that
+  order. A double bond to S or P raises its valence (S 2 -> 4 -> 6, P 3 -> 5).
+
+Metals (``METALS``: the s- and d-block and Al, Ga, In, Tl, Sn, Pb, Bi) are coordination centres instead: the user
+picks a coordination geometry (``COORDINATION``: terminal, linear, trigonal, tetrahedral, square planar, trigonal
+bipyramidal, octahedral), each site is a single bond, there are no lone pairs, and open sites stay empty (no
+hydrogens are put on a metal). MMFF94 has no parameters for bonded metals, so Minimize uses UFF for them, with the
+metal's UFF type taken from its geometry (``MinimizeResult.note`` says when UFF has no type for that geometry and
+another was used).
 
 Every change is a ``Command`` with ``apply(model)`` and ``undo(model)``. ``History`` keeps the undo and redo
 stacks here and in tests; the GUI wraps the same commands in a ``QUndoStack`` (``model.history`` only needs a
@@ -26,7 +34,9 @@ stacks here and in tests; the GUI wraps the same commands in a ``QUndoStack`` (`
 
 from __future__ import annotations
 
+import itertools
 import math
+import re
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -41,8 +51,19 @@ from . import fragments as frag_lib
 from .fragments import Fragment
 
 SEED = 42
-DOMAINS = {"s": 1, "sp": 2, "sp2": 3, "sp3": 4, "sp3d": 5, "sp3d2": 6}   # 5 and 6: read, not built
+#: Coordination geometries of metal centres and their number of sites (no lone pairs; every site a single bond).
+COORDINATION = {"terminal": 1, "linear": 2, "trigonal": 3, "tetrahedral": 4, "square planar": 4,
+                "trigonal bipyramidal": 5, "octahedral": 6}
+DOMAINS = {"s": 1, "sp": 2, "sp2": 3, "sp3": 4, "sp3d": 5, "sp3d2": 6, **COORDINATION}   # sp3d/sp3d2: read only
 _HYB_OF = {1: "s", 2: "sp", 3: "sp2", 4: "sp3"}
+#: Elements built as coordination centres (``COORDINATION``) rather than by VSEPR.
+METALS = frozenset(
+    "Li Na K Rb Cs Be Mg Ca Sr Ba Sc Ti V Cr Mn Fe Co Ni Cu Zn Y Zr Nb Mo Tc Ru Rh Pd Ag Cd La Hf Ta W Re Os Ir Pt "
+    "Au Hg Al Ga In Tl Sn Pb Bi".split())
+#: Elements MMFF94 has parameters for when bonded; a structure with any other element is minimized with UFF.
+MMFF_ELEMENTS = frozenset("H C N O F Si P S Cl Br I".split())
+#: The element picker's first row: the elements most molecules are made of.
+COMMON_ELEMENTS = ("H", "C", "N", "O", "F", "P", "S", "Cl", "Br", "I", "B", "Si")
 #: Valences an atom of these elements may take; attaching ``=O`` moves it up the list.
 HYPERVALENT = {"P": (3, 5), "S": (2, 4, 6), "Se": (2, 4, 6)}
 _PT = Chem.GetPeriodicTable()
@@ -69,6 +90,8 @@ def _capacity(symbol: str, charge: int, hyb: str, valence: int) -> tuple[int, in
     """(lone pairs, sigma bonds, pi bonds) an atom of this kind makes when complete."""
     if symbol == "H":
         return 0, 1, 0
+    if hyb in COORDINATION:
+        return 0, COORDINATION[hyb], max(0, valence - COORDINATION[hyb])
     lp = max(0, (_PT.GetNOuterElecs(symbol) - charge - valence) // 2)
     sigma = max(0, DOMAINS.get(hyb, 4) - lp)
     return lp, sigma, valence - sigma
@@ -76,9 +99,10 @@ def _capacity(symbol: str, charge: int, hyb: str, valence: int) -> tuple[int, in
 
 @dataclass(frozen=True)
 class AtomType:
-    """One button of the atom palette: element, hybridization and formal charge. ``bond_order`` fixes the
-    order of the bond to the atom it is attached to (2 for ``=O`` and ``=S``, 3 for ``≡N``); None lets the
-    kit choose. ``valence`` None means the element's usual valence at this charge."""
+    """An element with a geometry and formal charge: a VSEPR hybridization (``sp3``, ``sp2``, ``sp``; ``s`` for H)
+    or, for a metal, a coordination geometry (``COORDINATION``). ``bond_order`` fixes the order of the bond to the
+    atom it is attached to (2 for ``=O``, 3 for ``≡N``); None lets the kit choose. ``valence`` None means the
+    element's usual valence at this charge."""
 
     key: str
     symbol: str
@@ -102,41 +126,130 @@ class AtomType:
 
 
 _TYPES = (
-    # Spartan's Organic tab, in its order
+    # named types, by element (any other element and geometry: ``geometry_options`` / ``atom_type``)
+    AtomType("H", "H", "s"),
+    AtomType("B", "B", "sp2"),
     AtomType("C sp3", "C", "sp3"), AtomType("C sp2", "C", "sp2"), AtomType("C sp", "C", "sp"),
     AtomType("N sp3", "N", "sp3"), AtomType("N sp2", "N", "sp2"), AtomType("N sp", "N", "sp"),
-    AtomType("P", "P", "sp3"), AtomType("O sp3", "O", "sp3"), AtomType("O sp2", "O", "sp2"),
-    AtomType("S", "S", "sp3"), AtomType("Si", "Si", "sp3"), AtomType("H", "H", "s"),
-    AtomType("F", "F", "sp3"), AtomType("Cl", "Cl", "sp3"), AtomType("Br", "Br", "sp3"), AtomType("I", "I", "sp3"),
-    AtomType("=O", "O", "sp2", bond_order=2), AtomType("=S", "S", "sp2", bond_order=2),
-    AtomType("≡N", "N", "sp", bond_order=3),
-    # charged and hypervalent types (Spartan's "More" list)
     AtomType("N+ sp3", "N", "sp3", charge=1), AtomType("N+ sp2", "N", "sp2", charge=1),
-    AtomType("O-", "O", "sp3", charge=-1), AtomType("S(IV)", "S", "sp3", valence=4),
-    AtomType("S(VI)", "S", "sp3", valence=6), AtomType("P(V)", "P", "sp3", valence=5), AtomType("B", "B", "sp2"),
+    AtomType("≡N", "N", "sp", bond_order=3),
+    AtomType("O sp3", "O", "sp3"), AtomType("O sp2", "O", "sp2"), AtomType("O-", "O", "sp3", charge=-1),
+    AtomType("=O", "O", "sp2", bond_order=2),
+    AtomType("F", "F", "sp3"),
+    AtomType("Si", "Si", "sp3"),
+    AtomType("P", "P", "sp3"), AtomType("P(V)", "P", "sp3", valence=5),
+    AtomType("S", "S", "sp3"), AtomType("S(IV)", "S", "sp3", valence=4), AtomType("S(VI)", "S", "sp3", valence=6),
+    AtomType("=S", "S", "sp2", bond_order=2),
+    AtomType("Cl", "Cl", "sp3"), AtomType("Br", "Br", "sp3"), AtomType("I", "I", "sp3"),
 )
 PALETTE: dict[str, AtomType] = {t.key: t for t in _TYPES}
-#: The Organic tab of the palette, in Spartan's order.
-ORGANIC = tuple(t.key for t in _TYPES[:19])
 _TYPE_ALIASES = {"c": "C sp3", "n": "N sp3", "o": "O sp3", "#n": "≡N", "n#": "≡N", "o=": "=O", "s=": "=S",
                  "s(ii)": "S", "p(iii)": "P", "o sp3-": "O-", "o-sp3": "O-"}
 _TYPE_INDEX = {k.lower().replace(" ", ""): k for k in PALETTE} | {k.replace(" ", ""): v for k, v in _TYPE_ALIASES.items()}
 
 
 def atom_type(kind: str | AtomType) -> AtomType:
-    """A palette entry by key (``"C sp2"``, ``"=O"``, ``"≡N"`` or ``"#N"``; a bare element means its sp3 type)."""
+    """An atom type by name: a named type (``"C sp2"``, ``"=O"``, ``"≡N"`` or ``"#N"``; a bare element means its
+    sp3 type), or ``"<element>[charge] <geometry>"`` for any element (``"Fe octahedral"``, ``"Se sp2"``,
+    ``"Zn2+ tetrahedral"``; a bare metal means its tetrahedral type)."""
     if isinstance(kind, AtomType):
         return kind
-    key = _TYPE_INDEX.get(str(kind).strip().lower().replace(" ", ""))
-    if key is None:
-        if str(kind).strip() in PALETTE:
-            return PALETTE[str(kind).strip()]
-        raise EditError(f"Unknown atom type {kind!r} (palette: {', '.join(PALETTE)})")
-    return PALETTE[key]
+    text = str(kind).strip()
+    key = _TYPE_INDEX.get(text.lower().replace(" ", ""))
+    if key is not None:
+        return PALETTE[key]
+    if text in PALETTE:
+        return PALETTE[text]
+    m = re.fullmatch(r"([A-Z][a-z]?)(\d?[+-])?\s*(.*)", text)
+    if m and m.group(1) in _ELEMENTS:
+        sym, q, geom = m.group(1), m.group(2) or "", m.group(3).strip().lower()
+        charge = 0 if not q else int(q[:-1] or 1) * (1 if q.endswith("+") else -1)
+        geom = geom or ("tetrahedral" if sym in METALS else "sp3")
+        for t in geometry_options(sym, charge):
+            if t.hyb == geom and (t.valence is None or sym in METALS):
+                return t
+    raise EditError(f"Unknown atom type {kind!r}: a named type ({', '.join(PALETTE)}) or '<element> <geometry>'")
 
 
-if any(t.sigma < 1 or t.pi < 0 for t in _TYPES):   # every palette type must be able to bond
-    raise RuntimeError("chem.edit: a palette atom type cannot bond")
+_ELEMENTS = frozenset(_PT.GetElementSymbol(z) for z in range(1, 87))
+#: named types by (element, hybridization, charge, valence), so ``geometry_options`` gives "F", not "F sp3"
+_NAMED = {(t.symbol, t.hyb, t.charge, t.total_valence): t for t in _TYPES if t.bond_order is None}
+
+
+def charge_text(charge: int) -> str:
+    """``""``, ``"+"``, ``"2+"``, ``"-"``..."""
+    return "" if not charge else f"{abs(charge) if abs(charge) > 1 else ''}{'+' if charge > 0 else '-'}"
+
+
+@lru_cache(maxsize=512)
+def _sites_accepted(symbol: str, charge: int, n: int) -> bool:
+    """RDKit accepts ``symbol`` with this charge and ``n`` single bonds (its valence rules: Al 3 but Al- 4)."""
+    rw = Chem.RWMol()
+    rw.AddAtom(Chem.Atom(_PT.GetAtomicNumber(symbol)))
+    rw.GetAtomWithIdx(0).SetFormalCharge(int(charge))
+    rw.GetAtomWithIdx(0).SetNoImplicit(True)
+    for _ in range(n):
+        h = rw.AddAtom(Chem.Atom(1))
+        rw.AddBond(0, h, Chem.BondType.SINGLE)
+    try:
+        with rdBase.BlockLogs():
+            Chem.SanitizeMol(rw)
+    except Exception:  # noqa: BLE001 - RDKit's valence error: not accepted
+        return False
+    return True
+
+
+#: VSEPR shape of (domains, lone pairs): what the atom looks like with its bonds only
+_SHAPES = {(4, 0): "tetrahedral", (4, 1): "pyramidal", (4, 2): "bent", (4, 3): "terminal",
+           (3, 0): "trigonal planar", (3, 1): "bent", (3, 2): "terminal", (2, 0): "linear", (2, 1): "terminal",
+           (1, 0): "terminal"}
+
+
+def shape_name(t: AtomType) -> str:
+    """The geometry of ``t``'s bonds in words: a coordination geometry, or the VSEPR shape (``"pyramidal"`` for
+    N sp3, ``"bent"`` for O sp3)."""
+    if t.hyb in COORDINATION:
+        return t.hyb
+    lp = _capacity(t.symbol, t.charge, t.hyb, t.total_valence)[0]
+    return _SHAPES.get((DOMAINS.get(t.hyb, 4), lp), t.hyb)
+
+
+def lone_pairs(t: AtomType) -> int:
+    return _capacity(t.symbol, t.charge, t.hyb, t.total_valence)[0]
+
+
+def geometry_options(symbol: str, charge: int = 0) -> list[AtomType]:
+    """The geometries an element can be built with at ``charge``. A metal (``METALS``): each coordination geometry
+    RDKit accepts that many bonds for. Any other element: each hybridization (sp3, sp2, sp) that leaves it at
+    least one bond and no unpaired electron, at its usual valence and, uncharged, its higher ones (S 4 and 6, P 5).
+    Keys are ``"<element><charge> <hybridization or geometry>"`` (``"S sp3 (6)"`` for a higher valence)."""
+    if symbol == "H":
+        return [PALETTE["H"]] if charge == 0 else []
+    if symbol not in _ELEMENTS:
+        return []
+    q = charge_text(charge)
+    if symbol in METALS:
+        return [AtomType(f"{symbol}{q} {geom}", symbol, geom, charge, None, n)
+                for geom, n in COORDINATION.items() if _sites_accepted(symbol, charge, n)]
+    e = _PT.GetNOuterElecs(symbol) - charge
+    usual = default_valence(symbol, charge)
+    valences = [usual] + ([v for v in HYPERVALENT.get(symbol, ()) if v > usual] if charge == 0 else [])
+    out = []
+    for valence in valences:
+        if valence < 1 or e - valence < 0 or (e - valence) % 2:
+            continue
+        for hyb in ("sp3", "sp2", "sp"):
+            lp, sigma, pi = _capacity(symbol, charge, hyb, valence)
+            if sigma < 1 or pi < 0 or pi > 3 or lp + sigma != DOMAINS[hyb]:
+                continue
+            named = _NAMED.get((symbol, hyb, charge, valence))
+            key = f"{symbol}{q} {hyb}" + (f" ({valence})" if valence != usual else "")
+            out.append(named or AtomType(key, symbol, hyb, charge, None, valence if valence != usual else None))
+    return out
+
+
+if any(t.sigma < 1 or t.pi < 0 for t in _TYPES):   # every named type must be able to bond
+    raise RuntimeError("chem.edit: a named atom type cannot bond")
 
 
 # ====================================================================== bond lengths
@@ -250,6 +363,62 @@ def domain_directions(existing: Sequence[np.ndarray], n_domains: int,
     return [_unit(np.cross(dirs[1] - dirs[0], dirs[2] - dirs[0]))]
 
 
+_C, _S = math.cos(2 * math.pi / 3), math.sin(2 * math.pi / 3)
+#: Ideal site directions of each coordination geometry (unit vectors).
+IDEAL_SITES: dict[str, np.ndarray] = {
+    "terminal": np.array([[1.0, 0, 0]]),
+    "linear": np.array([[1.0, 0, 0], [-1.0, 0, 0]]),
+    "trigonal": np.array([[1.0, 0, 0], [_C, _S, 0], [_C, -_S, 0]]),
+    "tetrahedral": np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]], float) / math.sqrt(3),
+    "square planar": np.array([[1.0, 0, 0], [0, 1.0, 0], [-1.0, 0, 0], [0, -1.0, 0]]),
+    "trigonal bipyramidal": np.array([[0, 0, 1.0], [0, 0, -1.0], [1.0, 0, 0], [_C, _S, 0], [_C, -_S, 0]]),
+    "octahedral": np.array([[1.0, 0, 0], [-1.0, 0, 0], [0, 1.0, 0], [0, -1.0, 0], [0, 0, 1.0], [0, 0, -1.0]]),
+}
+
+
+def _fit_rotation(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Proper rotation R with a @ R.T as close as possible to b (Kabsch; rows are unit vectors)."""
+    u, _, vt = np.linalg.svd(a.T @ b)
+    d = np.sign(np.linalg.det(vt.T @ u.T)) or 1.0
+    return vt.T @ np.diag([1.0, 1.0, d]) @ u.T
+
+
+def coordination_directions(existing: Sequence[np.ndarray], geometry: str,
+                            reference: np.ndarray | None = None) -> list[np.ndarray]:
+    """Unit vectors of a coordination centre's sites not taken by ``existing`` (unit vectors to its neighbours): the
+    ideal sites of ``geometry`` (``IDEAL_SITES``) turned to fit the existing bonds best (each bond matched to its own
+    site). With one bond, ``reference`` sets the turn about it, as in ``domain_directions``."""
+    ideal = IDEAL_SITES[geometry]
+    dirs = [_unit(d) for d in existing]
+    n = len(dirs)
+    if n >= len(ideal):
+        return []
+    if n == 0:
+        return [v.copy() for v in ideal]
+    if n == 1:
+        u = dirs[0]
+        rot = ideal @ _align(ideal[0], u).T
+        rest = rot[1:]
+        if reference is not None:
+            r = np.asarray(reference, float)
+            w = _unit(r - np.dot(r, u) * u)
+            first = next((v for v in rest if abs(np.dot(v, u)) < 0.99), None)
+            if w.any() and first is not None:
+                p = _unit(first - np.dot(first, u) * u)
+                ang = math.atan2(float(np.dot(np.cross(p, w), u)), float(np.dot(p, w)))
+                rest = rest @ _rotation(u, ang).T
+        return [_unit(v) for v in rest]
+    b = np.array(dirs)
+    best = None
+    for idx in itertools.permutations(range(len(ideal)), n):
+        rot = _fit_rotation(ideal[list(idx)], b)
+        err = float(np.sum((ideal[list(idx)] @ rot.T - b) ** 2))
+        if best is None or err < best[0] - 1e-9:
+            best = (err, rot, set(idx))
+    _, rot, used = best
+    return [_unit(ideal[k] @ rot.T) for k in range(len(ideal)) if k not in used]
+
+
 # ====================================================================== records
 @dataclass(frozen=True)
 class FreeValence:
@@ -313,6 +482,7 @@ class MinimizeResult:
     forcefield: str        # "MMFF94", "MMFF94s", "UFF" or "none"
     converged: bool
     moved: int = 0         # atoms free to move
+    note: str = ""         # why UFF, or the UFF type used for a metal whose geometry UFF has no type for
 
 
 # ====================================================================== fragment templates
@@ -344,11 +514,29 @@ def _perceive(atom: Chem.Atom) -> tuple[str, int]:
         implicit_h = atom.GetTotalNumHs()     # hydrogens that are not atoms of their own
     except RuntimeError:                      # property cache not computed: all hydrogens are atoms here
         implicit_h = atom.GetNumExplicitHs()
+    if sym in METALS:                         # a coordination centre: its geometry from its number of neighbours
+        n = atom.GetDegree() + implicit_h
+        geom = {0: "terminal", 1: "terminal", 2: "linear", 3: "trigonal", 4: "tetrahedral",
+                5: "trigonal bipyramidal"}.get(n, "octahedral")
+        if n == 4 and _is_square(atom):
+            geom = "square planar"
+        return geom, max(_bond_orders(atom) + implicit_h, 1)
     sigma = atom.GetDegree() + implicit_h + atom.GetNumRadicalElectrons()
     valence = _bond_orders(atom) + implicit_h + atom.GetNumRadicalElectrons()
     lp = max(0, (_PT.GetNOuterElecs(atom.GetAtomicNum()) - atom.GetFormalCharge() - valence) // 2)
     domains = sigma + lp
     return _HYB_OF.get(domains, "sp3d" if domains == 5 else "sp3d2" if domains >= 6 else "s"), valence
+
+
+def _is_square(atom: Chem.Atom) -> bool:
+    """Four neighbours in a square around ``atom`` (two of them opposite), from the first conformer."""
+    mol = atom.GetOwningMol()
+    if not mol.GetNumConformers():
+        return False
+    pos = mol.GetConformer().GetPositions()
+    c = pos[atom.GetIdx()]
+    u = [_unit(pos[n.GetIdx()] - c) for n in atom.GetNeighbors()]
+    return any(np.dot(a, b) < -0.9 for a, b in itertools.combinations(u, 2))
 
 
 def _optimize_conformers(mol: Chem.Mol) -> list[float]:
@@ -380,7 +568,7 @@ def _embed(mol: Chem.Mol, seed: int = SEED, n_confs: int = 4) -> None:
 
 def _extend_chains(mol: Chem.Mol) -> None:
     """Set every acyclic single bond between two backbone atoms to anti (180°) and re-optimize, so chains
-    start extended (zig-zag) as Spartan builds them, not curled the way a random conformer may be. The
+    start extended (zig-zag), not curled the way a random conformer may be. The
     backbone neighbour on each side is the one with the most heavy neighbours (a CF2's next carbon, not its
     fluorines)."""
     def heavy_degree(a: Chem.Atom) -> int:
@@ -635,6 +823,8 @@ class EditableMolecule:
         out = []
         for i in range(self.n_atoms):
             st = self.atom_state(i)
+            if st.hyb in COORDINATION and st.open >= 0:
+                continue                      # a metal's open sites stay empty: not a problem
             if st.open > 0:
                 what = "double-bond valence" if st.sigma_free <= 0 else "free valence"
                 out.append(f"{self.label(i)} ({st.hyb}) has {st.open} unfilled {what}{'s' if st.open > 1 else ''}")
@@ -686,6 +876,27 @@ class EditableMolecule:
         return MoleculeInput(id=safe_id(id or name or smiles), smiles=smiles, name=name or id or "",
                              source="model kit", mol=self.to_mol())
 
+    def forcefield(self) -> tuple[str, str]:
+        """(force field Minimize uses now, why): ``("MMFF94", "")``, ``("UFF", "MMFF94 has no parameters for Fe")``,
+        or ``("none", reason)``."""
+        if self.n_atoms < 2:
+            return "none", "nothing to minimize yet"
+        m = self._completed()
+        try:
+            with rdBase.BlockLogs():
+                Chem.SanitizeMol(m)
+        except Exception:  # noqa: BLE001
+            return "none", "the structure is not valid yet"
+        _set_metal_hybridization(m)
+        with rdBase.BlockLogs():
+            if AllChem.MMFFHasAllMoleculeParams(m):
+                return self.variant, ""
+            missing = sorted({a.GetSymbol() for a in m.GetAtoms() if a.GetSymbol() not in MMFF_ELEMENTS})
+            why = f"MMFF94 has no parameters for {', '.join(missing) if missing else 'this structure'}"
+            if AllChem.UFFHasAllMoleculeParams(m) or _uff_fallback(m) is not None:
+                return "UFF", why
+        return "none", why + ", and UFF has none for it either"
+
     def energy(self) -> tuple[float, str]:
         """Force-field energy (kcal/mol) of the current coordinates and the force field used."""
         if self.n_atoms < 2:
@@ -693,7 +904,8 @@ class EditableMolecule:
         m = self._completed()
         with rdBase.BlockLogs():
             Chem.SanitizeMol(m)
-        ff, name = _forcefield(m, self.variant)
+        _set_metal_hybridization(m)
+        ff, name, _ = _forcefield(m, self.variant)
         return float(ff.CalcEnergy()), name
 
     # ------------------------------------------------------------------ edits (each one undoable)
@@ -702,7 +914,7 @@ class EditableMolecule:
         return self.history.push(command)
 
     def add_atom(self, kind: str | AtomType = "C sp3", position=(0.0, 0.0, 0.0), *, fill_h: bool | None = None) -> int:
-        """Place a new atom on its own (Spartan's first click in empty space). Returns its index."""
+        """Place a new atom on its own (the first click in empty space). Returns its index."""
         return self.do(AddAtom(kind, tuple(position), fill_h))
 
     def add_fragment(self, fragment: str | Fragment, position=(0.0, 0.0, 0.0)) -> Placement:
@@ -768,7 +980,7 @@ class EditableMolecule:
         return self.do(SetPositions(np.array(positions, float).reshape(-1, 3)))
 
     def fill_hydrogens(self) -> list[int]:
-        """Put hydrogens on every open valence (Spartan does this when you leave the builder)."""
+        """Put hydrogens on every open valence (not on a metal's open sites)."""
         return self.do(FillHydrogens())
 
     def minimize(self, frozen: Iterable[int] = (), *, max_iters: int = 2000) -> MinimizeResult:
@@ -881,7 +1093,10 @@ class EditableMolecule:
             if others:
                 r = self._pos(others[0]) - self._pos(b)
                 reference = -(r - np.dot(r, dirs[0]) * dirs[0])
-        remaining = domain_directions(dirs, DOMAINS.get(st.hyb, 0), reference)
+        if st.hyb in COORDINATION:
+            remaining = coordination_directions(dirs, st.hyb, reference)
+        else:
+            remaining = domain_directions(dirs, DOMAINS.get(st.hyb, 0), reference)
         return remaining[:max(0, st.sigma_slots - len(nbrs))]
 
     def _resolve(self, valence: FreeValence | int) -> FreeValence:
@@ -901,10 +1116,12 @@ class EditableMolecule:
         raise TypeError("valence must be a FreeValence or a hydrogen's index")
 
     def _fill(self, i: int) -> list[int]:
-        """Hydrogens on ``i``'s open sigma slots; returns the new atoms."""
+        """Hydrogens on ``i``'s open sigma slots; returns the new atoms. A metal's open sites stay empty."""
         if self._is_h(i):
             return []
         st = self.atom_state(i)
+        if st.hyb in COORDINATION:
+            return []
         n = min(st.sigma_free, st.open)
         if n <= 0:
             return []
@@ -926,6 +1143,8 @@ class EditableMolecule:
         want = max(0, min(st.sigma_slots - len(heavy), st.valence - heavy_sum))
         if not fill:
             want = min(want, len(hs))
+        if st.hyb in COORDINATION:
+            want = 0                          # a new metal centre: its sites open, not hydrogens
         dirs = self._open_directions(i, heavy)[:want]
         p, length = self._pos(i), bond_length(st.symbol, "H")
         for h, d in zip(hs, dirs):
@@ -1080,6 +1299,14 @@ class EditableMolecule:
         """(hybridization, valence) for atom ``i`` with ``n_heavy`` heavy neighbours, bond-order sum
         ``heavy_sum`` and ``pi`` pi bonds, trying ``valences`` in order. With ``hyb`` given the
         hybridization is fixed; otherwise it follows from the domains. Raises EditError when none fits."""
+        if hyb is None and symbol in METALS:
+            hyb = self.atom_state(i).hyb if self.atom_state(i).hyb in COORDINATION else "tetrahedral"
+        if hyb in COORDINATION:
+            n = COORDINATION[hyb]
+            if n_heavy <= n and pi == 0:
+                return hyb, n
+            raise EditError(f"{self.label(i)} ({symbol}, {hyb}) takes at most {n} single bonds: bonds to a metal "
+                            "are single in the model kit")
         e = _PT.GetNOuterElecs(symbol) - charge if symbol != "H" else 1
         for valence in valences:
             if valence < heavy_sum or (symbol != "H" and e - valence < 0):
@@ -1149,7 +1376,7 @@ class EditableMolecule:
             i = mapping[n]
             touched.append(i)
             st = self.atom_state(i)
-            if fill and st.sigma_free > 0 and st.open > 0:
+            if fill and st.sigma_free > 0 and st.open > 0 and st.hyb not in COORDINATION:
                 h = self._new_atom("H", 0, "s", 1, self._pos(i) + d * bond_length(st.symbol, "H"))
                 self._add_bond(i, h, 1)
                 touched.append(h)
@@ -1194,6 +1421,10 @@ class EditableMolecule:
         if st.symbol == "H":
             raise EditError("Charges on hydrogen are not supported by the model kit")
         if charge == st.charge:
+            return self._identity()
+        if st.hyb in COORDINATION:            # a metal keeps its geometry and sites; only the charge changes
+            self._atom(atom).SetFormalCharge(int(charge))
+            self._edited([atom, *self.neighbors(atom)])
             return self._identity()
         valence = st.valence + default_valence(st.symbol, charge) - default_valence(st.symbol, st.charge)
         heavy = [n for n in self.neighbors(atom) if not self._is_h(n)]
@@ -1248,7 +1479,7 @@ class EditableMolecule:
         if self._fill_flag(fill_h):
             for x, d in ((i, di), (j, -di)):
                 st = self.atom_state(x)
-                if st.sigma_free > 0 and st.open > 0:
+                if st.sigma_free > 0 and st.open > 0 and st.hyb not in COORDINATION:
                     h = self._new_atom("H", 0, "s", 1, self._pos(x) + d * bond_length(st.symbol, "H"))
                     self._add_bond(x, h, 1)
                     touched.append(h)
@@ -1334,6 +1565,8 @@ class EditableMolecule:
             if self._is_h(i):
                 continue
             st = self.atom_state(i)
+            if st.hyb in COORDINATION:
+                continue                      # a metal's open sites stay empty
             n = min(st.sigma_free, st.open)
             if n <= 0:
                 continue
@@ -1355,7 +1588,8 @@ class EditableMolecule:
                 Chem.SanitizeMol(m)
         except Exception as exc:  # noqa: BLE001
             raise EditError(f"Cannot minimize an invalid structure: {str(exc).strip()}") from None
-        ff, name = _forcefield(m, self.variant)
+        _set_metal_hybridization(m)
+        ff, name, note = _forcefield(m, self.variant)
         fixed = {int(f) for f in frozen}
         if movable is not None:
             free = set(movable)
@@ -1364,11 +1598,13 @@ class EditableMolecule:
             fixed |= set(range(m.GetNumAtoms())) - free
         for f in sorted(fixed):
             ff.AddFixedPoint(f)
+        if name == "UFF":
+            _hold_trans_ligands(ff, m)
         ff.Initialize()
         converged = ff.Minimize(maxIts=max_iters) == 0
         energy = float(ff.CalcEnergy())
         self._set_positions(np.array(ff.Positions()).reshape(-1, 3)[:n])
-        return MinimizeResult(energy, name, converged, m.GetNumAtoms() - len(fixed))
+        return MinimizeResult(energy, name, converged, m.GetNumAtoms() - len(fixed), note)
 
     def _op_relax(self, atoms, radius, max_iters) -> MinimizeResult:
         centre = [a for a in (atoms if atoms is not None else self.last_edit) if 0 <= a < self.n_atoms]
@@ -1383,17 +1619,82 @@ class EditableMolecule:
         return self._op_minimize((), max_iters, movable=region)
 
 
+_RD_HYB = {"terminal": Chem.HybridizationType.S, "linear": Chem.HybridizationType.SP,
+           "trigonal": Chem.HybridizationType.SP2, "tetrahedral": Chem.HybridizationType.SP3,
+           "square planar": Chem.HybridizationType.SP2D, "trigonal bipyramidal": Chem.HybridizationType.SP3D,
+           "octahedral": Chem.HybridizationType.SP3D2}
+
+
+def _set_metal_hybridization(m: Chem.Mol) -> None:
+    """RDKit leaves a six-coordinate metal's hybridization unspecified, and UFF types a metal by it: set it from the
+    metal's coordination geometry (``qb_hyb``)."""
+    for a in m.GetAtoms():
+        if a.HasProp("qb_hyb") and a.GetProp("qb_hyb") in _RD_HYB:
+            a.SetHybridization(_RD_HYB[a.GetProp("qb_hyb")])
+
+
+def _uff_fallback(m: Chem.Mol) -> str | None:
+    """When UFF has no type for a metal in its geometry (no square-planar Cu), try the metal's other types in turn
+    (in place). Returns a note on what was used, or None when nothing works."""
+    order = (Chem.HybridizationType.SP3, Chem.HybridizationType.SP3D2, Chem.HybridizationType.SP2D,
+             Chem.HybridizationType.SP2, Chem.HybridizationType.SP, Chem.HybridizationType.SP3D,
+             Chem.HybridizationType.S)
+    names = {v: k for k, v in _RD_HYB.items()}
+    notes = []
+    with rdBase.BlockLogs():
+        for a in m.GetAtoms():
+            if not a.HasProp("qb_hyb") or a.GetProp("qb_hyb") not in _RD_HYB:
+                continue
+            if AllChem.UFFHasAllMoleculeParams(m):
+                break
+            wanted = a.GetHybridization()
+            for h in order:
+                if h == wanted:
+                    continue
+                a.SetHybridization(h)
+                if AllChem.UFFHasAllMoleculeParams(m):
+                    notes.append(f"UFF has no {a.GetProp('qb_hyb')} {a.GetSymbol()}: its {names[h]} type was used")
+                    break
+            else:
+                a.SetHybridization(wanted)
+        ok = AllChem.UFFHasAllMoleculeParams(m)
+    return "; ".join(notes) if ok else None
+
+
+def _hold_trans_ligands(ff, m: Chem.Mol) -> None:
+    """UFF's general angle term has its minimum at 90° and a maximum at 180° for a square-planar or trigonal-
+    bipyramidal metal (RDKit special-cases only octahedral ones), so trans ligands slide off 180° and the centre folds
+    toward a tetrahedron. Hold each pair of a metal's ligands that is trans now (over 150°) at 179-180°."""
+    pos = m.GetConformer().GetPositions()
+    for a in m.GetAtoms():
+        if not a.HasProp("qb_hyb") or a.GetProp("qb_hyb") not in ("square planar", "trigonal bipyramidal",
+                                                                    "octahedral"):
+            continue
+        c = a.GetIdx()
+        for i, j in itertools.combinations([n.GetIdx() for n in a.GetNeighbors()], 2):
+            u, v = _unit(pos[i] - pos[c]), _unit(pos[j] - pos[c])
+            if float(np.dot(u, v)) < -0.866:
+                ff.UFFAddAngleConstraint(i, c, j, False, 179.0, 180.0, 200.0)
+
+
 def _forcefield(m: Chem.Mol, variant: str):
+    """(force field, its name, note): MMFF94 (or MMFF94s) when it has parameters, else UFF (metals: typed by their
+    geometry, ``_uff_fallback`` when UFF has no type for it)."""
     with rdBase.BlockLogs():
         if AllChem.MMFFHasAllMoleculeParams(m):
             props = AllChem.MMFFGetMoleculeProperties(m, mmffVariant=variant)
             ff = AllChem.MMFFGetMoleculeForceField(m, props, confId=0, ignoreInterfragInteractions=False)
             if ff is not None:
-                return ff, variant
+                return ff, variant, ""
+        missing = sorted({a.GetSymbol() for a in m.GetAtoms() if a.GetSymbol() not in MMFF_ELEMENTS})
+        note = f"MMFF94 has no parameters for {', '.join(missing) if missing else 'this structure'}"
+        fallback = "" if AllChem.UFFHasAllMoleculeParams(m) else _uff_fallback(m)
+        if fallback is None:
+            raise EditError("Neither MMFF94 nor UFF has parameters for this structure")
         ff = AllChem.UFFGetMoleculeForceField(m, confId=0, ignoreInterfragInteractions=False)
     if ff is None:
         raise EditError("Neither MMFF94 nor UFF has parameters for this structure")
-    return ff, "UFF"
+    return ff, "UFF", note + (f"; {fallback}" if fallback else "")
 
 
 def _best_torsion(local: np.ndarray, anchor: int, axis: np.ndarray, origin: np.ndarray,

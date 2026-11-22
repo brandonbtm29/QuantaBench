@@ -1,13 +1,16 @@
 """Smoke test of the Model Kit (UI-7) in the real main window, with screenshots.
 
-    xvfb-run -a -s "-screen 0 1600x1000x24" python scripts/model_kit_smoke.py OUT_DIR     # Linux, headless
+    xvfb-run -a -s "-screen 0 1700x1200x24" python scripts/model_kit_smoke.py OUT_DIR     # Linux, headless
     python scripts/model_kit_smoke.py OUT_DIR                                             # Windows, macOS
 
-Opens the window with throwaway settings, switches to the Build workspace and Build mode (as Ctrl+4 does), builds
-PFBA (perfluorobutanoic acid) atom by atom through the kit's click handlers, minimizes it, builds GenX from the
-group menus' fragments, adds both to the molecule list and checks their SMILES. Saves PNGs of the window at each
-step. ``QWidget.grab()`` cannot read the 3D view's OpenGL surface (offscreen it comes out black), so each picture
-is the window's grab with the 3D view's own VTK screenshot painted into its place. Exits 1 on a wrong structure.
+Opens the window with throwaway settings, switches to the Build workspace and Build mode, builds PFBA
+(perfluorobutanoic acid) atom by atom through the kit's element and geometry pickers and click handlers, minimizes
+it, builds cisplatin from the periodic table (a square-planar Pt: Minimize uses UFF) and GenX from fragments, adds
+them to the molecule list and checks their SMILES. Saves PNGs of the window at each step. ``QWidget.grab()`` cannot
+read the 3D view's OpenGL surface (offscreen it comes out black), so each picture is the window's grab with the 3D
+view's own VTK screenshot painted into its place. Events are pumped as in the tests, deferred deletes included (Qt
+retires old dock tab bars with deleteLater; without them a scripted run shows stale tab bars a real event loop never
+shows). Exits 1 on a wrong structure.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 PFBA = "OC(=O)C(F)(F)C(F)(F)C(F)(F)F"
+CISPLATIN_ATOMS = {"Pt": 1, "Cl": 2, "N": 2}
 GENX = "OC(=O)C(F)(C(F)(F)F)OC(F)(F)C(F)(F)C(F)(F)F"
 
 
@@ -32,7 +36,7 @@ def main(out: Path) -> int:
                      ("QUANTABENCH_SCRATCH_DIR", "scratch")):
         os.environ[var] = str(tmp / sub)       # never the user's own settings or window layout
 
-    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtCore import QEvent, QPoint, QRect
     from PySide6.QtGui import QImage, QPainter
     from PySide6.QtWidgets import QApplication
     from rdkit import Chem
@@ -42,7 +46,7 @@ def main(out: Path) -> int:
 
     app = QApplication.instance() or QApplication([])
     win = MainWindow(sm.Settings(output_dir=str(tmp / "runs")))
-    win.resize(1560, 940)
+    win.resize(1600, 1120)
     win.show()
     app.processEvents()
     if win.viewer.error:
@@ -53,6 +57,7 @@ def main(out: Path) -> int:
         end = time.time() + seconds
         while time.time() < end:
             app.processEvents()
+            app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             time.sleep(0.02)
 
     def shot(name: str) -> None:
@@ -95,8 +100,10 @@ def main(out: Path) -> int:
     def rows(atom: int) -> list[int]:
         return [r for r, v in enumerate(kit.valences) if v.atom == atom and v.h is not None]
 
-    # ---- PFBA, atom by atom: C sp2 in empty space, =O and O sp3 on its stubs, then C sp3 + F
-    kit.choose("C sp2")
+    # ---- PFBA, atom by atom: C (trigonal planar) in empty space, O by a double bond and O (bent) on its stubs,
+    # then C (tetrahedral) and F
+    kit.element_buttons["C"].click()
+    kit.choose_geometry("sp2")
     kit.click_space()
     shot("01_first_atom_double_valences")           # a C sp2: three double free valences (magenta stubs)
     kit.choose("=O")
@@ -127,13 +134,46 @@ def main(out: Path) -> int:
     res = kit.minimize()
     side_view()
     print("PFBA", kit.model.to_smiles(), res, f"{kit.stack.count()} edits on the undo stack")
-    shot("03_pfba_built_minimized")
+    kit.element_buttons["S"].click()                # the geometry chooser for S: lone pairs drawn as rings
+    shot("03_pfba_built_minimized_s_geometries")
+    kit.choose("C sp3")
     win.a_undo.trigger()                            # Ctrl+Z: before Minimize
     win.a_redo.trigger()                            # Ctrl+Y
     win.set_view_mode("rotate")                     # select two atoms for the edit tools: the C=O
     win.selection.select([0, 1])
     shot("04_rotate_mode_selection_value")
     kit.add_to_list()
+
+    # ---- cisplatin from the periodic table: Pt square planar with charge -2, two Cl, two NH3 drawn as N+ (the
+    # formal-charge picture of its dative bonds); Minimize uses UFF
+    kit.new()
+    win.set_view_mode("build")
+    kit.table_section.set_open(True)
+    kit.charge_box.setCurrentIndex(kit.charge_box.findData(-2))
+    kit.table_buttons["Pt"].click()
+    kit.choose_geometry("square planar")
+    pt = kit.click_space()
+    for ligand in ("Cl", "Cl", "N+ sp3", "N+ sp3"):
+        kit.choose(ligand)
+        kit.click_stub(next(r for r, v in enumerate(kit.valences) if v.atom == pt))
+    kit.charge_box.setCurrentIndex(kit.charge_box.findData(-2))
+    kit.table_buttons["Pt"].click()                 # show Pt's coordination geometries in the dock
+    kit.choose_geometry("square planar")
+    res = kit.minimize()
+    side_view()
+    counts = {}
+    for i in range(kit.model.n_atoms):
+        counts[kit.model.symbol(i)] = counts.get(kit.model.symbol(i), 0) + 1
+    if res is None or res.forcefield != "UFF" or any(counts.get(k) != v for k, v in CISPLATIN_ATOMS.items()):
+        print("cisplatin: wrong structure or force field", counts, res)
+        return 1
+    print("cisplatin", kit.model.to_smiles(), res.forcefield, res.note)
+    if kit.model.to_smiles(isomeric=False) != canon("Cl[Pt-2](Cl)([NH3+])[NH3+]"):
+        print("cisplatin: wrong SMILES", kit.model.to_smiles())
+        return 1
+    shot("05_cisplatin_square_planar_uff")
+    kit.add_to_list()
+    kit.table_section.set_open(False)
 
     # ---- GenX from groups: COOH, then on its CH3 carbon F, CF3, ether O and C3F7
     kit.new()                                       # an empty model (Build mode would edit the selected PFBA)
@@ -157,10 +197,10 @@ def main(out: Path) -> int:
         print("GenX: wrong structure", kit.model.to_smiles())
         return 1
     print("GenX", kit.model.to_smiles())
-    shot("05_genx_from_groups")
+    shot("06_genx_from_fragments")
     kit.add_to_list()
     side_view()
-    shot("06_added_to_the_list")
+    shot("07_added_to_the_list")
     ids = [r.id for r in win.model.rows()]
     print("molecule list:", ids, [r.source for r in win.model.rows()])
     win.close()
@@ -168,7 +208,7 @@ def main(out: Path) -> int:
     while not win.closed and time.time() - t < 30:
         app.processEvents()
         time.sleep(0.02)
-    return 0 if len(ids) == 2 else 1
+    return 0 if len(ids) == 3 else 1
 
 
 if __name__ == "__main__":

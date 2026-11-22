@@ -1,6 +1,7 @@
 """The model kit's edit model (chem/edit.py): free valences, attach/replace/delete, bond orders and charges,
 geometry setters, minimize, undo/redo, import/export, and four PFAS built with kit operations only."""
 
+import itertools
 import math
 
 import numpy as np
@@ -123,10 +124,23 @@ def test_genx_keeps_its_stereocentre_from_3d():
     assert "@" not in model.to_smiles(isomeric=False)
 
 
-# ====================================================================== palette and free valences
-def test_palette():
-    assert edit.ORGANIC == ("C sp3", "C sp2", "C sp", "N sp3", "N sp2", "N sp", "P", "O sp3", "O sp2", "S", "Si",
-                            "H", "F", "Cl", "Br", "I", "=O", "=S", "≡N")
+# ====================================================================== atom types and free valences
+def test_named_types_and_geometry_options():
+    assert {"C sp3", "C sp2", "C sp", "N sp3", "O sp2", "=O", "≡N", "S(VI)", "P(V)", "H"} <= set(edit.PALETTE)
+    assert edit.COMMON_ELEMENTS[:4] == ("H", "C", "N", "O")
+    assert [(t.hyb, edit.shape_name(t)) for t in edit.geometry_options("N")] == [
+        ("sp3", "pyramidal"), ("sp2", "bent"), ("sp", "terminal")]
+    assert [t.key for t in edit.geometry_options("S")] == ["S", "S sp2", "S(IV)", "S sp2 (4)", "S sp (4)", "S(VI)",
+                                                         "S sp2 (6)"]   # named types keep their names
+    assert edit.geometry_options("S", 1)[0].key == "S+ sp3"                     # higher valences: uncharged only
+    assert {t.key for t in edit.geometry_options("O", -1)} == {"O-"}
+    assert edit.geometry_options("F")[0].sigma == 1 and len(edit.geometry_options("F")) == 1
+    fe = edit.geometry_options("Fe", 2)
+    assert [t.hyb for t in fe] == list(edit.COORDINATION) and fe[-1].key == "Fe2+ octahedral" and fe[-1].sigma == 6
+    assert "tetrahedral" not in {t.hyb for t in edit.geometry_options("Al")}      # RDKit: neutral Al takes 3 bonds
+    assert "tetrahedral" in {t.hyb for t in edit.geometry_options("Al", -1)}
+    assert edit.atom_type("Fe octahedral").sigma == 6 and edit.atom_type("Zn2+ tetrahedral").charge == 2
+    assert edit.atom_type("Cu").hyb == "tetrahedral" and edit.atom_type("Se sp2").symbol == "Se"
     assert edit.atom_type("C") is edit.PALETTE["C sp3"]
     assert edit.atom_type("#N") is edit.atom_type("≡N") is edit.PALETTE["≡N"]
     assert edit.atom_type(" c SP2 ").key == "C sp2"
@@ -473,6 +487,63 @@ def test_set_positions_is_one_undoable_step():
     with pytest.raises(EditError):
         m.set_positions(np.full_like(before, np.nan))
     assert np.array_equal(m.positions, before) and not m.history.can_undo
+
+
+@pytest.mark.parametrize("metal, geometry, ligand, angles", [
+    ("Fe2+", "octahedral", "O sp3", {90, 180}), ("Zn2-", "tetrahedral", "Cl", {109}),
+    ("Ag+", "linear", "N sp3", {180}), ("Ni", "square planar", "Cl", {90, 180}), ("Al", "trigonal", "Cl", {120})])
+def test_metal_centres_built_and_minimized_with_uff(metal, geometry, ligand, angles):
+    m = EditableMolecule(auto_relax=True)
+    c = m.add_atom(f"{metal} {geometry}")
+    assert m.atom_state(c).hyb == geometry and len(m.free_valences(c)) == edit.COORDINATION[geometry]
+    assert m.n_atoms == 1                               # no hydrogens on a metal: its sites stay open
+    while m.free_valences(c):
+        m.attach_atom(m.free_valences(c)[0], ligand)
+    assert m.problems() == [] and m.forcefield()[0] == "UFF" and "no parameters for" in m.forcefield()[1]
+    res = m.minimize()
+    assert res.forcefield == "UFF" and "MMFF94 has no parameters" in res.note
+    pos = m.positions
+    u = [(pos[n] - pos[c]) / np.linalg.norm(pos[n] - pos[c]) for n in m.neighbors(c)]
+    seen = {round(math.degrees(math.acos(np.clip(np.dot(a, b), -1, 1)))) for a, b in itertools.combinations(u, 2)}
+    assert all(min(abs(s - a) for a in angles) <= 6 for s in seen), seen
+    mol = m.to_mol()
+    assert sum(a.GetNumRadicalElectrons() for a in mol.GetAtoms() if a.GetSymbol() != metal.rstrip("+-0123456789")) == 0
+
+
+@pytest.mark.parametrize("relax", [False, True])
+def test_square_planar_with_mixed_ligands_stays_planar(relax):
+    """UFF's general angle term puts a maximum at 180° for a square-planar centre: with two kinds of ligand (cis-
+    PtCl2(NH3)2, NH3 drawn as N+ on Pt2-) the centre folded toward a tetrahedron until trans pairs were held."""
+    m = EditableMolecule(auto_relax=relax)
+    pt = m.add_atom("Pt2- square planar")
+    for ligand in ("Cl", "Cl", "N+ sp3", "N+ sp3"):
+        m.attach_atom(m.free_valences(pt)[0], ligand)
+    m.minimize()
+    pos = m.positions
+    u = [(pos[n] - pos[pt]) / np.linalg.norm(pos[n] - pos[pt]) for n in m.neighbors(pt)]
+    angles = sorted(math.degrees(math.acos(np.clip(np.dot(a, b), -1, 1))) for a, b in itertools.combinations(u, 2))
+    assert all(abs(a - 90) < 4 for a in angles[:4]) and all(a > 177 for a in angles[4:]), angles
+    assert Chem.MolToSmiles(Chem.RemoveHs(m.to_mol()), isomericSmiles=False).count("[NH3+]") == 2
+
+
+def test_metal_sites_follow_existing_bonds_and_uff_fallback():
+    m = EditableMolecule()
+    c = m.add_atom("C sp3")
+    cu = m.attach_atom(m.free_valences(c)[0], "Cu square planar")
+    assert m.symbol(cu) == "Cu" and len(m.free_valences(cu)) == 3                # one site taken by the carbon
+    d = [m.free_valences(cu)[k].vector for k in range(3)] + [m.positions[c] - m.positions[cu]]
+    d = [v / np.linalg.norm(v) for v in d]
+    assert abs(np.dot(np.cross(d[0], d[1]), d[2])) < 1e-6                         # all four in one plane
+    for v in m.free_valences(cu):
+        m.attach_atom(v, "Cl")
+    res = m.minimize()
+    assert res.forcefield == "UFF" and "no square planar Cu" in res.note       # UFF has no square-planar Cu type
+    with pytest.raises(EditError, match="single"):
+        m.set_bond_order(cu, c, 2)
+    m.set_charge(cu, 1)                                 # a metal keeps its geometry: only the charge changes
+    assert m.atom_state(cu).hyb == "square planar" and m.atom_state(cu).charge == 1
+    k = m.replace_atom(cu, "Pt square planar")
+    assert m.symbol(k) == "Pt" and m.atom_state(k).hyb == "square planar"
 
 
 # ====================================================================== import and export

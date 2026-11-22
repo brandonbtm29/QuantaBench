@@ -3,18 +3,29 @@
 ## Unreleased (after 0.3.0)
 
 ### The 3D model kit's Build mode (UI-7, 2026-11-22)
-- **Build mode** in the 3D view (View toolbar *Build*, Ctrl+4) and a **Model Kit** dock in the Build workspace, as in
-  Spartan: pick an atom type (C sp3 / sp2 / sp, N, O, P, S, Si, H, halogens, =O, =S, ≡N, drawn with their
-  geometry), a group, ring or PFAS piece, or type a SMILES or InChI. Free valences are drawn as stubs; click one to
-  attach the choice at its ideal bond length and direction, click an atom to replace it, click in empty space to
-  place the first atom (Shift+click: a separate piece). A drag still rotates; Ctrl+click selects.
+- **Build mode** in the 3D view (View toolbar *Build*, Ctrl+4) and a **Model Kit** dock in the Build workspace. Pick
+  an element (a row of common elements; the others, metals included, in a compact periodic table), then its geometry
+  (each drawn as a small schematic: tetrahedral, pyramidal, bent, trigonal planar, linear, terminal; S, Se, P and As
+  also at their higher valences), its charge and the bond it attaches by; or a fragment (functional groups, ring
+  systems, small substituents, PFAS pieces) or a SMILES or InChI. Free valences are drawn as stubs; click one to attach
+  the choice at its ideal bond length and direction, click an atom to replace it, click in empty space to place the
+  first atom (Shift+click: a separate piece). A drag still rotates; Ctrl+click selects.
+- **Metals** (s- and d-block, Al, Ga, In, Tl, Sn, Pb, Bi) are coordination centres: terminal, linear, trigonal,
+  tetrahedral, square planar, trigonal bipyramidal or octahedral, chosen by the user; open sites stay empty. Minimize
+  and the relax use UFF for them (MMFF94 has no parameters), with the metal typed by its geometry; the dock says which
+  force field applies and why. Trans ligands of a square-planar, trigonal-bipyramidal or octahedral metal are held
+  at 179-180° under UFF, whose general angle term would otherwise fold a square-planar centre.
 - **Edit tools** on the selected atoms: delete (atoms or a whole piece), bond order, charge ±, make / break a bond,
-  a box that sets the selected distance, angle or dihedral, Add H, and **Minimize** (MMFF94, UFF fallback, selected
-  atoms frozen on request). A quick local relax follows each edit.
-- **Edit > Undo / Redo** (Ctrl+Z, Ctrl+Y) for every Model Kit edit, Move-mode drags during an edit included.
+  a box that sets the selected distance, angle or dihedral, Add H, and **Minimize** (selected atoms frozen on
+  request). A quick local relax follows each edit.
+- **Edit > Undo / Redo** (Ctrl+Z, Ctrl+Y) for every Model Kit edit, Move-mode drags during an edit included. The mouse
+  modes and Undo / Redo are named actions (`view.mode_build`, `edit.undo`, ...) with their default keys in
+  `gui.action_ids`, ready for a rebinding page.
 - **Add to list** puts the structure in the molecule list with its 3D coordinates (source "model kit"); **Replace**
   updates the molecule the edit started from. Entering Build mode edits the selected molecule.
 - The Build workspace's default layout changed: saved window layouts of an older version are reset once.
+- Fixed: the Results dock could undo a resize by hand when the event loop was slow (the fold recorded the user's
+  height as its own and restored the old one when unfolding).
 
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
@@ -787,8 +798,8 @@ Of the 13,206 molecules of b01-b15, 8 failed in the gas phase and 13 in water, f
 
 ### 3D model kit core (UI-7, 2026-11-07)
 - **Edit model** (`chem/edit.py`, no GUI yet): an RDKit molecule with 3D coordinates where every change is an
-  undoable command. Pick an atom type (C sp3 / sp2 / sp, N, O, P, S, Si, H, halogens, =O, =S, ≡N, as in
-  Spartan's Organic tab) or a fragment and attach it at a free valence: it goes at its ideal bond length, and
+  undoable command. Pick an atom type (an element with its hybridization: C sp3 / sp2 / sp, N, O, P, S, Si,
+  H, halogens, =O, =S, ≡N) or a fragment and attach it at a free valence: it goes at its ideal bond length, and
   its open valences get hydrogens. Also replace an atom, delete, bond order, formal charge, make/break bond,
   set distance / angle / dihedral (the smaller side moves; ring bonds are refused), Minimize (MMFF94, UFF
   when MMFF has no parameters, frozen atoms) and a local relax near the last edit. SMILES and MOL blocks in

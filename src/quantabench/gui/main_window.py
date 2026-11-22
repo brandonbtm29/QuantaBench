@@ -76,12 +76,14 @@ from .settings_dialog import SettingsDialog, method_keys, method_label
 from .viewer2d import MoleculeViewer2D
 from .viewer3d import COLOR_MODES, LABEL_MODES, STYLES, MoleculeViewer3D
 
-MODE_ACTIONS = (("rotate", "Rotate", "Ctrl+1", "Drag rotates the view (click selects, Ctrl+click adds)"),
-                ("select", "Select", "Ctrl+2", "Drag draws a selection box"),
-                ("move", "Move", "Ctrl+3", "Drag on a molecule rotates it rigidly, Shift+drag slides it "
-                                           "(press on a selected atom to move only the selection)"),
-                ("build", "Build", "Ctrl+4", "Model Kit: click a free valence to attach the chosen atom or group, "
-                                             "an atom to replace it; drag rotates, Ctrl+click selects"))
+#: The 3D view's mouse modes: (mode, text, tip). Their actions are named ``view.mode_<mode>``; the default shortcuts
+#: are in ``gui.action_ids``.
+MODE_ACTIONS = (("rotate", "Rotate", "Drag rotates the view (click selects, Ctrl+click adds)"),
+                ("select", "Select", "Drag draws a selection box"),
+                ("move", "Move", "Drag on a molecule rotates it rigidly, Shift+drag slides it "
+                                 "(press on a selected atom to move only the selection)"),
+                ("build", "Build", "Model Kit: click a free valence (stub) to attach the chosen atom or fragment, "
+                                   "an atom to replace it; drag rotates, Ctrl+click selects"))
 BATCHED_CHOICES = (("auto", "Auto (batched on a GPU)"), ("on", "Always batched"), ("off", "One at a time (ASE)"))
 
 STAGES = [
@@ -773,8 +775,12 @@ class MainWindow(QMainWindow):
         self.mode_group = QActionGroup(self)
         self.mode_group.setExclusive(True)
         self.mode_actions = {}
-        for key, text, shortcut, tip in MODE_ACTIONS:
-            a = act(text, lambda _checked=False, k=key: self.set_view_mode(k), shortcut, f"{tip} ({shortcut})")
+        from .action_ids import bind
+
+        for key, text, tip in MODE_ACTIONS:
+            a = bind(act(text, lambda _checked=False, k=key: self.set_view_mode(k)), f"view.mode_{key}")
+            keys = a.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
+            a.setToolTip(f"{tip} ({keys})" if keys else tip)
             a.setCheckable(True)
             self.mode_group.addAction(a)
             self.mode_actions[key] = a

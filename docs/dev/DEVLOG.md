@@ -361,3 +361,40 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Seen on the way, also on `main`:** a "Pipeline / Surfaces" tab bar left at the right edge of the 3D view after
   the start-up switch to Build (BACKLOG UI-1b); `test_gui_declutter.py::test_results_dock_folds_for_one_conformer`
   fails in the cloud container under xvfb on `main` as well (dock heights).
+
+## 2026-11-22 (later): the Model Kit as QuantaBench's own design, metals, two layout findings (UI-7, PR #44)
+- **Own design.** Brandon asked for the kit not to mirror another program's for IP reasons. It no longer has a fixed
+  palette of hybridized atom types:
+  - *element*: a common-element row, plus a compact periodic table under "Inorganic and other elements";
+  - *geometry*: `edit.geometry_options` lists what the element can take at the chosen charge. VSEPR shapes come from
+    the same lone-pair arithmetic as the edit model; for metals, every coordination geometry RDKit accepts that many
+    bonds for. The icons are schematics drawn here: dots for bond sites, dashed rings for lone pairs, faint polyhedron
+    edges.
+  - *Charge* and *Bond to it*: "=O" is now O, terminal, Double.
+  - The fragment menus have new names.
+  - The named types stay as an API (`edit.atom_type`, short names in the geometry list), but the 19-type list and
+    its order are gone.
+- **Metals.**
+  - `COORDINATION` geometries with `IDEAL_SITES`. Sites are fitted to existing bonds by Kabsch over all assignments
+    (at most 720 for an octahedron with five bonds).
+  - Metals have no lone pairs and no hydrogens on open sites. They are perceived by degree when a molecule is
+    loaded (four neighbours with one pair opposite: square planar).
+  - Under UFF, RDKit leaves a six-coordinate metal's hybridization unspecified, and UFF typing then fails.
+    `_set_metal_hybridization` sets it from the geometry, and `_uff_fallback` tries the metal's other types when UFF
+    has none for the chosen one (square-planar Cu, trigonal-bipyramidal Fe).
+  - **The square-planar bug:** UFF's angle parameter for Pt is 90°, but RDKit special-cases only octahedral centres.
+    The general cosine term for θ₀ = 90° is K/4 (1 + cos 2θ), whose maximum is at 180°, so trans ligands sat on an
+    unstable point. A symmetric NiCl4 stayed put, while cis-PtCl2(NH3)2 folded to 49-108°. Trans pairs are now held
+    at 179-180° (`UFFAddAngleConstraint`), and the result is 90° and 179°. Test: mixed-ligand Pt, with and without
+    the relax.
+- **UI-1b is not a bug in the app.** The stale tab bars showed only when a script pumps `processEvents()` without
+  `DeferredDelete`; a real event loop shows none. Hiding the bars by hand crashed Qt (gdb: `QWidget::ensurePolished`
+  under `QMainWindowLayout::animationFinished`, reached from a deleted widget's animation), so that fix was dropped
+  and the smoke script now pumps events as the tests do.
+- **The declutter test was a real race.** `ResultsFolder._record` runs from `singleShot(0)` and stored whatever height
+  the dock had then. On a slow loop, the test's resize to 360 px came first, so unfolding restored 190 px over the
+  user's height. A traced run showed `[record] height=360 folded_to=360`, then `[unfold]`. It now records only a
+  height below the one before the fold.
+- **Shortcuts.** `gui/action_ids.py` names the actions (`view.mode_*`, `edit.undo`, `edit.redo`, `build.model_kit`)
+  and holds their default keys. Undo and Redo are the platform's standard keys (plus Ctrl+Y). None of the keys were
+  chosen to match another program; Ctrl+4 continues QuantaBench's Ctrl+1 to Ctrl+3 mouse modes.

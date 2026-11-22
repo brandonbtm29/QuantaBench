@@ -1,39 +1,47 @@
-"""The Model Kit dock (UI-7): Spartan-style building in the 3D view.
+"""The Model Kit dock (UI-7): build and edit a molecule in the 3D view.
 
-    install(win)    adds the Model Kit dock (Build workspace), Edit > Undo / Redo (Ctrl+Z, Ctrl+Y) and the controller
-                    of the 3D view's Build mode (View toolbar, Ctrl+4) to a MainWindow
+    install(win)    adds the Model Kit dock (Build workspace), Edit > Undo / Redo and the controller of the 3D view's
+                    Build mode (View toolbar) to a MainWindow
 
-An **edit** is a session on one ``chem.edit.EditableMolecule``. Entering Build mode starts one: on the molecule
-selected in the list (its shown conformer when it is built, else its input structure), or on an empty model when
-nothing is selected (**New** starts an empty one, **Edit selected** loads the selected molecule). While an edit is
-open the kit owns the 3D and 2D views, as the Surface Builder does: selecting another molecule in the list does not
-change them, and the other mouse modes (Rotate to select atoms for the edit tools, Move to place a second piece) act
-on the model. **Add to list** hands the structure over as a new molecule (``model.to_input``: the 3D coordinates go
-with it, source "model kit") and **Replace <id>** gives the molecule the edit started from the new structure; both
-end the edit, as Spartan's Done does. **Close** drops it.
+**Choosing what to build** goes element first, then geometry:
 
-In Build mode the view draws every free valence as a stub (``MoleculeViewer3D.set_stubs``; hydrogens are stubs
-there) and reports clicks (``buildClicked``), which this module turns into edits (MODEL_KIT_GUI.md):
+1. *Element*: a row of tiles for the common elements (``edit.COMMON_ELEMENTS``) and, in the section **Inorganic and
+   other elements**, a compact periodic table (periods 1-6). Metals are coordination centres; the other elements
+   follow VSEPR.
+2. *Geometry*: the shapes that element can take at the chosen charge (``edit.geometry_options``), each drawn as a
+   small schematic (bond sites as dots, lone pairs as rings, the polyhedron's edges faint) and named by its shape:
+   tetrahedral, pyramidal, bent, trigonal planar, linear, terminal for a main-group atom (with its hybridization in the
+   tooltip; a higher valence of S, Se, P, As is a geometry of its own); terminal, linear, trigonal, tetrahedral, square
+   planar, trigonal bipyramidal and octahedral for a metal.
+3. *Charge* and *Bond to it* (Auto, Single, Double, Triple): a carbonyl oxygen is O, terminal, Double; a nitrile N is
+   N, terminal, Triple.
 
-====================  ======================  =====================================================
-Click                 Palette choice          Edit
-====================  ======================  =====================================================
-stub                  atom type               ``attach_atom`` at that free valence
-stub                  group / ring / PFAS     ``attach_fragment``
-atom                  atom type               ``replace_atom``
-empty space           anything                ``add_atom`` / ``add_fragment`` there, when the model is
-                                              empty or with Shift (a separate piece)
-Ctrl+click            -                       select (for the edit tools), as in Rotate mode
-====================  ======================  =====================================================
+Or a *fragment*: Functional groups, Ring systems, Small substituents, PFAS pieces (``chem.fragments``; the (CF2)n and
+CnF2n+1 lengths come from the n box), or any SMILES or InChI typed in the box.
 
-The edit tools act on the selected atoms: Delete (atoms, or the whole piece), bond order (1 → 2 → 3), charge ±,
+**An edit** is a session on one ``chem.edit.EditableMolecule``. Entering Build mode starts one: on the molecule
+selected in the list (its shown conformer when it is built), or on an empty model when nothing is selected (**New**
+starts an empty one, **Edit selected** loads the selected molecule). While an edit is open the kit owns the 3D and 2D
+views, as the Surface Builder does: selecting another molecule in the list does not change them, and the other mouse
+modes (Rotate to select atoms for the edit tools, Move to place a second piece) act on the model. **Add to list**
+hands the structure over as a new molecule (``model.to_input``: the 3D coordinates go with it, source "model kit")
+and **Replace <id>** gives the molecule the edit started from the new structure; both end the edit. **Close** drops
+it.
+
+In Build mode the view draws every free valence as a stub (``MoleculeViewer3D.set_stubs``; hydrogens are stubs there)
+and reports clicks (``buildClicked``), which this module turns into edits (MODEL_KIT_GUI.md): a stub attaches the
+current choice there, an atom is replaced by the current atom type, a click in empty space places the first atom or
+fragment of an empty model (Shift+click: a separate piece), and Ctrl+click selects.
+
+The edit tools act on the selected atoms: Delete (atoms, or the whole piece), bond order (1 -> 2 -> 3), charge ±,
 make and break a bond, the measured distance / angle / dihedral (2, 3 or 4 atoms) set to a typed value, Add H and
-Minimize (MMFF94, UFF when MMFF has no parameters, the selection frozen when asked). A quick local relax runs inside
-each edit (``model.auto_relax``), so Undo takes it back too. A failed edit (``EditError``) is reported on the
-message line and changes nothing.
+Minimize (MMFF94; UFF when MMFF94 has no parameters, which the dock says, as for metals; the selection frozen when
+asked). A quick local relax runs inside each edit (``model.auto_relax``), so Undo takes it back too. A failed edit
+(``EditError``) is reported on the message line and changes nothing.
 
 Every edit is a ``chem.edit.Command``; ``UndoAdaptor`` is the ``model.history`` that puts them on a ``QUndoStack``
-(Edit > Undo / Redo). The handlers (``click_stub``, ``click_atom``, ``click_space``, ``choose``, the tools) are
+(Edit > Undo / Redo, named actions ``edit.undo`` / ``edit.redo``, default keys in ``gui.action_ids``). The handlers
+(``click_stub``, ``click_atom``, ``click_space``, ``choose``, ``choose_element``, ``choose_geometry``, the tools) are
 plain methods, which the tests call directly.
 """
 
@@ -43,21 +51,11 @@ import dataclasses
 import math
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (
-    QAction,
-    QColor,
-    QFont,
-    QIcon,
-    QKeySequence,
-    QPainter,
-    QPen,
-    QPixmap,
-    QUndoCommand,
-    QUndoStack,
-)
+from PySide6.QtCore import QPointF, QSize, Qt
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDockWidget,
     QDoubleSpinBox,
     QGridLayout,
@@ -82,10 +80,59 @@ from ..chem.fragments import Fragment
 
 TITLE = "Model Kit"
 SOURCE = "model kit"
-#: the "More" menu: charged and hypervalent atom types after the Organic tab
-MORE_TYPES = tuple(k for k in kit.PALETTE if k not in kit.ORGANIC)
-COLUMNS = 5                     # atom buttons per row
 FIRST_VIEW_EXTENT = 10.0        # Å the view spans around the first atom of a new model
+COMMON_COLUMNS = 6              # common-element tiles per row
+GEOMETRY_COLUMNS = 4            # geometry buttons per row
+BONDS = (("Auto", None), ("Single", 1), ("Double", 2), ("Triple", 3))
+CHARGES = (-3, -2, -1, 0, 1, 2, 3)
+#: Fragment menus: (title, fragments). The library's categories, under QuantaBench's own names.
+FRAGMENT_MENUS = (("Functional groups", "group"), ("Ring systems", "ring"), ("Small substituents", "substituent"),
+                  ("PFAS pieces", "pfas"))
+
+#: The compact periodic table: one string per period, a symbol per column (18 columns, "." = empty). Lanthanides
+#: and actinides after La are left out.
+PERIODIC_ROWS = (
+    "H . . . . . . . . . . . . . . . . He",
+    "Li Be . . . . . . . . . . B C N O F Ne",
+    "Na Mg . . . . . . . . . . Al Si P S Cl Ar",
+    "K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr",
+    "Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe",
+    "Cs Ba La Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn",
+)
+NOBLE_GASES = frozenset("He Ne Ar Kr Xe Rn".split())
+#: Tile colours by kind of element (QuantaBench's own scheme)
+_KIND_RGB = {"nonmetal": (214, 226, 240), "halogen": (210, 236, 214), "metalloid": (244, 230, 196),
+             "s-metal": (246, 214, 210), "d-metal": (226, 216, 242), "p-metal": (208, 232, 232),
+             "noble": (225, 225, 225)}
+_HALOGENS = frozenset("F Cl Br I At".split())
+_METALLOIDS = frozenset("B Si Ge As Sb Te Po".split())
+_S_METALS = frozenset("Li Na K Rb Cs Be Mg Ca Sr Ba".split())
+_P_METALS = frozenset("Al Ga In Tl Sn Pb Bi".split())
+
+
+def element_kind(symbol: str) -> str:
+    if symbol in NOBLE_GASES:
+        return "noble"
+    if symbol in _HALOGENS:
+        return "halogen"
+    if symbol in _METALLOIDS:
+        return "metalloid"
+    if symbol in _S_METALS:
+        return "s-metal"
+    if symbol in _P_METALS:
+        return "p-metal"
+    if symbol in kit.METALS:
+        return "d-metal"
+    return "nonmetal"
+
+
+def element_name(symbol: str) -> str:
+    try:
+        from ase.data import atomic_names, atomic_numbers
+
+        return atomic_names[atomic_numbers[symbol]].lower()
+    except (ImportError, KeyError, IndexError):
+        return symbol
 
 
 # ====================================================================== undo
@@ -123,30 +170,30 @@ class UndoAdaptor:
         return result
 
 
-# ====================================================================== icons
-def _element_rgb(symbol: str) -> QColor:
-    from ase.data import atomic_numbers
-    from ase.data.colors import jmol_colors
-
-    r, g, b = (jmol_colors[atomic_numbers[symbol]] * 255).round().astype(int)
-    return QColor(int(r), int(g), int(b))
+# ====================================================================== geometry icons
+#: a fixed oblique view for the schematics: turned 25° about x, then -35° about y
+_VIEW = (np.array([[math.cos(-0.61), 0, math.sin(-0.61)], [0, 1, 0], [-math.sin(-0.61), 0, math.cos(-0.61)]])
+         @ np.array([[1, 0, 0], [0, math.cos(0.44), -math.sin(0.44)], [0, math.sin(0.44), math.cos(0.44)]]))
 
 
-def _stub_angles(t: AtomType) -> list[tuple[float, float]]:
-    """(angle in degrees, length factor) of the stubs an atom type's icon shows: its sigma bonds in the 2D picture
-    of its geometry (a tetrahedron's fourth bond foreshortened)."""
-    domains = {4: [(90, 1.0), (205, 1.0), (335, 1.0), (270, 0.55)], 3: [(90, 1.0), (210, 1.0), (330, 1.0)],
-               2: [(180, 1.0), (0, 1.0)], 1: [(180, 1.0)]}[kit.DOMAINS.get(t.hyb, 4) if t.symbol != "H" else 1]
-    if t.bond_order:                      # =O, =S, ≡N: one multiple bond to the left
-        return [(180, 1.0)]
-    n = max(1, t.sigma)
-    if n == 2 and len(domains) == 4:      # bent (O sp3): the two lower bonds
-        return domains[1:3]
-    return domains[:n]
+def site_directions(t: AtomType) -> tuple[np.ndarray, int]:
+    """(unit vectors of all of ``t``'s domains, how many of them are bonds); the rest are lone pairs."""
+    if t.hyb in kit.COORDINATION:
+        dirs = kit.IDEAL_SITES[t.hyb]
+        return dirs, len(dirs)
+    n = kit.DOMAINS.get(t.hyb, 4)
+    dirs = np.array(kit.domain_directions([], n)) if n > 1 else np.array([[1.0, 0, 0]])
+    bonds = max(1, min(n, t.sigma))
+    if n == 4:          # upright: a lone pair on top when there is one (pyramidal, bent), else a bond
+        up = dirs[-1] if bonds < n else dirs[0]
+        dirs = dirs @ kit._align(up, np.array([0.0, 1.0, 0.0])).T
+    return dirs, bonds
 
 
-def atom_icon(t: AtomType, size: int = 40) -> QIcon:
-    """The atom with its free valences in their geometry, as Spartan's Organic tab draws them."""
+def geometry_icon(t: AtomType, color: QColor, size: int = 34) -> QIcon:
+    """A schematic of ``t``'s geometry: the centre, a dot per bond site, a ring per lone pair, faint polyhedron
+    edges."""
+    dirs, n_bonds = site_directions(t)
     out = QIcon()
     for scale in (1, 2):
         pm = QPixmap(size * scale, size * scale)
@@ -155,38 +202,66 @@ def atom_icon(t: AtomType, size: int = 40) -> QIcon:
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         c = QPointF(size / 2, size / 2)
-        r_atom = size * 0.25
-        r_stub = size * 0.48
-        order = t.bond_order or 1
-        pen = QPen(QColor(110, 115, 125), max(1.4, size / 22))
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        r = size * 0.38
+        pts = [QPointF(c.x() + r * v[0], c.y() - r * v[1]) for v in (dirs @ _VIEW.T)]
+        if len(dirs) >= 3:      # the polyhedron's edges: pairs at the smallest angle between sites
+            cos = dirs @ dirs.T
+            smallest = min(cos[i, j] for i in range(len(dirs)) for j in range(i))
+            faint = QColor(color)
+            faint.setAlpha(70)
+            p.setPen(QPen(faint, 1.0))
+            for i in range(len(dirs)):
+                for j in range(i):
+                    if cos[i, j] >= smallest - 0.05 or len(dirs) == 3:
+                        p.drawLine(pts[i], pts[j])
+        pen = QPen(color, max(1.3, size / 24))
         p.setPen(pen)
-        for ang, f in _stub_angles(t):
-            u = QPointF(math.cos(math.radians(ang)), -math.sin(math.radians(ang)))
-            n = QPointF(-u.y(), u.x())
-            for k in range(order):
-                off = (k - (order - 1) / 2) * size * 0.09
-                p.drawLine(c + n * off, c + u * (r_stub * f) + n * off)
-        color = _element_rgb(t.symbol)
-        p.setPen(QPen(color.darker(150), 1.0))
+        for k, q in enumerate(pts):
+            if k < n_bonds:
+                p.drawLine(c, q)
         p.setBrush(color)
-        p.drawEllipse(c, r_atom, r_atom)
-        font = QFont()
-        font.setPixelSize(int(size * 0.27))
-        font.setBold(True)
-        p.setFont(font)
-        p.setPen(QColor(20, 20, 20) if color.lightness() > 110 else QColor(245, 245, 245))
-        label = t.symbol + ("+" if t.charge > 0 else "-" if t.charge < 0 else "")
-        p.drawText(QRectF(c.x() - r_atom * 1.6, c.y() - r_atom, r_atom * 3.2, r_atom * 2),
-                   Qt.AlignmentFlag.AlignCenter, label)
+        for k, q in enumerate(pts):
+            if k < n_bonds:
+                p.drawEllipse(q, size * 0.07, size * 0.07)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(color, 1.0, Qt.PenStyle.DashLine))
+        for k, q in enumerate(pts):
+            if k >= n_bonds:
+                p.drawEllipse(QPointF((c.x() + q.x()) / 2 + (q.x() - c.x()) * 0.25,
+                                      (c.y() + q.y()) / 2 + (q.y() - c.y()) * 0.25), size * 0.08, size * 0.08)
+        p.setPen(QPen(color, 1.0))
+        p.setBrush(QColor(color.red(), color.green(), color.blue(), 160))
+        p.drawEllipse(c, size * 0.11, size * 0.11)
         p.end()
         out.addPixmap(pm)
     return out
 
 
+def _geometry_label(t: AtomType) -> str:
+    name = kit.shape_name(t)
+    if t.valence is not None and t.hyb not in kit.COORDINATION:
+        name += f" ({t.valence})"
+    return name.replace("trigonal bipyramidal", "trig. bipyramid").replace("trigonal planar", "trig. planar")
+
+
+def _geometry_tip(t: AtomType) -> str:
+    q = kit.charge_text(t.charge)
+    if t.hyb in kit.COORDINATION:
+        return (f"{t.symbol}{q}, {t.hyb}: {t.sigma} coordination site{'s' if t.sigma != 1 else ''} (single bonds; "
+                "open sites stay empty)")
+    lp = kit.lone_pairs(t)
+    bits = [f"{t.symbol}{q} {t.hyb}, valence {t.total_valence}", f"{t.sigma} σ bond{'s' if t.sigma != 1 else ''}"]
+    if t.pi:
+        bits.append(f"{t.pi} π")
+    if lp:
+        bits.append(f"{lp} lone pair{'s' if lp != 1 else ''}")
+    return ": ".join([bits[0], ", ".join(bits[1:])])
+
+
 # ====================================================================== the dock's widget and controller
 class ModelKitPanel(QWidget):
-    """The palette, the edit tools and the controller of the 3D view's Build mode (module docstring)."""
+    """The element and geometry pickers, the fragments, the edit tools and the controller of the 3D view's Build mode
+    (module docstring)."""
 
     def __init__(self, win, parent=None):
         super().__init__(parent)
@@ -195,10 +270,14 @@ class ModelKitPanel(QWidget):
         self.active = False                 # an edit is open: the kit owns the 3D and 2D views
         self.source_id: str | None = None   # the listed molecule this edit started from
         self.source_name = ""
+        self.element = "C"
+        self.options: list[AtomType] = []   # the element's geometries at the chosen charge
+        self.geometry: AtomType | None = None
         self.choice: AtomType | Fragment = kit.atom_type("C sp3")
         self.valences: list[kit.FreeValence] = []   # the stubs, in the order the view draws them
         self.message = ""
         self._shown_n = -1
+        self._syncing = False
         self.stack = QUndoStack(self)
         self.stack.setUndoLimit(500)
 
@@ -220,7 +299,7 @@ class ModelKitPanel(QWidget):
         lay.addWidget(self.editing_label)
         row = QHBoxLayout()
         self.b_new = QPushButton("New")
-        self.b_new.setToolTip("Start an empty model: click in the 3D view (Build mode) to place the first atom")
+        self.b_new.setToolTip("Start an empty model, in Build mode: click in the 3D view to place the first atom")
         self.b_new.clicked.connect(lambda _c=False: self.new() and self._to_build_mode())
         self.b_edit = QPushButton("Edit selected")
         self.b_edit.setToolTip("Edit the molecule selected in the list (its shown conformer when it is built)")
@@ -229,63 +308,93 @@ class ModelKitPanel(QWidget):
         row.addWidget(self.b_edit)
         lay.addLayout(row)
 
-        # ---- palette: atoms
-        lay.addWidget(_heading("Atoms"))
+        # ---- element
+        lay.addWidget(_heading("1. Element"))
         grid = QGridLayout()
         grid.setSpacing(2)
-        self.atom_buttons: dict[str, QToolButton] = {}   # checked: the current choice (none for a group)
-        for k, key in enumerate(kit.ORGANIC):
-            t = kit.PALETTE[key]
-            b = QToolButton()
-            b.setText(key)
-            b.setIcon(atom_icon(t))
-            b.setIconSize(_size(28))
-            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-            b.setCheckable(True)
-            b.setAutoRaise(True)
-            b.setMinimumWidth(54)
-            b.setToolTip(_type_tip(t))
-            b.clicked.connect(lambda _c=False, key=key: self.choose(key))
-            self.atom_buttons[key] = b
-            grid.addWidget(b, k // COLUMNS, k % COLUMNS)
+        self.element_buttons: dict[str, QToolButton] = {}
+        for k, sym in enumerate(kit.COMMON_ELEMENTS):
+            b = self._element_tile(sym, 30)
+            grid.addWidget(b, k // COMMON_COLUMNS, k % COMMON_COLUMNS)
         lay.addLayout(grid)
+        from .collapsible import Section
 
-        # ---- palette: groups, rings, PFAS, more, text
-        lay.addWidget(_heading("Groups and rings"))
+        table = QWidget()
+        tl = QGridLayout(table)
+        tl.setContentsMargins(0, 2, 0, 2)
+        tl.setHorizontalSpacing(1)
+        tl.setVerticalSpacing(1)
+        self.table_buttons: dict[str, QToolButton] = {}
+        for r, period in enumerate(PERIODIC_ROWS):
+            for col, sym in enumerate(period.split()):
+                if sym == ".":
+                    continue
+                b = self._element_tile(sym, 18, in_table=True)
+                tl.addWidget(b, r, col)
+        legend = QLabel("Tiles: nonmetal, <span style='background:#d2ecd6'>&nbsp;halogen&nbsp;</span> "
+                        "<span style='background:#f4e6c4'>&nbsp;metalloid&nbsp;</span> "
+                        "<span style='background:#f6d6d2'>&nbsp;s-block&nbsp;</span> "
+                        "<span style='background:#e2d8f2'>&nbsp;d-block&nbsp;</span> "
+                        "<span style='background:#d0e8e8'>&nbsp;p-block metal&nbsp;</span>. "
+                        "Metals are built as coordination centres (UFF for Minimize).")
+        legend.setWordWrap(True)
+        legend.setStyleSheet("color: gray;")
+        tl.addWidget(legend, len(PERIODIC_ROWS), 0, 1, 18)
+        self.table_section = Section("Inorganic and other elements", table, key="kit_elements", open_=False)
+        lay.addWidget(self.table_section)
+        self.element_label = QLabel()
+        self.element_label.setWordWrap(True)
+        lay.addWidget(self.element_label)
+
+        # ---- geometry, charge, bond
+        lay.addWidget(_heading("2. Geometry"))
+        self.geometry_grid = QGridLayout()
+        self.geometry_grid.setSpacing(2)
+        lay.addLayout(self.geometry_grid)
+        self.geometry_buttons: list[QToolButton] = []
         row = QHBoxLayout()
-        self.menus: dict[str, QMenu] = {}
-        for name, entries in (("Groups", frag_lib.by_category("group") + [frag_lib.get("CF3")]),
-                              ("Rings", frag_lib.by_category("ring")),
-                              ("Substituents", frag_lib.by_category("substituent"))):
-            row.addWidget(self._menu_button(name, entries))
+        row.addWidget(QLabel("Charge"))
+        self.charge_box = QComboBox()
+        for q in CHARGES:
+            self.charge_box.addItem(f"{q:+d}" if q else "0", q)
+        self.charge_box.setCurrentIndex(CHARGES.index(0))
+        self.charge_box.setToolTip("Formal charge of the new atom (the geometries follow it: N+ is tetrahedral)")
+        self.charge_box.currentIndexChanged.connect(lambda _i: self._on_charge())
+        row.addWidget(self.charge_box)
+        row.addWidget(QLabel("Bond to it"))
+        self.bond_box = QComboBox()
+        for text, order in BONDS:
+            self.bond_box.addItem(text, order)
+        self.bond_box.setToolTip("Order of the bond from the atom it attaches to. Auto: double between two atoms that "
+                                 "each still have a π bond to make (C sp2 to C sp2), else single")
+        self.bond_box.currentIndexChanged.connect(lambda _i: self._update_choice())
+        row.addWidget(self.bond_box)
+        row.addStretch(1)
         lay.addLayout(row)
-        row = QHBoxLayout()
-        pfas = self._menu_button("PFAS", frag_lib.by_category("pfas"))
-        menu = self.menus["PFAS"]
+
+        # ---- fragments
+        lay.addWidget(_heading("Or a fragment"))
+        grid = QGridLayout()
+        grid.setSpacing(2)
+        self.menus: dict[str, QMenu] = {}
+        for k, (title, category) in enumerate(FRAGMENT_MENUS):
+            b = self._menu_button(title, frag_lib.by_category(category))
+            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            grid.addWidget(b, k // 2, k % 2)
+        menu = self.menus["PFAS pieces"]
         menu.addSeparator()
-        menu.addAction("(CF2)n chain (n from the box)", lambda: self.choose(frag_lib.cf2_chain(self.n_box.value())))
-        menu.addAction("CnF2n+1 (n from the box)", lambda: self.choose(frag_lib.perfluoroalkyl(self.n_box.value())))
-        row.addWidget(pfas)
+        menu.addAction("(CF2)n chain, n from the box", lambda: self.choose(frag_lib.cf2_chain(self.n_box.value())))
+        menu.addAction("CnF2n+1, n from the box", lambda: self.choose(frag_lib.perfluoroalkyl(self.n_box.value())))
+        lay.addLayout(grid)
+        row = QHBoxLayout()
         self.n_box = QSpinBox()
         self.n_box.setRange(1, 20)
         self.n_box.setValue(6)
         self.n_box.setPrefix("n = ")
-        self.n_box.setToolTip("Length of the PFAS menu's (CF2)n chain and CnF2n+1 group")
+        self.n_box.setToolTip("Length of the PFAS pieces' (CF2)n chain and CnF2n+1 group")
         row.addWidget(self.n_box)
-        more = QToolButton()
-        more.setText("More atoms")
-        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        more_menu = QMenu(more)
-        for key in MORE_TYPES:
-            a = more_menu.addAction(atom_icon(kit.PALETTE[key], 24), key, lambda key=key: self.choose(key))
-            a.setToolTip(_type_tip(kit.PALETTE[key]))
-        more.setMenu(more_menu)
-        self.menus["More"] = more_menu
-        row.addWidget(more)
-        lay.addLayout(row)
-        row = QHBoxLayout()
         self.text_box = QLineEdit()
-        self.text_box.setPlaceholderText("SMILES or InChI of a group")
+        self.text_box.setPlaceholderText("SMILES or InChI")
         self.text_box.setToolTip("A fragment from text: mark where it bonds with [*:1] (else its first atom bonds), "
                                  "or an InChI (its first atom bonds)")
         self.text_box.returnPressed.connect(lambda: self.use_text())
@@ -313,13 +422,13 @@ class ModelKitPanel(QWidget):
         self.b_delete.setMenu(dm)
         tools = [self.b_delete]
         for text, tip, fn in (
-                ("Bond order", "Two bonded atoms: single → double → triple → single", self.cycle_bond_order),
+                ("Bond order", "Two bonded atoms: single -> double -> triple -> single", self.cycle_bond_order),
                 ("Charge +", "One atom: formal charge + 1 (an amine N becomes ammonium)", lambda: self.change_charge(1)),
                 ("Charge −", "One atom: formal charge − 1 (a hydroxyl O becomes an oxide)",
                  lambda: self.change_charge(-1)),
                 ("Make bond", "Two atoms: bond them (a hydrogen of each makes room)", self.make_bond),
                 ("Break bond", "Two bonded atoms: break the bond", self.break_bond),
-                ("Add H", "Hydrogens on every open valence", self.add_hydrogens)):
+                ("Add H", "Hydrogens on every open valence (not on metals)", self.add_hydrogens)):
             b = QToolButton()
             b.setText(text)
             b.setToolTip(tip)
@@ -346,20 +455,24 @@ class ModelKitPanel(QWidget):
         lay.addLayout(row)
         row = QHBoxLayout()
         self.b_minimize = QPushButton("Minimize")
-        self.b_minimize.setToolTip("MMFF94 (UFF when MMFF has no parameters); open valences count as hydrogens")
+        self.b_minimize.setToolTip("MMFF94; UFF when MMFF94 has no parameters (metals and other elements it lacks); "
+                                   "open valences count as hydrogens")
         self.b_minimize.clicked.connect(lambda _c=False: self.minimize())
         self.freeze_box = QCheckBox("Freeze selected")
         self.freeze_box.setToolTip("Keep the selected atoms where they are while minimizing")
         row.addWidget(self.b_minimize)
         row.addWidget(self.freeze_box)
         lay.addLayout(row)
+        self.ff_label = QLabel()
+        self.ff_label.setWordWrap(True)
+        self.ff_label.setStyleSheet("color: gray;")
+        lay.addWidget(self.ff_label)
         self.relax_box = QCheckBox("Relax after each edit")
         self.relax_box.setChecked(True)
-        self.relax_box.setToolTip("A quick MMFF relax of the atoms near each edit (part of the edit: Undo takes it "
-                                  "back too)")
+        self.relax_box.setToolTip("A quick relax of the atoms near each edit with the same force field (part of the "
+                                  "edit: Undo takes it back too)")
         self.relax_box.toggled.connect(self._on_relax_toggled)
         lay.addWidget(self.relax_box)
-
         lay.addStretch(1)
 
         # ---- footer, always in view: problems, the last message, the hand-off
@@ -395,10 +508,126 @@ class ModelKitPanel(QWidget):
         win.viewer.coordinatesChanged.connect(self._on_coordinates_changed)
         win.selection.changed.connect(self._on_selection_changed)
         self.stack.cleanChanged.connect(self._on_clean_changed)
-        self.choose(self.choice)
+        self.choose("C sp3")
         self._update_state()
 
-    # ================================================================== palette
+    # ================================================================== element, geometry, fragment
+    def _element_tile(self, sym: str, size: int, in_table: bool = False) -> QToolButton:
+        b = QToolButton()
+        b.setText(sym)
+        b.setObjectName(f"element_{sym}" + ("_table" if in_table else ""))
+        b.setCheckable(True)
+        b.setFixedSize(QSize(size + (4 if not in_table else 0), size))
+        r, g, bl = _KIND_RGB[element_kind(sym)]
+        font = "8pt" if in_table else "10pt"
+        b.setStyleSheet(f"QToolButton {{ background: rgb({r},{g},{bl}); color: #1b1d22; border: 1px solid "
+                        f"rgb({r - 30},{g - 30},{bl - 30}); border-radius: 3px; font-size: {font}; font-weight: 600; "
+                        "padding: 0px; } QToolButton:checked { border: 2px solid #c47a00; } "
+                        "QToolButton:disabled { color: #9a9a9a; }")
+        if sym in NOBLE_GASES:
+            b.setEnabled(False)
+            b.setToolTip(f"{sym} ({element_name(sym)}): not built by the kit")
+        else:
+            b.setToolTip(f"{sym} ({element_name(sym)}), {element_kind(sym).replace('-', ' ')}")
+            b.clicked.connect(lambda _c=False, s=sym: self.choose_element(s))
+        (self.table_buttons if in_table else self.element_buttons)[sym] = b
+        return b
+
+    def choose_element(self, symbol: str, prefer: AtomType | None = None) -> AtomType | None:
+        """Make ``symbol`` the element to build with; its geometry buttons follow (keeping the previous shape when
+        it has one, ``prefer`` when given). Returns the atom type chosen, None when the element has no geometry at
+        the current charge (said on the message line)."""
+        self.element = symbol
+        charge = self.charge_box.currentData()
+        self.options = kit.geometry_options(symbol, charge)
+        self._fill_geometries()
+        for d in (self.element_buttons, self.table_buttons):
+            for sym, b in d.items():
+                b.setChecked(sym == symbol)
+        what = "coordination centre: choose its geometry" if symbol in kit.METALS else "choose its geometry"
+        self.element_label.setText(f"<b>{_html(symbol)}</b> ({_html(element_name(symbol))}), {what}"
+                                   + (" (UFF in Minimize)" if symbol not in kit.MMFF_ELEMENTS else ""))
+        if not self.options:
+            self.geometry = None
+            self.say(f"{symbol}{kit.charge_text(charge)}: no geometry at this charge", error=True)
+            self._update_choice()
+            return None
+        keep = prefer or self.geometry
+        pick = 0
+        if keep is not None:
+            same = [k for k, t in enumerate(self.options)
+                    if t.hyb == keep.hyb and t.total_valence == keep.total_valence]
+            same_hyb = [k for k, t in enumerate(self.options) if t.hyb == keep.hyb]
+            similar = [k for k, t in enumerate(self.options) if kit.shape_name(t) == kit.shape_name(keep)]
+            pick = (same or same_hyb or similar or [0])[0]
+        return self.choose_geometry(pick)
+
+    def _fill_geometries(self) -> None:
+        for b in self.geometry_buttons:
+            self.geometry_grid.removeWidget(b)
+            b.deleteLater()
+        self.geometry_buttons = []
+        color = self.palette().windowText().color()
+        for k, t in enumerate(self.options):
+            b = QToolButton()
+            b.setText(_geometry_label(t))
+            b.setObjectName(f"geometry_{k}")
+            b.setIcon(geometry_icon(t, color))
+            b.setIconSize(QSize(30, 30))
+            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            b.setCheckable(True)
+            b.setAutoRaise(True)
+            b.setMinimumWidth(78)
+            b.setToolTip(_geometry_tip(t))
+            b.clicked.connect(lambda _c=False, k=k: self.choose_geometry(k))
+            self.geometry_grid.addWidget(b, k // GEOMETRY_COLUMNS, k % GEOMETRY_COLUMNS)
+            self.geometry_buttons.append(b)
+
+    def choose_geometry(self, which: int | str) -> AtomType | None:
+        """Pick one of the element's geometries: its index, or a hybridization / geometry name (``"sp2"``,
+        ``"octahedral"``)."""
+        if isinstance(which, str):
+            idx = next((k for k, t in enumerate(self.options) if t.hyb == which or kit.shape_name(t) == which), None)
+        else:
+            idx = which if 0 <= which < len(self.options) else None
+        if idx is None:
+            self.say(f"{self.element} has no geometry {which!r} here", error=True)
+            return None
+        self.geometry = self.options[idx]
+        for k, b in enumerate(self.geometry_buttons):
+            b.setChecked(k == idx)
+        return self._update_choice()
+
+    def _on_charge(self) -> None:
+        if not self._syncing:
+            self.choose_element(self.element)
+
+    def current_atom_type(self) -> AtomType | None:
+        """The element and geometry chosen, with the bond order of *Bond to it*."""
+        if self.geometry is None:
+            return None
+        order = self.bond_box.currentData()
+        return dataclasses.replace(self.geometry, bond_order=order) if order else self.geometry
+
+    def _update_choice(self) -> AtomType | None:
+        if self._syncing:
+            return None
+        t = self.current_atom_type()
+        if t is None:
+            return None
+        self.choice = t
+        self._show_choice()
+        return t
+
+    def _show_choice(self) -> None:
+        c = self.choice
+        if isinstance(c, AtomType):
+            bond = {2: ", attached by a double bond", 3: ", attached by a triple bond"}.get(c.bond_order or 0, "")
+            self.choice_label.setText(f"Next: <b>{_html(c.symbol + kit.charge_text(c.charge))}</b>, "
+                                      f"{_html(_geometry_label(c))}{bond}. A stub attaches it, an atom becomes it.")
+        else:
+            self.choice_label.setText(f"Next: <b>{_html(c.caption)}</b> ({_html(c.name)}). A stub attaches it.")
+
     def _menu_button(self, name: str, entries: list[Fragment]) -> QToolButton:
         b = QToolButton()
         b.setText(name)
@@ -414,9 +643,9 @@ class ModelKitPanel(QWidget):
         return b
 
     def choose(self, choice: str | AtomType | Fragment) -> AtomType | Fragment | None:
-        """Make ``choice`` what a click builds: an atom type (palette key such as ``"C sp2"``, ``"=O"``), a
-        ``Fragment``, or a fragment name from ``chem.fragments`` (``"COOH"``, ``"(CF2)6"``). Returns it, None when
-        it is unknown (said on the message line)."""
+        """Make ``choice`` what a click builds: an atom type (``AtomType``, or a name ``edit.atom_type`` reads:
+        ``"C sp2"``, ``"=O"``, ``"Fe octahedral"``), a ``Fragment``, or a fragment name (``"COOH"``, ``"(CF2)6"``).
+        An atom type sets the element, charge, geometry and bond pickers. Returns the choice, None when unknown."""
         try:
             if isinstance(choice, (AtomType, Fragment)):
                 c = choice
@@ -428,17 +657,23 @@ class ModelKitPanel(QWidget):
         except KeyError:
             self.say(f"No atom type or fragment named {choice!r}", error=True)
             return None
-        self.choice = c
-        key = c.key if isinstance(c, AtomType) else None
-        for k, b in self.atom_buttons.items():
-            b.setChecked(k == key)
-        if isinstance(c, AtomType):
-            self.choice_label.setText(f"Building with <b>{c.key}</b>: click a free valence to attach it, an atom "
-                                      "to replace it.")
-        else:
-            self.choice_label.setText(f"Building with <b>{_html(c.caption)}</b> ({_html(c.name)}): click a free "
-                                      "valence to attach it.")
-        return c
+        if isinstance(c, Fragment):
+            self.choice = c
+            for b in self.geometry_buttons:
+                b.setChecked(False)
+            self._show_choice()
+            return c
+        self._syncing = True
+        try:
+            self.charge_box.setCurrentIndex(CHARGES.index(max(min(c.charge, 3), -3)))
+            self.bond_box.setCurrentIndex(next(k for k, (_t, o) in enumerate(BONDS) if o == c.bond_order))
+        finally:
+            self._syncing = False
+        self.choose_element(c.symbol, prefer=c)
+        if self.geometry is None or (self.geometry.hyb, self.geometry.total_valence) != (c.hyb, c.total_valence):
+            self.choice = c                  # a type the pickers do not offer: build it as given
+            self._show_choice()
+        return self.choice
 
     def use_text(self, text: str | None = None) -> Fragment | None:
         """The text box: a SMILES (``[*:1]`` marks the attachment; else its first atom bonds) or an InChI."""
@@ -479,8 +714,8 @@ class ModelKitPanel(QWidget):
         self._refresh(reset_camera=True)
         self.stack.setClean()
         what = f"{source_id}" if source_id else "a new molecule"
-        self.say(f"Editing {what}. Build mode (Ctrl+4): click a stub to attach, an atom to replace"
-                 + (", in empty space to place the first atom." if model.n_atoms == 0 else "."))
+        self.say(f"Editing {what}. In Build mode a stub attaches, an atom is replaced"
+                 + (", a click in empty space places the first atom." if model.n_atoms == 0 else "."))
         self._update_state()
 
     def new(self) -> bool:
@@ -575,7 +810,7 @@ class ModelKitPanel(QWidget):
 
         m = self.model
         if m is None or m.n_atoms == 0:
-            QMessageBox.information(self, title, "Nothing built yet: click in the 3D view in Build mode (Ctrl+4).")
+            QMessageBox.information(self, title, "Nothing built yet: click in the 3D view in Build mode.")
             return None
         unpaired = [m.label(i) for i in range(m.n_atoms) if m.symbol(i) != "H"
                     and m.atom_state(i).open > 0 and m.atom_state(i).sigma_free <= 0]
@@ -646,7 +881,7 @@ class ModelKitPanel(QWidget):
             self.click_space(point, shift)
 
     def click_stub(self, row: int):
-        """A click on stub ``row`` (of ``valences``): attach the palette's choice there."""
+        """A click on stub ``row`` (of ``valences``): attach the current choice there."""
         if not 0 <= row < len(self.valences):
             return None
         v = self.valences[row]
@@ -655,7 +890,7 @@ class ModelKitPanel(QWidget):
         return self._do(self.model.attach_fragment, v, self.choice)
 
     def click_atom(self, atom: int):
-        """A click on an atom: replace it with the palette's atom type (a hydrogen takes a group too)."""
+        """A click on an atom: replace it with the current atom type (a hydrogen takes a fragment too)."""
         m = self.model
         if not 0 <= atom < m.n_atoms:
             return None
@@ -668,7 +903,7 @@ class ModelKitPanel(QWidget):
         return None
 
     def click_space(self, point=(0.0, 0.0, 0.0), shift: bool = False):
-        """A click in empty space: the first atom or group of an empty model, or with Shift a separate piece."""
+        """A click in empty space: the first atom or fragment of an empty model, or with Shift a separate piece."""
         m = self.model
         if m.n_atoms and not shift:
             self.say("Click a free valence (a stub) or an atom; Shift+click in empty space adds a separate piece.")
@@ -753,7 +988,8 @@ class ModelKitPanel(QWidget):
         if res is not None:
             self.say(f"Minimized with {res.forcefield}: E = {res.energy:.2f} kcal/mol"
                      + ("" if res.converged else " (not converged: Minimize again)")
-                     + (f", {len(frozen)} atom(s) frozen" if frozen else ""))
+                     + (f", {len(frozen)} atom(s) frozen" if frozen else "")
+                     + (f". {res.note}" if res.note else ""))
         return res
 
     def _do(self, fn, *args):
@@ -795,6 +1031,9 @@ class ModelKitPanel(QWidget):
         problems = m.problems()
         self.problems_label.setText("" if not problems else "To fix before a calculation: " + "; ".join(problems[:4])
                                     + (f" (and {len(problems) - 4} more)" if len(problems) > 4 else ""))
+        ff, why = m.forcefield()
+        self.ff_label.setText("" if ff == "none" and m.n_atoms < 2 else
+                              f"Force field: {ff}" + (f" ({why})" if why else ""))
         self._update_value()
         self._update_state()
 
@@ -853,9 +1092,10 @@ class ModelKitPanel(QWidget):
         self.b_replace.setEnabled(on and self.source_id is not None)
         self.b_replace.setText(f"Replace {self.source_id}" if on and self.source_id else "Replace")
         if not on:
-            self.editing_label.setText("No edit open. Choose <b>Build</b> mode (Ctrl+4) or <b>New</b> to start; "
-                                       "Build mode edits the selected molecule.")
+            self.editing_label.setText("No edit open. Choose <b>Build</b> mode or <b>New</b> to start; Build mode "
+                                       "edits the selected molecule.")
             self.problems_label.setText("")
+            self.ff_label.setText("")
             return
         what = f"<b>{_html(self.source_id)}</b>" if self.source_id else "<b>a new molecule</b>"
         changed = "" if self.stack.isClean() else " (changed)"
@@ -877,26 +1117,10 @@ def _heading(text: str) -> QLabel:
     return label
 
 
-def _size(n: int):
-    from PySide6.QtCore import QSize
-
-    return QSize(n, n)
-
-
 def _html(text: str) -> str:
     import html
 
     return html.escape(str(text))
-
-
-def _type_tip(t: AtomType) -> str:
-    bits = [f"{t.symbol} {t.hyb}"]
-    if t.charge:
-        bits.append(f"charge {t.charge:+d}")
-    if t.bond_order:
-        bits.append({2: "attaches with a double bond", 3: "attaches with a triple bond"}[t.bond_order])
-    bits.append(f"{t.sigma} free valence{'s' if t.sigma != 1 else ''}")
-    return ", ".join(bits)
 
 
 def _menu(win, title: str):
@@ -907,6 +1131,8 @@ def _menu(win, title: str):
 
 
 def install(win) -> None:
+    from .action_ids import bind
+
     panel = ModelKitPanel(win)
     dock = QDockWidget(TITLE, win)
     dock.setObjectName("modelkit")
@@ -918,20 +1144,18 @@ def install(win) -> None:
     win.viewModeChanged.connect(lambda mode: panel.enter_build() if mode == "build" else None)
     toggle = dock.toggleViewAction()
     toggle.setText(TITLE)
-    toggle.setToolTip("Spartan-style model kit: build in the 3D view (Build mode, Ctrl+4)")
+    toggle.setToolTip("Build and edit molecules in the 3D view (Build mode)")
     view = _menu(win, "View")
     if view is not None:
         view.addAction(toggle)
-    # Edit > Undo / Redo: the model kit's edits (a text field keeps its own Ctrl+Z while it has the focus)
+    # Edit > Undo / Redo: the model kit's edits (a text field keeps its own undo while it has the focus)
     from .clipboard import _edit_menu
 
     menu = _edit_menu(win)
-    undo = panel.stack.createUndoAction(win, "Undo")
-    undo.setShortcuts([QKeySequence("Ctrl+Z")])
-    undo.setToolTip("Undo the last Model Kit edit (Ctrl+Z)")
-    redo = panel.stack.createRedoAction(win, "Redo")
-    redo.setShortcuts([QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])
-    redo.setToolTip("Redo the Model Kit edit (Ctrl+Y)")
+    undo = bind(panel.stack.createUndoAction(win, "Undo"), "edit.undo")
+    undo.setToolTip("Undo the last Model Kit edit")
+    redo = bind(panel.stack.createRedoAction(win, "Redo"), "edit.redo")
+    redo.setToolTip("Redo the Model Kit edit")
     first = menu.actions()[0] if menu.actions() else None
     menu.insertAction(first, undo)
     menu.insertAction(first, redo)
@@ -940,7 +1164,7 @@ def install(win) -> None:
     win.a_undo, win.a_redo = undo, redo
     build = _menu(win, "Build")
     if build is not None:
-        a = QAction("Model kit (Build mode)", win)
+        a = bind(QAction("Model kit (Build mode)", win), "build.model_kit")
         a.setToolTip("Build or edit in the 3D view with the Model Kit")
         a.triggered.connect(lambda _checked=False: win.set_view_mode("build"))
         build.addAction(a)
