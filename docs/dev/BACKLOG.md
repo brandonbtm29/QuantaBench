@@ -106,10 +106,34 @@ with its deadline and resume, the budget setter, and the time window for one mac
   deadline lives in `batch run`, not `grid build`. Not ported: the QSAR-specific `analyze_tranche.py` step, and the
   budget setter (`machines set --max-cpu` covers it). Left: run CREST-RUN-1's water phase with it (acceptance).
 
-## FIX-6: A flaky macOS test of run priority · ready
+## FIX-6: A flaky macOS test of run priority · in-PR 2026-11-22 (branch `fix/fix-6-macos-priority-test`)
 `tests/test_machine_control.py::test_priority_applied_to_running_processes` fails now and then on macOS CI (a
 process is left at nice -10); it passes on a rerun. Seen on #17 and #25. Find the race or make the test wait for
 the priority change.
+- **Cause: macOS loses a nice value set while the process is inside exec().** The image that comes out of the exec
+  keeps the value from before, although getpriority() shows the new one until the exec ends. The test lowered its
+  child right after `Popen`. On GitHub's runners `sys.executable` is python.org's framework python, which re-execs
+  itself into `Python.app` a few ms after it starts (the failing child was named "Python"). A change that landed in
+  that second exec was lost: the test read 10 at once, then the value the child inherited from pytest (-10 there).
+- **Shown on the MacBook** (fork, exec, one setpriority at a delay swept over 0-6 ms, a read 80 ms later): 297 of
+  1,200 changes were lost, all of them landing inside an exec (Homebrew's python: one; a copy of python.org's re-exec
+  launcher: two). The CI failure itself, with that launcher as `sys.executable`, its re-exec
+  delayed 6-9 ms and pytest at nice 5: 6 of 1,000 runs (`... or 5 == 0`, CI's message with 5 for -10).
+- **Fix:** the test waits until the child's Python runs. `apply_to_pids` (POSIX) looks at the processes it
+  lowered again after `RECHECK_S` (0.25 s) and lowers once more those an exec put back: lanes and programs that are
+  just starting (the `sh -c` wrappers of `external.run_program` exec two or three times) could keep the old
+  priority. After: 0 of 500 runs, and 0 of 300 for the old test with the new `apply_to_pids`. Test:
+  `test_a_priority_lost_in_an_exec_is_set_again`.
+- Found on the way: PRIO-2 below.
+
+## PRIO-2: A live priority change on Linux lowers only each lane's main thread · ready
+Found with FIX-6 (2026-11-22). Linux keeps a nice value (and an I/O priority) per thread, and `setpriority(PRIO_PROCESS,
+pid)`, which psutil's `nice()` calls, changes only the thread whose id is the pid. `priority.apply_to_process` walks
+`/proc/self/task`; `apply_to_pids`, used when the priority changes while a batch runs (DIST-7), does not, so a lane's
+threads that already run (PyTorch's and OpenMP's pools, a dxtb or AIMNet2 refine) keep the old priority; programs the
+lane starts later inherit the new one from the main thread. Checked in the cloud: after `psutil.Process(pid).nice(10)`
+the main thread is at 10 and the child's other thread at 0. Fix: walk `/proc/<pid>/task` for each process (nice and
+ionice), with a test that a lane's second thread is lowered too.
 
 ## REL-1: Tag 0.3.0 · done 2026-11-18 (Brandon: "complete item 8"; tag `v0.3.0`)
 0.1, 0.2 and 0.3 are all unreleased and nothing is tagged. After TELEM-1 and this status update: set the version,
