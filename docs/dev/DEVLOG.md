@@ -579,3 +579,33 @@ Newest entries at the bottom. One entry per working session or nightly run.
   keeps that cache's age unless given one.
 - Tests: `tests/test_lookups.py` (6), `tests/test_gui_settings_lookups.py` (2). Screenshots:
   `docs/dev/screenshots/SETTINGS-1/lookups_tab.png`, `lookup_menu_*.png`.
+
+## 2026-11-22: the Simulate workspace design (RES-1, branch `feat/res-1-simulate-design`)
+- **Survey** of LAMMPS-GUI, VMD + QwikMD, CHARMM-GUI, OpenMM-Setup, Materials Studio (Forcite, Amorphous Cell),
+  MAPS, SAMSON, Packmol/moltemplate and OVITO, plus OpenFF Interchange/NAGL and RadonPy, over system building,
+  force fields, protocols, run control, live monitoring and analysis. Sources are the tools' own pages, fetched on
+  2026-11-22. The commercial tools' vendor pages give feature lists only.
+- **The design** (`docs/SIMULATE_DESIGN.md`) keeps the runnable folder as the product and makes MD runs jobs of
+  their own kind, made of segments: one engine process each, ended by a pause, a time window, a move to the GPU or a
+  crash. Pilot B's hand-written resume and the MacBook's deadline stop were the reason. LAMMPS first, OpenMM with
+  OpenMM-ML in v2/v3. The lessons table uses the final reports of pilots A, B and C (2026-11-22).
+- **Found on the way:**
+  - LAMMPS' `fix halt` with `is_file()` and `error soft` stops a run cleanly when a file appears, so a pause can
+    write a restart file without killing the process.
+  - LAMMPS marks `fix smd` as unmaintained and recommends `fix colvars` or `fix plumed`: the flexible steered MD
+    should be written on Colvars.
+  - Binary restart files are meant for the same executable and platform only, so moving a run between machines
+    needs a data file.
+- **Open:** 12 questions for Brandon in the doc (DEC-1). SIM-1 stays blocked until he approves.
+- **Brandon's first answers (same day), now in the doc:**
+  - Splitting across machines (§6): replicas, hand-offs through data files, or GPU + CPU in one machine, with the
+    trade-offs. It is v2, gated on a consistency test with pilot A; v1 stays on this computer.
+  - A resource-aware scheduler (§7, SCHED-3). The pilots' LAMMPS timing breakdowns show GPU MD is not GPU-only:
+    PPPM and the bonded terms on the CPU took 75-86 % of the loop time.
+  - A COMSOL-like parameterization builder (§9.1): nodes per component with a resolution, global physics nodes
+    with the cutoff as the "screening length", compatibility checks (combining rules, 1-4 scaling, units, a
+    cutoff without a tail). Its minimal version goes into SIM-1 v1.
+  - LigParGen allowed; σ by default 16 Å + tail on the GPU, with the C6F14 target Freire 2006 and no offsets.
+  - Where MD runs live stays open, with the facts: run folders of 131-182 MB, and `.stignore` lines for restart
+    files, the STOP file and frames.
+  - New BACKLOG items BUILD-CLEAN (a "Clean up" for 2D and 3D) and SCHED-3.

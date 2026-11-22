@@ -821,8 +821,23 @@ Follow-ups (ready):
 - Acceptance: tests that each preset produces the right `BuildConfig`; queue runs jobs in order with
   cancellation; screenshot.
 
-## RES-1: MD front-end survey and Simulate workspace design · ready
+## RES-1: MD front-end survey and Simulate workspace design · in-PR 2026-11-22 (branch `feat/res-1-simulate-design`)
 Depends on: none (research only; can run any night).
+- 2026-11-22: `docs/SIMULATE_DESIGN.md`: the survey of 9 tools plus OpenFF Interchange/NAGL and RadonPy (a table over
+  the six aspects, what to borrow and avoid), the workspace flow as text mockups, the data model (System,
+  Parameterization, Protocol/Stage, Run/Segment, Telemetry, Trajectory, Analysis) and how it fits UI-2, UI-5 and
+  the workers, engines with GPU support on AMD, Apple and NVIDIA, the force-field routes, protocol templates,
+  monitoring and analysis, v1/v2/v3, risks and 12 open questions. Grounded in the MD pilots' lessons.
+- 2026-11-22, Brandon's answers added to the doc (marked "(Brandon, 2026-11-22)"):
+  - v1 stays on this computer; splitting across machines (replicas, hand-offs through data files, GPU + CPU in one
+    machine) is v2, gated on a consistency test with pilot A (§6).
+  - A COMSOL-like parameterization builder: a force-field node and a resolution per component, global physics nodes
+    (the LJ cutoff or "screening length", long-range dispersion with the automatic tail, electrostatics),
+    compatibility checks, benchmark-backed defaults (§9.1).
+  - LigParGen is allowed.
+  - σ by default: 16 Å + tail on the GPU; the C6F14 target stays Freire 2006 with no offsets.
+  - A resource-aware scheduler (§7, SCHED-3).
+  - Where MD runs live is still open; the facts and a recommendation are in §5.
 - Survey how LAMMPS-GUI, VMD + QwikMD, CHARMM-GUI, OpenMM-Setup, Materials Studio Forcite/Amorphous
   Cell, MAPS, SAMSON, Packmol/moltemplate and OVITO handle: system building, force-field assignment,
   protocol setup, run control, live monitoring, trajectory analysis.
@@ -831,6 +846,43 @@ Depends on: none (research only; can run any night).
   No code. Cite sources.
 
 ## SIM-1: Simulate workspace v1 · blocked (needs RES-1 design approved by Brandon)
+- The design is `docs/SIMULATE_DESIGN.md` (RES-1); it waits for Brandon's approval and his answers to its open
+  questions (DEC-1). Proposed v1 there, two PRs: MD runs as jobs (a run supervisor with segments, pause through a
+  STOP file, resume, live telemetry, `md run/status/pause/resume`, the liquid slab's default dispersion `cutoff16`),
+  then the Simulate panel for the liquid slab and the rigid pull on this computer, with the parameterization
+  builder's minimal version (one component node, the cutoff and electrostatics nodes, the checks).
+
+## BUILD-CLEAN: "Clean up" for a molecule's 2D layout and 3D structure · ready
+Brandon (2026-11-22): "When a molecule is built, do we currently have an option where we can 'clean up' the structure
+like ChemDraw?"
+- Today:
+  - 3D: the model kit's edit model has Minimize (MMFF; `chem.edit.Minimize`, UI-7), and its GUI button comes with the
+    model kit's build mode (PR #44).
+  - 2D: the 2D view lays every molecule out automatically (CoordGen, or a pinned zig-zag for long chains;
+    `gui.viewer2d`), but no command redoes the layout of the molecule shown. The Schrödinger sketcher has its own
+    Clean Up (`chem.sketch` refers to it).
+- Add **Clean up** in three places:
+  - the Molecules dock's context menu;
+  - the model kit;
+  - next to the Sketch dock's buttons.
+
+  It offers 2D (re-run the layout with RDKit's CoordGen, the zig-zag rule kept) and 3D (MMFF minimize, UFF where MMFF
+  has no parameters, as one undoable command). Selected atoms can be held fixed.
+- Acceptance: tests that a messy 2D drawing and a distorted 3D geometry come back clean with the connectivity and
+  stereo unchanged; screenshot.
+
+## SCHED-3: A scheduler that runs GPU-bound and CPU-bound jobs side by side · ready (design: SIMULATE_DESIGN.md §7; MD jobs after SIM-1 PR 1)
+Brandon (2026-11-22): "Maybe we can include a job queue or scheduler? If one type of job is better suited for the CPU
+and another for a GPU, then we can tell the user that both jobs can run efficiently at the same time."
+- **A resource profile per job:** CPU threads and how busy they are, the GPU and its memory, RAM, disk I/O. It comes
+  from the run timings, MON-1's samples, MD-BENCH-1's ns/day and the method.
+- **A ledger per machine** (threads within the budget, one GPU-heavy job per GPU, RAM headroom, one heavy-disk job).
+  The queue starts a job when its profile fits beside the running ones, and says so ("can run side by side"), with
+  the measured slowdown once there is one.
+- **GPU MD is not GPU-only:** in the pilots' GPU runs, PPPM and the bonded terms on the CPU took 75-86 % of the loop
+  time (pilot B, 6 threads; pilot C, 4 threads), so its profile is the GPU plus 4-6 threads.
+- Acceptance: a GPU job (AIMNet2 batch or GPU MD) and a CPU job (CREST or xTB lanes) start together on one machine
+  within its budget; the Jobs dock shows each one's share and the note; tests of the ledger with stand-in profiles.
 
 ## FIX-1: Windows CI green · done 2026-11-05
 - 2026-11-05: first green CI on Windows, Linux and macOS (PLAT-2). The failures since then were separate bugs,
