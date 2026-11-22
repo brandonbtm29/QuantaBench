@@ -2,6 +2,10 @@
 mouse picks, except one test of the view's VTK-free click path), the QUndoStack wrapper, the edit tools, Minimize
 and the hand-off to the molecule list.
 
+The handlers do not need a working 3D view (its methods are no-ops without one), so these tests run where VTK
+cannot draw, such as Qt's offscreen platform on Windows; what needs the drawn view (stubs, picking) is checked only
+where it works (``drawn``).
+
     xvfb-run -a python -m pytest tests/test_gui_model_kit.py
 """
 
@@ -40,9 +44,6 @@ def win(tmp_path):
     w.resize(1400, 900)
     w.show()
     app.processEvents()
-    if w.viewer.error:
-        w.close()
-        pytest.skip(w.viewer.error)
     yield w
     w.close()
     assert _wait(app, lambda: w.closed, 30)
@@ -65,6 +66,11 @@ def _canon(smiles):
     from rdkit import Chem
 
     return Chem.MolToSmiles(Chem.MolFromSmiles(smiles))
+
+
+def drawn(win) -> bool:
+    """The 3D view draws (VTK works here): stubs and picking can be checked."""
+    return win.viewer.plotter is not None
 
 
 def _rows(kit, atom, hydrogen=True):
@@ -135,11 +141,14 @@ def test_build_mode_starts_an_edit_and_owns_the_views(win):
     assert kit.active and kit.source_id == "ethanol" and kit.model.to_smiles() == "CCO"
     assert kit.b_replace.text() == "Replace ethanol" and kit.b_replace.isEnabled()
     assert len(win.viewer.atoms) == kit.model.n_atoms == 9
-    # build mode: hydrogens are stubs, not atoms; the stubs are the model's free valences, in order
-    assert set(win.viewer._vis) == {i for i in range(9) if kit.model.symbol(i) != "H"}
-    assert len(win.viewer.stub_tips) == len(kit.valences) == 6 and "build_stubs" in win.viewer._names
+    assert len(kit.valences) == 6
+    if drawn(win):     # build mode: hydrogens are stubs, not atoms; the stubs are the model's free valences, in order
+        assert set(win.viewer._vis) == {i for i in range(9) if kit.model.symbol(i) != "H"}
+        assert len(win.viewer.stub_tips) == len(kit.valences) and "build_stubs" in win.viewer._names
     win.set_view_mode("rotate")                      # still the model, hydrogens back as atoms, no stubs
-    assert kit.active and len(win.viewer._vis) == 9 and "build_stubs" not in win.viewer._names
+    assert kit.active
+    if drawn(win):
+        assert len(win.viewer._vis) == 9 and "build_stubs" not in win.viewer._names
     # selecting another molecule in the list does not take the views from the edit
     win.add_inputs([from_smiles("CCCC", id="butane")])
     assert len(win.viewer.atoms) == 9
@@ -341,6 +350,8 @@ def test_clicks_through_the_view(win, ortho):
     Ctrl+click selects, a click in empty space of an empty model places the first atom under the cursor."""
     kit = win.model_kit
     viewer = win.viewer
+    if not drawn(win):
+        pytest.skip(viewer.error)
     win.set_view_mode("build")
     if ortho:
         viewer.toggle_projection()
