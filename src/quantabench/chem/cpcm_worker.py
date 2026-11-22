@@ -101,7 +101,7 @@ class Helper:
         self.crashes = 0
 
     def _start(self) -> subprocess.Popen:
-        from .. import priority
+        from .. import priority, proctree
         from . import external
 
         env = dict(os.environ)
@@ -109,7 +109,9 @@ class Helper:
             env[k] = str(self.threads)
         env.pop(IN_PROCESS_ENV, None)
         level = priority.lower_of(priority.in_force(), priority.current_level())
-        return subprocess.Popen(  # noqa: S603 - this Python, this module
+        # Windows: in a kill-on-close job, so a crash of this process cannot leave the helper in an SCF (ENG-3); on
+        # POSIX it ends at the EOF of its stdin
+        return proctree.start(
             [sys.executable, "-m", "quantabench.chem.cpcm_worker", str(self.threads), level],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
             bufsize=1, env=env, creationflags=external._NO_WINDOW)
@@ -136,6 +138,7 @@ class Helper:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     code = proc.wait()
+                _release(proc)
                 self.proc = None
                 self.crashes += 1
                 raise HelperCrashed(f"tblite's ddX CPCM crashed its process at this geometry (exit code {code})")
@@ -156,6 +159,14 @@ class Helper:
         except Exception:  # noqa: BLE001
             with contextlib.suppress(Exception):
                 proc.kill()
+        _release(proc)
+
+
+def _release(proc) -> None:
+    from .. import proctree
+
+    with contextlib.suppress(Exception):
+        proctree.release(proc)
 
 
 _helpers: dict[int, Helper] = {}

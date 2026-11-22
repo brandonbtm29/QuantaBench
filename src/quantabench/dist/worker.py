@@ -123,6 +123,7 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "radii_set": ("bondi", "spartan"),
     "priority": ("normal", "low", "background"),
     "rank_method": ("auto", "refine", "gxtb+cpcm", "gxtb", "aimnet2", "aimnet2+cpcm", "qm"),   # chem.rank
+    "ring_conformers": ("normal", "thorough"),                     # chem.conformers.RING_CONFORMERS
 }
 # Inclusive ranges of numeric BuildConfig fields; other numbers only need to be finite.
 RANGES: dict[str, tuple[float, float]] = {
@@ -297,6 +298,23 @@ def _check_radii_overrides(value) -> dict[str, float]:
     return out
 
 
+def _check_counterions(value) -> str:
+    """``config.strip_counterions``: known counter-ion names, comma-separated and sorted as ``BuildConfig.from_settings``
+    stores them (a resume and every machine of a grid compare the run's settings by this string)."""
+    from ..chem import standardize
+
+    if not isinstance(value, str) or len(value) > 2000 or _CONTROL.search(value):
+        raise RequestError(400, "config.strip_counterions must be a string of counter-ion names")
+    try:
+        canonical = standardize.canonical_counterions(value)
+    except ValueError as exc:
+        raise RequestError(400, f"config.strip_counterions: {exc}") from None
+    if canonical != value:
+        raise RequestError(400, f"config.strip_counterions must be the names sorted and comma-separated, "
+                                f"{canonical!r}, not {value!r}")
+    return value
+
+
 def validate_config(data) -> dict:
     """Check a ``BuildConfig`` as sent by a client (``dataclasses.asdict``, usually without ``output_dir``
     and the resource fields). Returns the accepted fields; raises ``RequestError`` (400) otherwise."""
@@ -334,6 +352,9 @@ def validate_config(data) -> dict:
             continue
         if name == "radii_overrides":            # {element symbol or Z: Å}, as chem.radii reads it
             out[name] = _check_radii_overrides(value)
+            continue
+        if name == "strip_counterions":          # names of chem.standardize.NAMED_COUNTERIONS, sorted
+            out[name] = _check_counterions(value)
             continue
         if isinstance(default, (bool, int, float)):
             out[name] = _check_number(name, value, type(default))
@@ -765,6 +786,9 @@ class Job:
     # stored counts instead of opening the job table (a read-only connection can recreate jobs.sqlite-wal after the
     # checkpoint, and cannot remove it)
     finishing: bool = field(default=False, repr=False)
+    # held by a status poll while it checks ``finishing`` and reads the job table, and by the end of the run while it
+    # sets ``finishing``: so the run waits for a poll that is still reading before it checkpoints the table (FIX-7)
+    table_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     handoff: object = field(default=None, repr=False)     # jobs.Handoff of the running batch (work sharing)
     control: object = field(default=None, repr=False)     # jobs.BatchControl of the running batch (DIST-7)
     # DIST-7: a hold after this machine slept, or lost its grid client, until the client says what is still ours
@@ -1551,9 +1575,12 @@ class JobManager:
                                            should_stop=job.stop.is_set, log=log, lanes=lanes, chunk=chunk,
                                            keep_results=False, handoff=job.handoff, control=job.control)
                 # final counts before the state changes, so no client sees "done" with old counts; from here status
-                # polls use them and leave the job table alone
-                job.counts = self._counts(job)
-                job.finishing = True
+                # polls use them and leave the job table alone. The lock waits for a poll that is still reading the
+                # table: its read-only connection, open across the checkpoint below, left jobs.sqlite-wal and -shm
+                # behind on Windows (FIX-7)
+                with job.table_lock:
+                    job.counts = self._counts(job)
+                    job.finishing = True
                 left = sum(int(job.counts.get(k, 0)) for k in ("pending", "running", "cancelled"))
                 tables = self._final_tables(run_dir)
                 self._checkpoint(run_dir)
@@ -1655,9 +1682,18 @@ class JobManager:
         except Exception:  # a table being created, a locked file on Windows: keep the last known counts
             return dict(job.counts)
 
+    def _live_counts(self, job: Job) -> dict:
+        """The counts a status request reports: the job table's while the job runs, the stored final counts once it is
+        finishing. The check and the read are one step under the job's ``table_lock``, so the end of the run cannot
+        checkpoint the table while a poll that began before it is still reading (FIX-7)."""
+        with job.table_lock:
+            if job.state == "running" and not job.finishing:
+                return self._counts(job)
+        return dict(job.counts)
+
     def public(self, job: Job, tail: int = 20) -> dict:
         """The job as the API reports it."""
-        counts = self._counts(job) if job.state == "running" and not job.finishing else dict(job.counts)
+        counts = self._live_counts(job)
         lines = list(job.log)[-tail:] if tail else []
         if tail and not lines:
             lines = _tail(Path(job.run_dir) / JOB_LOG, tail)
