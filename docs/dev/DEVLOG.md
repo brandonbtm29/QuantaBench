@@ -356,3 +356,15 @@ Newest entries at the bottom. One entry per working session or nightly run.
   - Binary restart files are meant for the same executable and platform only, so moving a run between machines
     needs a data file.
 - **Open:** 12 questions for Brandon in the doc (DEC-1). SIM-1 stays blocked until he approves.
+- **Brandon's first answers (same day), now in the doc:**
+  - Splitting across machines (§6): replicas, hand-offs through data files, or GPU + CPU in one machine, with the
+    trade-offs. It is v2, gated on a consistency test with pilot A; v1 stays on this computer.
+  - A resource-aware scheduler (§7, SCHED-3). The pilots' LAMMPS timing breakdowns show GPU MD is not GPU-only:
+    PPPM and the bonded terms on the CPU took 75-86 % of the loop time.
+  - A COMSOL-like parameterization builder (§9.1): nodes per component with a resolution, global physics nodes
+    with the cutoff as the "screening length", compatibility checks (combining rules, 1-4 scaling, units, a
+    cutoff without a tail). Its minimal version goes into SIM-1 v1.
+  - LigParGen allowed; σ by default 16 Å + tail on the GPU, with the C6F14 target Freire 2006 and no offsets.
+  - Where MD runs live stays open, with the facts: run folders of 131-182 MB, and `.stignore` lines for restart
+    files, the STOP file and frames.
+  - New BACKLOG items BUILD-CLEAN (a "Clean up" for 2D and 3D) and SCHED-3.

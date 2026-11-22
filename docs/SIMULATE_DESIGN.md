@@ -1,6 +1,7 @@
 # Simulate workspace design (RES-1)
 
-Status: **proposal, 2026-11-22. Waits for Brandon's approval** (BACKLOG DEC-1); SIM-1 starts after that. No code
+Status: **proposal, 2026-11-22. Waits for Brandon's approval** (BACKLOG DEC-1); SIM-1 starts after that. Brandon
+answered several of the open questions on 2026-11-22; his answers are marked "(Brandon, 2026-11-22)". No code
 here. Sources are numbered at the end ([Sources](#sources)); repository facts point at the module or file.
 
 The Simulate workspace is where QuantaBench sets up, runs and analyzes molecular dynamics:
@@ -19,15 +20,23 @@ data model, its engines and force fields, and the order to build it in.
   The pilots needed this by hand.
 - **LAMMPS first, OpenMM second.** LAMMPS runs every setup QuantaBench writes, on AMD, Apple and NVIDIA. OpenMM
   comes in v2 for ML-potential MD (OpenMM-ML) and the OpenFF-native path.
-- **Force fields keep a source for every parameter**, and coverage is checked before a run. OPLS-AA stays the
-  reference for perfluoroalkanes; OpenFF Sage (with NAGL charges later) is the general route; GAFF2 needs a
-  fluorocarbon refit before it is used for PFAS liquids.
+- **Force fields are composed, like physics in COMSOL** (Brandon, 2026-11-22). Each component gets a force-field
+  node with a resolution, and global "physics" nodes set the LJ cutoff (the screening length), long-range dispersion
+  and electrostatics. Compatibility is checked, defaults are backed by benchmarks, and every parameter keeps its
+  source (section 9.1). OPLS-AA stays the reference for perfluoroalkanes; OpenFF Sage (with NAGL charges later) is
+  the general route; GAFF2 needs a fluorocarbon refit before it is used for PFAS liquids.
+- **σ by default: 16 Å LJ cutoff + tail correction, on the GPU** (Brandon, 2026-11-22). Ewald dispersion on the CPU
+  stays as the check. The C6F14 target is Freire 2006 (12.33 mN/m); OPLS-AA's shortfall is documented, not corrected.
+- **Splitting a calculation across machines waits for a consistency test** with pilot A (section 6). v1 runs on this
+  computer; machine splitting is v2.
+- **The queue schedules by resource** (SCHED-3, section 7): a GPU-bound job and a CPU-bound job run side by side, and
+  the user is told so.
 - **SIM-1 v1 is two PRs:**
   1. MD runs as jobs: a run supervisor with segments, resume and live telemetry, plus the CLI.
   2. The Simulate panel for the two setups that exist today, the liquid slab and the rigid steered pull, run on
-     this computer.
+     this computer, with a minimal force-field builder.
 
-  Workers, OpenMM, mixtures and the extra analyses come in v2 and v3.
+  Workers, splitting, OpenMM, mixtures and the extra analyses come in v2 and v3.
 
 ## 2. What QuantaBench has today
 
@@ -74,14 +83,14 @@ Pilot runs: `Runs/md-pilot-2026-11-20` in Brandon's output folder: C6F14 with OP
 | 1 | On the AMD RX 9060 XT (OpenCL), LAMMPS' default "AMD_GPU" tuning built empty neighbor lists: no nonbonded forces, no error. `device_type generic` fixes it (`md.liquid.gpu_switches`). | An engine *variant* carries its switches. Every input keeps the pair-energy guard. A new GPU, driver or build gets the `run 0` CPU/GPU check (`md.bench`) before a production run. |
 | 2 | The fastest setup was `-sf hybrid gpu omp -pk gpu 1 device_type generic pair/only on -pk omp N`: 15.2 against 10.2 ns/day with everything on the GPU (9,780 atoms). Pilot B's slab ran at 21.0 ns/day this way, 5.4 times its 3.9 on 4 CPU threads. | The variant is chosen from measured ns/day, not guessed. Real runs report their speed back as a learned rate. |
 | 3 | `lj/long/coul/long` and `pppm/disp` have no GPU styles. | The protocol's dispersion choice limits the engine variants. The review says why the GPU is greyed out. |
-| 4 | The dispersion treatment decides σ. Against Tsige & Grest's 11.25 mN/m ([46](#sources)):<br>• C, 12 Å cutoff: 7.96 raw, 11.12 with the tail; slab 4.7 % below the bulk density; 16.1 ns/day on the GPU.<br>• B, 16 Å (Tsige & Grest's setup): 9.60 raw, 11.71 ± 0.30 with the tail, which reproduces their number (+4 %); slab 2.0 % below; 21 ns/day on the GPU + CPU.<br>• A, Ewald dispersion: 10.70 ± 0.70 with no correction needed; slab at the bulk density; 7.6 ns/day on 8 CPU threads.<br>LAMMPS' own tail correction assumes a homogeneous bulk and must not be used for a slab ([40](#sources)). | Cutoff variants always report raw σ, σ with the tail, and the plateau-vs-bulk density check, and the template labels them that way. "16 Å + tail on the GPU" and "Ewald on the CPU" are both offered; the default is Brandon's (question 7). |
+| 4 | The dispersion treatment decides σ. Against Tsige & Grest's 11.25 mN/m ([46](#sources)):<br>• C, 12 Å cutoff: 7.96 raw, 11.12 with the tail; slab 4.7 % below the bulk density; 16.1 ns/day on the GPU.<br>• B, 16 Å (Tsige & Grest's setup): 9.60 raw, 11.71 ± 0.30 with the tail, which reproduces their number (+4 %); slab 2.0 % below; 21 ns/day on the GPU + CPU.<br>• A, Ewald dispersion: 10.70 ± 0.70 with no correction needed; slab at the bulk density; 7.6 ns/day on 8 CPU threads.<br>LAMMPS' own tail correction assumes a homogeneous bulk and must not be used for a slab ([40](#sources)). | Cutoff variants always report raw σ, σ with the tail, and the plateau-vs-bulk density check, and the template labels them that way. "16 Å + tail on the GPU" is the default (Brandon, 2026-11-22); "Ewald on the CPU" stays as the check. |
 | 5 | Long runs need restart, resume and appended outputs. Pilot B moved from CPU to GPU at 3 ns through a hand-written resume input (`read_restart`, outputs cut at the restart step and appended, `run ... upto`). The join was checked: one continuous pressure-tensor series with no duplicate or missing steps, the same energies and pressures to the fifth digit, and the header lines written again at the join (the reader skips them). The MacBook's GAFF2 slab stopped at its window's deadline. The analysis could not read pilot B's slab speed, because its log was split. | Segments are first-class (section 5). Resume is a button. Outputs append, and every reader skips repeated headers. Telemetry and speed are kept per segment. |
 | 6 | The MacBook runs conda-forge LAMMPS (22 Jul 2025) with OpenMP, with restart files every 100 ps, `caffeinate` and a deadline script. | Each machine finds its own engine build. The restart interval follows the machine's window. A Mac GPU build of LAMMPS is FORK-8. |
 | 7 | GAFF2 + AM1-BCC gave too high a density for C6F14: 1.836 ± 0.001 against about 1.67-1.68 g/cm³, 10 % high (MacBook bulk NPT, 2026-11-21). | Force-field choice per class, with a warning on fluorocarbons. Refits (Träg & Zahn ([47](#sources))) go through the existing LJ overrides. |
 | 8 | OPLS-AA typing covers only alkanes, perfluoroalkanes and (fluoro)benzenes. | Coverage is checked before anything is written, with the alternatives offered. |
-| 9 | The pilots ran beside the paused CREST rebuild at below-normal priority on a thread budget. | MD jobs use the same priority and budget settings as builds. A GPU is a resource with its own lane. |
+| 9 | The pilots ran beside the paused CREST rebuild at below-normal priority on a thread budget. | MD jobs use the same priority and budget settings as builds. A GPU is a resource with its own lane (section 7). |
 | 10 | Pilot A's error bar (0.70) missed the 0.5 target, and its blocking curve kept rising. LAMMPS chose a 2 x 2 x 8 dispersion mesh for `force/disp/kspace 0.002`, which may not resolve the interface; a `rerun` of the saved frames with a finer mesh is the proposed check. | The σ result shows the blocking curve and says when it has not levelled off. The README and the review report the PPPM grids LAMMPS chose. Re-evaluating saved frames (`rerun`) becomes an analysis (v2). |
-| 11 | Every complete estimate (A, B + tail, C + tail) is 10.7-11.7 mN/m: on Tsige & Grest and the older experiments (11.25-11.44), 5-13 % below Freire 2006 (12.33). | The gap to Freire is the force field, not the method. Each result is shown against every reference the system has, with the target chosen per system. |
+| 11 | Every complete estimate (A, B + tail, C + tail) is 10.7-11.7 mN/m: on Tsige & Grest and the older experiments (11.25-11.44), 5-13 % below Freire 2006 (12.33). | The gap to Freire is the force field, not the method. The C6F14 target stays Freire 2006 with no offset: the OPLS-AA shortfall is documented, not corrected (Brandon, 2026-11-22). Each result is shown against every reference the system has. |
 
 ## 3. Survey: how other MD front ends do it
 
@@ -131,8 +140,8 @@ from any step; it also has steered MD and umbrella-sampling workflows ([28](#sou
 
 ### 3.3 What to avoid
 
-- **Web services that upload structures** (CHARMM-GUI, LigParGen) as a required step: unpublished PFAS stay local
-  unless Brandon decides otherwise per molecule.
+- **Web services that upload structures as a required step** (CHARMM-GUI). Unpublished PFAS stay local by default.
+  LigParGen is the exception Brandon allowed (2026-11-22): the review says when a SMILES leaves the machine.
 - **Biomolecular assumptions:** PDB residues, one force field (CHARMM36 in QwikMD ([5](#sources))), water as the
   only solvent.
 - **The input file as the main interface** (LAMMPS-GUI's model). It stays available as Advanced, not the default.
@@ -175,20 +184,23 @@ Checks    ✓ closest contact 2.1 Å   ✓ neutral   [Preview in 3D]
 "Molecule on a surface" opens today's surface builder (graphite or a metal slab, the molecule placed and moved in the
 3D view), and its result becomes the system.
 
-**2. Force field.**
+**2. Force field: the parameterization builder** (section 9.1). A tree of nodes, one per component plus the global
+physics; v1 has one component node (the liquid, or the rigid adsorbate and its slab).
 
 ```
-Force field  (•) OPLS-AA + Watkins-Jorgensen 2001   ( ) OpenFF Sage 2.3.0 + AM1-BCC   ( ) GAFF2 + AM1-BCC
-             ( ) UFF, rigid molecule (steered pull only)                              ⓘ which to choose
-Coverage     ✓ all 20 atoms typed                    (OpenFF, GAFF2: installed in the md environment ✓)
-Charges      fixed OPLS-AA charges        (OpenFF/GAFF2: AM1-BCC by sqm; NAGL in v2)
-Mixing       geometric · 1-4 scaling 0.5 / 0.5       Overrides: none [Load...]
-Notes        ⚠ GAFF2 gave 1.836 g/cm³ for C6F14 (measured ~1.68): use it for fluorocarbons only with a refit
-[Parameters...]  every type, charge and bonded term with its source (the setup JSON)
+Components
+  C6F14 x 489            [OPLS-AA + Watkins-Jorgensen ▾]  [all-atom ▾]  charges [OPLS-AA ▾]  ✓ 20/20 typed
+Physics
+  Van der Waals          LJ 12-6 · cutoff (screening length) [16 Å]  long range [tail correction, added to σ ▾]
+  Electrostatics         PPPM 1e-5
+  Combining, 1-4         geometric · 0.5 / 0.5 (from OPLS-AA)
+Checks                   ✓ one combining rule  ✓ real units  ✓ the cutoff has its tail  ✓ GPU styles exist
+Notes                    ⚠ GAFF2 gave 1.836 g/cm³ for C6F14 (measured ~1.68): for fluorocarbons only with a refit
+[Parameters...]  every type, charge and bonded term with its source       [Duplicate as a variant]
 ```
 
 Typing runs on a worker thread. Its result (`TypedMolecule`) is cached per molecule, force field and QuantaBench
-version, so a system types once and runs anywhere (section 7).
+version, so a system types once and runs anywhere (section 9).
 
 **3. Protocol.**
 
@@ -201,7 +213,7 @@ Template  [Liquid slab (surface tension) ▾]                                   
   5  Settle              NVT 2 ns
   6  Production          NVT 10 ns: pressure tensor every 10 fs, ρ(z) every 10 ps, a frame every 100 ps
 Dispersion  ( ) Ewald for r⁻⁶ (CPU only)   (•) 16 Å cutoff + tail correction (GPU)   ( ) 12 Å + tail (screen)
-            (the default is question 7)
+            (the default: Brandon, 2026-11-22)
 Restart     every 100 ps
 Advanced    in.bulk / in.slab as written (read-only in v1; saved as a template of one's own in v2)
 ```
@@ -258,12 +270,17 @@ System            what is simulated
   packing                   packmol | lattice, density and its source, tolerance, seed
   parameterization_id
 
-Parameterization  the force field as applied to this system (ForceField in the backlog's words)
-  id, backend               "oplsaa" | "openff" | "gaff2" | "uff-rigid"
-  per component             TypedMolecule (today's to_dict: types, charges, LJ, bonded terms, sources, overrides)
-  surface terms             LJ preset for the slab (md.params) and the mixing rule for the cross terms
-  charges                   method (OPLS, AM1-BCC by sqm, NAGL model, xTB/AIMNet2 for rigid molecules)
-  mixing, special_lj/coul, coverage report, versions of the tools used
+Parameterization  the force field as applied to this system (ForceField in the backlog's words): a node tree
+  id
+  components[]              ComponentFF: component id, force field ("oplsaa" | "openff" | "gaff2" | "uff-rigid" |
+                            surface preset | water model | ion set), resolution (all-atom | united-atom | coarse-
+                            grained), charge method (OPLS, AM1-BCC by sqm, NAGL model, LigParGen, xTB/AIMNet2 for rigid
+                            molecules), overrides, the TypedMolecule (today's to_dict: types, charges, LJ, bonded
+                            terms, sources)
+  physics                   vdw: LJ form, cutoff (the screening length), long range (none | bulk tail | slab tail in
+                            the analysis | Ewald dispersion with its accuracy); coulomb: method and accuracy, slab
+                            correction; combining rule and explicit cross terms; 1-4 scaling
+  checks[]                  each compatibility check with its result; versions of the tools used
 
 Protocol          an ordered list of stages, from a template
   id, template, name
@@ -366,7 +383,130 @@ apart, so the Library dock and File > Open run folder... list both. Components r
 - Each finished segment's ns/day is recorded as a learned rate per machine, variant and size, next to the
   benchmark, as DIST-7 does for builds.
 
-## 6. Engines
+### Where MD runs live (question 2, still open)
+
+Brandon asked how the conformer runs are set up today and whether both places are in SyncThing (2026-11-22).
+
+**The facts:**
+- **Batch runs** (the conformer and QSAR runs) go to the output folder in the settings. Brandon's is
+  `~/SyncThing/QuantaBench/Runs`, which SyncThing syncs between the machines. Each run folder has one writer, the
+  machine that runs it; the others only read it (ARCHITECTURE.md, "Batches are resumable"). The README asks for
+  `jobs.sqlite-wal` and `jobs.sqlite-shm` in that SyncThing folder's `.stignore`, so SQLite's transient files never
+  sync.
+- **Projects** (`.qbproj`, UI-2) live wherever they are saved with File > Save as. None are in SyncThing yet. A
+  project's `runs/` is synced only if the project itself is saved in a synced folder. Paths inside a project are
+  relative, paths outside it are absolute, so a project can point at run folders elsewhere.
+- **Sizes**, from the C6F14 pilots (9,780 atoms, 13 ns): 131-182 MB per run folder.
+  - The pressure tensor every 10 fs: 48 MB.
+  - The density profiles: 12 MB.
+  - Frames every 100 ps: 52 MB (about 0.4 MB a frame).
+  - Restart files: 2.9 MB each, two per stage. Data files: 2.7 MB each.
+
+  The 17 liquids of Phase 1, two runs each, would be about 4-6 GB.
+
+**The options:**
+
+| | A: in the output folder (`Runs/`), the project points at them | B: in the project's `runs/` |
+|---|---|---|
+| Synced | Always: every machine sees the run | Only if the project is saved in SyncThing |
+| Workers | A worker writes into its own output folder already, so local and remote runs land in the same place | A remote run would need copying into the project |
+| Like today | Yes: batch runs work this way, and the Library dock lists the output folder | Like a project's builds |
+| Moving the project | The links are absolute paths | Everything moves with the project |
+
+**Recommendation: A**, the output folder, with the project pointing at the run, plus these lines in the SyncThing
+folder's `.stignore`:
+
+```
+jobs.sqlite-wal
+jobs.sqlite-shm
+*.restart.a
+*.restart.b
+*.restart
+STOP
+frames
+```
+
+- Restart files are binary and readable only by the same LAMMPS on the same platform ([50](#sources)), so they are of
+  no use to another machine.
+- The STOP file is meant for the machine that runs the job only.
+- Frames are the bulk of a run folder and are only needed to view the run. They come through the archive when
+  another machine needs them. With frames written into `frames/` (section 5's run folder), the one pattern covers
+  them; the pilots' `slab.lammpstrj` would need `*.lammpstrj`.
+- The text outputs (pressure tensor, profiles, logs) stay synced, so σ can be analyzed on any machine.
+
+## 6. Splitting a calculation across machines
+
+Brandon (2026-11-22): "We would need to be clever about what can be shared calculations or split, and we may need to
+think about how that's done. We could do some different tests using Pilot A where we split calculations differently
+so we know we get consistent results." **v1 stays on this computer; splitting across machines is v2, gated on that
+test.**
+
+There are three ways to split an MD calculation. A fourth, one time step spread over several machines with MPI, is
+out of scope: the machines are linked by Tailscale over Wi-Fi or the internet, not a cluster network.
+
+| | 1. Independent replicas | 2. One trajectory in segments, handed between machines | 3. GPU + CPU inside one machine |
+|---|---|---|---|
+| What | N runs of the same system from different seeds or packings, one per machine; σ is averaged | One run continued on the next machine at a segment boundary: `write_data` there, `read_data` and the protocol's remaining stages here | The pair style on the GPU, PPPM and bonded terms on OpenMP threads (`pair/only on`), as pilots B and C ran |
+| Wall time | Shorter: the replicas run at the same time | Not shorter: the run is serial; it uses idle hours (the MacBook's night window) | Shorter: 21 against 3.9 ns/day in pilot B |
+| Statistics | Independent samples: the error bar is the spread between replicas, which also catches slow fluctuations like pilot A's. Each replica pays its own settle time (2 ns here) | One correlated series, block-averaged as today. Equivalent to one run if the hand-off is clean | Those of one run |
+| Portability | Each replica stays on one machine and its engine build; replicas from different builds are compared first | Needs the data file: binary restarts don't move between machines ([50](#sources)). Thermostat, barostat and averaging histories restart; both builds need the same styles | Nothing moves |
+| Determinism | Not bitwise across machines (CPU double precision vs GPU mixed precision); statistically the same if the builds agree | Not exact: a data-file restart continues statistically similar. The join has to be checked, as pilot B's was | Mixed precision changed the fifth or sixth digit at pilot B's join; not bitwise reproducible, statistically the same |
+| Good for | The 17-liquid sweep and error bars; Auto routing by ns/day | Long single runs that outlast one machine's window | Every cutoff run on a machine with a GPU |
+
+**The consistency test** (pilot A; the plan is being written as `Runs/md-pilot-2026-11-20/split_test_plan.md` in
+Brandon's output folder). What v2 needs from it:
+- Replicas: σ from several shorter replicas, run on the workstation and the MacBook, against pilot A's single 10 ns,
+  within the combined error bars.
+- Hand-off: pilot A continued from a `write_data` file on the other machine. The energies and pressure at the join
+  should agree to the precision of the two builds, and σ over the continued part should match the same length
+  continued on the original machine, within the error bars.
+- The GPU + CPU split can't be tested with pilot A (Ewald dispersion has no GPU style). Pilot B's checked CPU→GPU join
+  covers it.
+
+Machine splitting goes into the v2 worker work only for the strategies the test passes.
+
+## 7. Scheduling by resource (SCHED-3)
+
+Brandon (2026-11-22): "Maybe we can include a job queue or scheduler? If one type of job is better suited for the CPU
+and another for a GPU, then we can tell the user that both jobs can run efficiently at the same time."
+
+**A resource profile per job.** Before a job starts, the queue estimates what it needs:
+- CPU threads, and how busy they really are;
+- the GPU and its memory;
+- RAM;
+- disk I/O (CREST through WSL wrote about 20 MB/s before CREST-SCRATCH-1).
+
+The estimate comes from what QuantaBench already measures:
+- the run timings (stage times, CPU time, the run's own CPU share);
+- MON-1's machine samples (GPU utilization and VRAM);
+- MD-BENCH-1's ns/day per variant;
+- the method (AIMNet2 batched on the GPU, xTB and CREST on the CPU).
+
+**GPU MD still needs CPU threads.** The LAMMPS timing breakdowns of the pilots' GPU runs:
+
+| run | threads | PPPM (Kspace) | bonded | pair (the wait for the GPU) | CPU use |
+|---|---|---|---|---|---|
+| B, 16 Å, GPU segment | 6 | 48 % | 27 % | 9 % | 237 % of 600 % |
+| C, 12 Å | 4 | 58 % | 28 % | 4 % | 173 % of 400 % |
+
+PPPM and the bonded terms on the CPU took 75-86 % of the loop time, so a GPU MD job's speed depends on its CPU
+threads. Its profile is "the GPU + 4 to 6 threads", not "the GPU".
+
+**How the queue uses the profiles:**
+- **A ledger per machine:** threads within the budget (free threads, Max CPU), one GPU-heavy job per GPU, RAM
+  headroom, one heavy-disk job at a time.
+- **A job starts when its profile fits.** On the 12-core workstation, a GPU MD job with 4-6 threads leaves the rest for
+  CPU lanes; the pilots ran that way beside CREST.
+- **The user is told:** "C6F14 slab (GPU + 6 threads) and the CREST batch (6 lanes x 1 thread) can run side by side.
+  The slowdown is not measured yet." Once runs have been timed alone and together, it gives the measured slowdown.
+  The same rule could start the next queued job early when its profile fits beside the running one.
+- **Across machines**, the profile feeds Auto: a CPU-heavy job goes where the cores are free, a GPU job where the GPU
+  is.
+
+Today the GUI queue runs one build at a time, lanes split the CPU within a build, and MD jobs would run beside it as
+their own processes (section 5). SCHED-3 replaces the one-at-a-time rule with the ledger.
+
+## 8. Engines
 
 | | LAMMPS (first) | OpenMM (v2) |
 |---|---|---|
@@ -394,7 +534,7 @@ Notes:
   ([29](#sources)), which is a possible route for QuantaBench's Warp-free one. Both have to be measured. Expect
   small systems: a PFAS molecule with a few hundred waters, not a 10,000-atom slab.
 
-## 7. Force fields
+## 9. Force fields
 
 | Route | Covers | Charges | Where it runs | What we know |
 |---|---|---|---|---|
@@ -412,12 +552,100 @@ Rules the workspace enforces:
 - **Typed once, run anywhere.** OpenFF and GAFF2 typing needs AmberTools and OpenFF from conda-forge in a Linux or
   macOS environment (the MD plan), so on the workstation it means WSL or typing on the MacBook. The parameterization
   is stored with the system, so the run itself needs only `lmp`.
-- **The default per class waits for the pilots** (question 4): OPLS-AA for perfluoroalkanes, OpenFF for the other
-  classes, GAFF2 only with a refit.
-- **LigParGen** (OPLS-AA charges for more groups) is a web service that sends the SMILES out; it needs Brandon's
-  decision (question 5).
+- **Defaults per class come from benchmarks** (section 9.1): OPLS-AA for perfluoroalkanes, OpenFF for the other
+  classes until their benchmarks exist, GAFF2 only with a refit.
+- **LigParGen** (OPLS-AA charges for more groups) is allowed (Brandon, 2026-11-22). It is a web service that receives
+  the SMILES, so the review says so, and the charges it returns are stored with their source. How it is called (a
+  file uploaded by hand, or a programmatic interface if it has one) and its terms of use are checked when it is built.
 
-## 8. Protocol templates
+### 9.1 The parameterization builder: force fields as composable nodes
+
+Brandon (2026-11-22): "make the force field selection and how coarse each one is kind of like how COMSOL lets you drag
+and drop various physics into a setup. This would take a lot of trial and erroring, but I think it would be a
+tremendous value add."
+
+The Force field step becomes a tree of nodes, the way a COMSOL model is a tree of physics interfaces. Nodes are added
+from a palette (drag and drop or a menu), and each node has its own settings and a status.
+
+```
+Parameterization: PFOA on graphite in water                                        [+ Add node ▾]
+├─ Components
+│  ├─ PFOA⁻ x 1            [OpenFF Sage 2.3.0 ▾]  [all-atom ▾]  charges [NAGL ▾]      ✓ typed
+│  ├─ Graphite, 3 layers   [graphite LJ, AMBER parm94 ▾]  [all-atom, frozen ▾]  no charges
+│  ├─ Water x 3,000        [TIP3P ▾]  [all-atom, rigid ▾]
+│  └─ Na⁺ x 1              [Joung-Cheatham (TIP3P set) ▾]
+├─ Physics
+│  ├─ Van der Waals        LJ 12-6 · cutoff (screening length) [16 Å] · long range [tail correction ▾]
+│  ├─ Electrostatics       PPPM 1e-5 · slab correction [auto]
+│  └─ Combining rule       [Lorentz-Berthelot ▾] · cross terms graphite-water [table...]
+└─ Checks
+   ✓ one combining rule and one 1-4 scaling for the molecules
+   ✓ real units everywhere   ✓ net charge 0
+   ⚠ cutoff without a long-range treatment would bias σ low → tail correction on
+```
+
+**Component nodes**, one per molecule type, surface slab, water or ion set, each with:
+- its force field;
+- its resolution:
+  - all-atom (OPLS-AA, GAFF2, OpenFF);
+  - united-atom (a united-atom force field would need its own typing, which QuantaBench doesn't have);
+  - coarse-grained (bead-spring models such as the one CHARMM-GUI's Polymer Builder equilibrates with before going back
+    to all-atom ([9](#sources)));
+- its charges and overrides.
+
+The data model carries the resolution from the start; v1 and v2 offer all-atom only.
+
+**Physics nodes**, global to the system:
+- **Van der Waals:** the LJ cutoff, which Brandon calls the "screening length" and wants as an option when building
+  force fields. Its long-range treatment:
+  - none;
+  - the analytic tail for a homogeneous bulk ([40](#sources));
+  - the slab tail added in the analysis (PR #37);
+  - Ewald dispersion with its accuracy.
+
+  The tail correction is switched on automatically for a cutoff run.
+- **Electrostatics:** PPPM and its accuracy, the slab correction where the box has one non-periodic direction.
+- **Combining rule and cross terms:** the mixing rule, and explicit pair coefficients where two parts disagree (a
+  surface against a liquid).
+- **1-4 scaling:** taken from the molecular force field.
+
+**Compatibility checks**, run on every change:
+- **Combining rules.** OPLS-AA mixes geometrically; GAFF2 and OpenFF use Lorentz-Berthelot (`md.forcefield`). LAMMPS
+  mixes all unlisted pairs with one rule, so a mixed system either chooses one rule or gets explicit cross terms, and
+  the check says which pairs are affected.
+- **1-4 scaling.** OPLS-AA scales 1-4 pairs by 0.5/0.5, GAFF2 and OpenFF by 0.5/0.8333 (`md.forcefield`). LAMMPS sets
+  1-4 scaling once for the system with `special_bonds` (exceptions per pair style need a hybrid pair style), so two
+  molecular force fields with different 1-4 scaling don't share a box. The check refuses that until such handling
+  exists.
+- **Units:** everything in LAMMPS `real` units, converted once where a backend uses other units (Interchange,
+  ParmEd).
+- **The cutoff:**
+  - a warning for a cutoff without a tail correction (lesson 4);
+  - an error for LAMMPS' bulk tail correction in a slab ([40](#sources));
+  - a note that Ewald dispersion has no GPU style (lesson 3).
+- **Water models and ion sets** are listed with the force fields they were fitted with; another pairing gets a
+  warning.
+
+**Benchmark-backed defaults per class.** A class gets a default only from a benchmark against measurements:
+
+| Class | Default | Evidence |
+|---|---|---|
+| Perfluoroalkanes | OPLS-AA + Watkins-Jorgensen, all-atom, 16 Å + tail, GPU | Pilots A-C; Tsige & Grest ([46](#sources)) |
+| Other PFAS classes (ethers, alcohols, acids, sulfonyl, aromatics, Cl/Br) | none yet: OpenFF Sage offered, with a "not benchmarked" mark | Pending: the MD plan's Phase 1 (17 liquids), and a literature review being written (`Literature Reviews/2026-11-22 MD surface tension cutoffs and force fields/` in Brandon's SyncThing folder) |
+
+**Trial and error made cheap.** "Duplicate as a variant" copies a system and changes one node. Pilots A, B and C were
+such a set: the same system, three dispersion treatments. In v2 a variant set runs as a sweep, and its results come
+back as one comparison table, like a COMSOL parametric study.
+
+**Build order:**
+- **v1 (fits PR 2):** the tree with one component node (the liquid, or the rigid adsorbate with its slab), the physics
+  nodes for the cutoff and its long-range treatment and for electrostatics, the combining rule shown read-only, and
+  the checks.
+- **v2:** several components (water, ions, a surface with a liquid), explicit cross-term tables, NAGL and LigParGen
+  charges, variants run as sweeps.
+- **v3:** united-atom and coarse-grained resolutions.
+
+## 10. Protocol templates
 
 A template is a named list of stages with defaults, like a recipe (`chem.recipes`). The user's own templates are
 saved in the settings, and every template writes the same kind of folder.
@@ -427,7 +655,7 @@ saved in the settings, and every template writes the same kind of folder.
 | Minimize | conjugate gradient | final structure, the largest force | energy before and after |
 | NVT | velocities, Nosé-Hoover (Langevin for rigid bodies and single ions, as `md.lammps` does) | thermo | T drift, energy |
 | NPT | NVT warm-up, then NPT (isotropic, or anisotropic for solids); LJ tail correction allowed here, in a homogeneous bulk ([40](#sources)) | box, density every ps | bulk density ± error, equilibration time |
-| Liquid slab (σ) | MD-2: minimize, warm-up, bulk NPT, open the box, settle, production | pressure tensor every 10 fs, ρ(z) every 10 ps, sparse frames; plateau vs bulk density, drift, evaporation | σ by Kirkwood-Buff ± block error; LJ tail for cutoff variants; density profile and its fit |
+| Liquid slab (σ) | MD-2: minimize, warm-up, bulk NPT, open the box, settle, production; 16 Å + tail by default (Brandon, 2026-11-22) | pressure tensor every 10 fs, ρ(z) every 10 ps, sparse frames; plateau vs bulk density, drift, evaporation | σ by Kirkwood-Buff ± block error; LJ tail for cutoff variants; density profile and its fit |
 | Steered MD + Jarzynski | equilibrate, then N pulls from independent starts (seeds or frames), constant-velocity spring | pull force and distance per pull | work per pull; PMF by Jarzynski's exponential average ([49](#sources)) and the cumulant form, with a bootstrap error |
 | Annealing | heat to T_high, hold, cool at a set rate, repeat; `run ... start/stop` keeps a ramp going across segments ([38](#sources)) | T, density | density against T |
 
@@ -441,7 +669,7 @@ Notes:
 - **Annealing** is how CHARMM-GUI equilibrates polymer melts ([9](#sources)), and a Forcite task
   ([13](#sources)). It matters for the sorbent work later.
 
-## 9. Monitoring and analysis
+## 11. Monitoring and analysis
 
 | Quantity | From | Live | After the run |
 |---|---|---|---|
@@ -468,7 +696,7 @@ Design points:
   ([23](#sources)). Several of its analysis modifiers are Pro-only ([22](#sources)), so QuantaBench does not depend
   on them.
 
-## 10. What to build, in which order
+## 12. What to build, in which order
 
 ### SIM-1 v1: two PRs
 
@@ -483,6 +711,8 @@ Design points:
   - `md resume DIR`, which reads the newest restart file, appends outputs and runs `upto`.
 - A telemetry reader: incremental parsing of the log, pressure tensor, density profile and pull-force files, and
   ns/day per segment, so a resumed run's speed is known.
+- The liquid slab's default dispersion becomes `cutoff16` (in `md liquid-slab` too; today it is `ewald`), with the
+  tail correction in the report (Brandon, 2026-11-22).
 - Tests with tiny LAMMPS runs (they skip without LAMMPS):
   - pause and resume give one continuous pressure-tensor series;
   - a killed segment resumes from its last restart file;
@@ -491,7 +721,8 @@ Design points:
 **PR 2, the Simulate panel:**
 - The stepper (section 4) for two kinds of system: the pure liquid slab and the molecule on a surface (today's
   surface builder and rigid pull).
-- Force fields `oplsaa`, `openff`, `gaff2` with coverage and availability.
+- The parameterization builder's v1 (section 9.1): one component node with `oplsaa`, `openff` or `gaff2`, coverage and
+  availability; the physics nodes for the cutoff and electrostatics; the checks.
 - Templates: minimize, NVT, NPT, liquid slab, and the rigid pull.
 - LAMMPS variants from `md.bench.can_run` with the estimate from `md_throughput`.
 - **Run on: this computer only.**
@@ -501,17 +732,21 @@ Design points:
 - Re-attaching to running runs when a project opens.
 - A scripted smoke test under xvfb with screenshots.
 
-**Not in v1:** workers for MD, OpenMM, mixtures and solutions, repeated pulls, RDF/MSD, editable inputs.
+**Not in v1:** workers for MD and splitting across machines, OpenMM, mixtures and solutions, repeated pulls, RDF/MSD,
+editable inputs.
 
 ### v2
 
 - **MD on the workers:** the `md` job kind in the worker API, Auto by ETA, time windows through segments, learned
-  rates.
+  rates. Splitting by replicas or hand-offs (section 6) only for the strategies the pilot A consistency test passes.
+- **Scheduling by resource (SCHED-3, section 7):** resource profiles and the per-machine ledger, with GPU and CPU jobs
+  side by side.
 - **Sweeps:** one protocol over many molecules, for the 17 test liquids of the MD plan, with results in the Analyze
   table.
 - **Systems:** mixtures and solutions with Packmol, a molecule on graphite in water, counter-ions (MD-1's lessons).
 - **Steered MD:** flexible, on Colvars, with N repeated pulls and the Jarzynski PMF; annealing.
-- **Force fields:** NAGL charges; the Träg & Zahn GAFF2 overrides; more OPLS-AA types if Brandon allows LigParGen.
+- **Force fields:** the builder's multi-component version (section 9.1); NAGL charges; the Träg & Zahn GAFF2
+  overrides; more OPLS-AA types through LigParGen (allowed).
 - **OpenMM:** classical MD with OpenFF through Interchange's `to_openmm` ([24](#sources)), on the same Run and
   Segment model.
 - **Analysis:** RDF, MSD and bulk-density analyses; re-evaluating saved frames with other settings (`rerun`, lesson
@@ -522,11 +757,12 @@ Design points:
 - **OpenMM-ML:** AIMNet2 (or AceFF, MACE-OFF) MD and ML/MM for a PFAS molecule with its first water shells or on a
   surface.
 - **Free energies:** hydration free energies through Open Free Energy, for a validation subset.
-- **Builders:** amorphous polymer and sorbent cells (Amorphous Cell- and RadonPy-like), with annealing.
+- **Builders:** amorphous polymer and sorbent cells (Amorphous Cell- and RadonPy-like), with annealing; united-atom
+  and coarse-grained resolutions in the parameterization builder.
 - **Views and exports:** a trajectory player synced with the telemetry plots (Tier 2 in UI_PLAN.md), GROMACS export,
   a Mac GPU route (FORK-8 or FORK-9).
 
-## 11. Risks
+## 13. Risks
 
 - **The force field dominates the error.**
   - GAFF2's density is 10 % high for C6F14.
@@ -559,36 +795,56 @@ Design points:
   - Run folders in a synced folder move all of that between machines.
 
   Frames should be sparse by default, and big files may need to stay out of SyncThing (question 3).
-- **OpenMM-ML speed and GPU support** on AMD and Apple are unmeasured (section 6).
+- **OpenMM-ML speed and GPU support** on AMD and Apple are unmeasured (section 8).
+- **Splitting can change results.** Replicas from different engine builds and hand-offs through data files are
+  statistically, not exactly, the same run (section 6). Hence the consistency test before v2 uses them.
+- **The composable builder invites combinations nobody has validated.** The checks catch the mechanical conflicts
+  (combining rules, 1-4 scaling, units). Whether a combination is physically sound comes only from benchmarks, so
+  defaults are offered only where a benchmark exists.
 - **Scope.** The Materials Studio-class builders are years of work; v1 deliberately wraps what exists.
 
-## 12. Open questions for Brandon
+## 14. Open questions for Brandon
 
 1. **v1 scope:** the two PRs above, this computer only, the liquid slab and the rigid pull? Or should v1 already send
    MD jobs to the workers?
-2. **Where MD runs live:** in the project's `runs/`, like batch runs, or always in the output folder `Runs/` with the
-   project pointing at them?
+   **Answered (Brandon, 2026-11-22):** be clever about what can be shared or split, and test it with pilot A. v1 stays
+   on this computer; splitting across machines is v2, gated on the consistency test (section 6).
+2. **Where MD runs live:** in the project's `runs/`, or in the output folder `Runs/` with the project pointing at
+   them? **Still open.** The facts, the two options and a recommendation (the output folder, with `.stignore` lines
+   for restarts, the STOP file and frames) are in section 5, "Where MD runs live".
 3. **Frames and big files:** the default frame interval, and should frames and restart files stay out of SyncThing
    (an ignore pattern) and move only through the archive?
 4. **The default force field per class once pilots A and B are written up:** OPLS-AA for perfluoroalkanes, OpenFF
    Sage for the rest, GAFF2 only with the Träg & Zahn refit?
+   **Answered in part (Brandon, 2026-11-22):** force-field selection becomes a composable builder, like physics in
+   COMSOL, with the resolution per component and the screening length as an option (section 9.1). The defaults per
+   class come from benchmarks; the literature review is pending, and the other classes need Phase 1.
 5. **LigParGen:** may OPLS-AA charges for more PFAS groups come from the web service (the SMILES leave the machine),
-   or local routes only?
+   or local routes only? **Answered (Brandon, 2026-11-22): allowed.**
 6. **A run that meets the end of a machine's time window:** wait for the window to reopen on the same machine (an
    exact continuation), or move to a free machine through a data file (statistically similar)?
 7. **The σ default:** 16 Å on the GPU with the tail correction (pilot B: reproduced Tsige & Grest, 21 ns/day, slab 2 %
    below the bulk density), or Ewald dispersion on the CPU (pilot A: no correction, 7.6 ns/day, its mesh still to
    check)? And the C6F14 target: Freire 2006 (12.33), which OPLS-AA misses by 5-13 %, or Caço 2003 (11.36)?
+   **Answered (Brandon, 2026-11-22):** 16 Å + tail on the GPU is the default ("that default is fine"). The target
+   stays Freire 2006 (12.33) with no offsets; the OPLS-AA shortfall is documented, not corrected.
 8. **OpenMM's place:** in v2 next to the workers, or after the workers and sweeps? Is AIMNet2 MD (a PFAS molecule
    in water or on graphite) worth a v2 spike?
 9. **Steered MD:** move to Colvars (needs the COLVARS package in every machine's LAMMPS), or keep `fix smd` for the
    rigid pull and use Colvars only for the flexible one?
 10. **Sharing machines by default:** may an MD job start while a CREST or QSAR batch runs on the same machine, and at
     which priority and thread share?
+    **Answered (Brandon, 2026-11-22):** a scheduler that knows which jobs suit the CPU and which the GPU, and tells the
+    user when both can run efficiently at once (section 7, SCHED-3). The default thread shares come from the measured
+    profiles.
 11. **The 17-liquid Phase 1:** run it from the CLI with the v1 supervisor as soon as PR 1 lands, before the panel?
 12. **The Mac's GPU:** try a LAMMPS OpenCL build (FORK-8) or OpenMM Metal (FORK-9) first, or neither for now?
 
 ## Sources
+
+Internal, not public: the pilot reports (`Runs/md-pilot-2026-11-20/pilot_A_report.md`, `pilot_B_report.md`,
+`pilot_C_report.md`, `pilots_summary.md`), the planned split test (`split_test_plan.md` there, being written) and the
+literature review on cutoffs and force fields (pending), all in Brandon's synced folders.
 
 Fetched 2026-11-22. Vendor pages of commercial tools list features without detail; the table says only what they
 say.
