@@ -765,6 +765,9 @@ class Job:
     # stored counts instead of opening the job table (a read-only connection can recreate jobs.sqlite-wal after the
     # checkpoint, and cannot remove it)
     finishing: bool = field(default=False, repr=False)
+    # held by a status poll while it checks ``finishing`` and reads the job table, and by the end of the run while it
+    # sets ``finishing``: so the run waits for a poll that is still reading before it checkpoints the table (FIX-7)
+    table_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     handoff: object = field(default=None, repr=False)     # jobs.Handoff of the running batch (work sharing)
     control: object = field(default=None, repr=False)     # jobs.BatchControl of the running batch (DIST-7)
     # DIST-7: a hold after this machine slept, or lost its grid client, until the client says what is still ours
@@ -1551,9 +1554,12 @@ class JobManager:
                                            should_stop=job.stop.is_set, log=log, lanes=lanes, chunk=chunk,
                                            keep_results=False, handoff=job.handoff, control=job.control)
                 # final counts before the state changes, so no client sees "done" with old counts; from here status
-                # polls use them and leave the job table alone
-                job.counts = self._counts(job)
-                job.finishing = True
+                # polls use them and leave the job table alone. The lock waits for a poll that is still reading the
+                # table: its read-only connection, open across the checkpoint below, left jobs.sqlite-wal and -shm
+                # behind on Windows (FIX-7)
+                with job.table_lock:
+                    job.counts = self._counts(job)
+                    job.finishing = True
                 left = sum(int(job.counts.get(k, 0)) for k in ("pending", "running", "cancelled"))
                 tables = self._final_tables(run_dir)
                 self._checkpoint(run_dir)
@@ -1655,9 +1661,18 @@ class JobManager:
         except Exception:  # a table being created, a locked file on Windows: keep the last known counts
             return dict(job.counts)
 
+    def _live_counts(self, job: Job) -> dict:
+        """The counts a status request reports: the job table's while the job runs, the stored final counts once it is
+        finishing. The check and the read are one step under the job's ``table_lock``, so the end of the run cannot
+        checkpoint the table while a poll that began before it is still reading (FIX-7)."""
+        with job.table_lock:
+            if job.state == "running" and not job.finishing:
+                return self._counts(job)
+        return dict(job.counts)
+
     def public(self, job: Job, tail: int = 20) -> dict:
         """The job as the API reports it."""
-        counts = self._counts(job) if job.state == "running" and not job.finishing else dict(job.counts)
+        counts = self._live_counts(job)
         lines = list(job.log)[-tail:] if tail else []
         if tail and not lines:
             lines = _tail(Path(job.run_dir) / JOB_LOG, tail)
