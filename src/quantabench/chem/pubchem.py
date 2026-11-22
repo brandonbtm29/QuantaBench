@@ -296,20 +296,40 @@ class RateLimiter:
 
 
 # ============================================================================================ cache
+def cache_settings() -> tuple[str, float]:
+    """(folder, maximum age in days) of the PubChem cache from Settings > Lookups (``settings.lookups``); ("", 0.0)
+    when they are not set or cannot be read."""
+    try:
+        from .. import settings
+
+        lk = settings.load().lookups
+        return str(lk.pubchem_cache_dir or "").strip(), max(0.0, float(lk.pubchem_max_age_days or 0.0))
+    except Exception:  # noqa: BLE001 - a cache preference is never worth an error
+        return "", 0.0
+
+
 def default_cache_path() -> Path:
-    """Per-machine cache (``QUANTABENCH_CACHE_DIR`` overrides the platform cache folder)."""
+    """Per-machine cache: ``QUANTABENCH_CACHE_DIR`` (the tests' own), else Settings > Lookups' folder, else the platform
+    cache folder."""
     import os
 
     from platformdirs import user_cache_dir
 
-    root = os.environ.get("QUANTABENCH_CACHE_DIR", "").strip() or user_cache_dir("QuantaBench", appauthor=False)
+    root = os.environ.get("QUANTABENCH_CACHE_DIR", "").strip()
+    if not root:
+        folder, _age = cache_settings()
+        if folder:
+            return Path(os.path.expanduser(folder)) / "pubchem_cache.sqlite"
+        root = user_cache_dir("QuantaBench", appauthor=False)
     return Path(root) / "pubchem" / "pubchem_cache.sqlite"
 
 
 class ResponseCache:
-    """SQLite store of PubChem responses keyed by method + URL + POST body; one commit per response."""
+    """SQLite store of PubChem responses keyed by method + URL + POST body; one commit per response. ``max_age_s`` > 0:
+    a response stored longer ago than that is a miss (fetched again and replaced), except with ``stale_ok``."""
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, max_age_s: float = 0.0):
+        self.max_age_s = max(0.0, float(max_age_s or 0.0))
         path = Path(path).expanduser()
         if path.suffix.lower() not in (".sqlite", ".db", ".sqlite3"):
             path = path / "pubchem_cache.sqlite"
@@ -321,12 +341,25 @@ class ResponseCache:
                          "body BLOB, fetched_utc TEXT)")
         self._db.commit()
 
-    def get(self, key: str) -> tuple[int, bytes] | None:
+    def get(self, key: str, stale_ok: bool = False) -> tuple[int, bytes] | None:
         with self._lock:
-            row = self._db.execute("SELECT status, body FROM responses WHERE key = ?", (key,)).fetchone()
+            row = self._db.execute("SELECT status, body, fetched_utc FROM responses WHERE key = ?", (key,)).fetchone()
         if row is None:
             return None
+        if self.max_age_s > 0 and not stale_ok and self._age_s(row[2]) > self.max_age_s:
+            return None
         return int(row[0]), zlib.decompress(row[1]) if row[1] else b""
+
+    @staticmethod
+    def _age_s(fetched_utc) -> float:
+        """Seconds since ``fetched_utc``; unreadable times count as old."""
+        try:
+            then = datetime.fromisoformat(str(fetched_utc))
+        except ValueError:
+            return float("inf")
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - then).total_seconds()
 
     def put(self, key: str, url: str, status: int, body: bytes) -> None:
         with self._lock:
@@ -375,7 +408,10 @@ class PubChemClient:
     def __init__(self, cache: str | Path | ResponseCache | bool | None = None, offline: bool = False,
                  rate: float = DEFAULT_RATE, per_minute: int = MAX_PER_MINUTE, transport: Transport | None = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] | None = None,
-                 timeout: float = 30.0, max_retries: int = 5, log: Callable[[str], None] | None = None):
+                 timeout: float = 30.0, max_retries: int = 5, log: Callable[[str], None] | None = None,
+                 max_age_days: float | None = None):
+        """``max_age_days``: cached responses older than this are fetched again (offline mode still reads them);
+        None = Settings > Lookups' maximum age for a cache made here, a given ``ResponseCache``'s own otherwise."""
         if isinstance(cache, ResponseCache):
             self.cache: ResponseCache | None = cache
         elif cache is False:
@@ -386,6 +422,9 @@ class PubChemClient:
             except (OSError, sqlite3.Error) as exc:
                 (log or _log.warning)(f"PubChem cache not available ({exc}); continuing without it")
                 self.cache = None
+        if self.cache is not None and (max_age_days is not None or not isinstance(cache, ResponseCache)):
+            days = cache_settings()[1] if max_age_days is None else max(0.0, float(max_age_days))
+            self.cache.max_age_s = days * 86400.0
         if offline and self.cache is None:
             raise ValueError("offline mode needs a cache")
         self.offline = offline
@@ -407,7 +446,7 @@ class PubChemClient:
         key = f"{method} {url}" + (f"\n{body.decode()}" if body else "")
         with self._lock:
             if self.cache is not None:
-                hit = self.cache.get(key)
+                hit = self.cache.get(key, stale_ok=self.offline)
                 if hit is not None:
                     self.cache_hits += 1
                     return hit

@@ -158,6 +158,10 @@ quantabench-cli build "OC1CCCC2CCCCC12" --ring-conformers thorough
 quantabench-cli build "[K+].[O-]S(=O)(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --counterion-entries
 ```
 
+Right-click a molecule in the list for **Look up**: PubChem, the NIST WebBook, nmrshiftdb2 and EPA CompTox open in the
+browser with its InChIKey, InChI or CAS RN. Settings > Lookups edits the URL templates (`%inchikey`, `%inchi`, `%cas`,
+`%smiles`, `%name`) and PubChem's cache folder and maximum age.
+
 ## Workspaces
 
 The activity bar on the left switches between five workspaces, each an arrangement of docks around the

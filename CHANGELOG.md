@@ -14,6 +14,14 @@
   six-membered rings, 20 seeds lowered the refined best conformer of 6 fused polycyclics by 0.1-2.8 kcal/mol and
   never raised one; the force-field step took 2.6x as long. Thorough runs stored before keep 5 when resumed.
 
+### Settings > Lookups and the molecule list's Look up menu (SETTINGS-1, 2026-11-22)
+- Spartan's Preferences > URLs: right-click a molecule for **Look up** in PubChem (by InChIKey), the NIST WebBook (by
+  CAS RN), nmrshiftdb2 (13C spectrum by InChI, JCAMP-DX) and EPA CompTox (by InChIKey). Settings > Lookups edits the
+  templates (`%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`, percent-encoded); a template whose value a molecule
+  lacks is greyed out with the reason. The CAS RN comes from a posted CAS field, the id or the name.
+- PubChem's cache: a folder (`lookups.pubchem_cache_dir`) and a maximum age (`lookups.pubchem_max_age_days`, 0 = no
+  limit): an older answer is asked again and replaced; `--offline` still reads it. Not science settings.
+
 ### Settings > Build defaults: build filters and ring conformers (SETTINGS-1, 2026-11-22)
 - Spartan's Import Filters as build filters, for every input: water, acids (HCl, HBr, HI, HF, ...) and counter-ions
   picked by name (sodium, potassium, ammonium, tetrabutylammonium, chloride, ... 34 in all) are stripped before the

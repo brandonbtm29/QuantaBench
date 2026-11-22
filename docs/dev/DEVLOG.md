@@ -562,6 +562,24 @@ Newest entries at the bottom. One entry per working session or nightly run.
   `test_worker.py::test_build_filters_travel_to_a_worker` (a worker over HTTP). Screenshot:
   `docs/dev/screenshots/SETTINGS-1/build_defaults_tab.png`.
 
+## 2026-11-22: Settings > Lookups, Spartan's URLs and Databases (SETTINGS-1, branch `feat/settings-1-lookups`)
+- **Templates** (`quantabench.lookups`): `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`, replaced longest first
+  (`%inchikey` before `%inchi`) and percent-encoded. The structure keys are of the record as drawn, all fragments
+  (potassium PFOS has its own InChIKey), which is what the databases index. The CAS RN comes from a posted field named
+  like CAS, then any field, the id or the name that is a CAS RN as a whole (`pubchem.cas_numbers`, check digit).
+- **Defaults**, checked where the site allowed it: NIST `cbook.cgi?ID=335-67-1` shows PFOA; CompTox
+  `dsstoxdb/results?search=` is the dashboard's own search link; PubChem `#query=` is its search page. nmrshiftdb2
+  documents InChI only for its data export (`exportcmlbyinchi`, 13C, `format/jcamp`), and its site refuses robots,
+  so that template (in Turbine's query form) is unverified: Spartan's own NMR template would settle it.
+- **Menu** (`gui.lookup_menu`): the molecule list's right-click menu has *Look up* with one action per template
+  (the URL as tooltip), greyed out with "(no CAS RN)" where a value is missing, and *Edit lookups...*.
+- **PubChem cache:** `ResponseCache.max_age_s` makes an answer older than the maximum age a miss (fetched again and
+  replaced); offline mode reads it anyway (`stale_ok`). `default_cache_path` takes Settings > Lookups' folder after
+  `QUANTABENCH_CACHE_DIR` (the tests' own) and before the platform's. A client made with its own `ResponseCache`
+  keeps that cache's age unless given one.
+- Tests: `tests/test_lookups.py` (6), `tests/test_gui_settings_lookups.py` (2). Screenshots:
+  `docs/dev/screenshots/SETTINGS-1/lookups_tab.png`, `lookup_menu_*.png`.
+
 ## 2026-11-22: SETTINGS-1 follow-ups (branch `feat/settings-1-followups`)
 Brandon's answers on PRs #40, #45 and #46: keep a salt's counter-ion as a separate entry; cap Automatic lanes at the
 physical cores; check whether Thorough ring conformers should seed from more than 5 conformers.
@@ -591,7 +609,7 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   - **The check.** 45 molecules with a saturated six-membered ring, sampled from the QSAR table (seed 7; 38 with one
     such ring, 7 with 2-4; at most 40 heavy atoms). Each ran gas MMFF94s (normal, thorough with 5 seeds, thorough with
     20), then AIMNet2 on the 20 lowest of each thorough pool, ranked by the refinement. On the workstation, 12
-    processes at below-normal priority, about 40 min.
+    processes at below-normal priority, about 45 min.
   - **Results:**
     - 20 seeds gave a larger force-field pool for 30 of 45 molecules, with new conformers among the 20 lowest for 27.
     - The lowest force-field energy dropped for 6, by 0.07-4.85 kcal/mol.

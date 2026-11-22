@@ -1294,7 +1294,11 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
     whether salts should keep their counter-ion as a separate entry (the settings plan's question).
   - **Lookups** (Databases, URLs): URL templates with `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`
     (PubChem, NIST WebBook by CAS, nmrshiftdb, EPA CompTox), opened from the molecule list; PubChem cache folder
-    and maximum age; a folder of reference tables with experimental values.
+    and maximum age; a folder of reference tables with experimental values. In PR (`feat/settings-1-lookups`,
+    2026-11-22): the templates (`settings.lookups.urls`, `quantabench.lookups`), the molecule list's right-click
+    *Look up* menu, the cache folder and maximum age (`lookups.pubchem_cache_dir`, `pubchem_max_age_days`). Left: the
+    folder of reference tables; the nmrshiftdb2 template (its documented 13C JCAMP export) is not checked against
+    the site.
   - **Follow-ups** (Brandon, 2026-11-22; in PR `feat/settings-1-followups`): salts as separate entries
     (`counterion_entries`, `chem.salts`: K-PFOS gives PFOS⁻ and K⁺, linked by `counterion_of`; no new counter-ion
     names); Automatic lanes never above the physical cores, typed specs up to the logical threads with a note;
