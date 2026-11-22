@@ -133,7 +133,12 @@ In a water run, not every step sees the water. The review lists it for the run's
 
 - **Salts and counter-ions.** With **Keep largest fragment** on (the default), the largest fragment is computed and
   the counter-ions are removed; the review names them. Off, the fragments are computed together, an ion pair in one
-  calculation.
+  calculation. Settings > Build defaults > Fragments strips water, acids and named counter-ions first (`--strip`):
+  a hydrated ion pair without its water, or the anion of a salt whose cation is the larger ion.
+- **Ring conformers.** The RDKit search keeps the ring shapes ETKDG and MMFF94s give, mostly chairs. *Thorough*
+  (Settings > Build defaults > Ring conformers, `--ring-conformers thorough`; Spartan's Conformer Rules) also makes
+  twist-boats of every saturated six-membered ring from the 5 lowest conformers; they join the pool when they are in
+  the window (cyclohexane's is 5.9 kcal/mol above the chair in MMFF94s).
 - **Metal complexes drawn as ions** (a ferrocene as Fe²⁺ and two cyclopentadienides) cannot be built: draw the
   metal-ligand bonds.
 - **Undefined stereocentres.** RDKit embeds an undefined centre at random for every conformer. One centre mixes two
