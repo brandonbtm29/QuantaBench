@@ -275,9 +275,11 @@ def test_settings_dialog_sections_and_info(tmp_path):
         d.show()
         _wait(app, lambda: False, 0.2)
         sec = d.sections
-        assert set(sec) == {"compute_threads", "compute_gpu", "compute_lanes", "compute_limits"}   # no report here
+        assert set(sec) == {"compute_threads", "compute_gpu", "compute_lanes", "compute_limits",
+                            "compute_expert"}                                       # no report here
         assert sec["compute_threads"].is_open() and sec["compute_lanes"].is_open()
         assert not sec["compute_gpu"].is_open() and not sec["compute_limits"].is_open()
+        assert not sec["compute_expert"].is_open()          # SETTINGS-1: lane spec, GPU linear algebra, dxtb
         assert sec["compute_gpu"].summary.text().startswith("GPU auto · device 0")
         d.molecule_timeout.setValue(900)
         assert sec["compute_limits"].summary.text().endswith("900 s per molecule")

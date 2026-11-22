@@ -338,3 +338,24 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Tests:** `tests/test_wsl_scratch.py` (23) runs the real scripts through a stand-in `wsl.exe` and `df` on
   Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
   check (BACKLOG CREST-SCRATCH-1).
+
+## 2026-11-22: Settings > Compute, Spartan's Jobs tab (SETTINGS-1, branch `feat/settings-1-compute`)
+- **What Spartan's Jobs tab has that the Compute tab lacked:** the "12 cores detected (24 logical)" line, and a short
+  front page. The tab now opens with "This computer: N cores, M logical" (`settings_dialog.cores_line`: the
+  detection report's `cores_text`, so Apple Silicon shows its performance cores; psutil before the report arrives).
+- **The Expert box** (a folding section, closed by default and remembered per machine like the others) holds the lane
+  spec, GPU linear algebra and dxtb on the GPU. Its header counts the ones not at their defaults ("2 changed", the
+  tooltip names them), so a hidden non-default is still visible.
+- **Lanes without the spec syntax:** *Molecules at once* lists Automatic, one at a time and 2 to the physical cores;
+  any other spec (GPU lanes, threads per lane, more lanes than cores) shows as *Custom*, and choosing Custom opens the
+  Expert box. Both controls edit the one value, this machine's `dist.machine_lanes` entry.
+- **Same values as the job dialog and the Machines dock** (checked): the job dialog starts from
+  `BuildConfig.from_settings` (`priority_for`, `free_threads_for`), the Machines dock and `machines set` from
+  `priority_for(machine)` / `lanes_for(machine)` and save through `update_machine`, which stamps each change in
+  `dist.machine_updated` for the SyncThing conflict merge. The dialog did not stamp, and it wrote the lane spec back
+  on every OK: a lane change the Machines dock saved while the dialog was open was lost. Now the dialog writes the
+  spec only when it changed, and stamps its per-machine changes the way `update_machine` does.
+- The job dialog's note pointed at "Settings > Resources" (the tab's old name).
+- Tests: `tests/test_gui_settings_compute.py` (5: the cores line, the Expert box and its count, the two lane
+  controls as one value, a round trip read back through `BuildConfig`, `control.machine_lines` and a new dialog, and
+  the Machines dock's newer values kept). Screenshots: `docs/dev/screenshots/SETTINGS-1/compute_*.png`.

@@ -2,6 +2,15 @@
 
 ## Unreleased (after 0.3.0)
 
+### Settings > Compute: an Expert box and this computer's cores (SETTINGS-1, 2026-11-22)
+- Spartan's Preferences > Jobs: a line with this computer's cores ("12 cores, 24 logical"), *Molecules at once*
+  (Automatic, one at a time, or N lanes) in Parallel lanes, and a folded **Expert** box with the full lane spec, GPU
+  linear algebra and dxtb on the GPU; its header counts the ones not at their defaults. Same settings as before
+  (`dist.machine_lanes`, `resources.linalg`, `resources.dxtb_gpu`), none of them science.
+- The tab's changes to this machine's priority, free threads and lanes are stamped like the Machines dock's, and an
+  unchanged lane spec is no longer written back (it overwrote a change the Machines dock saved while the dialog was
+  open).
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use
