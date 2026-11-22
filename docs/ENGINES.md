@@ -151,6 +151,14 @@ What the standardization does with research records (every step is in the molecu
   `removed_fragments` column (`[Na+]`, `2 x [Br-]`, a second copy of the parent, a co-crystallized acid).
   Bonds to alkali and alkaline-earth metals are ionic and are disconnected first (`CC(=O)O[Na]` is
   sodium acetate). Turn off *keep largest fragment* to compute the whole record instead.
+- **Build filters** (Settings > Build defaults > Fragments, `build --strip`; Spartan's Import Filters): water, small
+  neutral inorganic acids (HCl, HBr, HI, HF, ...) and counter-ions picked by name (`sodium`, `tetrabutylammonium`,
+  `chloride`, ... in `standardize.NAMED_COUNTERIONS`; a name also matches the neutral form, triethylamine for
+  triethylammonium) are removed before the largest-fragment rule, for every input. They matter where that rule would
+  not remove the fragment: with *keep largest fragment* off (a hydrate's ion pair is computed without its water), or
+  where the counter-ion is the larger ion (tetrabutylammonium trifluoroacetate computes the trifluoroacetate). The
+  notes say "stripped before the largest-fragment rule (build filters): O (water), [Na+] (sodium)", and
+  `removed_fragments` lists them first. Off by default; science settings (stored with the run, sent to workers).
 - **Metal salts.** A bondless Al³⁺, Zn²⁺, Fe²⁺/Fe³⁺ or Cu²⁺ cation (as well as Na⁺, K⁺, Ca²⁺, Mg²⁺,
   Ba²⁺, Sr²⁺) is a counter-ion when the rest of the record is an organic ion and counter-ions: fosetyl-Al
   (`[Al+3]` + 3 ethyl phosphonates) computes one ethyl phosphonate anion, and `removed_fragments` lists
@@ -326,8 +334,8 @@ not tried again in the run; `--retry-failed` (with a higher limit, or 0) redoes 
 - **dxtb.** `chem/torch_compat.py` runs the dense linear algebra a GPU build lacks (Cholesky and solve
   on AMD's Windows ROCm wheel; everything, in float64, on MPS) on the CPU inside a dxtb call. Results
   match the CPU, but dxtb 0.4 is 5-8x slower on the workstation's GPU than on its CPU (host synchronizations in its
-  overlap integrals), so `dxtb_device()` keeps dxtb on the CPU unless Settings > Compute > "dxtb on the
-  GPU" (or `QUANTABENCH_DXTB_GPU`) is `on`. `QUANTABENCH_LINALG=auto|cpu|device` chooses what is routed.
+  overlap integrals), so `dxtb_device()` keeps dxtb on the CPU unless Settings > Compute > Expert > "dxtb on
+  the GPU" (or `QUANTABENCH_DXTB_GPU`) is `on`. `QUANTABENCH_LINALG=auto|cpu|device` chooses what is routed.
 
 ## Finding programs
 
@@ -335,6 +343,18 @@ QuantaBench looks, in this order, at: Settings > Engines (a path, or `wsl:/full/
 the `QUANTABENCH_XTB` / `QUANTABENCH_CREST` / `QUANTABENCH_MOPAC` / `QUANTABENCH_PSI4_PYTHON`
 environment variables, PATH, the running Python environment, and conda/mamba environments in the usual
 places (`~/miniforge3/envs/*`, `~/mambaforge`, `~/miniconda3`, `~/micromamba`, ...).
+
+**Several conda environments with the program:** the newest version wins, read from each environment's
+`conda-meta/<package>-<version>-<build>.json` record (nothing runs; the version cache for a program without one).
+Equal versions, or no known version, keep the order above. `doctor` says so: `conda env qb-tools (newest of 3
+environments: 6.7.1)`. Before ENG-3 (2026-11-22) the first environment in alphabetical order won.
+
+**Version probes** (`xtb --version`, `python -c "import psi4"`, g-xTB's start check, `lmp -h`) write their output to
+temporary files and end the whole process tree when they finish or time out, so a launcher's child that keeps the
+output open (a conda `.bat`, a venv's `python.exe`, wsl.exe's own helpers) cannot make them wait past their timeout.
+The versions are cached on disk by path, size and modification time. The GUI builds its window without probing: on
+the first start (or after a program changed) a background worker probes and relabels the engine lists; until then a
+program whose version is not known yet is not ruled out.
 
 **Paths per machine.** The settings file is shared by every machine (SyncThing), but a program's path
 usually belongs to one: the workstation runs CREST as `wsl:/home/<you>/micromamba/envs/qb-tools/bin/crest`, the Mac
@@ -519,11 +539,16 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
       a generous guess). WSL's memory is capped (by default half the PC's), and several lanes run at once, so each
       job checks when it starts;
     - otherwise `~/.cache/quantabench/scratch/<job>` (`$XDG_CACHE_HOME` if set) on WSL's ext4 disk.
-  - The input is copied in, and CREST runs there (`wsl.exe --cd <that folder>`). CREST's output is the log QuantaBench
-    writes through the pipe, in the Windows job folder, as before. What comes back:
+  - The input is copied in, and CREST runs there (`wsl.exe --cd <that folder>`). Its stdout and stderr go to
+    `crest.out` there too, not through wsl.exe's pipe, which wrote them to NTFS as thousands of small writes a second
+    (CREST-LOG-1, 2026-11-22). When CREST ends, `crest.log` in the Windows job folder gets a bounded copy: the first
+    200 and the last 2,000 lines, 1 MiB at most, lines cut at 2,000 characters, each run of identical lines as one
+    line and a count, and a line saying how much was left out. A CREST that writes more than 16 MB gets a WARNING
+    in the run's log. What comes back:
     - success: `crest_conformers.xyz` (what the pipeline reads), `crest.energies` and `crest_best.xyz`;
-    - a failure or the time limit: the folder's top-level files up to 8 MB (CREST's small logs, `crestopt.log`), next
-      to its log in the kept Windows job folder; trajectories and subfolders stay behind;
+    - a failure or the time limit: the folder's top-level files up to 8 MB (`crest.out` when it is that small,
+      CREST's small logs, `crestopt.log`), next to `crest.log` in the kept Windows job folder; trajectories and
+      subfolders stay behind;
     - Settings > Engines > Keep job folders: everything;
     - a cancel: nothing.
   - The folder inside WSL is removed in every case. A killed process cannot do that: the clean-up of left-behind job
@@ -537,6 +562,20 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     --crest-wsl-scratch auto|shm|disk|off`. `engines.crest_wsl_shm_min_gb` is in the settings file only. When no
     folder can be made inside WSL, the job runs in the Windows folder, with a warning and a note.
   - Native CREST (Linux, macOS) is not affected: it runs in its job folder on a local disk, as always.
+- **BLAS threads** (CREST-LOG-1, 2026-11-22). CREST gets `OPENBLAS_NUM_THREADS=1`, as CREST's install notes ask;
+  its OpenMP threads stay as many as `-T` (the molecule's threads), with `OMP_MAX_ACTIVE_LEVELS=1` as for every
+  program.
+  - Why: CREST 3 runs its calculations in its own OpenMP threads. conda-forge's CREST links a pthreads OpenBLAS
+    (`libopenblas-*-pthreads_*`, the workstation's WSL CREST), which, called inside them with more than one thread,
+    prints `OpenBLAS Warning : Detect OpenMP Loop and this application may hang. Please rebuild the library with
+    USE_OPENMP=1 option.` on each call: 27,000 lines in 45 s at `-T 5`, a 368 MB log in 11 minutes in the CREST
+    rebuild. One BLAS thread per CREST thread is the layout CREST wants anyway (the xtb that `--legacy` starts
+    inherits it).
+  - An OpenMP OpenBLAS (the fork's macOS build: `USE_OPENMP`) or Accelerate never warns, and inside CREST's threads
+    it already uses one thread.
+  - Other programs keep a BLAS thread per thread: xtb (`--opt`, `--grad`) and tblite call BLAS outside their OpenMP
+    loops and print no such warning with 5 BLAS threads (checked with conda-forge's xtb 6.7.1 and tblite 0.6.0 in
+    WSL), and xtb's documentation recommends `OPENBLAS_NUM_THREADS=<ncores>` for them.
 - **Levels.** `--crest-method gfn2 | gfnff | gfn2//gfnff | gfn1`; `--quick` is the default
   (`--crest-full` for a full run). gfn2, gfn1 and gfnff run inside CREST 3. `gfn2//gfnff` needs
   CREST's `--legacy` mode (added automatically) and an `xtb` on the PATH CREST sees.
@@ -702,6 +741,26 @@ lowest are refined, and the refined ensemble is pruned to `--window`.
     methyl and CF3 rotors do not), as the timing rows record it.
 - **Run priority and free threads** apply to every lane and to the CREST threads they borrow (next section).
 
+## Programs never outlive QuantaBench (ENG-3)
+
+A run's programs end with the QuantaBench process that started them, however it ends: a crash, End task, a lane
+killed at its time limit, a closed terminal.
+
+| | how | what ends them |
+|---|---|---|
+| Windows | every program `run_program` starts (xtb, CREST's wsl.exe, MOPAC, Psi4, g-xTB) and tblite's CPCM helper is created suspended, put in a job object of its own with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, then resumed; whatever it starts joins the job. The lanes are in one such job of their parent (the GUI or the CLI), and each lane's programs in jobs nested in it | Windows, when the last handle to the job closes: only QuantaBench holds it. A cancel or a time limit ends the whole job, also a child whose parent has already exited (which `taskkill /T` misses) |
+| a `wsl:` program (CREST) | wsl.exe and its helpers (a second wsl.exe, wslhost.exe, conhost.exe) are in the job. Inside WSL the program runs under a guard script, with wsl.exe's stdin as its lifeline (a pipe QuantaBench holds open and never writes) | when wsl.exe ends, WSL hangs up the Linux session (SIGHUP), which ends an ordinary program. The guard's watchdog then kills the program's whole process group (SIGTERM, SIGKILL 2 s later): programs that ignore SIGHUP, CREST's xtb. It does the same when the lifeline reaches EOF (QuantaBench died but wsl.exe lived on). When the program ends, the guard sends SIGTERM to what it left in its group (CREST's xtb after a cancel) and exits with the program's code |
+| Linux, macOS | programs run in their own session | a cancel or a time limit kills the process group; a lane's programs are recorded and killed by its parent when the lane dies |
+
+- The job sets no other limit: priority, affinity and memory are as before (Run priority and free threads, below).
+- Measured on the workstation (WSL 2, kernel 6.18): ending wsl.exe ends the Linux processes of its session; a process
+  that ignores SIGHUP (`nohup`) or runs in another session (`setsid`) did not end before the guard. Through the guard,
+  a program and its child that both ignore SIGHUP end when the GUI is killed outright, with the job and with only the
+  lifeline (`tests/test_proctree.py`).
+- **Limits.** On Linux and macOS there are no job objects: a GUI or CLI killed outright (SIGKILL, a crash) still leaves
+  a program that is running there until it ends. Inside WSL, a process that starts a session of its own (`setsid`, a
+  daemon) is outside the guard's group; neither CREST nor xtb does.
+
 ## Run priority and free threads
 
 A 5-lane x 4-thread run on the workstation (20 of 24 threads, below-normal CPU priority) made the PC hard to use, even for
@@ -770,9 +829,11 @@ machine's thread count: 12 of 24 on the workstation) store another machine's val
 of the settings file. A worker reads its machine's values at job start and re-reads them every 15 s while a job
 runs. A changed **run priority** is applied to the job's running lanes and the programs they started at once
 (`priority.apply_to_pids`): lowering works everywhere, raising only on Windows (on macOS and Linux it applies from the
-next worker start). **Lanes and free threads** apply with the machine's next job (a pause and resume restarts the
-job's lanes too). A job that `grid build --priority` gave its own priority keeps it. docs/WORKERS.md, "Pausing a
-machine, a closing laptop", has the rest.
+next worker start). macOS loses a nice value set while a process is inside exec() (a lane or a program that is just
+starting), so on macOS and Linux the lowered processes are looked at again a quarter of a second later and lowered
+once more if an exec put the old value back (FIX-6). **Lanes and free threads** apply with the machine's next job (a
+pause and resume restarts the job's lanes too). A job that `grid build --priority` gave its own priority keeps it.
+docs/WORKERS.md, "Pausing a machine, a closing laptop", has the rest.
 
 **Free threads.** With CPU threads = Auto (0, the default), the run's thread budget is the logical threads minus the
 free threads. The `auto` lane plan stays inside that budget, as do `1` (one process) and `N` lanes. Dynamic CREST

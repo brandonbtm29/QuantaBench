@@ -210,3 +210,46 @@ def test_gfn2_label_follows_the_full_libcint_check(tmp_path, monkeypatch):
         assert "Not available: GFN2 needs dxtb's libcint backend: tad-libcint 9.9 does not load" in w.engine_info.text()
     finally:
         _close(app, w)
+
+
+def test_first_start_probes_program_versions_off_the_gui_thread(tmp_path, monkeypatch):
+    """ENG-3: no version cached on disk (the first start): the window is built without running ``--version`` on the
+    GUI thread, a worker probes, and the engine lists are relabelled (here MOPAC 21, too old, becomes 'not installed')."""
+    import sys
+    import threading
+
+    from quantabench import settings as sm
+    from quantabench.chem import external
+    from quantabench.gui.main_window import MainWindow
+
+    script = tmp_path / "mopac_impl.py"
+    script.write_text('print(" MOPAC version 21.0.0 (stand-in)")\n', encoding="utf-8")
+    if sys.platform == "win32":
+        exe = tmp_path / "mopac.bat"
+        exe.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+    else:
+        exe = tmp_path / "mopac"
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+        exe.chmod(0o755)
+    monkeypatch.setenv("QUANTABENCH_MOPAC", str(exe))
+    external.clear_cache()
+    calls = []
+    real = external._probe_version
+
+    def spy(info, spec, *a, **k):
+        calls.append((spec.name, threading.current_thread() is threading.main_thread()))
+        return real(info, spec, *a, **k)
+
+    monkeypatch.setattr(external, "_probe_version", spy)
+    app = _app()
+    w = MainWindow(sm.Settings(output_dir=str(tmp_path)))
+    try:
+        assert not [c for c in calls if c[1]], f"probed on the GUI thread: {calls}"
+        i = w.w_method.findData("mopac-pm7")
+        assert i >= 0 and not w.w_method.itemText(i).endswith("(not installed)")       # unknown yet: not ruled out
+        assert _wait(app, lambda: w.w_method.itemText(w.w_method.findData("mopac-pm7")).endswith("(not installed)"))
+        assert ("mopac", False) in calls and not [c for c in calls if c[1]]
+        assert external.uncached_versions(["mopac"]) == []
+    finally:
+        _close(app, w)
+        external.clear_cache()

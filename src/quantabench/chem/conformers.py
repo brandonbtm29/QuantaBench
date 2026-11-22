@@ -262,16 +262,103 @@ def prune(mol: Chem.Mol, conf_ids: list[int], energies: list[float], window_kcal
     return kept_ids, kept_e
 
 
+#: Ring conformers of the RDKit search (``BuildConfig.ring_conformers``; Spartan's Preferences > Settings > Conformer
+#: Rules, whose "Thorough" "considers twist-boat conformers of six-membered rings (in addition to chair conformers)"):
+#: "normal" = the rings ETKDG and the force field give (chairs, with ETKDG's small-ring torsions); "thorough" = also
+#: twist-boats of every saturated six-membered ring (``twist_boats``)
+RING_CONFORMERS = ("normal", "thorough")
+#: "thorough": twist-boats are made from this many of the lowest force-field conformers
+TWIST_BOAT_SEEDS = 5
+#: ring torsions (degrees, around the ring) of a twist-boat; ``twist_boats`` holds a ring at each of its three
+#: rotations and their mirror images, then lets the force field relax it (cyclohexane: MMFF94s +5.9 kcal/mol)
+TWIST_BOAT_TORSIONS = (30.0, -65.0, 30.0, 30.0, -65.0, 30.0)
+
+
+def check_ring_conformers(value: str) -> str:
+    if value not in RING_CONFORMERS:
+        raise ValueError(f"ring_conformers must be one of {', '.join(RING_CONFORMERS)}, not {value!r}")
+    return value
+
+
+def flexible_six_rings(mol: Chem.Mol) -> list[tuple[int, ...]]:
+    """The saturated six-membered rings of ``mol`` (sp3 atoms, single bonds, not aromatic): the rings that have
+    twist-boat conformers."""
+    out = []
+    info = mol.GetRingInfo()
+    for ring, bonds in zip(info.AtomRings(), info.BondRings()):
+        if len(ring) != 6:
+            continue
+        atoms = [mol.GetAtomWithIdx(i) for i in ring]
+        if any(a.GetIsAromatic() or a.GetHybridization() != Chem.HybridizationType.SP3 for a in atoms):
+            continue
+        if any(mol.GetBondWithIdx(b).GetBondType() != Chem.BondType.SINGLE for b in bonds):
+            continue
+        out.append(tuple(ring))
+    return out
+
+
+def twist_boats(mol: Chem.Mol, conf_ids: list[int], energies: list[float], forcefield: str,
+                notes: list[str] | None = None) -> tuple[list[int], list[float]]:
+    """Twist-boat conformers ("thorough" ring conformers): for each saturated six-membered ring of each of the
+    ``TWIST_BOAT_SEEDS`` lowest conformers, a copy with the ring held at a twist-boat (``TWIST_BOAT_TORSIONS``, its
+    three rotations and their mirror images) is optimized with the force field, then optimized freely. Returns the
+    new conformer ids (added to ``mol``) and their energies (kcal/mol); one that falls back to a chair is a duplicate
+    for ``prune`` to drop. Nothing without a force field or a flexible ring."""
+    rings = flexible_six_rings(mol)
+    if not rings or forcefield not in ("MMFF94s", "UFF") or not conf_ids:
+        return [], []
+    with rdBase.BlockLogs():
+        props = AllChem.MMFFGetMoleculeProperties(mol, mmffVariant="MMFF94s") if forcefield == "MMFF94s" else None
+
+    def field(cid: int):
+        if props is not None:
+            return AllChem.MMFFGetMoleculeForceField(mol, props, confId=cid)
+        return AllChem.UFFGetMoleculeForceField(mol, confId=cid)
+
+    patterns = []
+    for shift in range(3):
+        rot = TWIST_BOAT_TORSIONS[shift:] + TWIST_BOAT_TORSIONS[:shift]
+        patterns += [rot, tuple(-t for t in rot)]
+    seeds = [conf_ids[i] for i in np.argsort(energies)[:TWIST_BOAT_SEEDS]]
+    new_ids: list[int] = []
+    new_e: list[float] = []
+    with rdBase.BlockLogs():
+        for cid in seeds:
+            for ring in rings:
+                for pattern in patterns:
+                    nid = int(mol.AddConformer(Chem.Conformer(mol.GetConformer(cid)), assignId=True))
+                    ff = field(nid)
+                    for k, target in enumerate(pattern):
+                        a, b, c, d = (ring[(k + j) % 6] for j in range(4))
+                        if props is not None:
+                            ff.MMFFAddTorsionConstraint(a, b, c, d, False, target - 2.0, target + 2.0, 500.0)
+                        else:
+                            ff.UFFAddTorsionConstraint(a, b, c, d, False, target - 2.0, target + 2.0, 500.0)
+                    ff.Minimize(maxIts=2000)
+                    ff = field(nid)
+                    ff.Minimize(maxIts=2000)
+                    new_ids.append(nid)
+                    new_e.append(float(ff.CalcEnergy()))
+    if notes is not None:
+        notes.append(f"thorough ring conformers: {len(new_ids)} twist-boat start(s) of {len(rings)} six-membered "
+                     f"ring(s) from the {len(seeds)} lowest conformer(s)")
+    return new_ids, new_e
+
+
 def generate(mol: Chem.Mol, max_conformers: int = 50, window_kcal: float = 6.0, rmsd_threshold: float = 0.5,
-             seed: int = 42, threads: int = 1, timeout_s: float | None = None, seeds=()) -> ConformerSet:
+             seed: int = 42, threads: int = 1, timeout_s: float | None = None, seeds=(),
+             ring_conformers: str = "normal") -> ConformerSet:
     """Conformers of ``mol``: ETKDGv3 embedding (``embed``), force-field optimization, pruning.
     ``timeout_s``: time limit of the embedding (``embed``); None = ``embed_time_limit()`` (a share of the
-    per-molecule limit this process's run recorded), 0 = none.
+    per-molecule limit this process's run recorded), 0 = none. ``ring_conformers`` (``RING_CONFORMERS``):
+    "thorough" adds twist-boats of saturated six-membered rings (``twist_boats``) before the pruning, which then keeps
+    at most ``max_conformers``; "normal" changes nothing.
 
     ``seeds``: coordinate arrays (one per conformer, on ``mol``'s atoms with explicit H; ``seed_coordinates``) from
     the input file. They are the first conformers: optimized with the force field like the others, never pruned,
     and first in ``conf_ids`` (so the refinement's top N includes them); they count towards ``max_conformers``
     (``max_conformers=1`` with one seed embeds nothing)."""
+    check_ring_conformers(ring_conformers)
     mol = Chem.Mol(mol)
     if mol.GetNumAtoms() == Chem.RemoveHs(mol).GetNumAtoms() and any(a.GetTotalNumHs() for a in mol.GetAtoms()):
         mol = Chem.AddHs(mol)
@@ -302,7 +389,15 @@ def generate(mol: Chem.Mol, max_conformers: int = 50, window_kcal: float = 6.0, 
     energies, ff = forcefield_optimize(mol, threads=threads)
     # forcefield_optimize returns energies in conformer order, which matches ``seed_ids + ids``
     all_ids = seed_ids + ids
-    kept, kept_e = prune(mol, all_ids, energies, window_kcal, rmsd_threshold)
+    max_keep = None
+    more_ids: list[int] = []
+    if ring_conformers == "thorough":
+        more_ids, more_e = twist_boats(mol, all_ids, list(energies), ff, notes)
+        all_ids, energies = all_ids + more_ids, list(energies) + more_e
+        max_keep = max_conformers
+    kept, kept_e = prune(mol, all_ids, energies, window_kcal, rmsd_threshold, max_keep=max_keep)
+    if more_ids:
+        notes[-1] += f"; {len(set(kept) & set(more_ids))} kept after pruning"
     if seed_ids:
         by_id = dict(zip(all_ids, energies))
         rest = [(k, e) for k, e in zip(kept, kept_e) if k not in seed_ids]

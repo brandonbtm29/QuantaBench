@@ -423,7 +423,8 @@ class JobDialog(QDialog):
         self.w_timeout.setSpecialValueText("None")
         self.w_timeout.setToolTip("Wall-clock limit per molecule in a batch; a molecule past it is marked failed")
         form.addRow("Time limit per molecule", self.w_timeout)
-        form.addRow("", _note("Lanes (parallel molecules) are this machine's Settings > Resources > Parallel lanes."))
+        form.addRow("", _note("Lanes (molecules at once) are this machine's Settings > Compute > Parallel lanes, "
+                              "also set in the Machines dock."))
         return page
 
     # ================================================================== the workers (Run on)

@@ -527,6 +527,36 @@ def test_surface_options_travel_to_a_worker():
             worker_mod.validate_config(bad)
 
 
+def test_build_filters_travel_to_a_worker(make_worker):
+    """SETTINGS-1: the build filters and ring conformers of the client's settings reach the worker's build (a
+    hydrate's ion pair is computed without water and sodium there too) and its run record; a value the worker cannot
+    compute the same way is refused before the job starts."""
+    import sqlite3
+
+    hydrate = "O.[Na+].[O-]C(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"
+    w = make_worker("w1")
+    c = WorkerClient(w.url, TOKEN)
+    config = {**CONFIG, "rank_method": "refine", "keep_largest_fragment": False, "strip_water": True,
+              "strip_counterions": "sodium", "ring_conformers": "thorough"}
+    j = c.submit([from_smiles(hydrate, id="napfoa")], config, "filters")
+    st = c.wait(j, poll=0.1, timeout=120)
+    assert st["state"] == "done" and st["counts"]["ok"] == 1, st
+    run_dir = Path(st["run_dir"])
+    with open(run_dir / "summary.csv", newline="", encoding="utf-8") as f:
+        row = next(csv.DictReader(f))
+    assert row["smiles"] == "O=C([O-])C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"
+    assert row["removed_fragments"] == "O.[Na+]"
+    with sqlite3.connect(run_dir / jobs.DB_NAME) as con:
+        stored = json.loads(con.execute("SELECT config FROM run").fetchone()[0])
+    assert (stored["strip_water"], stored["strip_counterions"], stored["ring_conformers"]) == (True, "sodium", "thorough")
+    good = client_mod.job_body([from_smiles(hydrate, id="napfoa")], config, "bad")
+    for change, message in (({"strip_counterions": "natrium"}, "unknown counter-ion"),
+                            ({"strip_counterions": "sodium,potassium"}, "sorted"),
+                            ({"ring_conformers": "skeletal"}, "ring_conformers")):
+        status, data = raw(w.url + "/v1/jobs", "POST", {**good, "config": {**good["config"], **change}})
+        assert status == 400 and message in data["error"], data
+
+
 def test_follow_stops_on_a_lost_job_and_retries_an_unreachable_one(make_worker, tmp_path):
     w = make_worker("w1")
     share = client_mod.Share(machine="w1", url=w.url, n=1, job_id="0123456789ab", state="running")
@@ -616,6 +646,58 @@ def test_archive_manifest_sync_temp_files_and_failed_streams(make_worker, tmp_pa
     monkeypatch.setattr(worker_mod, "archive_members", lambda d: [*real_members(d), d / "vanished.xyz"])
     with pytest.raises(WorkerError, match="incomplete or damaged"):
         c.download_archive(j, tmp_path / "dl2")
+
+
+def test_the_end_of_a_run_waits_for_a_status_poll_reading_the_job_table(make_worker, monkeypatch):
+    """FIX-7: a status poll that began reading the job table before ``Job.finishing`` was set, and was still reading
+    when the worker checkpointed the table, left jobs.sqlite-wal and -shm behind on Windows: its read-only connection
+    was open across the checkpoint. The end of the run now waits for such a read."""
+    run_ended, go_on, reading, done_reading, checkpoint_began = (threading.Event() for _ in range(5))
+    real_run, real_fallbacks = jobs.run_resumable, jobs.JobStore.fallbacks
+    real_checkpoint = worker_mod.JobManager._checkpoint
+
+    def run_resumable(*a, **kw):
+        out = real_run(*a, **kw)
+        run_ended.set()
+        assert go_on.wait(60)
+        return out
+
+    def fallbacks(self):                        # the last read of ``open_run``
+        if threading.current_thread().name == "test-poll":
+            reading.set()
+            assert done_reading.wait(60)
+        return real_fallbacks(self)
+
+    def checkpoint(run_dir, *a, **kw):
+        checkpoint_began.set()
+        return real_checkpoint(run_dir, *a, **kw)
+
+    monkeypatch.setattr(jobs, "run_resumable", run_resumable)
+    monkeypatch.setattr(jobs.JobStore, "fallbacks", fallbacks)
+    monkeypatch.setattr(worker_mod.JobManager, "_checkpoint", staticmethod(checkpoint))
+    w = make_worker("w1")
+    c = WorkerClient(w.url, TOKEN)
+    j = c.submit(inputs(["ethanol"]), dict(CONFIG), "poll")
+    assert run_ended.wait(120)
+    job = w.manager.get(j)
+    got: dict = {}
+    poll = threading.Thread(target=lambda: got.update(w.manager.public(job, tail=0)), name="test-poll")
+    poll.start()
+    try:
+        assert reading.wait(30)                 # a status poll is reading the job table; the run has ended
+        go_on.set()
+        # without the lock the worker went on to checkpoint the table while the poll still had it open
+        checkpointed_while_reading = checkpoint_began.wait(0.5)
+        state_while_reading = job.state
+    finally:
+        go_on.set()
+        done_reading.set()
+        poll.join(30)
+    end = c.wait(j, poll=0.1, timeout=120)
+    assert not checkpointed_while_reading and state_while_reading == "running"
+    assert checkpoint_began.is_set() and got["counts"]["ok"] == 1
+    assert end["state"] == "done" and end["counts"]["ok"] == 1
+    assert not list(Path(end["run_dir"]).glob("jobs.sqlite-*"))
 
 
 def test_stale_worker_lock_with_a_reused_pid(tmp_path):
