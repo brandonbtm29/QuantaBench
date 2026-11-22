@@ -509,3 +509,23 @@ Newest entries at the bottom. One entry per working session or nightly run.
   stay on wsl.exe's pipe. The guard's `wait` printed "Terminated" into the run's Windows log when a program was
   stopped (cancel, time limit); CREST-LOG-1's time-limit test caught it. `wait $p 2>/dev/null` keeps that line out;
   the exit code is unchanged.
+
+## 2026-11-22: the lifeline guard for native programs on macOS and Linux (ENG-3b, branch `feat/eng-3b-posix-lifeline`)
+- **Why:** Brandon asked for the same watchdog on the MacBook. Until now a GUI or CLI killed outright there (SIGKILL,
+  a crash) left its xtb, CREST, MOPAC or Psi4 running until they ended; only cancels, time limits and dead lanes were
+  covered.
+- **How:** `run_program` starts every native POSIX program as `/bin/sh -c GUARD /bin/sh -c STACK_WRAPPER prog args`
+  in its own session, with stdin a pipe it holds open: the guard `wsl:` programs got in ENG-3 (`WSL_GUARD` is now an
+  alias of `GUARD`). When the process holding the pipe dies, the kernel closes it, the watchdog reads EOF and kills the
+  program's process group (SIGTERM, SIGKILL 2 s later).
+- **What changes for the caller:** `proc.pid` is the guard's (the group's leader, so cancels and the lane registry's
+  `killpg` work as before). The guard ends as the program did: its exit code, or the same signal re-raised (`-9`,
+  `-11` still reach `ProgramRun.returncode`). The program's stdin is /dev/null, as before. The usage meter samples the
+  largest resident set among the guard's descendants (the program and what it starts, `ru_maxrss`'s meaning); the CPU
+  time comes through the guard, which waits for the program. A program given `stdin_text` runs without the guard.
+- **Tests:** the hard-kill test (a stand-in GUI SIGKILLed, its engine and grandchild end) now runs on POSIX too, and
+  fails with the guard switched off; exit codes and signals; the meter's sampled peak (a larger child first, so
+  `ru_maxrss` cannot set it). The fake CREST in `test_telemetry.py` killed `os.getppid()` to stand in for a dying lane;
+  under the guard its parent is a shell, so it walks up to the lane. On the MacBook (a temporary clone): the targeted
+  tests pass (the load sampler test fails there on `main` too, under load), and a real xtb MD run and a real CREST
+  search in a child process killed with SIGKILL ended 2 s later, guard and all.
