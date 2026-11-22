@@ -152,11 +152,11 @@ The activity bar on the left switches between five workspaces, each an arrangeme
 shared 2D/3D view: **Build** (molecules, Appearance), **Calculate** (pipeline, Machines), **Simulate** (surface
 builder, LAMMPS export), **Analyze** (the table and its plot, surfaces, spectra, conformers) and **Library** (the
 run folders under the output folder: open one, or resume its unfinished molecules). Alt+1 ... Alt+5 switch too
-(Control+1 ... on macOS). Each workspace remembers how its docks were arranged; View > Reset layout brings back its
+(⌥⌘1 ... on macOS). Each workspace remembers how its docks were arranged; View > Reset layout brings back its
 default. The playback bar under the view steps through the selected molecule's conformers, or (its Conformers /
 Molecules box) through the molecules of the list.
 
-**Projects** (File > New / Open / Save project, Ctrl+N, Ctrl+Alt+O, Ctrl+S): a `<name>.qbproj` folder holds the
+**Projects** (File > New / Open / Save project, Ctrl+N, Ctrl+Shift+O, Ctrl+S): a `<name>.qbproj` folder holds the
 molecule list, the results, the build settings, the Analyze table (columns, formulas, joined files, plot) and the
 workspace. Builds in a project write into its `runs/` folder, results that existed only in memory (an imported
 output) are written into it when it is saved, and paths inside it are relative, so a project can be moved or synced
@@ -216,8 +216,15 @@ angle or dihedral of the last 2, 3 or 4 picked atoms. "Show 2D" (Ctrl+D) hides t
 | R | Reset the view (isometric, fit) |
 | X / Y / Z (Shift: from the other side) | Look down an axis |
 | P | Perspective / orthographic |
-| Esc | Clear the selection |
+| + / - | Zoom in / out |
+| Ctrl+arrows | Turn the view 15° |
+| Left / Right, Home / End, Space | Previous / next, first / last conformer; play or pause |
+| Up / Down | Previous / next molecule in the list |
+| Esc, Ctrl+A | Clear the selection, select all atoms |
 | Shift+Esc | Cancel a running build (after the current step) |
+
+These are the default keys. **Settings > Controls** (Tools > Keyboard controls...) lists every key, rebinds them,
+and offers keymaps modelled on Avogadro 2, VMD and Spartan; see [docs/CONTROLS.md](docs/CONTROLS.md).
 
 Toolbar mouse modes: **Rotate** (Ctrl+1, the default), **Select** (Ctrl+2: drag a box) and **Move**
 (Ctrl+3: as in Avogadro's manipulate tool, pressing on an atom grabs its whole molecule, or the
@@ -229,8 +236,8 @@ positive, on a scale symmetric about zero, as Spartan and Avogadro draw ESP maps
 gray, adsorbate orange).
 
 **2D view:** click selects, Ctrl+click toggles, left-drag on empty space pans, Shift+drag or
-right-drag rotates the drawing in-plane, wheel zooms, double-click or F fits, `[` `]` rotate by 15°,
-`+` `-` zoom. Hydrogens are implicit by default (View > Hydrogens in 2D). Screenshot... saves the 3D
+right-drag rotates the drawing in-plane, wheel zooms, double-click or F fits, Ctrl+Left/Right (or `[` `]`)
+rotate by 15°, `+` `-` zoom. Hydrogens are implicit by default (View > Hydrogens in 2D). Screenshot... saves the 3D
 view as PNG or the 2D structure as SVG/PNG.
 
 **Sketch dock** (Build > Sketch a molecule..., optional): draw a structure in

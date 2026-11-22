@@ -43,9 +43,11 @@ import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QMimeData, QObject, Qt
+from PySide6.QtCore import QEvent, QMimeData, QObject
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QMessageBox, QPlainTextEdit, QTextEdit
+
+from . import keymap
 
 _log = logging.getLogger(__name__)
 
@@ -453,17 +455,16 @@ def _edit_menu(win):
 def install(win) -> None:
     menu = _edit_menu(win)
     a_paste = QAction("Paste", win)
-    a_paste.setShortcut(QKeySequence(QKeySequence.StandardKey.Paste))
-    a_paste.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-    a_paste.setToolTip("Add the structures on the clipboard to the Molecules list: ChemDraw, MOL or SD, "
-                       "CDXML, Marvin, SMILES, names or CAS numbers (in a text field: paste the text)")
+    keymap.bind(win, a_paste, "edit.paste", "Add the structures on the clipboard to the Molecules list: ChemDraw, MOL "
+                "or SD, CDXML, Marvin, SMILES, names or CAS numbers (in a text field: paste the text)")
     a_paste.triggered.connect(lambda _checked=False: edit_paste(win))
     menu.addAction(a_paste)
     menu.addSeparator()
     win.a_copy_as = {}
     for kind, label in COPY_LABELS.items():
         a = QAction(f"Copy as {label}", win)
-        a.setToolTip(f"Put the selected molecules on the clipboard as {label} (the structure as entered)")
+        keymap.bind(win, a, f"edit.copy_as.{kind}",
+                    f"Put the selected molecules on the clipboard as {label} (the structure as entered)")
         a.triggered.connect(lambda _checked=False, k=kind: copy_as(win, k))
         menu.addAction(a)
         win.a_copy_as[kind] = a

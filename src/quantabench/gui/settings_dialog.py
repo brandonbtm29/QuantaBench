@@ -1,5 +1,5 @@
 """Settings dialog: compute resources, build defaults, import options, surfaces and radii, display (energy units),
-engines, folders."""
+controls (the keymap, ``gui.controls_page``), engines, folders."""
 
 from __future__ import annotations
 
@@ -66,8 +66,10 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._import_tab(), "Import")
         tabs.addTab(self._surfaces_tab(), "Surfaces && radii")    # "&&": a literal & (not a shortcut)
         tabs.addTab(self._display_tab(), "Display")
+        tabs.addTab(self._controls_tab(parent), "Controls")
         tabs.addTab(self._engines_tab(), "Engines")
         tabs.addTab(self._folders_tab(), "Folders")
+        self.tabs = tabs
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -509,6 +511,22 @@ class SettingsDialog(QDialog):
             if r is not None:
                 out[self.radii_table.item(row, 0).text()] = r
         return out
+
+    def _controls_tab(self, parent) -> QWidget:
+        """Settings > Controls (UI-9): the keymap's preset and the user's keys. A display setting kept on this
+        computer (the window's keymap, not settings.json); MainWindow.open_settings applies it on OK."""
+        from .controls_page import ControlsPage
+
+        self.controls = ControlsPage(getattr(parent, "keymap", None), self)
+        return self.controls
+
+    def show_tab(self, title: str) -> bool:
+        """Bring the tab titled ``title`` ("Controls", "Display", ...) to the front; False when there is none."""
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i).replace("&&", "&") == title:
+                self.tabs.setCurrentIndex(i)
+                return True
+        return False
 
     def _display_tab(self) -> QWidget:
         """Energy units and number format for the GUI's tables and panels (Spartan's Preferences > Document)."""

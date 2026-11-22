@@ -29,12 +29,13 @@ from dataclasses import asdict, fields
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QFileDialog, QMenu, QMessageBox
 
 from .. import __version__
 from .. import project as proj
 from ..analysis.sheet import TableState
+from . import keymap
 from .molecule_list import FINISHED, MoleculeRow
 
 RECENT_KEY = "projects/recent"
@@ -422,23 +423,21 @@ def install(win) -> None:
     ctl = ProjectController(win)
     win.project = ctl
 
-    def act(text, slot, shortcut=None, tip=None):
+    def act(name, text, slot, tip):
         a = QAction(text, win)
         a.triggered.connect(slot)
-        if shortcut:
-            a.setShortcut(QKeySequence(shortcut))
-        if tip:
-            a.setToolTip(tip)
-            a.setStatusTip(tip)
+        keymap.bind(win, a, name, tip)           # its keys (gui.keymap) and the tooltip that shows them
+        a.setStatusTip(tip)
         return a
 
-    ctl.a_new = act("New project", ctl.new_project, "Ctrl+N", "An empty, untitled project")
-    ctl.a_open = act("Open project...", ctl.open_project, "Ctrl+Alt+O",
+    ctl.a_new = act("file.new_project", "New project", ctl.new_project, "An empty, untitled project")
+    ctl.a_open = act("file.open_project", "Open project...", ctl.open_project,
                      "Open a .qbproj folder: its molecules, results, build settings and Analyze table")
-    ctl.a_save = act("Save project", ctl.save, "Ctrl+S",
+    ctl.a_save = act("file.save_project", "Save project", ctl.save,
                      "Save the molecules, build settings and Analyze table to the project folder")
-    ctl.a_save_as = act("Save project as...", ctl.save_as, "Ctrl+Shift+S", "Save to a new .qbproj folder")
-    ctl.a_close = act("Close project", ctl.close_project, None, "Close the project (asks to save changes)")
+    ctl.a_save_as = act("file.save_project_as", "Save project as...", ctl.save_as, "Save to a new .qbproj folder")
+    ctl.a_close = act("file.close_project", "Close project", ctl.close_project,
+                      "Close the project (asks to save changes)")
     ctl.recent_menu = QMenu("Open recent project", win)
     ctl.recent_menu.setToolTipsVisible(True)
     ctl.recent_menu.aboutToShow.connect(lambda: ctl._fill_recent(ctl.recent_menu))

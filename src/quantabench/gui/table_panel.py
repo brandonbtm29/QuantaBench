@@ -51,7 +51,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -74,6 +74,7 @@ from ..analysis import features as feat
 from ..analysis import formula as fm
 from ..analysis import sheet
 from ..analysis.sheet import ColumnStore, FormulaSpec, JoinRead, JoinSpec, TableState
+from . import keymap
 
 #: the window settings key of the table's state (until UI-2's project document keeps it)
 STATE_KEY = "analyze/table"
@@ -789,7 +790,9 @@ class SheetModel(QAbstractTableModel):
 
 
 class SheetView(QTableView):
-    """The table: Ctrl+C copies the selected cells as TSV, Ctrl+Shift+C with the column titles."""
+    """The table: Copy (Ctrl+C) copies the selected cells as TSV, Copy with column titles (Ctrl+Shift+C) with the
+    titles. Both and Select all are named actions (``gui.keymap``, scope "table": ``copy_actions``), so Settings >
+    Controls rebinds them."""
 
     def __init__(self, model: SheetModel, parent=None):
         super().__init__(parent)
@@ -810,6 +813,12 @@ class SheetView(QTableView):
         hh.setSortIndicator(-1, Qt.SortOrder.AscendingOrder)        # the Molecules dock's order until a click
         self.setSortingEnabled(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.copy_actions = {
+            "copy": keymap.local_action(self, "table.copy", lambda: self.copy(headers=False), "Copy"),
+            "copy_with_titles": keymap.local_action(self, "table.copy_with_titles", lambda: self.copy(headers=True),
+                                                    "Copy with column titles"),
+            "select_all": keymap.local_action(self, "table.select_all", self.selectAll, "Select all"),
+        }
 
     def selected_block(self) -> tuple[list[int], list[int], set[tuple[int, int]]]:
         idx = self.selectionModel().selectedIndexes()
@@ -838,15 +847,9 @@ class SheetView(QTableView):
             set_clipboard_text(text)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt's name
-        if event.matches(QKeySequence.StandardKey.Copy):
-            self.copy(headers=False)
-            return
-        mods = event.modifiers()
-        if event.key() == Qt.Key.Key_C and mods & Qt.KeyboardModifier.ControlModifier \
-                and mods & Qt.KeyboardModifier.ShiftModifier:
-            self.copy(headers=True)
-            return
-        super().keyPressEvent(event)
+        # the copy keys are actions (copy_actions): the shortcut map runs them; this when it did not see the key
+        if not keymap.dispatch_key(event, self):
+            super().keyPressEvent(event)
 
 
 class TablePanel(QWidget):
@@ -1194,9 +1197,8 @@ class TablePanel(QWidget):
     # ------------------------------------------------------------------ menus and dialogs
     def _cell_menu(self, pos) -> None:
         m = QMenu(self)
-        m.addAction("Copy\tCtrl+C", lambda: self.view.copy(False))
-        m.addAction("Copy with column titles\tCtrl+Shift+C", lambda: self.view.copy(True))
-        m.addAction("Select all\tCtrl+A", self.view.selectAll)
+        for a in self.view.copy_actions.values():    # the actions show their keys (Settings > Controls)
+            m.addAction(a)
         m.exec(self.view.viewport().mapToGlobal(pos))
 
     def _header_menu(self, pos) -> None:
@@ -1459,5 +1461,7 @@ def install(win) -> None:
     # the table follows the molecule list only while it is in view (a batch in Calculate costs it nothing)
     dock.visibilityChanged.connect(lambda on: panel.model.set_active("table", on))
     add_view_toggle(win, dock, "Table", "Molecules x properties: descriptors, formula columns, export")
+    for a in panel.view.copy_actions.values():   # the user's keys for them (Settings > Controls)
+        keymap.bind(win, a, a.objectName())
     win.table_dock = dock
     win.table_panel = panel

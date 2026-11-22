@@ -18,7 +18,7 @@ so. The Plot dock has a ⧉ button of its own (``gui.plot_panel``): a scatter pl
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QDockWidget,
     QHBoxLayout,
@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QToolButton,
     QWidget,
 )
+
+from . import keymap
 
 POPOUT_SIZE = QSize(640, 520)
 
@@ -160,9 +162,7 @@ def install(win: QMainWindow) -> None:
     sub.setToolTipsVisible(True)
     sub.aboutToShow.connect(lambda: _fill(win, sub))
     back = QAction("Dock all panels", win)
-    back.setObjectName("dock_all")
-    back.setShortcut(QKeySequence("Ctrl+Shift+D"))
-    back.setToolTip("Every panel in a window of its own back into the main window")
+    keymap.bind(win, back, "view.dock_all", "Every panel in a window of its own back into the main window")
     back.triggered.connect(lambda _c=False: _dock_all_said(win))
     view.addAction(back)
     win.popout_menu = sub

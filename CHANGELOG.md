@@ -2,6 +2,17 @@
 
 ## Unreleased (after 0.3.0)
 
+### Settings > Controls: keymaps and key rebinding (UI-9, 2026-11-22)
+- Every keyboard shortcut is a named action in one registry (`gui.keymap`); **Settings > Controls** (also Tools >
+  Keyboard controls...) chooses a keymap (QuantaBench, or ones modelled on Avogadro 2, VMD or Spartan from their public
+  documentation), rebinds any action with a key-capture field, warns when a key is taken (Swap / Clear the other),
+  resets one action or everything, and exports or imports the keymap as JSON. Kept per computer. docs/CONTROLS.md.
+- New default keys, chosen from platform conventions: Open project Ctrl+Shift+O (was Ctrl+Alt+O), Open run folder
+  Ctrl+Shift+R (was Ctrl+Shift+O), Close project Ctrl+W, Help the platform's key (⌘? on macOS), workspaces ⌥⌘1-5 on
+  macOS (was Control+1-5), ⌘. cancels a run on macOS; in the structure views Left/Right, Home/End and Space step and
+  play conformers, Up/Down and Ctrl+Home/End step molecules, + and - zoom and Ctrl+arrows turn the 3D view, Esc and
+  Ctrl+A clear and select the atoms in both views, R resets the view there; Edit > Find a molecule (Ctrl+F).
+
 ### The LJ tail beyond the cutoff in `md surface-tension` (MD-2, 2026-11-21)
 - **Why:** pilot C (C6F14, OPLS-AA, plain 12 Å LJ cutoff, 10 ns on the GPU) gave σ = 7.96 ± 0.32 mN/m, 29 % below
   Tsige & Grest 2008 (11.25 at 16 Å with an analytic tail correction) and 30-35 % below experiment. A slab can't use

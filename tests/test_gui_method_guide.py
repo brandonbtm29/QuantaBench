@@ -118,7 +118,9 @@ def test_methods_guide_window_opens_searches_and_follows_links(window):
     help_menu = next(a.menu() for a in w.menuBar().actions() if a.text().replace("&", "") == "Help")
     texts = [a.text() for a in help_menu.actions() if not a.isSeparator()]
     assert "Methods guide..." in texts and texts[-1] == "About QuantaBench"
-    assert w.a_methods_guide.shortcut().toString() == "F1"
+    from PySide6.QtGui import QKeySequence
+
+    assert w.a_methods_guide.shortcut() == QKeySequence(QKeySequence.StandardKey.HelpContents)   # F1; Cmd+? on macOS
     w.a_methods_guide.trigger()
     g = w.methods_guide
     assert g.isVisible() and g.count_label.text() == f"{len(guide.ENTRIES)} entries"

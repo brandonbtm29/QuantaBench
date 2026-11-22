@@ -35,6 +35,7 @@ from rdkit.Chem import rdDepictor
 from rdkit.Chem.Draw import rdMolDraw2D
 from rdkit.Geometry import Point2D, Point3D
 
+from quantabench.gui import keymap
 from quantabench.gui.selection import ACCENT_HEX, ACCENT_RGB, SelectionModel
 
 __all__ = ["ACCENT_HEX", "ACCENT_RGB", "MoleculeViewer2D", "build_depiction", "compute_2d_coords"]
@@ -196,7 +197,8 @@ class MoleculeViewer2D(QWidget):
 
     Mouse: click an atom to select it, Ctrl+click to toggle, click empty space to clear; left-drag on
     empty space pans; Shift+left-drag or right-drag rotates in-plane; the wheel zooms at the cursor;
-    double-click fits. Keys: ``+``/``-`` zoom, ``[``/``]`` rotate by 15°, ``F`` fits.
+    double-click fits. Keys (the defaults of ``gui.keymap``'s "view2d" actions, ``key_actions``, which Settings >
+    Controls rebinds): ``+``/``-`` zoom, Ctrl+Left/Right or ``[``/``]`` rotate by 15°, ``F`` fits.
     """
 
     def __init__(self, parent=None, selection: SelectionModel | None = None):
@@ -239,6 +241,10 @@ class MoleculeViewer2D(QWidget):
             msg.setWordWrap(True)
             lay.addWidget(msg)
         self.set_selection_model(selection or SelectionModel(self))
+        self.key_actions = {name: keymap.local_action(self, name, fn) for name, fn in (
+            ("view2d.zoom_in", lambda: self.zoom(KEY_ZOOM)), ("view2d.zoom_out", lambda: self.zoom(1.0 / KEY_ZOOM)),
+            ("view2d.rotate_ccw", lambda: self.rotate(KEY_ROTATE_DEG)),
+            ("view2d.rotate_cw", lambda: self.rotate(-KEY_ROTATE_DEG)), ("view2d.fit", self.fit))}
 
     # ------------------------------------------------------------------ selection
     @property
@@ -732,21 +738,10 @@ class _DepictionView(QGraphicsView):
         event.accept()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        key = event.key()
-        if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
-            self._owner.zoom(KEY_ZOOM)
-        elif key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
-            self._owner.zoom(1.0 / KEY_ZOOM)
-        elif key == Qt.Key.Key_BracketLeft:
-            self._owner.rotate(KEY_ROTATE_DEG)
-        elif key == Qt.Key.Key_BracketRight:
-            self._owner.rotate(-KEY_ROTATE_DEG)
-        elif key == Qt.Key.Key_F:
-            self._owner.fit()
-        else:
+        # the view's keys are actions (MoleculeViewer2D.key_actions); Qt's shortcut map runs them in the active
+        # window, this when it did not see the key
+        if not keymap.dispatch_key(event, self):
             super().keyPressEvent(event)
-            return
-        event.accept()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
