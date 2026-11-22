@@ -35,7 +35,16 @@ Implementation notes:
   both in the same conda env). It runs in a folder inside WSL (``chem.wsl_scratch``: /dev/shm when it has room,
   else WSL's disk; ``engines.crest_wsl_scratch``), not in the Windows job folder through ``/mnt/c``, where
   every file it wrote crossed to the Windows disk (about 70 GB an hour in a batch). Only ``RESULT_FILES``
-  come back (the log is QuantaBench's own, in the Windows folder); a note says which scratch was used.
+  come back; a note says which scratch was used. CREST's stdout and stderr go to ``OUTPUT_FILE`` there too, and the
+  Windows ``crest.log`` gets a bounded copy when it ends (its first 200 and last 2,000 lines, repeated lines
+  collapsed; ``external.run_program(program_log=...)``): wsl.exe relayed the output to NTFS as thousands of small
+  writes a second (CREST-LOG-1).
+- BLAS threads: ``OPENBLAS_NUM_THREADS=1`` (``BLAS_ENV``), as CREST's install notes ask. CREST runs its calculations
+  in its own OpenMP threads (``-T``); a pthreads OpenBLAS (conda-forge's default, the workstation's WSL CREST) called
+  inside them with more than one thread prints "OpenBLAS Warning : Detect OpenMP Loop and this application may hang"
+  on each call: 27,000 lines in 45 s with 5 threads, a 368 MB log in 11 minutes on the workstation. One BLAS thread
+  per CREST thread is also what CREST's parallel layout wants (the xtb of ``--legacy`` inherits it). An OpenMP
+  OpenBLAS (the fork's macOS build) or Accelerate never warn and are not affected inside CREST's threads.
 - Run time grows quickly with size and flexibility: GFN-FF ``--quick`` on ethanol takes ~2 s, GFN2
   ``--quick`` on PFBA ~2 min on 2 cores; a C8 perfluoroalkyl acid with GFN2 is tens of minutes.
 """
@@ -65,8 +74,13 @@ METHOD_FLAGS = {"gfn2": "--gfn2", "gfn1": "--gfn1", "gfnff": "--gfnff", "gff": "
 #: need ``--legacy``, which runs the xtb binary for every calculation instead of CREST's built-in tblite
 LEGACY_METHODS = {"gfn2//gfnff"}
 #: what comes back from a job folder inside WSL (``chem.wsl_scratch``): what the pipeline reads, and CREST's two
-#: small summaries (CREST's output itself is the log QuantaBench writes in the Windows job folder)
+#: small summaries (CREST's output comes back bounded, into the log in the Windows job folder: ``OUTPUT_FILE``)
 RESULT_FILES = ("crest_conformers.xyz", "crest.energies", "crest_best.xyz")
+#: CREST's stdout and stderr in its folder inside WSL (``external.run_program(program_log=...)``); comes back whole
+#: only with keep_scratch, or after a failure when it is small (``wsl_scratch``)
+OUTPUT_FILE = "crest.out"
+#: on top of ``external.program_env``: one BLAS thread inside each of CREST's OpenMP threads (module docstring)
+BLAS_ENV = {"OPENBLAS_NUM_THREADS": "1"}
 
 
 def scratch_bytes(n_atoms: int) -> int:
@@ -179,10 +193,11 @@ def command(program, cfg, *, threads: int = 1, solvent: str = "", charge: int = 
 
 
 def child_env(program, threads: int) -> dict[str, str]:
-    """Thread caps etc. for CREST, with the found xtb's folder first on PATH (native runs only)."""
+    """Thread caps etc. for CREST (one BLAS thread per CREST thread: ``BLAS_ENV``), with the found xtb's folder first
+    on PATH (native runs only)."""
     from . import external
 
-    extra: dict[str, str] = {}
+    extra: dict[str, str] = dict(BLAS_ENV)
     if not program.via_wsl:
         xtb = external.find_program("xtb")
         if xtb is not None and not xtb.via_wsl:
@@ -284,7 +299,8 @@ def generate(mol: Chem.Mol, cfg, *, threads: int = 1, solvent: str = "", charge:
         with wsl_scratch.job_folder(program, d, inputs=("input.xyz",), expected_bytes=scratch_bytes(len(numbers)),
                                     log=log) as place:
             run = external.run_program(cmd, d, threads=threads, env=env, timeout=timeout, log_name="crest.log",
-                                       should_stop=should_stop, log=log, program_cwd=place.linux_dir)
+                                       should_stop=should_stop, log=log, program_cwd=place.linux_dir,
+                                       program_log=OUTPUT_FILE)
             place.fetch(RESULT_FILES)
             problem = optimizer_problem(run.text())
             if problem:

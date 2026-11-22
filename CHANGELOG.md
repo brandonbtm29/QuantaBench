@@ -15,6 +15,15 @@
 - Drops on the window and the molecule list: several files at once in every File > Open format, run folders,
   project folders, and plain folders (the files in them).
 
+### CREST through WSL: one BLAS thread per CREST thread, and its output kept inside WSL (CREST-LOG-1, 2026-11-22)
+- CREST now gets `OPENBLAS_NUM_THREADS=1` (CREST's install notes). The WSL CREST links a pthreads OpenBLAS, which
+  printed "OpenBLAS Warning : Detect OpenMP Loop and this application may hang" on every BLAS call inside CREST's
+  OpenMP threads (a 368 MB log in 11 minutes in the CREST rebuild) and ran extra BLAS threads (a 5-thread lane used
+  about 8.5 cores). Other programs keep their thread caps.
+- Through WSL, CREST's stdout and stderr go to `crest.out` in its folder inside WSL; `crest.log` in the Windows job
+  folder gets a bounded copy when CREST ends: the first 200 and the last 2,000 lines, 1 MiB at most, repeated lines
+  collapsed to one line and a count (`external.run_program(program_log=...)`, `wsl_scratch.output_tail`).
+
 ### A finished worker job no longer leaves jobs.sqlite-wal behind on Windows (FIX-7, 2026-11-22)
 - A status poll that was reading the job table when the run ended kept its read-only connection open across the
   worker's checkpoint, so -wal and -shm came back after the checkpoint had removed them. This was the flaky
