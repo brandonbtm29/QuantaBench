@@ -248,11 +248,12 @@ def test_a_killed_lanes_program_is_killed_in_its_wsl_folder(monkeypatch):
 # ------------------------------------------------------------------------------------- CREST through the stand-in WSL
 @posix_only
 def test_crest_runs_in_dev_shm_and_only_the_results_come_back(wsl_crest, monkeypatch):
-    seen_dirs = []
+    seen_dirs, seen_log = [], []
     real_fetch = wsl_scratch.Place.fetch
 
     def fetch(self, names):
         seen_dirs.append(sorted(p.name for p in self.win_dir.iterdir()))
+        seen_log.append((self.win_dir / "crest.log").read_text())
         real_fetch(self, names)
         seen_dirs.append(sorted(p.name for p in self.win_dir.iterdir()))
 
@@ -266,6 +267,10 @@ def test_crest_runs_in_dev_shm_and_only_the_results_come_back(wsl_crest, monkeyp
     assert Path(call["cwd"]).parent == wsl.shm_root                     # CREST ran in /dev/shm/quantabench/<job>
     assert Path(call["cwd"]).name.startswith("crest_")
     assert call["argv"][:2] == ["input.xyz", "--gfnff"] and call["threads"] == "2"
+    # CREST-LOG-1: one BLAS thread per CREST thread, and CREST's output in a file of its folder inside WSL, not the
+    # pipe through wsl.exe; the Windows log gets it when CREST ends
+    assert call["blas_threads"] == "1" and call["stdout"] == crest.OUTPUT_FILE
+    assert seen_log[0] == " CREST terminated normally.\n"
     run_line = next(ln for ln in lines if ln.startswith("  $ wsl.exe"))
     assert run_line.startswith(f"  $ wsl.exe --cd {call['cwd']} -e sh -c ")
     # before the fetch the Windows job folder has the input, CREST's output (crest.log, through the pipe) and the
@@ -326,10 +331,32 @@ def test_a_failed_crest_brings_back_its_small_files_only(wsl_crest, monkeypatch)
     assert "Initial geometry optimization failed!" in str(exc.value)
     (kept,) = [p for p in wsl_crest["scratch"].iterdir()]
     assert f"job files kept in {kept}" in str(exc.value)
-    assert sorted(p.name for p in kept.iterdir()) == sorted(
-        [".qb_owner.json", "crest.log", "crestopt.log", "input.xyz"])   # CREST's output, its small files, the input
+    assert sorted(p.name for p in kept.iterdir()) == sorted(                # the log, CREST's small files (its whole
+        [".qb_owner.json", "crest.log", crest.OUTPUT_FILE, "crestopt.log", "input.xyz"])   # output too), the input
     assert (kept / "crestopt.log").read_text() == "optimization log\n"
+    assert (kept / "crest.log").read_text() == (kept / crest.OUTPUT_FILE).read_text()     # short: all of it
     assert wsl_crest["wsl"].jobs() == []                                 # the folder inside WSL is gone
+
+
+@posix_only
+def test_a_chatty_crest_leaves_a_bounded_log(wsl_crest, monkeypatch):
+    """CREST-LOG-1: a CREST that prints the OpenBLAS warning a million times (123 MB) and then fails. Its output stays
+    inside WSL; the kept log has the banner, the warning once with its count, and why CREST stopped."""
+    monkeypatch.setenv("FAKE_CREST_MODE", "chatty")
+    warning = ("OpenBLAS Warning : Detect OpenMP Loop and this application may hang. Please rebuild the library with "
+               "USE_OPENMP=1 option.")
+    with pytest.raises(external.ExternalProgramError, match="exited with code 1") as exc:
+        crest.generate(_ethanol(), _cfg(), threads=4)
+    assert "Initial geometry optimization failed!" in str(exc.value)                # the tail is in the error
+    assert crest.failure_reason(str(exc.value)).startswith("Initial geometry optimization failed! (exit code 1")
+    (kept,) = [p for p in wsl_crest["scratch"].iterdir()]
+    assert crest.OUTPUT_FILE not in {p.name for p in kept.iterdir()}               # 123 MB: it stays behind
+    text = (kept / "crest.log").read_text()
+    assert len(text) < 1000 and text.count(warning) == 1
+    assert text.splitlines() == [" CREST banner", warning,
+                                 "    [QuantaBench: the line above repeated 999999 more times]",
+                                 "  Initial geometry optimization failed!"]
+    assert wsl_crest["wsl"].jobs() == []
 
 
 @posix_only
@@ -387,6 +414,84 @@ def test_an_error_in_the_block_cleans_up_too(fake_wsl, tmp_path):
         raise RuntimeError("boom")
     assert (win / "notes.txt").read_text() == "why it failed" and not (win / ".qb_pid").exists()
     assert not linux.exists() and not (win / external.WSL_TWIN_FILE).exists()
+
+
+# ------------------------------------------------------------------------------------- a program's output inside WSL
+def _wsl_job_dir(fake_wsl) -> Path:
+    d = fake_wsl.shm_root / "job_x1"
+    d.mkdir(parents=True)
+    return d
+
+
+def _wsl_sh(script: str) -> list[str]:
+    """A shell script run through the stand-in WSL with the WSL wrapper, as ``ProgramInfo.command()`` builds it."""
+    return ["wsl.exe", "-e", "sh", "-c", external.WSL_WRAPPER, "sh", "-c", script]
+
+
+@posix_only
+def test_the_same_line_a_million_times_comes_back_once(fake_wsl, tmp_path):
+    linux = _wsl_job_dir(fake_wsl)
+    lines: list[str] = []
+    line = "OpenBLAS Warning : Detect OpenMP Loop and this application may hang. Please rebuild the library with " \
+           "USE_OPENMP=1 option."
+    run = external.run_program(_wsl_sh(f'echo start; yes "{line}" | head -n 1000000; echo "the end" >&2'),
+                               tmp_path / "win", log_name="chatty.log", program_cwd=str(linux),
+                               program_log="chatty.out", log=lines.append)
+    assert (linux / "chatty.out").stat().st_size == 6 + 1_000_000 * (len(line) + 1) + 8    # all of it, inside WSL
+    assert run.log_file.read_text().splitlines() == [
+        "start", line, "    [QuantaBench: the line above repeated 999999 more times]", "the end"]
+    assert [m for m in lines if "WARNING" in m] == ["  WARNING: sh wrote 116 MB of output inside WSL; the log has its "
+                                                    "first and last lines, repeated lines collapsed"]
+
+
+@posix_only
+def test_a_long_output_comes_back_as_its_first_and_last_lines(fake_wsl, tmp_path):
+    linux = _wsl_job_dir(fake_wsl)
+    lines: list[str] = []
+    run = external.run_program(_wsl_sh("seq 1 1000000; exit 3"), tmp_path / "win", log_name="seq.log",
+                               program_cwd=str(linux), program_log="seq.out", check=False, log=lines.append)
+    assert run.returncode == 3
+    text = run.log_file.read_text()
+    got = text.splitlines()
+    n_head, n_tail = wsl_scratch.OUTPUT_HEAD_LINES, wsl_scratch.OUTPUT_TAIL_LINES
+    assert got[:n_head] == [str(i) for i in range(1, n_head + 1)]
+    assert got[n_head] == (f"    [QuantaBench: {1_000_000 - n_head - n_tail} lines left out here; the whole output, "
+                           "seq.out inside WSL, has 1000000 lines and 6888896 bytes]")
+    assert got[n_head + 1:] == [str(i) for i in range(1_000_001 - n_tail, 1_000_001)]
+    assert len(text.encode()) <= wsl_scratch.OUTPUT_MAX_BYTES
+    assert not [m for m in lines if "WARNING" in m]                                  # 6.9 MB: no warning
+    # long lines are cut, and the bytes bound the tail when 2,000 lines would not fit
+    long = "x" * 3000
+    run = external.run_program(_wsl_sh(f"for i in $(seq 1 3000); do echo {long}$i; done"), tmp_path / "win2",
+                               log_name="long.log", program_cwd=str(linux), program_log="long.out")
+    text = run.log_file.read_text()
+    assert len(text.encode()) <= wsl_scratch.OUTPUT_MAX_BYTES + 200
+    got = text.splitlines()
+    assert got[0] == "x" * wsl_scratch.OUTPUT_LINE_CHARS + " [QuantaBench: 1001 more characters]"
+    assert "lines left out here" in text and got[-1].endswith(" [QuantaBench: 1004 more characters]")
+
+
+@posix_only
+def test_the_output_of_a_program_past_its_time_limit_comes_back(fake_wsl, tmp_path):
+    linux = _wsl_job_dir(fake_wsl)
+    with pytest.raises(external.ExternalProgramError, match="timed out after 1 s") as exc:
+        external.run_program(_wsl_sh("echo working; sleep 30"), tmp_path / "win", log_name="slow.log",
+                             program_cwd=str(linux), program_log="slow.out", timeout=1.0)
+    assert exc.value.args[0].endswith("\nworking")                     # the error's log tail
+    assert (tmp_path / "win" / "slow.log").read_text() == "working\n"
+
+
+@posix_only
+def test_no_output_file_without_a_folder_inside_wsl(fake_wsl, tmp_path):
+    """``program_log`` is only for a program in a folder inside WSL: elsewhere the output goes through the pipe."""
+    run = external.run_program(_wsl_sh("echo through the pipe"), tmp_path / "win", log_name="p.log",
+                               program_log="p.out")
+    assert run.text() == "through the pipe\n" and not (tmp_path / "win" / "p.out").exists()
+    linux = _wsl_job_dir(fake_wsl)
+    run = external.run_program(_wsl_sh("echo through the pipe"), tmp_path / "win2", log_name="p.log",
+                               program_cwd=str(linux))
+    assert run.text() == "through the pipe\n" and not (linux / "p.out").exists()
+    assert wsl_scratch.output_tail(str(linux), "missing.out") == ("", 0)
 
 
 # ------------------------------------------------------------------------------------- the sweeps
