@@ -1476,6 +1476,73 @@ The benchmark box has no vacuum, and the slab's longer k-space grid makes the sl
 as a lower bound. A GPU variant that failed the benchmark's CPU/GPU pressure check is left out unless
 `--include-unverified`.
 
+## MD runs as jobs (`md run`, `md status`, `md pause`, `md resume`; SIM-1)
+
+A folder written by `md liquid-slab`, `md smd` or the Surface builder runs under QuantaBench's **run supervisor**
+(`md.supervisor`), one LAMMPS process (a *segment*) at a time:
+
+```
+quantabench-cli md run c6f14_cutoff16 [--variant auto|cpu|gpu|gpu-cutoff16] [--threads 6] [--priority low] [--detach]
+quantabench-cli md status c6f14_cutoff16            # state, ns done, ns/day, ETA, alerts, segments (--json)
+quantabench-cli md pause c6f14_cutoff16 [--now]     # at the next pause point, with a checkpoint
+quantabench-cli md resume c6f14_cutoff16 [--variant gpu] [--threads 6] [--detach]
+```
+
+In the GUI, Simulate > **Run MD folder...** does the same as a job: the Jobs dock shows its ns, ns/day and ETA, Cancel
+becomes **Pause**, and **Resume** queues the folder again. An MD job runs in a process of its own beside the window's
+builds (one MD job at a time on this computer until SCHED-3's scheduler), and closing the window leaves it running.
+
+**What the folder holds.** Besides the inputs, `run.json` (`md.sim.Run`): the system, the parameterization (the force
+field as applied, the long-range "physics"), the protocol as parts (`bulk` = `in.bulk`, `slab` = `in.slab`; `smd` =
+`in.smd`), each a list of stages with their step ranges and time steps, the files each part appends to, and the
+segments that ran: machine, LAMMPS build (version, path, packages), variant, threads, the checkpoint each started
+from and the one it ended with, first and last step, ns/day, exit. While a supervisor runs, `progress.json` holds
+its heartbeat (part, stage, step, ns done, ns/day over the last minutes, ETA, alerts) and `supervisor.lock` its pid.
+
+**The variant.** `auto` takes the GPU package where LAMMPS has it and the folder's dispersion has GPU styles (a
+cutoff; not `ewald`), unless the machine's MD benchmark failed the CPU/GPU pressure check; else the CPU (OpenMP).
+The switches are `md.bench`'s (`-sf hybrid gpu omp ... device_type generic pair/only on -pk omp N` on OpenCL). The
+threads default to the machine's thread budget, the priority to the settings'.
+
+**Pause.** Every input written since SIM-1 has
+
+```
+variable        qb_stop equal is_file(STOP)
+fix             qb_halt all halt ${pause_every} v_qb_stop != 0 error soft
+```
+
+and after every `run ... upto` a check: a run that stopped before its end step was halted, so the input writes
+`<part>.pause.restart` (binary) and `<part>.pause.data` (`write_data`, with velocities), prints
+`QB_PAUSED <part> step N` and quits. `pause_every` is the least common multiple of the output periods (10 ps with
+the defaults: the pressure tensor's 10 fs, the density profile's 10 ps blocks, the bulk density's 1 ps), so a pause
+never splits an averaging block. `md pause --now` also stops LAMMPS if it has not paused within 30 s; the next segment
+then starts from the newest periodic restart file (`restart_every`, now 100 ps). Without QuantaBench, creating a file
+named `STOP` in the folder pauses a plain `lmp -in in.slab` the same way.
+
+**Resume** (`md.supervisor.choose_checkpoint`) continues from the furthest checkpoint this machine may use: a binary
+restart (the pause one or a periodic one) only when the part's last segment ran here with the same LAMMPS build
+(LAMMPS reads restart files only with the same executable on the same platform), else the pause data file, which any
+build reads (positions, image flags and velocities exact; the thermostat and barostat start again, so the run
+continues statistically, not bitwise, the same, as the split test plan has it). The step of a restart file is read
+from its header (`md.sim.restart_step`), that of a data file from its first line. Before the segment starts, every
+output the part appends to is cut at that step (`md.sim.cut_at`): an `ave/time` with one sample per row and a dump
+lose the step itself too, because the resumed run writes them again at its first step; `ave/chunk` blocks averaged
+before it keep it. The segment's input (`in.<part>.seg<N>`, `md.liquid.resume_input`) reads the checkpoint, sets the
+pair style, the force field and k-space again (so a GPU segment can follow a CPU one, as pilot B did), skips the
+stages that ended before the step (`jump`), and runs the current one `upto` its end with every output in `append`
+mode. Logs are per segment (`log.slab`, then `log.slab.seg3`, ...); `md surface-tension` reads the outputs as one
+series (its readers also merge by step) and lists each segment's speed. The steered pull is short and its rigid
+bodies are not worth a checkpoint: a paused pull runs again from its start.
+
+**Folders written before SIM-1** run too: `md run` builds their `run.json` from `liquid_setup.json` or
+`smd_setup.json`. Their inputs have no STOP lines, so only `md pause --now` stops them, and a resume starts from the
+last periodic restart file.
+
+**Where runs live.** Run folders stay in the output folder (`Runs/`), synced by SyncThing; the shared ignore file
+keeps binary restart files and trajectory dumps on the machine that wrote them (they are of no use to another
+build), while logs, data files (`*.pause.data`, `bulk_final.data`), the pressure tensor, the profiles and `run.json`
+sync, so a run can be analyzed, and resumed from its data file, on another machine.
+
 ## Not available yet
 
 - NMR shieldings (Psi4 has none; planned through PySCF).

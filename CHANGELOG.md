@@ -2,6 +2,24 @@
 
 ## Unreleased (after 0.3.0)
 
+### MD runs as jobs: segments, pause and resume (SIM-1 PR 1, 2026-11-23)
+- **`quantabench-cli md run DIR`** runs a folder written by `md liquid-slab`, `md smd` or the Surface builder under a
+  run supervisor: one LAMMPS process (segment) per part at the run priority, the GPU where LAMMPS has one and the
+  folder's dispersion has GPU styles (`--variant`, `--threads`, `--priority`, `--detach`). `md status` shows the state,
+  ns done, ns/day, the ETA, alerts and every segment; `md pause` pauses at the next pause point with a checkpoint
+  (`--now` also stops LAMMPS after 30 s); `md resume` continues from the furthest checkpoint this machine and LAMMPS
+  build may read: a binary restart, else the portable data file. Outputs are cut at the checkpoint's step and
+  appended to, so they stay one series.
+- **The run folder** gains `run.json` (the system, the force field as applied, the protocol's parts and stages, and the
+  segments: machine, build, variant, threads, start and end steps, ns/day), `progress.json` while it runs, and
+  per-segment inputs and logs (`in.slab.seg3`, `log.slab.seg3`). The liquid slab's inputs pause on a file named
+  `STOP` (also without QuantaBench), run each stage `upto` its end step and write restart files every 100 ps (was
+  1 ns); the steered pull pauses too (and runs again from its start on resume). Folders written before run as well.
+- **In the GUI:** Simulate > **Run MD folder...** submits a folder as an MD job. It runs in a process of its own
+  beside the window's builds (one MD job at a time here) and keeps running when the window closes; the Jobs dock,
+  now also in the Simulate workspace, shows its ns, ns/day and ETA, Cancel becomes Pause, and Resume continues it.
+- `md surface-tension` reads outputs merged by step and lists each segment's speed.
+
 ### Long-range settings for slabs: options and recommendations (MD-LR, 2026-11-23)
 - **Slab-safe pppm/disp defaults** for `md liquid-slab`'s full long-range dispersion (`ewald`): G = 2.77 / rc and a
   dispersion mesh no coarser than 0.52 / G, computed in the input from the box (again once the slab's box is open),

@@ -958,12 +958,66 @@ Depends on: none (research only; can run any night).
   Protocol, Run), engines (OpenMM, LAMMPS), what to build in which order, open questions for Brandon.
   No code. Cite sources.
 
-## SIM-1: Simulate workspace v1 · blocked (needs RES-1 design approved by Brandon)
-- The design is `docs/SIMULATE_DESIGN.md` (RES-1); it waits for Brandon's approval and his answers to its open
-  questions (DEC-1). Proposed v1 there, two PRs: MD runs as jobs (a run supervisor with segments, pause through a
-  STOP file, resume, live telemetry, `md run/status/pause/resume`, the liquid slab's default dispersion `cutoff16`),
-  then the Simulate panel for the liquid slab and the rigid pull on this computer, with the parameterization
-  builder's minimal version (one component node, the cutoff and electrostatics nodes, the checks).
+## SIM-1: Simulate workspace v1 · in-PR 2026-11-23 (PR 1, branch `feat/sim-1-md-run-jobs`); PR 2 ready after it
+Brandon (2026-11-23): "Yes you can start building out the simulate workspace. For the MD, I would like to eventually
+have some default geometries and common set ups." Design: `docs/SIMULATE_DESIGN.md` (approved; §12 the two PRs, §15
+the setups he asked for). Docs: docs/ENGINES.md, "MD runs as jobs".
+- **PR 1, MD runs as jobs (done 2026-11-23):**
+  - `md.sim`: `run.json` (System, Parameterization, Protocol of parts and stages, Run, Segment), restart-header and
+    data-file steps, output cuts, merge by step.
+  - `md.supervisor`: one LAMMPS process per segment at the run priority, `progress.json` (part, stage, step, ns,
+    ns/day, ETA, alerts), pause through a STOP file (`fix halt` every `pause_every` steps, on output-block
+    boundaries; a pause writes a binary and a data checkpoint), stop now, resume from the furthest checkpoint this
+    machine and build may read, a lock per folder, `start_detached`. `md.telemetry`: the live log reader.
+  - `quantabench-cli md run/status/pause/resume`; folders written before SIM-1 run too.
+  - The liquid slab's inputs: STOP lines, `run ... upto` stage ends, restart files every 100 ps (was 1 ns),
+    `run.json`, and the segment inputs (`md.liquid.resume_input`). The rigid pull: STOP lines and `run.json` (a
+    "rerun" part). `md surface-tension` merges by step and lists each segment's speed.
+  - GUI: kind-"md" jobs in the job queue (the supervisor as its own process, beside builds, one MD job at a time
+    here), ns / ns/day / ETA in the Jobs dock, Pause and Resume, Simulate > Run MD folder..., the Jobs dock in the
+    Simulate workspace.
+  - Tests: `tests/test_md_sim.py`, `tests/test_md_supervisor.py` (a 540-atom hexane slab with `lmp`: pause and
+    resume give one series with the same energy at the join; a stopped segment resumes from its restart file; a moved
+    run from the data file; `QB_TEST_MD_GPU=1` for CPU then GPU), `tests/test_gui_md_jobs.py`, a job test in
+    `tests/test_lammps.py`.
+  - Not changed: the liquid slab's default dispersion (MD-LR's recommendation decides it, #52).
+- **Next:**
+  - PR 2, the Simulate panel (design §12): the stepper for the liquid slab and the rigid pull, the parameterization
+    builder's v1 (MD-LR's `options()`, `recommend_long_range()`, `check_settings()` in the Van der Waals node),
+    templates, variants from `md.bench.can_run`, telemetry plots from `md.telemetry.read_thermo`, re-attaching to
+    running runs when a project opens (`JobQueue.attach_md`).
+  - Learned rates: each finished segment's ns/day into the machine's record next to the MD benchmark (design §5).
+  - `STOP` and `supervisor.lock` in the SyncThing folder's `.stglobalignore` (needs-Brandon: his folder).
+  - A CPU-then-GPU segment on the workstation (`QB_TEST_MD_GPU=1 pytest tests/test_md_supervisor.py`), once its runs
+    leave the GPU free.
+
+## SIM-2: Setup templates (default geometries and common setups) · ready (after SIM-1 PR 1; GUI after PR 2)
+Brandon (2026-11-23): "For the MD, I would like to eventually have some default geometries and common set ups." Design:
+`docs/SIMULATE_DESIGN.md` §15.1 (inputs, defaults, stages and what each measures).
+- Templates, each writing a SIM-1 run folder (`run.json`, inputs with the STOP lines, README with every source):
+  - liquid slab (surface tension): built;
+  - bulk liquid: density and ΔHvap (the bulk stages plus a gas-phase molecule), optional α_P and κ_T;
+  - solvation box: a solute in water (TIP3P + Joung-Cheatham ions) or another solvent, counter-ions;
+  - rigid pull or adsorption on a surface: the rigid pull is built; repeated and flexible pulls (Colvars) in v2;
+  - polymer melt: chains packed at low density, compressed and annealed; density, Tg, Rg, CED;
+  - liquid-liquid interface: two liquids, z-only NPT at fixed area; interfacial tension, profiles.
+- CLI first (`md bulk`, `md solvate`, ... or `md setup --template NAME`), then the panel's template list (PR 2).
+- Acceptance per template: a folder that runs under `md run` in the cloud (tiny smoke run) and its analysis; the
+  bulk liquid against the measured density and ΔHvap of hexane and C6F14 and the force field's published values.
+
+## SIM-3: Pre-flight checks for MD setups · ready (after SIM-1 PR 1)
+Design: `docs/SIMULATE_DESIGN.md` §15.2. `md.preflight.check(system, parameterization, protocol) -> [Finding(id,
+severity, message, fix)]`, run by the writers (refuse on an error, `--force`), by the supervisor between parts (the
+after-the-fact checks, into `progress.json`) and by the Simulate panel's review (ADV-1 style). Findings stored in
+`run.json`.
+- Missing or guessed parameters and the typing of unusual groups; charges and net charge; cutoff against half the box
+  (also under NPT); overlaps after packing (and ring spearing for polymers); k-space accuracy and the mesh for slabs
+  (MD-LR's rule, and the grid LAMMPS printed read back from the log); time step against constraints; vacuum and slab
+  thickness; thermostat and barostat damping; equilibration length and drift (automated equilibration detection);
+  error bars from block averages (blocking curve levelled off, replicas).
+- With the checks §9.1 lists (combining rule, 1-4 scaling, units, a cutoff without its tail), the engine review
+  (styles in the build, GPU switches), disk space and run time against the time window.
+- Acceptance: a test per check with a deliberately broken setup; the C6F14 pilots' folders pass.
 
 ## BUILD-CLEAN: "Clean up" for a molecule's 2D layout and 3D structure · ready
 Brandon (2026-11-22): "When a molecule is built, do we currently have an option where we can 'clean up' the structure
@@ -984,9 +1038,17 @@ like ChemDraw?"
 - Acceptance: tests that a messy 2D drawing and a distorted 3D geometry come back clean with the connectivity and
   stereo unchanged; screenshot.
 
-## SCHED-3: A scheduler that runs GPU-bound and CPU-bound jobs side by side · ready (design: SIMULATE_DESIGN.md §7; MD jobs after SIM-1 PR 1)
+## SCHED-3: A scheduler that gives each job its fastest device assignment, and runs jobs side by side when that helps · ready (design: SIMULATE_DESIGN.md §7; MD jobs after SIM-1 PR 1)
 Brandon (2026-11-22): "Maybe we can include a job queue or scheduler? If one type of job is better suited for the CPU
 and another for a GPU, then we can tell the user that both jobs can run efficiently at the same time."
+Brandon (2026-11-23): "The point of the scheduler is to compare what each job needs, then optimize and make one job go
+faster by dedicating just GPU, CPU, or both."
+- **The aim:** compare what each job needs (from the run timings, MON-1's samples and the MD-BENCH data) and pick the
+  device assignment, GPU only, CPU only or both, that makes a given job finish fastest; run jobs side by side when
+  that helps (and say so), not as the goal in itself. For GPU MD that is the GPU plus the 4-6 threads its PPPM needs
+  (below); for an AIMNet2 batch the GPU; for CREST or xTB lanes the CPU.
+- SIM-1 PR 1 gives MD jobs their own slot in the GUI queue (one MD job at a time beside builds) and records each
+  segment's variant, threads and ns/day in `run.json`: the data this scheduler compares.
 - **A resource profile per job:** CPU threads and how busy they are, the GPU and its memory, RAM, disk I/O. It comes
   from the run timings, MON-1's samples, MD-BENCH-1's ns/day and the method.
 - **A ledger per machine** (threads within the budget, one GPU-heavy job per GPU, RAM headroom, one heavy-disk job).
@@ -994,8 +1056,10 @@ and another for a GPU, then we can tell the user that both jobs can run efficien
   the measured slowdown once there is one.
 - **GPU MD is not GPU-only:** in the pilots' GPU runs, PPPM and the bonded terms on the CPU took 75-86 % of the loop
   time (pilot B, 6 threads; pilot C, 4 threads), so its profile is the GPU plus 4-6 threads.
-- Acceptance: a GPU job (AIMNet2 batch or GPU MD) and a CPU job (CREST or xTB lanes) start together on one machine
-  within its budget; the Jobs dock shows each one's share and the note; tests of the ledger with stand-in profiles.
+- Acceptance: for a job, the scheduler picks the fastest of GPU only, CPU only and both from its measured profile
+  (an MD job: from `md_throughput` and its earlier segments' ns/day), and says why; a GPU job (AIMNet2 batch or GPU MD)
+  and a CPU job (CREST or xTB lanes) start together on one machine within its budget when that helps; the Jobs dock
+  shows each one's share and the note; tests of the choice and of the ledger with stand-in profiles.
 
 ## FIX-1: Windows CI green · done 2026-11-05
 - 2026-11-05: first green CI on Windows, Linux and macOS (PLAT-2). The failures since then were separate bugs,
