@@ -853,3 +853,19 @@ def test_auto_reads_this_machines_registry(monkeypatch):
     lanes, reason = L.plan_auto(aimnet, mac)
     assert all(x.device == "cpu" for x in lanes) and "no GPU lane: benchmark" in reason
     assert "no GPU lane: benchmark aimnet2@mps" in L.plan_text("auto", aimnet, mac, 0)
+
+
+def test_auto_lanes_stop_at_the_physical_cores_and_custom_specs_get_the_smt_note(monkeypatch):
+    """SETTINGS-1 follow-up: Automatic never plans more lanes than physical cores (2-thread lanes of an external
+    program on a 2-core, 8-thread machine: 2 lanes, not 4); a typed spec may go up to the logical count, with a note
+    that hyperthreads add little."""
+    monkeypatch.setattr(resources, "logical_cores", lambda: 8)
+    smt4 = report(physical=2, logical=8)
+    lanes, reason = L.plan_auto(pipeline.BuildConfig(method="xtb-gfn2", threads=8), smt4)
+    assert lanes == [Lane("cpu1", "cpu", 2), Lane("cpu2", "cpu", 2)] and "one lane per physical core (2)" in reason
+    tower = report()
+    monkeypatch.setattr(resources, "logical_cores", lambda: 24)
+    text = L.plan_text("16", pipeline.BuildConfig(method="mmff"), tower)
+    assert text.startswith("16 CPU lanes") and "More lanes than the 12 physical cores" in text
+    assert "physical cores" not in L.plan_text("12", pipeline.BuildConfig(method="mmff"), tower)
+    assert L.plan_text("30", pipeline.BuildConfig(method="mmff"), tower).startswith("Not usable here")

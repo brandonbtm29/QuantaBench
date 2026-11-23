@@ -2173,6 +2173,13 @@ class MainWindow(QMainWindow):
         nowhere else), so a batch of any size runs with flat memory."""
         ident = res.input.id
         self.running.pop(ident, None)
+        if self.model.row(ident) is None and (res.input.meta or {}).get("qb_counterion_of"):
+            # a counter-ion entry the run added (Settings > Build defaults, chem.salts): a row of its own
+            inp = res.input
+            self.model.add_rows([MoleculeRow(id=ident, name=inp.name or "", smiles=inp.smiles or "",
+                                             source=inp.source or "", input=inp,
+                                             fields=molecule_list.posted_fields(inp))])
+            self._batch_ids.append(ident)
         fields = molecule_list.row_updates(res)
         if self._batch_dir is not None:
             fields["run_dir"] = str(self._batch_dir)

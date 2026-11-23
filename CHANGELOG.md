@@ -15,6 +15,23 @@
 - The Model Kit's Undo / Redo, Build mode and Minimize, and Paste, Copy molecules and Copy as are keymap actions too.
 - Switching workspaces no longer animates the docks (a Qt crash when a tab bar was deleted mid-animation).
 
+### SETTINGS-1 follow-ups: salts as separate entries, lanes at the physical cores, twist-boat seeds (2026-11-22)
+- **Keep the counter-ions as separate entries** (Settings > Build defaults, `build --counterion-entries`; science
+  setting `counterion_entries`, off): the counter-ions a build removes become molecules of the run. K-PFOS gives
+  PFOS⁻ and `kpfos_K+`, whose `counterion_of` column names the records it came from; posted fields are copied; one
+  entry per InChIKey in a run.
+- **Automatic lanes** never exceed the physical cores. A typed lane spec may go up to the logical threads, and the
+  plan line says when it runs more lanes than cores (hyperthreads add little for these engines).
+- **Twist-boat seeds** (Build defaults, `--twist-boat-seeds`; science setting `twist_boat_seeds`, default 20, was
+  5): Thorough ring conformers seed twist-boats from the 20 lowest conformers. On 45 QSAR molecules with saturated
+  six-membered rings, 20 seeds lowered the refined best conformer of 6 fused polycyclics by 0.1-2.8 kcal/mol and
+  never raised one; the force-field step took 2.6x as long. Thorough runs stored before keep 5 when resumed.
+
+### The lifeline guard for native programs on macOS and Linux (ENG-3b, 2026-11-22)
+- xtb, CREST, MOPAC, Psi4 and g-xTB on the MacBook (and Linux) now end when the GUI or CLI that started them dies,
+  even of SIGKILL: they run under the guard CREST through WSL already had, whose lifeline is their stdin. Run timings
+  still report the program's own peak memory and CPU time, and a program killed by a signal still reports it.
+
 ### The 3D model kit's Build mode (UI-7, 2026-11-22)
 - **Build mode** in the 3D view (View toolbar *Build*, Ctrl+4) and a **Model Kit** dock in the Build workspace. Pick
   an element (a row of common elements; the others, metals included, in a compact periodic table), then its geometry

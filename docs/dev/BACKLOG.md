@@ -1188,9 +1188,11 @@ not try to match Spartan exactly.
   - The GUI builds its window without probing (`external.deferred_probes`); a worker probes the versions not cached
     on disk yet and relabels the engine lists.
   - Already done by SCRATCH-1 (2026-11-13): failed-run scratch folders go 3 days after their process ended.
-  - Still open: POSIX has no job objects: a GUI or CLI killed outright (SIGKILL, a crash) leaves a running native
-    program running there until it ends (cancels, time limits and dead lanes are covered). A Linux process inside WSL
-    that starts its own session (setsid, a daemon) is outside the guard's group (neither CREST nor xtb does).
+  - ENG-3b · in-PR 2026-11-22 (branch `feat/eng-3b-posix-lifeline`; Brandon, 2026-11-22: "Please also build this
+    watchdog for MacBook"): native programs on Linux and macOS run under the same lifeline guard, so a GUI or CLI
+    killed outright (SIGKILL, a crash) takes them along; the usage meter samples the guard's largest descendant.
+  - Still open: a process that starts its own session (setsid, a daemon) is outside the guard's group (neither CREST
+    nor xtb does).
 - MOPAC COSMO: energies step as surface segments switch (CF3COO⁻ in water: finite-difference forces off by
   0.3 eV/Å at h = 1 mÅ); consider running MOPAC frequencies in the gas phase automatically.
 
@@ -1449,6 +1451,11 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
     *Look up* menu, the cache folder and maximum age (`lookups.pubchem_cache_dir`, `pubchem_max_age_days`). Left: the
     folder of reference tables; the nmrshiftdb2 template (its documented 13C JCAMP export) is not checked against
     the site.
+  - **Follow-ups** (Brandon, 2026-11-22; in PR `feat/settings-1-followups`): salts as separate entries
+    (`counterion_entries`, `chem.salts`: K-PFOS gives PFOS⁻ and K⁺, linked by `counterion_of`; no new counter-ion
+    names); Automatic lanes never above the physical cores, typed specs up to the logical threads with a note;
+    `twist_boat_seeds` (Thorough ring conformers, default 20 after a 45-molecule check, an advanced science setting).
+    Waiting for Brandon: Spartan's NMR URL template for the nmrshiftdb2 lookup.
   - **Machines** (Available Servers, Embedded Server): the `dist` settings (workers, port, bind, token), now
     only in settings.json.
 - Later: **Molecule display** (default 3D style, atom labels such as charges and exposed area, surface style; the

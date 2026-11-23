@@ -770,3 +770,69 @@ Newest entries at the bottom. One entry per working session or nightly run.
   `PYVISTA_OFF_SCREEN=true`): 1,899 passed, 23 failed, all TEST-WIN-1: 14 `test_lanes`, 2 real-MOPAC, 3 GUI (also on
   `main`), and the memory guard late in a full run (`test_vibrations` x3, `test_pipeline::test_gfn1_xtb_real`; alone
   they pass, 23 of 23).
+
+## 2026-11-22: the lifeline guard for native programs on macOS and Linux (ENG-3b, branch `feat/eng-3b-posix-lifeline`)
+- **Why:** Brandon asked for the same watchdog on the MacBook. Until now a GUI or CLI killed outright there (SIGKILL,
+  a crash) left its xtb, CREST, MOPAC or Psi4 running until they ended; only cancels, time limits and dead lanes were
+  covered.
+- **How:** `run_program` starts every native POSIX program as `/bin/sh -c GUARD /bin/sh -c STACK_WRAPPER prog args`
+  in its own session, with stdin a pipe it holds open: the guard `wsl:` programs got in ENG-3 (`WSL_GUARD` is now an
+  alias of `GUARD`). When the process holding the pipe dies, the kernel closes it, the watchdog reads EOF and kills the
+  program's process group (SIGTERM, SIGKILL 2 s later).
+- **What changes for the caller:** `proc.pid` is the guard's (the group's leader, so cancels and the lane registry's
+  `killpg` work as before). The guard ends as the program did: its exit code, or the same signal re-raised (`-9`,
+  `-11` still reach `ProgramRun.returncode`). The program's stdin is /dev/null, as before. The usage meter samples the
+  largest resident set among the guard's descendants (the program and what it starts, `ru_maxrss`'s meaning); the CPU
+  time comes through the guard, which waits for the program. A program given `stdin_text` runs without the guard.
+- **Tests:** the hard-kill test (a stand-in GUI SIGKILLed, its engine and grandchild end) now runs on POSIX too, and
+  fails with the guard switched off; exit codes and signals; the meter's sampled peak (a larger child first, so
+  `ru_maxrss` cannot set it). The fake CREST in `test_telemetry.py` killed `os.getppid()` to stand in for a dying lane;
+  under the guard its parent is a shell, so it walks up to the lane. On the MacBook (a temporary clone): the targeted
+  tests pass (the load sampler test fails there on `main` too, under load), and a real xtb MD run and a real CREST
+  search in a child process killed with SIGKILL ended 2 s later, guard and all.
+
+## 2026-11-22: SETTINGS-1 follow-ups (branch `feat/settings-1-followups`)
+Brandon's answers on PRs #40, #45 and #46: keep a salt's counter-ion as a separate entry; cap Automatic lanes at the
+physical cores; check whether Thorough ring conformers should seed from more than 5 conformers.
+- **Salts** (`chem.salts`, `BuildConfig.counterion_entries`):
+  - The input list is expanded once, before `jobs.run_resumable` takes its chunk and in `pipeline.run`, so the
+    entries depend only on the list and the settings: every machine of a grid makes the same ones, and a resume with
+    the same list adds none.
+  - Counter-ions are the fragments the build removes (`standardize(info=...)`, after the build filters) that are
+    ions or named counter-ions. Water, a copy of the kept ion and neutral molecules are left out. HCl counts, as
+    chloride.
+  - Entries are de-duplicated by the InChIKey of the fragment as drawn, also against the list's own single-fragment
+    inputs.
+  - Each entry's id is `<first record>_<formula>`, cut to the worker's 60 characters. Its `counterion_of` lists every
+    record it came from (`;`), and it copies the posted fields of the first record.
+  - The GUI gives an entry a row when its result arrives.
+  - No new counter-ion names ("keep what we have for now").
+- **Lanes:** `plan_auto` already gave one lane per physical core for most engines. The 2-thread lanes of external
+  programs could exceed the physical cores on a machine with more than two threads per core; now every automatic plan
+  stops at the physical cores. `parse_lanes` already refused more lanes than logical threads; `plan_text` now
+  adds a note when a typed spec runs more lanes than physical cores. The coordinator relayed NOVA's MD and CREST
+  measurements: flat scaling past ~6-8 threads per job.
+- **Twist-boat seeds**:
+  - **What the sources say.** Spartan's manual: Thorough "considers twist-boat conformers of six-membered rings (in
+    addition to chair conformers)". Wavefunction's conformer FAQ: twist-boats "are unlikely by default", and its
+    FINDBOATS keyword samples them. Wang, Witek, Landrum and Riniker (J. Chem. Inf. Model. 2020) add small-ring torsion
+    potentials to ETKDG. None says how many conformers to start twist-boats from.
+  - **The check.** 45 molecules with a saturated six-membered ring, sampled from the QSAR table (seed 7; 38 with one
+    such ring, 7 with 2-4; at most 40 heavy atoms). Each ran gas MMFF94s (normal, thorough with 5 seeds, thorough with
+    20), then AIMNet2 on the 20 lowest of each thorough pool, ranked by the refinement. On the workstation, 12
+    processes at below-normal priority, about 45 min.
+  - **Results:**
+    - 20 seeds gave a larger force-field pool for 30 of 45 molecules, with new conformers among the 20 lowest for 27.
+    - The lowest force-field energy dropped for 6, by 0.07-4.85 kcal/mol.
+    - After the refinement the best conformer changed for 6 of 45, always to a lower one: 0.11-2.83 kcal/mol lower,
+      heavy-atom RMSD 0.47-2.59 Å. These were mestranol, progesterone, medroxyprogesterone, a hydroxy-keto
+      steroid (53-05-4), hydroquinine and cinchonamine: all fused polycyclics. No monocyclic molecule changed.
+    - Cost per molecule: force field median 6.3 s with 5 seeds against 15.6 s with 20 (2.6x in total), refinement
+      +20 %.
+  - **Decision.** The default is now 20 (`TWIST_BOAT_SEEDS`, `twist_boat_seeds`, Build defaults > *Twist-boat
+    seeds*, `--twist-boat-seeds`), as an advanced science setting.
+    - It matters only with Thorough (`_ONLY_WITH`).
+    - A Thorough run stored before it ran with 5 (`LEGACY_DEFAULTS`).
+    - Not tested: more than 20.
+- Tests: `tests/test_salts.py`, plus additions to `test_build_filters.py`, `test_gui_settings_build.py` and
+  `test_lanes.py`.
