@@ -54,6 +54,7 @@ class HardwareReport:
     optional_packages: dict[str, bool] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     performance_cores: int = 0    # Apple Silicon's performance cores (``performance_cores()``); 0 = none known
+    ram_available_gb: float = 0.0  # memory available when it was detected (what other programs leave); 0 = unknown
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -371,6 +372,7 @@ def detect() -> HardwareReport:
         gpus=gpus,
         optional_packages={p: has_package(p) for p in OPTIONAL_PACKAGES},
         performance_cores=performance_cores(),
+        ram_available_gb=psutil.virtual_memory().available / 1024**3,
     )
     if backend == "none":
         rep.notes.append("PyTorch is not installed: ML potentials and xTB are unavailable; MMFF still works. "
@@ -399,7 +401,8 @@ def detect_light(note: str = "") -> HardwareReport:
         os=f"{platform.system()} {platform.release()}", python=platform.python_version(), cpu_name=cpu_name(),
         physical_cores=physical_cores(), logical_cores=logical_cores(), ram_gb=psutil.virtual_memory().total / 1024**3,
         wsl=is_wsl(), torch_version=version, torch_backend="unknown" if version else "none",
-        optional_packages={p: has_package(p) for p in OPTIONAL_PACKAGES}, performance_cores=performance_cores())
+        optional_packages={p: has_package(p) for p in OPTIONAL_PACKAGES}, performance_cores=performance_cores(),
+        ram_available_gb=psutil.virtual_memory().available / 1024**3)
     if note:
         rep.notes.append(note)
     return rep
