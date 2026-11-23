@@ -15,8 +15,9 @@ ignore the hang-up or when ``wsl.exe`` outlives a dead parent (``chem.external``
 
 **POSIX** has no job objects. Programs run in their own session (``start_new_session``), so a cancel or a time limit
 kills the whole process group, and a supervised lane's programs are recorded for its parent to kill
-(``external.set_program_registry``). A process killed outright (SIGKILL) still leaves its programs running there,
-as before; the lane supervisor covers the lanes.
+(``external.set_program_registry``). Since ENG-3b, ``run_program`` also starts every native program under the lifeline
+guard (``chem.external.GUARD``): its stdin is a pipe this process holds open, and when this process dies, even of
+SIGKILL, the kernel closes it and the guard's watchdog kills the program's process group.
 
 **Probes** (``run_probe``): ``subprocess.run(timeout=...)`` waits for the program's pipes to close after it kills a
 program that timed out, and on Windows a launcher's child that inherited them keeps them open, so the probe can block

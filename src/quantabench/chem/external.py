@@ -60,21 +60,28 @@ WSL_LOG_VAR = "QUANTABENCH_WSL_LOG"
 #: and the output into ``$QUANTABENCH_WSL_LOG`` when it is set.
 WSL_WRAPPER = ('ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -Hs)" 2>/dev/null; echo $$ > .qb_pid; '
                f'[ -n "${WSL_LOG_VAR}" ] && exec >"${WSL_LOG_VAR}" 2>&1; exec "$0" "$@"')
-#: ``run_program`` starts a ``wsl:`` program as ``wsl.exe ... -e sh -c WSL_GUARD sh -c WSL_WRAPPER prog args``, with
-#: wsl.exe's stdin a pipe that QuantaBench holds open and never writes (the lifeline; ENG-3). The guard runs the
-#: program in the background in its own process group (WSL makes the guard a session and group leader) and waits for
-#: it; a watchdog subshell kills the whole group (SIGTERM, then SIGKILL 2 s later) when the lifeline reaches EOF
-#: (QuantaBench died while wsl.exe lived on) or when WSL hangs up the session (wsl.exe was ended: its kill-on-close
-#: job, a cancel, End task). WSL's hang-up alone ends a program that does not ignore SIGHUP; the watchdog also ends
-#: those that do, and CREST's xtb children. When the program ends, the guard stops the watchdog, sends SIGTERM to
-#: what the program left in the group and exits with the program's code. ``kill -TERM -$$`` can only reach the guard's
-#: own group (a group's id is its leader's PID). ``wait``'s stderr goes to /dev/null: sh reports a program ended by a
-#: signal ("Terminated"), and that line would land in the run's log after a cancel or a time limit.
-WSL_GUARD = ('exec 3<&0 </dev/null; g=$$; '
-             'k() { trap "" TERM; kill -TERM -$g 2>/dev/null; sleep 2; kill -KILL -$g 2>/dev/null; exit 0; }; '
-             '(trap "" INT TERM; trap k HUP; while read -r _ <&3; do :; done; k) >/dev/null 2>&1 & w=$!; '
-             '"$0" "$@" 3<&- & p=$!; wait $p 2>/dev/null; rc=$?; kill -KILL $w 2>/dev/null; '
-             'trap "" TERM; kill -TERM -$g 2>/dev/null; exit $rc')
+#: The lifeline guard (ENG-3). ``run_program`` starts a program under it, with the program's stdin (wsl.exe's for a
+#: ``wsl:`` program) a pipe that QuantaBench holds open and never writes: the lifeline.
+#:   - a ``wsl:`` program: ``wsl.exe ... -e sh -c GUARD sh -c WSL_WRAPPER prog args`` (WSL makes the guard a session
+#:     and group leader);
+#:   - a native program on Linux and macOS: ``/bin/sh -c GUARD /bin/sh -c STACK_WRAPPER prog args`` in a session of its
+#:     own (``start_new_session``), so the guard leads the program's process group there too.
+#: The guard runs the program in the background in its process group and waits for it. A watchdog subshell kills the
+#: whole group (SIGTERM, then SIGKILL 2 s later) when the lifeline reaches EOF (the QuantaBench process died, even of
+#: SIGKILL: the kernel closes its end of the pipe) or on a hang-up (WSL hangs up the session when wsl.exe ends: its
+#: kill-on-close job, a cancel, End task). When the program ends, the guard stops the watchdog, sends SIGTERM to what
+#: the program left in the group (CREST's xtb after a cancel) and ends as the program did: its exit code, or the same
+#: signal. ``kill -TERM -$g`` can only reach the guard's own group (a group's id is its leader's PID). ``wait``'s
+#: stderr goes to /dev/null: sh reports a program ended by a signal ("Terminated"), and that line would land in the
+#: run's log after a cancel or a time limit.
+GUARD = ('exec 3<&0 </dev/null; g=$$; '
+         'k() { trap "" TERM; kill -TERM -$g 2>/dev/null; sleep 2; kill -KILL -$g 2>/dev/null; exit 0; }; '
+         '(trap "" INT TERM; trap k HUP; while read -r _ <&3; do :; done; k) >/dev/null 2>&1 & w=$!; '
+         '"$0" "$@" 3<&- & p=$!; wait $p 2>/dev/null; rc=$?; kill -KILL $w 2>/dev/null; '
+         'trap "" TERM; kill -TERM -$g 2>/dev/null; '
+         'if [ $rc -gt 128 ]; then trap - $((rc - 128)) 2>/dev/null; kill -$((rc - 128)) $$ 2>/dev/null; fi; exit $rc')
+#: the name ENG-3's first part gave it, when only ``wsl:`` programs ran under it
+WSL_GUARD = GUARD
 #: a program that writes more output than this inside WSL gets a warning in the run's log (CREST's own is far smaller)
 LOUD_OUTPUT_BYTES = 16 * 2**20
 
@@ -884,8 +891,9 @@ CREATE_NO_WINDOW = 0x08000000           # subprocess has the constant only on Wi
 def popen_args(cmd: Sequence[str], *, via_wsl: bool = False, prio: priority.ChildPriority | None = None,
                system: str | None = None, guard: bool = False) -> tuple[list[str], dict]:
     """(argv, Popen keywords besides cwd/env/stdio) with which ``run_program`` starts ``cmd`` on ``system`` (default
-    this one) at the run priority ``prio`` (``priority.options_here``; None = unchanged). ``guard``: a ``wsl:``
-    program runs under ``WSL_GUARD`` (after ``-e``), whose lifeline is wsl.exe's stdin.
+    this one) at the run priority ``prio`` (``priority.options_here``; None = unchanged). ``guard``: the program runs
+    under the lifeline ``GUARD`` (a ``wsl:`` program after ``-e``; a native one on POSIX before ``STACK_WRAPPER``), whose
+    lifeline is its stdin. A native Windows program needs none: its kill-on-close job ends it (``proctree``).
 
     Windows: no console window, and the priority class as a creation flag (``BELOW_NORMAL_PRIORITY_CLASS`` /
     ``IDLE_PRIORITY_CLASS``; whatever the program starts inherits it); a ``wsl:`` program's wrapper gets ``nice`` and
@@ -900,11 +908,13 @@ def popen_args(cmd: Sequence[str], *, via_wsl: bool = False, prio: priority.Chil
         argv = [prio.wrap(a) if a == WSL_WRAPPER else a for a in argv]
         if guard and "-e" in argv[1:]:
             at = argv.index("-e", 1) + 1
-            argv = [*argv[:at], "sh", "-c", WSL_GUARD, *argv[at:]]
+            argv = [*argv[:at], "sh", "-c", GUARD, *argv[at:]]
     if system == "win32":
         return argv, {"creationflags": CREATE_NO_WINDOW | prio.creationflags}
     if not via_wsl:
         argv = ["/bin/sh", "-c", prio.wrap(STACK_WRAPPER), *argv]
+        if guard:
+            argv = ["/bin/sh", "-c", GUARD, *argv]
     return argv, {"start_new_session": True}      # own process group, so cancellation kills children
 
 
@@ -1173,9 +1183,10 @@ def _windows_usage(proc: subprocess.Popen, job: proctree.Job | None = None) -> t
 class _UsageMeter:
     """CPU time and peak memory of one program run by ``run_program``. Never raises: what cannot be measured is
     None. POSIX: the change of ``getrusage(RUSAGE_CHILDREN)`` across the run, exact for the program and the
-    children it waited for, unless another ``run_program`` ran in this process at the same time (then None);
-    the peak memory is sampled about once a second, and taken from ``ru_maxrss`` when this program set a new
-    maximum. Windows: the times (the program and the processes it starts) and peak memory of its kill-on-close job
+    children it waited for, unless another ``run_program`` ran in this process at the same time (then None; the
+    lifeline guard waits for the program, so its time counts); the peak memory is the largest resident set among the
+    started process and its descendants (the program under the guard, and what it starts: ``ru_maxrss``'s meaning),
+    sampled about once a second, and taken from ``ru_maxrss`` when this program set a new maximum. Windows: the times (the program and the processes it starts) and peak memory of its kill-on-close job
     (``proctree.start``; ``run_program`` closes it); nothing for ``wsl.exe`` (the work runs in the Linux VM) or a
     batch-file launcher."""
 
@@ -1222,10 +1233,19 @@ class _UsageMeter:
             return
         self.next_sample = now + self.SAMPLE_EVERY_S
         try:
-            rss = self.ps.memory_info().rss / 2**20
-            self.peak = rss if self.peak is None else max(self.peak, rss)
+            rss = self.ps.memory_info().rss
         except Exception:  # noqa: BLE001 - gone between polls
             self.ps = None
+            return
+        try:      # the program itself runs under the lifeline guard (GUARD): its largest descendant, as ru_maxrss counts
+            kids = self.ps.children(recursive=True)
+        except Exception:  # noqa: BLE001
+            kids = []
+        for kid in kids:
+            with contextlib.suppress(Exception):
+                rss = max(rss, kid.memory_info().rss)
+        rss /= 2**20
+        self.peak = rss if self.peak is None else max(self.peak, rss)
 
     def finish(self) -> tuple[float | None, float | None]:
         try:
@@ -1299,9 +1319,10 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
     NTFS. When it ends (or is killed at the time limit) a bounded copy of it is added to ``cwd/log_name``
     (``wsl_scratch.output_tail``: the first and last lines, repeated lines collapsed). Ignored for other programs.
 
-    The program cannot outlive this process on Windows: it runs in a kill-on-close job of its own
-    (``proctree.start``), closed when it ends (which also ends what it left running). A ``wsl:`` program also runs
-    under ``WSL_GUARD``, with wsl.exe's stdin as its lifeline (unless ``stdin_text`` is given).
+    The program cannot outlive this process. On Windows it runs in a kill-on-close job of its own
+    (``proctree.start``), closed when it ends (which also ends what it left running). A ``wsl:`` program, and every
+    program on Linux and macOS, runs under the lifeline ``GUARD`` (unless ``stdin_text`` is given): its process group is
+    killed when this process dies, however it dies. ``proc.pid`` is then the guard's, the leader of that group.
     """
     cwd = Path(cwd)
     cwd.mkdir(parents=True, exist_ok=True)
@@ -1322,7 +1343,8 @@ def run_program(cmd: Sequence[str], cwd: str | Path, *, threads: int = 1, env: d
         timeout = limit if limit > 0 else None
     shown = cmd
     prio = priority.options_here(via_wsl)          # the run priority in force in this thread (never raised)
-    guard = via_wsl and stdin_text is None         # WSL_GUARD, whose lifeline is wsl.exe's stdin (held, never written)
+    # the lifeline GUARD: its stdin (wsl.exe's) is a pipe held open and never written; a native Windows program has its job
+    guard = stdin_text is None and (via_wsl or not IS_WINDOWS)
     cmd, start_kwargs = popen_args(cmd, via_wsl=via_wsl, prio=prio, guard=guard)
     log_file = cwd / log_name
     t0 = time.perf_counter()

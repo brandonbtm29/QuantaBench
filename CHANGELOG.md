@@ -2,6 +2,11 @@
 
 ## Unreleased (after 0.3.0)
 
+### The lifeline guard for native programs on macOS and Linux (ENG-3b, 2026-11-22)
+- xtb, CREST, MOPAC, Psi4 and g-xTB on the MacBook (and Linux) now end when the GUI or CLI that started them dies,
+  even of SIGKILL: they run under the guard CREST through WSL already had, whose lifeline is their stdin. Run timings
+  still report the program's own peak memory and CPU time, and a program killed by a signal still reports it.
+
 ### The 3D model kit's Build mode (UI-7, 2026-11-22)
 - **Build mode** in the 3D view (View toolbar *Build*, Ctrl+4) and a **Model Kit** dock in the Build workspace. Pick
   an element (a row of common elements; the others, metals included, in a compact periodic table), then its geometry
