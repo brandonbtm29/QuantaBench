@@ -656,11 +656,15 @@ def package_changes(before: dict[str, tuple[str, str]], after: dict[str, tuple[s
 # ------------------------------------------------------------------------------------------- update
 def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE, branch: str = BRANCH,
            python: str | None = None, log=None, status: UpdateStatus | None = None,
-           upgrade_packages: bool = False, upgrade_strategy: str = "eager") -> UpdateResult:
+           upgrade_packages: bool = False, upgrade_strategy: str = "eager",
+           reinstall_deps: bool = False) -> UpdateResult:
     """Pull ``remote/branch`` (fast-forward only) and reinstall when the dependencies or this platform's fork
     packages changed. ``upgrade_packages`` also upgrades the installed packages (only that when there is
     nothing to pull); ``upgrade_strategy`` is pip's: ``eager`` upgrades every dependency to the newest version
     allowed, ``only-if-needed`` only QuantaBench and the fork packages (and dependencies that must move).
+    ``reinstall_deps`` (``--reinstall``) runs the reinstall in every environment of the checkout even when this
+    pull changed nothing: for a checkout that another tool fast-forwarded (the cross-machine update script), whose
+    dependency changes this function could not see.
 
     ``status`` is a fresh ``check()`` result to reuse (else this checks again). ``log`` gets one line per
     step (the CLI prints them). Never raises for git/pip failures."""
@@ -669,7 +673,7 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
     say = log or (lambda _msg: None)
     st = status if status is not None else check(repo, fetch=True, remote=remote, branch=branch)
     pull = st.state not in ("up-to-date", "ahead")
-    if not pull and not upgrade_packages:
+    if not pull and not upgrade_packages and not reinstall_deps:
         return UpdateResult(ok=True, old_head=st.head, new_head=st.head, message=st.summary(), worker=st.worker)
     if (pull and st.blocked_reason) or st.state in ("error", "not-a-checkout"):
         return UpdateResult(ok=False, old_head=st.head, new_head=st.head,
@@ -717,7 +721,8 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
         lines.append(f"{bad_forks}: reinstalling without the fork packages (the installed ones stay).")
     if upgrade_packages:
         reinstall = list(dict.fromkeys([*reinstall, *forks.pinned()]))
-    if (res.changed or res.forks_changed or upgrade_packages) and install:
+    asked = reinstall_deps and not (res.changed or res.forks_changed)      # a reinstall nothing in the pull called for
+    if (res.changed or res.forks_changed or upgrade_packages or asked) and install:
         extras = installed_extras(old_text) if old_text else []
         with_extras = f" with extras [{','.join(extras)}]" if extras else ""
         if upgrade_packages:
@@ -726,6 +731,7 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
         else:
             why = [f"pyproject.toml changed ({', '.join(res.changed)})"] if res.changed else []
             why += [f"{FORK_FILE} changed"] if res.forks_changed else []
+            why += ["a reinstall was asked for (--reinstall)"] if asked else []
             say(f"{'; '.join(why)}: reinstalling{with_extras}...")
         before = pip_list(python)
         res.pip_ran = True
@@ -740,11 +746,11 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
         res.log = (res.log + "\n" + out).strip()
         if not ok and res.updated and (res.changed or res.forks_changed):
             _roll_back(root, old_full, res, say)       # the new code needs what pip could not install
-        lines += _pip_report(res, ok, out, upgrade_packages, upgrade_strategy, listed=after is not None)
+        lines += _pip_report(res, ok, out, upgrade_packages, upgrade_strategy, listed=after is not None, asked=asked)
         relinked = _relink_openmp(python)
         if relinked:
             lines.append(relinked)
-        if ok and (res.changed or res.forks_changed):
+        if ok and (res.changed or res.forks_changed or asked):
             res.other_envs = reinstall_other_envs(root, old_text, forks, python, reinstall, say)
             lines += _other_envs_report(res.other_envs)
             res.ok = res.ok and all(env_ok for _v, env_ok, _m in res.other_envs)
@@ -851,13 +857,16 @@ def _other_envs_report(envs: list[tuple[str, bool, str]]) -> list[str]:
     return lines
 
 
-def _pip_report(res: UpdateResult, ok: bool, out: str, upgrade: bool, strategy: str, listed: bool) -> list[str]:
+def _pip_report(res: UpdateResult, ok: bool, out: str, upgrade: bool, strategy: str, listed: bool,
+                asked: bool = False) -> list[str]:
     """The lines of ``update()``'s message about the pip run."""
     torch = _torch_version()
     kept = f"PyTorch kept at {torch}" if torch else "PyTorch left as it was"
     lines = []
     if ok and upgrade:
         lines.append(f"Upgraded the installed packages with pip (--upgrade-strategy {strategy}; {kept}).")
+    elif ok and asked:
+        lines.append(f"Reinstalled the dependencies the installers' way: installed extras, fork packages ({kept}).")
     elif ok:
         lines.append(f"{'Dependencies' if res.changed else 'The fork packages'} changed: reinstalled with pip ({kept}).")
     elif res.rolled_back:

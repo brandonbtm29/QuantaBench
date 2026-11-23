@@ -932,5 +932,13 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   test_local_worker.py 14, test_install_scripts.py 26 (Linux: 2 PowerShell tests skipped). GUI smoke run on a
   throwaway clone behind main, with screenshots of the dialog, the busy-worker state, the wait question and the
   result with the worker restart offer.
+- **The cross-machine update script** (Brandon, 2026-11-23: some apps should update "across the board" from one list;
+  another worker builds that into his hub script). The script and the app share their rules (fast-forward only, skip
+  or refuse local changes, report or install dependency changes). One gap: a clone the script fast-forwarded has the
+  new code but the old dependencies, and the app's next check sees nothing to pull. `update --reinstall` (the
+  installers' pip line in every environment, with nothing to pull) and `--restart-worker` (also with nothing to
+  pull) close it: they are the command QuantaBench's entry in the script's list should run. DISTRIBUTION.md has the
+  comparison.
 - Nothing on the workstation, the MacBook or the lab PC was updated, restarted or installed into; the Update flow ran
-  only on throwaway clones.
+  only on throwaway clones. On the Mac, a read-only check built `QuantaBench.app` in /tmp and saw the real worker
+  as "LaunchAgent, idle, machine paused"; nothing was restarted.

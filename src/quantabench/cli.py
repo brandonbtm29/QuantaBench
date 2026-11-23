@@ -22,7 +22,7 @@
     quantabench-cli md surface-tension DIR                                      # sigma +- error, densities, checks
     quantabench-cli md estimate DIR | --atoms N --ns NS                         # hours per machine (MD-BENCH-1)
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
-    quantabench-cli update [--check] [--upgrade-packages] [--restart-worker]    # git pull + reinstall if needed
+    quantabench-cli update [--check] [--upgrade-packages] [--reinstall] [--restart-worker]  # pull + reinstall
     quantabench-cli shortcuts [--desktop] [--remove]                            # launchers with the icon, no terminal
     quantabench-cli sketcher [--install [--from-zip ZIP]] [--use DIR]            # the Sketch dock's editor files
     quantabench-cli monitor [--interval 2] [--count N] [--worker NAME]         # live load, clocks, temperatures
@@ -843,12 +843,14 @@ def priority_lines(s, machine: str | None = None, logical: int | None = None) ->
 def _update(args) -> int:
     """``update --check``: fetch and report. ``update``: git pull --ff-only, then pip install -e if the
     dependencies or the fork packages changed (quantabench.update). ``--upgrade-packages`` also upgrades the
-    installed packages, with or without new commits. ``--restart-worker`` restarts this computer's idle worker
+    installed packages, with or without new commits; ``--reinstall`` reinstalls the dependencies (into every
+    environment of the checkout) without upgrading. ``--restart-worker`` restarts this computer's idle worker
     afterwards (``local_worker.restart``). Refused while that worker runs jobs from this checkout. 0 = up to date
     or updated, 1 = refused or failed."""
     from . import update as update_mod
 
     upgrade = getattr(args, "upgrade_packages", False)
+    reinstall = getattr(args, "reinstall", False)
     status = update_mod.check()
     print(status.summary())
     if status.state in ("error", "not-a-checkout"):
@@ -859,22 +861,36 @@ def _update(args) -> int:
                   "--upgrade-packages to also upgrade the installed packages.")
         return 0
     nothing_to_pull = status.state in ("up-to-date", "ahead")
-    if upgrade and nothing_to_pull and status.busy_reason:
+    pip_anyway = upgrade or reinstall              # pip runs with nothing to pull, too
+    if pip_anyway and nothing_to_pull and status.busy_reason:
         print(status.busy_reason)                  # pip under a running job: no
         return 1
-    if not status.can_update and not (upgrade and nothing_to_pull):
+    restart_worker = getattr(args, "restart_worker", False)
+    if not status.can_update and not (pip_anyway and nothing_to_pull):
+        if nothing_to_pull and restart_worker:     # asked for: e.g. after another tool fast-forwarded the checkout
+            return _restart_local_worker(status.worker)
         return 0 if nothing_to_pull else 1
     print()
     extra = {"upgrade_packages": True, "upgrade_strategy": args.upgrade_strategy} if upgrade else {}
+    if reinstall:
+        extra["reinstall_deps"] = True
     res = update_mod.update(status=status, log=print, **extra)
     print(res.message)
-    if res.ok and res.worker_needs_restart and getattr(args, "restart_worker", False):
-        from . import local_worker
-
-        ok, msg = local_worker.restart(res.worker)
-        print(msg)
-        return 0 if ok else 1
+    if res.ok and restart_worker:
+        return _restart_local_worker(res.worker)
     return 0 if res.ok else 1
+
+
+def _restart_local_worker(worker) -> int:
+    """``update --restart-worker``: restart this computer's worker when it runs this checkout and is idle."""
+    from . import local_worker
+
+    if worker is None or not worker.affected:
+        print("No worker from this checkout runs on this computer: nothing to restart.")
+        return 0
+    ok, msg = local_worker.restart(worker)
+    print(msg)
+    return 0 if ok else 1
 
 
 def rank_choices() -> list[str]:
@@ -1309,9 +1325,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="with --upgrade-packages: eager (default) upgrades every dependency to the newest version "
                          "pyproject.toml allows; only-if-needed upgrades QuantaBench and the fork packages, and "
                          "dependencies only where they must move")
+    up.add_argument("--reinstall", action="store_true",
+                    help="also install the dependencies into every environment of the checkout the installers' way "
+                         "(installed extras, fork packages, PyTorch kept), when there is nothing to pull too: for a "
+                         "checkout another tool fast-forwarded, such as a script that updates other computers")
     up.add_argument("--restart-worker", action="store_true",
-                    help="after the update, restart this computer's quantabench-cli worker when it runs this checkout, "
-                         "is idle and is kept by the macOS LaunchAgent or the Windows scheduled task (docs/WORKERS.md)")
+                    help="after the update (or with nothing to pull), restart this computer's quantabench-cli worker "
+                         "when it runs this checkout, is idle and is kept by the macOS LaunchAgent or the Windows "
+                         "scheduled task (docs/WORKERS.md)")
     up.set_defaults(func=_update)
 
     from .dist import cli as dist_cli

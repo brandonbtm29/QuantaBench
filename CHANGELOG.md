@@ -16,6 +16,10 @@
   starting the task) and `quantabench-cli update --restart-worker`; a worker started by hand gets instructions.
 - **The checkout's other environments** (`.venv-rocm` next to `.venv`) get the same reinstall when the dependencies
   change, each with its own extras and its own PyTorch build.
+- **`quantabench-cli update --reinstall`** runs that reinstall in every environment with nothing to pull, and
+  `--restart-worker` works with nothing to pull too: `update --reinstall --restart-worker` finishes a checkout that the
+  cross-machine update script fast-forwarded (docs/DISTRIBUTION.md, "In-app updates and the cross-machine update
+  script").
 - **pip fails: back to the old commit.** When the new code needs packages pip could not install, the checkout goes
   back (`git reset --keep`) and QuantaBench keeps working, as Brandon's other apps do. Git and pip never wait for
   an answer (no Git Credential Manager window either).

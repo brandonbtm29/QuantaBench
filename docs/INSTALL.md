@@ -121,8 +121,10 @@ AMD's ROCm PyTorch, and Miniforge must not be installed in a folder with spaces.
   packages** to upgrade the packages too. With nothing to pull, the same window offers **Upgrade packages...**.
 - **On the command line:** `quantabench-cli update --check` reports how far the checkout is behind
   `origin/main` and what is new, and `quantabench-cli update` updates it. `quantabench-cli update
-  --upgrade-packages` also upgrades the packages, with or without new commits. `--restart-worker` restarts this
-  computer's worker afterwards (below).
+  --upgrade-packages` also upgrades the packages, with or without new commits. `--reinstall` reinstalls the
+  dependencies into every environment of the checkout without upgrading (for a checkout another tool
+  fast-forwarded, [DISTRIBUTION.md](DISTRIBUTION.md#in-app-updates-and-the-cross-machine-update-script)).
+  `--restart-worker` restarts this computer's worker afterwards (below), also with nothing to pull.
 
 **Updates follow main, not releases.** Every merged pull request lands on main after its tests pass, several a
 day, while releases are tags on main a few weeks apart; machines that share a batch should run the same commit

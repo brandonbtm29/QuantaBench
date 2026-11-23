@@ -182,6 +182,53 @@ Uninstall removes the install folder and the launchers. It never removes setting
 - If an installed build ever runs on the same machine as a checkout, it needs its own name and IDs
   ("QuantaBench (release)") so that their Start menu entries and taskbar groups stay apart.
 
+## In-app updates and the cross-machine update script
+
+Brandon keeps a script on his hub computer, `Update-OtherComputers.ps1`, outside this repository. It updates his
+apps "across the board" from one list he can extend; QuantaBench is one entry. The script and the in-app update
+are two tools for one job, and they follow the same rules.
+
+| | In the app / `quantabench-cli update` | The cross-machine script |
+|---|---|---|
+| Runs | on the computer it updates; it fetches from GitHub itself | on the hub, after a push; it pushes main into each other computer's clone over SSH (their git cannot log in inside SSH) |
+| Moves the checkout | `git pull --ff-only` | fast-forward only |
+| Never | forces, stashes or resets local work (`git reset --keep` only takes back its own pull when pip fails) | forces, stashes or resets |
+| Local changes, another branch, commits not on GitHub | refuses and says why | skips that clone and lists it |
+| A computer that is off or asleep | (not running) | skipped and listed |
+| Dependency changes (`pyproject.toml`, `scripts/fork-packages.json`) | installs them into every environment of the checkout | reports them |
+| Running programs | waits for the window's jobs and this computer's worker; then offers to restart the app and the worker | starts nothing over SSH; running programs keep the old code until they restart |
+
+**Where they meet.** A clone that the script fast-forwarded has the new code, but its environments still have the
+old dependencies. The app's next check finds nothing to pull, so it never sees that change: it only compares what
+its own pull brings. The repository's own way to finish that computer is one command, run there with any of its
+environments:
+
+```
+quantabench-cli update --reinstall --restart-worker
+```
+
+- `--reinstall` runs the installers' pip line (installed extras, fork packages, PyTorch kept) in every environment
+  of the checkout, with nothing to pull.
+- `--restart-worker` then restarts that computer's worker, if it runs this checkout, is idle and is kept by the
+  LaunchAgent or the scheduled task.
+- The command refuses (exit 1, with the reason) while that worker runs or is about to run a job from the
+  checkout, so the script can list the computer as skipped. It never starts the GUI.
+- Rerunning the install script for the OS does the same reinstall, more slowly.
+
+So QuantaBench's entry in the script's list needs:
+
+- the dependency files: `pyproject.toml` and `scripts/fork-packages.json`;
+- the install command: `<.venv>/python -m quantabench update --reinstall` (add `--restart-worker` to restart an
+  idle worker);
+- the rule that GUIs are never started over SSH (the same rule as for every app on the list).
+
+Each tool covers a different case:
+
+- **In-app update:** one computer, by hand, when Brandon sits at it. It installs and restarts there.
+- **The script:** every computer at once, after a push from the hub.
+- **Installed builds (0.5)** are not git clones. The script does not find them (it finds clones by their origin
+  URL); they follow releases through the app.
+
 ## Code signing and notarization (later)
 
 - **Windows.** An unsigned installer shows SmartScreen's "Windows protected your PC". Where Smart App Control is on,

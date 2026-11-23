@@ -802,6 +802,39 @@ def test_failed_reinstall_in_another_environment_is_reported(repos, monkeypatch)
     assert "FAILED: pip failed in .venv-rocm" in res.message
 
 
+def test_reinstall_with_nothing_to_pull(repos, monkeypatch):
+    """A checkout another tool fast-forwarded: --reinstall runs the installers' pip line in every environment."""
+    from quantabench import launchers
+
+    _, _, work = repos
+    main_env, rocm = _fake_env(work, ".venv"), _fake_env(work, ".venv-rocm")
+    rocm_py = str(launchers.Variant(rocm).python(windowed=False))
+    monkeypatch.setattr(update, "_pip_rows", lambda python=None: [{"name": "quantabench", "version": "0.3.0"}]
+                        if python == rocm_py else [])
+    calls = []
+    monkeypatch.setattr(update, "_pip_install", lambda root, extras, python, **kw: calls.append(
+        (python, kw.get("upgrade"), list(kw.get("reinstall", ())))) or (True, "ok"))
+    main_py = str(launchers.Variant(main_env).python(windowed=False))
+    res = update.update(work, python=main_py)
+    assert res.ok and not res.pip_ran and calls == []                     # nothing to pull: nothing to do
+    res = update.update(work, python=main_py, reinstall_deps=True)
+    assert res.ok and res.pip_ran and not res.updated and not res.upgraded and not res.rolled_back
+    assert calls == [(main_py, None, []), (rocm_py, None, [])]
+    assert "Reinstalled the dependencies the installers' way" in res.message and ".venv-rocm" in res.message
+    monkeypatch.setattr(update, "probe_worker", lambda root: _Worker(busy=True))
+    res = update.update(work, python=main_py, reinstall_deps=True)
+    assert not res.ok and "worker busy" in res.message and len(calls) == 2
+
+
+def test_cli_reinstall(monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("up-to-date"))
+    monkeypatch.setattr(update, "update", lambda *a, **k: seen.append(k) or update.UpdateResult(ok=True, message="ok"))
+    assert cli.main(["update"]) == 0 and seen == []
+    assert cli.main(["update", "--reinstall"]) == 0 and seen[0]["reinstall_deps"] is True
+    assert "upgrade_packages" not in seen[0]
+
+
 def test_cli_restart_worker(monkeypatch, capsys):
     from quantabench import local_worker
 
@@ -814,6 +847,16 @@ def test_cli_restart_worker(monkeypatch, capsys):
     assert cli.main(["update"]) == 0 and not restarted
     assert cli.main(["update", "--restart-worker"]) == 0 and restarted == [worker]
     assert "Restarted the worker." in capsys.readouterr().out
+    # nothing to pull (another tool fast-forwarded the checkout): the restart that was asked for still happens
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("up-to-date", worker=worker))
+    monkeypatch.setattr(update, "update", lambda *a, **k: pytest.fail("nothing to pull"))
+    assert cli.main(["update", "--restart-worker"]) == 0 and restarted == [worker, worker]
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("up-to-date"))
+    assert cli.main(["update", "--restart-worker"]) == 0 and len(restarted) == 2
+    assert "nothing to restart" in capsys.readouterr().out
+    monkeypatch.setattr(local_worker, "restart", lambda w: (False, "it is busy"))
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("up-to-date", worker=worker))
+    assert cli.main(["update", "--restart-worker"]) == 1
 
 
 def test_cli_refuses_while_the_worker_is_busy(monkeypatch, capsys):

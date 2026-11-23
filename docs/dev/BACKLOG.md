@@ -2238,7 +2238,9 @@ requirement for every app: an update button, and a launcher that hides the termi
     same: `--restart-worker`; a busy worker refuses the update.
   - Launchers with the icon and the Windows taskbar ID (`quantabench.launchers`, `quantabench-cli shortcuts`,
     Help > Create app shortcuts...). The installers call it.
-  - docs/DISTRIBUTION.md: the installer design.
+  - docs/DISTRIBUTION.md: the installer design, and how the in-app update and the cross-machine update script
+    share their rules. `update --reinstall [--restart-worker]` is the command that finishes a computer the script
+    fast-forwarded.
   - Tests: tests/test_update.py, tests/test_launchers.py (a real .lnk made and read back on Windows),
     tests/test_local_worker.py, tests/test_install_scripts.py.
 - **PR 2 (needs-Brandon: the design's open questions):** installers built in CI on `v*` tags, a release channel for
