@@ -11,11 +11,16 @@ wheel, right-drag           zoom
 click an atom               select it (replaces the selection); click on empty space clears
 Ctrl+click                  add/remove an atom from the selection
 double-click an atom        rotate about that atom from now on (moves the focal point)
-R                           reset the view
+R                           reset the view (the main window's View > Reset view)
 X / Y / Z                   look down the x / y / z axis (Shift: from the negative side)
 P                           toggle perspective / orthographic projection
-Esc                         clear the selection
++ / -                       zoom in / out
+Ctrl+arrows                 turn the view 15 degrees
+Esc                         clear the selection (the main window's Selection keys)
 ==========================  ===================================================================
+
+These are the default keys: they are named actions of ``gui.keymap`` (``key_actions``), which Settings > Controls
+rebinds; VTK's and pyvista's own single-letter keys are switched off.
 
 ``set_mode('select')`` makes a plain left-drag draw a selection box instead of rotating.
 ``set_mode('move')`` grabs atoms instead of the camera, like Avogadro's manipulate tool: left-drag
@@ -61,6 +66,7 @@ from ase.data.colors import jmol_colors
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from . import keymap
 from .selection import ACCENT_RGB, SelectionModel, format_measurement, measure
 
 STYLES = ("Ball and stick", "Licorice", "Space filling", "Wireframe")
@@ -72,6 +78,8 @@ CLICK_TOLERANCE_PX = 4.0          # press/release closer than this is a click, n
 WIREFRAME_PICK_RADIUS = 0.35      # Å; wireframe draws no spheres, so pick within this radius
 LICORICE_RADIUS = 0.18            # Å
 BOND_RADIUS = {"Ball and stick": 0.11, "Licorice": LICORICE_RADIUS}
+KEY_ZOOM = 1.25                   # one zoom key press
+KEY_TURN_DEG = 15.0               # one turn or roll key press
 HALO_PAD = 0.28                   # Å added to the drawn radius for the selection halo
 HALO_COLOR = ACCENT_RGB              # same amber as the 2D view's highlights
 MEASURE_COLOR = (1.0, 0.80, 0.20)
@@ -350,6 +358,36 @@ class MoleculeViewer3D(QWidget):
             msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
             msg.setWordWrap(True)
             lay.addWidget(msg)
+        self.key_actions = self._make_key_actions()
+        if self.plotter is not None:      # the VTK widget takes every key itself: the actions see them first
+            self._key_dispatcher = keymap.KeyDispatcher(self.plotter.interactor)
+
+    def _make_key_actions(self) -> dict:
+        """The 3D view's own keys as named actions (``gui.keymap``, scope "view3d"), with their default keys; the main
+        window's keymap applies the user's."""
+        cmds = {
+            "view3d.along_x": lambda: self.view_along("x"), "view3d.along_y": lambda: self.view_along("y"),
+            "view3d.along_z": lambda: self.view_along("z"),
+            "view3d.along_minus_x": lambda: self.view_along("x", negative=True),
+            "view3d.along_minus_y": lambda: self.view_along("y", negative=True),
+            "view3d.along_minus_z": lambda: self.view_along("z", negative=True),
+            "view3d.projection": self.toggle_projection,
+            "view3d.zoom_in": lambda: self.zoom(KEY_ZOOM), "view3d.zoom_out": lambda: self.zoom(1.0 / KEY_ZOOM),
+            "view3d.rotate_left": lambda: self.turn(-KEY_TURN_DEG, 0.0),
+            "view3d.rotate_right": lambda: self.turn(KEY_TURN_DEG, 0.0),
+            "view3d.rotate_up": lambda: self.turn(0.0, -KEY_TURN_DEG),
+            "view3d.rotate_down": lambda: self.turn(0.0, KEY_TURN_DEG),
+            "view3d.roll_ccw": lambda: self.roll(KEY_TURN_DEG), "view3d.roll_cw": lambda: self.roll(-KEY_TURN_DEG),
+        }
+        return {name: keymap.local_action(self, name, fn) for name, fn in cmds.items()}
+
+    def run_command(self, name: str) -> bool:
+        """Trigger the 3D view's action ``name`` ("view3d.along_x", ...); False when there is no such action."""
+        a = self.key_actions.get(name)
+        if a is None:
+            return False
+        a.trigger()
+        return True
 
     # ================================================================== public API
     @property
@@ -488,6 +526,46 @@ class MoleculeViewer3D(QWidget):
             self.plotter.enable_parallel_projection()
         self._render()
         return bool(cam.GetParallelProjection())
+
+    def zoom(self, factor: float) -> None:
+        """Zoom the camera by ``factor`` (> 1 closer)."""
+        if self.plotter is None:
+            return
+        cam = self.plotter.renderer.GetActiveCamera()
+        if cam.GetParallelProjection():
+            cam.SetParallelScale(cam.GetParallelScale() / factor)
+        else:
+            cam.Dolly(factor)
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.plotter.camera_set = True
+        self._render()
+
+    def turn(self, right_deg: float, down_deg: float) -> None:
+        """Turn the structure ``right_deg`` to the right (about the screen's vertical axis) and ``down_deg`` down
+        (its top toward the viewer), by moving the camera around the focal point."""
+        if self.plotter is None:
+            return
+        cam = self.plotter.renderer.GetActiveCamera()
+        if right_deg:
+            cam.Azimuth(-right_deg)
+        if down_deg:
+            cam.Elevation(down_deg)
+            cam.OrthogonalizeViewUp()
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.plotter.camera_set = True
+        self._render()
+
+    def roll(self, ccw_deg: float) -> None:
+        """Roll the structure ``ccw_deg`` counter-clockwise in the plane of the screen."""
+        if self.plotter is None:
+            return
+        self.plotter.renderer.GetActiveCamera().Roll(-ccw_deg)
+        self.plotter.camera_set = True
+        self._render()
+
+    def atom_count(self) -> int:
+        """Atoms in the structure shown (0 when nothing is)."""
+        return 0 if self._atoms is None else len(self._atoms)
 
     def center_on_atom(self, index: int) -> None:
         """Make atom ``index`` the center of rotation without turning the view (camera translates)."""
@@ -765,20 +843,6 @@ class MoleculeViewer3D(QWidget):
                   & (d[:, 1] <= max(y0, y1)) & (np.abs(d[:, 2]) <= 1))
         self.selection.select(self._vis[inside], additive=additive)
 
-    def _on_key(self, key: str) -> bool:
-        k = key.lower() if len(key) == 1 else key
-        if k == "r":
-            self.reset_camera()
-        elif k in ("x", "y", "z"):
-            self.view_along(k, negative=key.isupper())
-        elif k == "p":
-            self.toggle_projection()
-        elif key == "Escape":
-            self.selection.clear()
-        else:
-            return False
-        return True
-
     def _camera_frame(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Unit vectors (right, up, toward viewer) of the screen, in world coordinates."""
         cam = self.plotter.renderer.GetActiveCamera()
@@ -823,11 +887,10 @@ class MoleculeViewer3D(QWidget):
         style.AddObserver("LeftButtonPressEvent", on_press)
         style.AddObserver("MouseMoveEvent", on_move)
         style.AddObserver("LeftButtonReleaseEvent", on_release)
-        # VTK's built-in single-letter keys (w/s wireframe, e/q exit, 3 stereo...) would fight ours
+        # VTK's built-in single-letter keys (w/s wireframe, e/q exit, 3 stereo...) would fight ours, which are
+        # actions (``key_actions``, gui.keymap)
         style.AddObserver("CharEvent", lambda *_: None)
         p.iren.clear_key_event_callbacks()   # pyvista binds q = close window, b/v/C pickers, ...
-        for key in ("r", "R", "x", "X", "y", "Y", "z", "Z", "p", "P", "Escape"):
-            p.add_key_event(key, lambda k=key: self._on_key(k))
 
     def _draw_band(self, x0: float, y0: float, x1: float, y1: float) -> None:
         import pyvista as pv

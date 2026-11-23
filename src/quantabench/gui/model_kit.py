@@ -40,7 +40,8 @@ asked). A quick local relax runs inside each edit (``model.auto_relax``), so Und
 (``EditError``) is reported on the message line and changes nothing.
 
 Every edit is a ``chem.edit.Command``; ``UndoAdaptor`` is the ``model.history`` that puts them on a ``QUndoStack``
-(Edit > Undo / Redo, named actions ``edit.undo`` / ``edit.redo``, default keys in ``gui.action_ids``). The handlers
+(Edit > Undo / Redo, named actions ``edit.undo`` / ``edit.redo`` of ``gui.keymap``, rebound on Settings > Controls;
+Build > Minimize is ``kit.minimize``). The handlers
 (``click_stub``, ``click_atom``, ``click_space``, ``choose``, ``choose_element``, ``choose_geometry``, the tools) are
 plain methods, which the tests call directly.
 """
@@ -1131,7 +1132,7 @@ def _menu(win, title: str):
 
 
 def install(win) -> None:
-    from .action_ids import bind
+    from . import keymap
 
     panel = ModelKitPanel(win)
     dock = QDockWidget(TITLE, win)
@@ -1152,10 +1153,9 @@ def install(win) -> None:
     from .clipboard import _edit_menu
 
     menu = _edit_menu(win)
-    undo = bind(panel.stack.createUndoAction(win, "Undo"), "edit.undo")
-    undo.setToolTip("Undo the last Model Kit edit")
-    redo = bind(panel.stack.createRedoAction(win, "Redo"), "edit.redo")
-    redo.setToolTip("Redo the Model Kit edit")
+    # named actions of the keymap (gui.keymap): their keys and the tooltips that show them
+    undo = keymap.bind(win, panel.stack.createUndoAction(win, "Undo"), "edit.undo", "Undo the last Model Kit edit")
+    redo = keymap.bind(win, panel.stack.createRedoAction(win, "Redo"), "edit.redo", "Redo the Model Kit edit")
     first = menu.actions()[0] if menu.actions() else None
     menu.insertAction(first, undo)
     menu.insertAction(first, redo)
@@ -1164,8 +1164,17 @@ def install(win) -> None:
     win.a_undo, win.a_redo = undo, redo
     build = _menu(win, "Build")
     if build is not None:
-        a = bind(QAction("Model kit (Build mode)", win), "build.model_kit")
-        a.setToolTip("Build or edit in the 3D view with the Model Kit")
+        a = keymap.bind(win, QAction("Model kit (Build mode)", win), "build.model_kit",
+                        "Build or edit in the 3D view with the Model Kit")
         a.triggered.connect(lambda _checked=False: win.set_view_mode("build"))
         build.addAction(a)
         win.a_model_kit = a
+    # Minimize as an action too, so a key can run it (Avogadro's keymap: Ctrl+Alt+O); no key by default
+    tip = panel.b_minimize.toolTip()
+    m = keymap.bind(win, QAction("Minimize the Model Kit's structure", win), "kit.minimize", tip)
+    m.triggered.connect(lambda _checked=False: panel.minimize())
+    if build is not None:
+        build.addAction(m)
+    win.a_kit_minimize = m
+    if isinstance(getattr(win, "keymap", None), keymap.Keymap):
+        win.keymap.follow_tooltip(panel.b_minimize, "kit.minimize", tip)

@@ -2,7 +2,7 @@
 
 First written 2026-11-07 after the core (`chem/edit.py`, `chem/fragments.py`) as the plan for this work. Rewritten
 2026-11-22 to describe what is built (branch `feat/ui-7-build-mode`: `gui/model_kit.py`, Build mode in
-`gui/viewer3d.py`, `gui/action_ids.py`; tests `tests/test_gui_model_kit.py`, `tests/test_edit.py`).
+`gui/viewer3d.py`, `gui/keymap.py`; tests `tests/test_gui_model_kit.py`, `tests/test_edit.py`).
 
 The kit is QuantaBench's own design. Other model builders were a reference for *what* a 3D builder needs to do (place
 atoms on free valences, replace atoms, groups and rings, undo, minimize). The layout, the names, the order of choices
@@ -133,7 +133,7 @@ Edit > Undo / Redo are the actions `edit.undo` and `edit.redo`.
 
 ## Shortcuts
 
-The kit's actions are named, with their default keys in one place (`gui.action_ids.DEFAULTS`), for the rebinding page
+The kit's actions are named, with their default keys in one place (`gui.keymap.SPECS`), for the rebinding page
 (UI-9):
 
 | Action | Default keys |
@@ -142,8 +142,9 @@ The kit's actions are named, with their default keys in one place (`gui.action_i
 | `edit.undo` | the platform's Undo key |
 | `edit.redo` | the platform's Redo key, plus Ctrl+Y |
 | `build.model_kit` | none |
+| `kit.minimize` | none (Avogadro 2's keymap: Ctrl+Alt+O) |
 
-None of these defaults copies another program's.
+None of these defaults copies another program's. Settings > Controls rebinds them (docs/CONTROLS.md).
 
 ## Tests
 

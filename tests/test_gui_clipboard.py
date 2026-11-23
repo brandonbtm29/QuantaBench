@@ -468,9 +468,9 @@ def test_molecule_list_context_menu_and_edit_menu(tmp_path, fake_clipboard):
     w.a_copy_as["canonical"].trigger()
     assert fake_clipboard.text().splitlines()[0] == "CCO ethanol"
     edit = next(a.menu() for a in w.menuBar().actions() if a.text().replace("&", "") == "Edit")
-    # the Model Kit's Undo / Redo (UI-7) come first
+    # the Model Kit's Undo / Redo (UI-7) come first, Find a molecule (UI-9) last
     assert [a.text() for a in edit.actions() if not a.isSeparator()] == ["Undo", "Redo", "Paste", "Copy molecules",
-                                                                         "Copy as"]
+                                                                         "Copy as", "Find a molecule"]
     _close(app, w)
 
 
@@ -767,7 +767,7 @@ def test_actions_are_named_with_their_default_keys(tmp_path, fake_clipboard):
     for name, action in names.items():
         assert action.objectName() == name and w.findChild(type(action), name) is action
         assert action.shortcuts() == cb.default_shortcuts(name)
-    assert names["edit.paste"].shortcuts() == QKeySequence.keyBindings(QKeySequence.StandardKey.Paste)
+    assert names["edit.paste"].shortcuts()[:1] == [QKeySequence(QKeySequence.StandardKey.Paste)]   # the keymap's
     assert [k.toString() for k in names["edit.copy_molecules"].shortcuts()] == ["Ctrl+Shift+C"]
     assert names["edit.copy_molecules"].shortcutContext() == Qt.ShortcutContext.WidgetWithChildrenShortcut
     assert names["edit.copy_molecules"] in w.mol_dock.actions()
