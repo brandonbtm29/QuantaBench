@@ -2224,6 +2224,33 @@ the code, but three things never arrived through it.
   - `--check --upgrade-packages` could preview the upgrade with `pip install --dry-run --report -`.
   - The worker update (3).
 
+### DIST-1 (0.5): Update button and terminal-free launchers on all three OSes · in-PR 2026-11-23 (installers: PR 2, after Brandon's OK on docs/DISTRIBUTION.md)
+Not the done DIST-1 of 2026-11-05 (machine capability report): the coordinator's id for the 0.5 distribution work.
+Brandon (2026-11-23): "Let's prioritize making installers and Update button on the different OS." His standing
+requirement for every app: an update button, and a launcher that hides the terminal.
+- **Done (PR 1), for git checkouts:**
+  - Help > Check for updates...: What's new from CHANGELOG.md (new and changed `###` sections between HEAD and
+    origin/main), the commits, why main, the newest release. Restart is offered after the update.
+  - It waits while the window has work (a build, local jobs), and while this computer's worker runs or is about to
+    run a job from this checkout (`local_worker.find`: the worker lock, psutil, `jobs.json`, `pause.json`).
+  - It reinstalls into the checkout's other environments, and goes back to the old commit when pip fails.
+  - It restarts an idle worker kept by the LaunchAgent or the scheduled task (UPD-1 3c, locally). The CLI does the
+    same: `--restart-worker`; a busy worker refuses the update.
+  - Launchers with the icon and the Windows taskbar ID (`quantabench.launchers`, `quantabench-cli shortcuts`,
+    Help > Create app shortcuts...). The installers call it.
+  - docs/DISTRIBUTION.md: the installer design.
+  - Tests: tests/test_update.py, tests/test_launchers.py (a real .lnk made and read back on Windows),
+    tests/test_local_worker.py, tests/test_install_scripts.py.
+- **PR 2 (needs-Brandon: the design's open questions):** installers built in CI on `v*` tags, a release channel for
+  installed builds, the first-run GPU wizard, and the upgrade in a helper process after the window closes on Windows.
+- Follow-ups:
+  - A second QuantaBench window from the same checkout is not detected (the update changes the code under it).
+  - The scheduled task's state is read in English (`"Running"`). On a Windows in another language the worker counts
+    as started by hand, and the app only explains.
+  - A worker started with `--state-dir` elsewhere is not found.
+  - Linux has no worker service to restart (no systemd unit is documented).
+  - Run `quantabench-cli shortcuts` once on the workstation, the MacBook and the lab PC (needs-Brandon).
+
 ### PERF-2: tblite Windows wheel with OpenBLAS · in progress 2026-11-06 (wheel built and verified; release needs a runner)
 - 2026-11-06: built in CI on QuantaBench's branch `ci/tblite-wheels` (run 42181668274; Actions refuses to run
   on the fork, HTTP 422 "Actions has been disabled", though the permissions API says enabled). Fixes: dftd4,

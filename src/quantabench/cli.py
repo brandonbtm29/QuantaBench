@@ -22,7 +22,8 @@
     quantabench-cli md surface-tension DIR                                      # sigma +- error, densities, checks
     quantabench-cli md estimate DIR | --atoms N --ns NS                         # hours per machine (MD-BENCH-1)
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
-    quantabench-cli update [--check] [--upgrade-packages]                       # git pull + reinstall if needed
+    quantabench-cli update [--check] [--upgrade-packages] [--restart-worker]    # git pull + reinstall if needed
+    quantabench-cli shortcuts [--desktop] [--remove]                            # launchers with the icon, no terminal
     quantabench-cli sketcher [--install [--from-zip ZIP]] [--use DIR]            # the Sketch dock's editor files
     quantabench-cli monitor [--interval 2] [--count N] [--worker NAME]         # live load, clocks, temperatures
     quantabench-cli review --file cohort.csv --phase water [--json]             # the review before a run
@@ -842,7 +843,9 @@ def priority_lines(s, machine: str | None = None, logical: int | None = None) ->
 def _update(args) -> int:
     """``update --check``: fetch and report. ``update``: git pull --ff-only, then pip install -e if the
     dependencies or the fork packages changed (quantabench.update). ``--upgrade-packages`` also upgrades the
-    installed packages, with or without new commits. 0 = up to date or updated, 1 = refused or failed."""
+    installed packages, with or without new commits. ``--restart-worker`` restarts this computer's idle worker
+    afterwards (``local_worker.restart``). Refused while that worker runs jobs from this checkout. 0 = up to date
+    or updated, 1 = refused or failed."""
     from . import update as update_mod
 
     upgrade = getattr(args, "upgrade_packages", False)
@@ -856,12 +859,21 @@ def _update(args) -> int:
                   "--upgrade-packages to also upgrade the installed packages.")
         return 0
     nothing_to_pull = status.state in ("up-to-date", "ahead")
+    if upgrade and nothing_to_pull and status.busy_reason:
+        print(status.busy_reason)                  # pip under a running job: no
+        return 1
     if not status.can_update and not (upgrade and nothing_to_pull):
         return 0 if nothing_to_pull else 1
     print()
     extra = {"upgrade_packages": True, "upgrade_strategy": args.upgrade_strategy} if upgrade else {}
     res = update_mod.update(status=status, log=print, **extra)
     print(res.message)
+    if res.ok and res.worker_needs_restart and getattr(args, "restart_worker", False):
+        from . import local_worker
+
+        ok, msg = local_worker.restart(res.worker)
+        print(msg)
+        return 0 if ok else 1
     return 0 if res.ok else 1
 
 
@@ -1297,6 +1309,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="with --upgrade-packages: eager (default) upgrades every dependency to the newest version "
                          "pyproject.toml allows; only-if-needed upgrades QuantaBench and the fork packages, and "
                          "dependencies only where they must move")
+    up.add_argument("--restart-worker", action="store_true",
+                    help="after the update, restart this computer's quantabench-cli worker when it runs this checkout, "
+                         "is idle and is kept by the macOS LaunchAgent or the Windows scheduled task (docs/WORKERS.md)")
     up.set_defaults(func=_update)
 
     from .dist import cli as dist_cli
@@ -1314,6 +1329,9 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_scratch import register as register_scratch
 
     register_scratch(sub)       # scratch: show or clean the scratch folder (quantabench.chem.external)
+    from .cli_shortcuts import register as register_shortcuts
+
+    register_shortcuts(sub)     # shortcuts: launchers with the app icon, no terminal window (quantabench.launchers)
     from .cli_sketcher import register as register_sketcher
 
     register_sketcher(sub)      # sketcher: the Sketch dock's editor files (quantabench.sketcher_assets)

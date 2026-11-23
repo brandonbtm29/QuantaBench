@@ -191,8 +191,9 @@ external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENG
 - [ ] Linux packages (conda, AppImage).
 - [ ] macOS `.app` bundle (Apple Silicon; notarization later). macOS itself is no longer deferred to
       0.5: it is brought up in P1 of the platform track.
-- [ ] On every OS: an Update button (pull/upgrade, then restart) and a launcher that hides the
-      terminal window.
+- [x] On every OS: an Update button (pull/upgrade, then restart) and a launcher that hides the
+      terminal window, for git checkouts (DIST-1, 2026-11-23: Help > Check for updates..., `quantabench-cli
+      shortcuts`). The installers above and their updates are designed in [DISTRIBUTION.md](DISTRIBUTION.md).
 
 ## Ideas parking lot
 

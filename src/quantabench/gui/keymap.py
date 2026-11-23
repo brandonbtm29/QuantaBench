@@ -179,6 +179,7 @@ SPECS: tuple[ActionSpec, ...] = (
     ActionSpec("help.methods_guide", "Methods guide...", "Help", (SK.HelpContents,)),
     ActionSpec("help.guide_find", "Find in the Methods guide", "Help", (SK.Find,), scope="guide"),
     ActionSpec("help.check_updates", "Check for updates...", "Help"),
+    ActionSpec("help.create_shortcuts", "Create app shortcuts...", "Help"),
     ActionSpec("help.about", "About QuantaBench", "Help"),
 )
 BY_NAME: dict[str, ActionSpec] = {s.name: s for s in SPECS}

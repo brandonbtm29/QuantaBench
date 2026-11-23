@@ -123,8 +123,12 @@ quantabench-cli batch status RUN_DIR
   starts it again by itself. On Windows, run `Stop-ScheduledTask "QuantaBench worker"`, then
   `Start-ScheduledTask "QuantaBench worker"`; the stop ends the process at once, so wait until it is idle. `grid machines` then shows the
   new commit. On Windows, stop the worker before `--upgrade-packages`: Windows keeps the files of a running
-  program locked, and pip cannot replace a package the worker has loaded. Updating workers from the client
-  is planned (BACKLOG UPD-1).
+  program locked, and pip cannot replace a package the worker has loaded. Help > Check for updates and
+  `quantabench-cli update` now look at this computer's worker first (DIST-1): while it runs or is about to run a
+  job from this checkout the update waits (the app) or is refused (the command line); afterwards they restart an
+  idle worker kept by the LaunchAgent or the scheduled task (the app's "Restart this computer's worker too",
+  `quantabench-cli update --restart-worker`). Updating workers on other machines from the client is planned
+  (BACKLOG UPD-1).
 - Stopping a worker with Ctrl+C, Ctrl+Break, SIGINT or SIGTERM stops its job after the current molecule. That
   includes a worker started in the background (`nohup … &`, over ssh), which `pkill -INT -f "quantabench-cli
   worker"` now stops too (it waits up

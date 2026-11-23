@@ -480,32 +480,16 @@ if ($WithEngines) {
 }
 
 # ---------------------------------------------------------------------------------------- 7. shortcuts
-function Set-Shortcut([string]$Path, [string]$Target, [string]$Description) {
-    $shell = New-Object -ComObject WScript.Shell
-    if (Test-Path $Path) {
-        $lnk = $shell.CreateShortcut($Path)
-        if ($lnk.TargetPath -ieq $Target -and $lnk.WorkingDirectory -ieq $Repo) { Ok "$Path"; return }
-    }
-    if ($DryRun) { Info "would create shortcut $Path -> $Target (start in $Repo)"; return }
-    $lnk = $shell.CreateShortcut($Path)
-    $lnk.TargetPath = $Target
-    $lnk.WorkingDirectory = $Repo
-    $lnk.Description = $Description
-    $lnk.Save()
-    Info "created $Path -> $Target"
-}
 if (-not $NoShortcut) {
-    Step "Shortcuts (no console window)"
-    # .venv\Scripts\quantabench.exe is pip's GUI launcher: it runs pythonw, so no console window opens
-    $places = @([Environment]::GetFolderPath("Programs"))
-    if ($DesktopShortcut) { $places += [Environment]::GetFolderPath("Desktop") }
-    foreach ($place in $places) {
-        Set-Shortcut (Join-Path $place "QuantaBench.lnk") (Join-Path $Venv "Scripts\quantabench.exe") "QuantaBench molecular modeling workbench"
-        if ($Gpu -eq "rocm") {
-            Set-Shortcut (Join-Path $place "QuantaBench (AMD GPU).lnk") (Join-Path $VenvRocm "Scripts\quantabench.exe") "QuantaBench with AMD's ROCm PyTorch"
-        }
-    }
-    Info "QuantaBench.bat in the repository starts it the same way (QuantaBench.bat rocm: the GPU environment)"
+    Step "Shortcuts (no console window, with the QuantaBench icon)"
+    # quantabench-cli shortcuts (src\quantabench\launchers.py): a Start Menu shortcut per environment (.venv:
+    # QuantaBench; .venv-rocm: QuantaBench (AMD GPU)) to its pythonw.exe -m quantabench, with the icon and the
+    # app's taskbar ID, so the running window groups with a pinned shortcut
+    $scArgs = @("-m", "quantabench", "shortcuts")
+    if ($DesktopShortcut) { $scArgs += "--desktop" }
+    $sc = Run $VPy $scArgs -AllowFail
+    if ($sc -ne 0) { Warn "the shortcuts were not made (above); make them later with .venv\Scripts\quantabench-cli.exe shortcuts" }
+    Info "QuantaBench.bat in the repository starts it too (QuantaBench.bat rocm: the GPU environment)"
 }
 
 # ------------------------------------------------------------------------------------------- 8. doctor

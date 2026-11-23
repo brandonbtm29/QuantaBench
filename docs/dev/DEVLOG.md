@@ -895,3 +895,42 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   Python default (`LiquidSlabConfig()`) stays `ewald` with the slab-safe settings.
 - Nothing on the workstation or the Mac was touched (A-fine, the GAFF2 slab and the GPU check kept running); A-fine's
   logs and `bulk_density.txt` were only read.
+
+## 2026-11-23: Update button and launchers on all three OSes; the installer design (DIST-1, branch `feat/dist-1-update-launchers`)
+- **The ask** (Brandon, 2026-11-23): installers and an Update button on every OS, plus his standing rule for his apps
+  (an update button, a launcher that hides the terminal). PR 1 finishes the Update button and the launchers for
+  today's git checkouts; the installers wait for his OK on docs/DISTRIBUTION.md.
+- **Looked at his other apps first.** The Porometry Analyzer and Kalends update to the newest release tag,
+  fast-forward only, and go back (`git reset --keep`) when pip fails. Kalends finishes in a helper process. The lab
+  apps make icons with an AppUserModelID through IShellLink + IPropertyStore, because WScript.Shell cannot set it.
+  - Taken over: the rollback, `GCM_INTERACTIVE=never` / `PIP_NO_INPUT`, the shortcut writer, and the
+    CHANGELOG-based notes.
+  - Not taken over: following releases. QuantaBench's machines run main, where fixes land daily and shared batches
+    need one commit. The dialog says so and shows how far main is past v0.3.0 (112 commits today). The helper
+    process is planned for the installed builds.
+- **What's new** comes from CHANGELOG.md itself: `###` sections of origin/main's file that HEAD's lacks, or whose text
+  changed, in file order. A release that is cut only moves sections, so it is not news. A throwaway clone 38 commits
+  behind main listed exactly the six sections those commits added (MD-LR ... ENG-3b).
+- **Waiting for work.** The window's build and queued local jobs, and this computer's worker (`local_worker.find`).
+  - Reading the worker: its lock, psutil (cwd, the venv launcher in `__PYVENV_LAUNCHER__`, the parent's exe, so a
+    venv's base-interpreter child on Windows still counts), `jobs.json` and `pause.json`.
+  - Queued jobs on a paused machine do not count.
+  - Restart: `launchctl kickstart -k`, or `schtasks /End` then `/Run` (Task Scheduler kills at once, so only when
+    idle). Then it waits for a new lock.
+- **Other environments.** `.venv-rocm` imports the same checkout, so a dependency change that only reached `.venv`
+  would break the GPU app and a worker restarted from it. Each other environment gets the same pip line, with its
+  own extras (from its `pip list`) and its own torch pin. `editable_project_location` skips another checkout's.
+- **Launchers** (`quantabench.launchers`), one per environment:
+  - Windows: a `.lnk` to `pythonw.exe -m quantabench` with the icon and AppUserModelID
+    `io.github.brandonbtm29.QuantaBench[.rocm]`, which the app sets too.
+  - macOS: the installer's `QuantaBench.app`, now made from Python, with the icon.
+  - Linux: a `.desktop` file with Desktop Entry quoting and `StartupWMClass`; the app sets `desktopFileName`.
+  - The installers call `python -m quantabench shortcuts` instead of writing their own launchers.
+- **Icon:** a benzene-like ring with one amber atom on a blue-to-teal rounded square, drawn by Qt's SVG renderer into
+  PNG/ICO/ICNS (`scripts/make_icons.py`; the macOS icon keeps Apple's margin).
+- **Tests:** tests/test_update.py 84, test_launchers.py 13 (the Windows .lnk round trip runs on Windows),
+  test_local_worker.py 14, test_install_scripts.py 26 (Linux: 2 PowerShell tests skipped). GUI smoke run on a
+  throwaway clone behind main, with screenshots of the dialog, the busy-worker state, the wait question and the
+  result with the worker restart offer.
+- Nothing on the workstation, the MacBook or the lab PC was updated, restarted or installed into; the Update flow ran
+  only on throwaway clones.

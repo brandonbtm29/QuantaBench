@@ -421,23 +421,10 @@ fi
 
 # ------------------------------------------------------------------------------------- 7. launcher
 if [ "$LAUNCHER" = 1 ]; then
-  step "Launcher (application menu, no terminal window)"
-  case "$VENV" in                         # Exec= is "quoted"; these would need escaping
-    *[\"\`\$\\%]*) die "the path $VENV has a character a .desktop file cannot hold (\" \` \$ \\ %); use --no-launcher" ;;
-  esac
-  write_file "$APPS_DIR/quantabench.desktop" "[Desktop Entry]
-Type=Application
-Name=QuantaBench
-GenericName=Molecular modeling workbench
-Comment=Build conformers, refine them with ML potentials or xTB, and look at the results
-Exec=\"$VENV/bin/quantabench\"
-Icon=applications-science
-Terminal=false
-Categories=Education;Science;Chemistry;
-StartupNotify=true"
-  if [ "$DRY_RUN" = 0 ] && command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
-  fi
+  step "Launcher (application menu, no terminal window, with the QuantaBench icon)"
+  # quantabench-cli shortcuts (src/quantabench/launchers.py): ~/.local/share/applications/quantabench.desktop
+  # (one per environment of the checkout), Exec= the environment's python -m quantabench
+  run "$VPY" -m quantabench shortcuts || warn "the launcher was not made (above); make it later with: \"$VENV/bin/quantabench-cli\" shortcuts"
 fi
 
 # ------------------------------------------------------------------------------- 8. system checks

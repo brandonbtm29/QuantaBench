@@ -55,8 +55,10 @@ cd "$HOME\GitHub Projects\QuantaBench"; git pull; powershell -ExecutionPolicy By
 Each script installs PyTorch first (Windows and Linux default to the CPU build; `--gpu` / `-Gpu` picks
 another), then `pip install -e ".[all,dev]"`. With `--with-engines` it also sets up xtb, CREST, MOPAC and
 Psi4 in conda environments. It ends with `quantabench-cli doctor`. Start the app from the Start Menu,
-`~/Applications/QuantaBench.app` or the application menu; none of them opens a terminal window. To update,
-use Help > Check for updates... or `quantabench-cli update`.
+`~/Applications/QuantaBench.app` or the application menu; none of them opens a terminal window, and each has the
+QuantaBench icon (`quantabench-cli shortcuts` makes them for an existing checkout). To update, use Help > Check for
+updates... or `quantabench-cli update`: it shows what is new from the CHANGELOG, pulls (fast-forward only),
+installs changed dependencies and offers to restart the app and this computer's worker.
 
 ```bash
 quantabench                       # the desktop app (from an activated .venv)
@@ -339,7 +341,8 @@ multi-machine plan, and the packages that need upstream fixes or forks.
 
 ## Releases
 
-Releases are git tags (`v0.3.0` is the first); there are no packaged installers yet. A tag marks a commit
+Releases are git tags (`v0.3.0` is the first); there are no packaged installers yet (the plan:
+[docs/DISTRIBUTION.md](docs/DISTRIBUTION.md)). A tag marks a commit
 whose tests passed on Windows, Linux and macOS and that ran real batches, with its changes in
 [CHANGELOG.md](CHANGELOG.md). The install scripts and Help > Check for updates follow `main`, which moves
 ahead of the last tag. To stay on a release, check out its tag (`git checkout v0.3.0`) and run the install
