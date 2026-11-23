@@ -766,4 +766,7 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - A crash found on the way: with the Model Kit's dock, `test_gui_workspaces` crashed in Qt after other GUI modules
   (gdb: a dock tab bar retired with deleteLater was destroyed under its running move animation, whose end shows the
   half-deleted widget). `WorkspaceManager` now restores and applies layouts with `QMainWindow` animations off.
-- Tests (cloud, xvfb): the GUI files, viewers and `test_edit`: 317 passed.
+- Tests: cloud (xvfb) the GUI files, viewers and `test_edit`: 317 passed. Windows full suite (offscreen Qt,
+  `PYVISTA_OFF_SCREEN=true`): 1,899 passed, 23 failed, all TEST-WIN-1: 14 `test_lanes`, 2 real-MOPAC, 3 GUI (also on
+  `main`), and the memory guard late in a full run (`test_vibrations` x3, `test_pipeline::test_gfn1_xtb_real`; alone
+  they pass, 23 of 23).
