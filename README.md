@@ -246,7 +246,11 @@ Toolbar mouse modes: **Rotate** (Ctrl+1, the default), **Select** (Ctrl+2: drag 
 (Ctrl+3: as in Avogadro's manipulate tool, pressing on an atom grabs its whole molecule, or the
 adsorbate on a surface; press on a selected atom to grab only the selection. Drag turns the grabbed
 atoms rigidly about their center, Shift+drag slides them in the view plane; a click does not change
-the selection). Labels: element, index (0-based, as in ASE and RDKit),
+the selection) and **Build** (Ctrl+4: the Model Kit. Pick an element, then its geometry (metals from
+the periodic table take coordination geometries), or a fragment, in the Model Kit dock; click a free
+valence (a stub) to attach it or an atom to replace it; Ctrl+Z / Ctrl+Y undo and redo, Minimize runs
+MMFF94, or UFF where MMFF94 has no parameters, and Add to list hands the structure to the molecule
+list). Labels: element, index (0-based, as in ASE and RDKit),
 element + index, or charge. Colors: element (Jmol), charge (red = negative, white = 0, blue =
 positive, on a scale symmetric about zero, as Spartan and Avogadro draw ESP maps), or tag (surface
 gray, adsorbate orange).

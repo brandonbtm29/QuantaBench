@@ -212,10 +212,10 @@ def test_kill_tree_reaches_a_child_whose_parent_has_exited(tmp_path):
         proctree.release(proc)
 
 
-@windows_only
 def test_hard_killed_gui_takes_its_programs_along(tmp_path):
     """The ENG-3 check: a stand-in GUI runs a stand-in engine (which starts a grandchild) through run_program and is
-    killed outright; Windows ends both when the dead process's job handle closes."""
+    killed outright (TerminateProcess, SIGKILL). Windows ends both when the dead process's job handle closes; on Linux
+    and macOS the lifeline guard's watchdog kills their process group when the pipe from the dead process closes."""
     tag = _tag()
     engine = _script(tmp_path / "engine.py", ENGINE)
     gui = _start_gui(tmp_path, [sys.executable, str(engine), str(tmp_path), tag])
@@ -352,3 +352,25 @@ def test_wsl_guard_keeps_the_exit_code_and_ends_leftovers(tmp_path):
         assert not _wait_ended([_read_pid(left)], timeout=10), "the guard left the program's child running"
     finally:
         proc.stdin.close()
+
+
+@posix_only
+def test_guarded_program_keeps_its_exit_code_and_signal(tmp_path):
+    """A native program runs under the lifeline guard on POSIX: run_program still sees its exit code, and a program
+    killed by a signal still comes back as that signal (Popen's negative return code)."""
+    assert external.run_program(["sh", "-c", "exit 3"], tmp_path / "a", check=False).returncode == 3
+    assert external.run_program(["sh", "-c", "kill -9 $$"], tmp_path / "b", check=False).returncode == -9
+    assert external.run_program(["sh", "-c", "kill -SEGV $$"], tmp_path / "c", check=False).returncode == -11
+    run = external.run_program(["sh", "-c", "echo out; echo err >&2; read x; echo stdin=${x:-none}"], tmp_path / "d")
+    assert run.returncode == 0 and run.text().split() == ["out", "err", "stdin=none"]      # stdin is /dev/null
+
+
+@posix_only
+def test_usage_meter_samples_the_program_under_the_guard(tmp_path):
+    """The started process is the guard (a shell); the meter's sampled peak is the program's (its largest descendant).
+    A larger child run first keeps ru_maxrss from setting the peak, so the number checked is the sampled one."""
+    hog = "import sys, time; b = bytearray(int(sys.argv[1]) * 2**20); b[::4096] = b'x' * len(b[::4096]); time.sleep(float(sys.argv[2]))"
+    subprocess.run([sys.executable, "-c", hog, "400", "0"], check=True)      # the high-water mark of RUSAGE_CHILDREN
+    run = external.run_program([sys.executable, "-c", hog, "200", "3"], tmp_path)
+    assert run.peak_rss_mb is not None and 180 < run.peak_rss_mb < 390, run.peak_rss_mb
+    assert run.cpu_s is not None

@@ -472,6 +472,23 @@ project database and search (UI-2), point group in the status bar, a properties 
 for trajectory frames and molecules. Needs-Brandon: a look on Windows and macOS (HiDPI icons, the dock
 layout at his window sizes).
 Depends on: none (everything else in the UI plugs into this, so it goes first).
+
+## UI-1b: A dock tab bar left over the view after a workspace switch · not a bug in the app (2026-11-22)
+Seen 2026-11-22 (UI-7), on `main` too: after the start-up switch from Calculate to Build, a `QTabBar` of the main
+window with the tabs "Pipeline" and "Surfaces" stayed visible at the right edge of the 3D view, and more stale bars
+appeared after a restored arrangement (a "Model Kit | Appearance" bar in Calculate).
+- **Only in scripted runs.** The bars showed in scripts that pump `processEvents()` without delivering
+  `DeferredDelete` (the UI-7 smoke script did). Qt retires a tab group's old bar with `deleteLater`, and a real event
+  loop (`app.exec()`, checked 2026-11-22 through Build, Calculate, Analyze, Build, Library, Calculate, Build) shows
+  none. The workspace tests' `_wait` delivers deferred deletes and already checks for stale bars. The smoke script now
+  does the same.
+- **Don't hide them by hand.** Hiding Qt's tab bars ourselves crashed Qt in 5 of 6 runs
+  (`QWidget::ensurePolished` from `QMainWindowLayout::animationFinished`, which shows every bar it counts as in use,
+  one of them already deleted). Re-applying the state with `restoreState(saveState())` does not retire them.
+- Fixed on the way, in the same branch: `test_gui_declutter.py::test_results_dock_folds_for_one_conformer`, which
+  failed under xvfb in the cloud container. It was a real race in `ResultsFolder._record`: on a slow event loop the
+  fold recorded the user's resize as its own height, and unfolding then undid the resize.
+
 - Left activity bar switching workspaces: **Build, Calculate, Simulate, Analyze, Library**. Each is a
   page/dock set. Map the existing panels: molecule list + inputs → Build; pipeline stages → Calculate;
   surface builder / LAMMPS export → Simulate (stub page with what exists); conformer table, descriptors
@@ -710,31 +727,51 @@ Depends on: UI-4 for the MOL/CDXML plumbing; the spike can start any time.
   from SMILES and templates; the hand-off matches canonical SMILES); works offline; screenshots on
   Windows and macOS.
 
-## UI-7: 3D model kit (Spartan-style builder in the 3D view) · core done 2026-11-07; build mode ready
+## UI-7: 3D model kit (a builder in the 3D view) · core done 2026-11-07; build mode in-PR 2026-11-22 (PR #44, branch `feat/ui-7-build-mode`)
 Depends on: none to start (the 3D view exists); UI-1 places it in Build.
 - **Done (core, branch `feat/model-kit-core`):** `chem/edit.py` (the edit model, commands, `History`) and
   `chem/fragments.py` (the fragment library). Every operation below is a plain function with tests;
   PFOA, PFOS, GenX and 6:2 FTS build with kit operations and match MMFF94 within 0.03 Å.
-- **Left:** the GUI build mode (stubs, picking, palette dock, QUndoStack wrapper, Ctrl+Z / Ctrl+Y,
-  screenshot). Start from `docs/dev/MODEL_KIT_GUI.md`. Also left: the InChI and Clipboard buttons (the
-  SMILES path exists: `fragments.from_smiles`), the Peptide / Nucleotide tabs, and sharing the fragment
-  list with the UI-6 sketcher.
-- **Build mode** in the PyVista view (next to select and move): a palette of atom types with their
-  hybridization, as in Spartan's Organic tab (C sp3 / sp2 / sp, N sp3 / sp2 / sp, O, S, P, Si, H, F, Cl,
-  Br, I, =O, =S, ≡N). Free valences are drawn as short stubs; clicking a stub attaches the chosen atom at
-  its ideal bond length and direction (VSEPR geometry from the hybridization). Clicking an atom with a
-  type selected replaces it.
-- **Groups and rings:** carboxylic acid / carboxylate, sulfonate, sulfonamide, CF3, ester, amide,
-  nitro, phosphate; benzene, cyclohexane (chair), pyridine, five-membered rings; the PFAS fragments from
-  UI-6 (shared definitions). Buttons for *SMILES*, *InChI* and *Clipboard* add a fragment from text.
-- **Edit tools:** delete atom/fragment, change bond order, formal charge ±, make/break bond, measure and
-  set distance / angle / dihedral (dragging a dihedral rotates the smaller side), and *Minimize* (MMFF94,
-  UFF fallback, with chosen atoms frozen). A quick local relax runs after each edit.
-- **One edit model** for 2D and 3D: `chem/edit.py`, an RDKit RWMol plus coordinates where every change
-  is an undoable command; QUndoStack, Ctrl+Z / Ctrl+Y.
-- Acceptance: tests that build PFOA, PFOS, GenX and 6:2 FTS with model-kit operations (no GUI clicks
-  needed: the commands are plain functions) and match canonical SMILES; bond lengths within 0.05 Å of
-  MMFF after Minimize; undo/redo round-trips; screenshot.
+- **In PR #44 (2026-11-22):** the GUI build mode, as `docs/dev/MODEL_KIT_GUI.md` now describes it.
+  - **Build mode and undo.**
+    - Build mode is in `gui/viewer3d.py` (`set_stubs`, `buildClicked`; a stub and an atom under the cursor: the
+      nearer wins), with the dock and controller in `gui/model_kit.py`.
+    - Edit > Undo / Redo: `UndoAdaptor` puts each `chem.edit.Command` on a `QUndoStack`.
+    - The dock is in the Build workspace (`workspaces.STATE_VERSION` 4).
+  - **QuantaBench's own design** (Brandon, 2026-11-22: not too close to another program, for IP reasons):
+    - element first: common elements, plus a compact periodic table in *Inorganic and other elements*;
+    - then a geometry, drawn as schematics and named by shape;
+    - then *Charge* and *Bond to it*;
+    - or a fragment, from Functional groups, Ring systems, Small substituents or PFAS pieces (n box for (CF2)n
+      and CnF2n+1), or a SMILES or InChI.
+  - **Metals** are coordination centres: terminal, linear, trigonal, tetrahedral, square planar, trigonal
+    bipyramidal or octahedral. Minimize and the relax use UFF, and the dock says so.
+    - UFF types the metal by its geometry, with a note when it has no type for that geometry.
+    - Trans ligands are held at 179-180°, since UFF's general angle term folded square-planar centres.
+  - **Edit tools:**
+    - Delete (atoms or the whole piece), bond order cycle, charge ±, make and break a bond.
+    - A value box that sets the selected distance / angle / dihedral.
+    - Add H, Minimize (Freeze selected), Relax after each edit.
+    - A Move-mode drag is one undoable step (`set_positions`).
+  - **Hand-off:** Add to list / Replace <id> send the structure with its 3D coordinates.
+  - **Named actions:** `view.mode_*`, `edit.undo`, `edit.redo` and `build.model_kit` take their default keys from
+    `gui/action_ids.py` (for UI-9's rebinding page).
+  - **Tests:** `tests/test_gui_model_kit.py`, `tests/test_edit.py`. Smoke script: `scripts/model_kit_smoke.py`.
+    Screenshots: `docs/dev/screenshots/UI-7/`.
+- **Left:**
+  - the Clipboard button (UI-4's parser);
+  - peptide and nucleotide builders;
+  - sharing the fragment list with the UI-6 sketcher;
+  - dragging a dihedral in the view (today: type the value);
+  - a hover highlight on stubs (needs a mouse-move observer outside a gesture);
+  - a Delete key in the 3D view;
+  - dative bonds to metals (today: formal charges, cisplatin as Pt2- with two N+).
+  - Needs-Brandon: the hand checks on Windows and macOS listed in PR #44.
+- Acceptance (met in PR #44):
+  - PFOA built through the Build-mode handlers matches canonical SMILES;
+  - bond lengths are within 0.05 Å of MMFF after Minimize;
+  - undo/redo round-trips;
+  - screenshots.
 
 ## ADV-1: Model advisor, a review of the molecules before a run · done 2026-11-09 (branch `feat/advisor`); follow-ups ready
 Brandon (2026-11-09): "Maybe as part of the job submission process, there can also be a review checking what types
@@ -1146,9 +1183,11 @@ not try to match Spartan exactly.
   - The GUI builds its window without probing (`external.deferred_probes`); a worker probes the versions not cached
     on disk yet and relabels the engine lists.
   - Already done by SCRATCH-1 (2026-11-13): failed-run scratch folders go 3 days after their process ended.
-  - Still open: POSIX has no job objects: a GUI or CLI killed outright (SIGKILL, a crash) leaves a running native
-    program running there until it ends (cancels, time limits and dead lanes are covered). A Linux process inside WSL
-    that starts its own session (setsid, a daemon) is outside the guard's group (neither CREST nor xtb does).
+  - ENG-3b · in-PR 2026-11-22 (branch `feat/eng-3b-posix-lifeline`; Brandon, 2026-11-22: "Please also build this
+    watchdog for MacBook"): native programs on Linux and macOS run under the same lifeline guard, so a GUI or CLI
+    killed outright (SIGKILL, a crash) takes them along; the usage meter samples the guard's largest descendant.
+  - Still open: a process that starts its own session (setsid, a daemon) is outside the guard's group (neither CREST
+    nor xtb does).
 - MOPAC COSMO: energies step as surface segments switch (CF3COO⁻ in water: finite-difference forces off by
   0.3 eV/Å at h = 1 mÅ); consider running MOPAC frequencies in the gas phase automatically.
 
