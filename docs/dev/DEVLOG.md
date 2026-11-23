@@ -1015,6 +1015,6 @@ MAC-GPU report's prototype converter (`Runs\mac-gpu-2026-11-23\scripts\bench_c6f
   σ-sample and test-area intervals), periodic `state.a/b.xml`, cut and resume through SIM-1's supervisor (DCD frames
   cut by `md.dcd.truncate`). Found on the way: `md run --detach` dropped `--priority` (the detached supervisor ran at
   the settings' priority): fixed.
-- **NOVA** (RX 9060 XT, OpenCL, below normal, beside A-fine and CREST): OpenMM sees single, mixed and double; pilot B's
+- **The workstation** (RX 9060 XT, OpenCL, below normal, beside A-fine and CREST): OpenMM sees single, mixed and double; pilot B's
   slab 135 (single), 137 (mixed), 121 (LJ-PME 12 Å, mixed) ns/day; with σ samples every 20 fs 97 / 90. The
-  `qb-openmm` environment was created there from `envs/openmm.yml` (and on the Mac).
+  `qb-openmm` environment was created there from `envs/openmm.yml` (and on the MacBook).
