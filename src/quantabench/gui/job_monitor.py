@@ -25,7 +25,7 @@ import html
 import time
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDockWidget,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import keymap
 from .job_queue import FINISHED, JobQueue
 
 COLUMNS = ("#", "Job", "Machine", "Status", "Progress", "Time")
@@ -450,8 +451,8 @@ def install(win) -> None:
     dock.hide()                               # the workspaces show it (Calculate: next to Results)
     win.jobs_dock = dock
     a = QAction("New job...", win)
-    a.setShortcut(QKeySequence("Ctrl+J"))
-    a.setToolTip("Submit molecules as a job: a level of theory, a task and resources (Ctrl+J)")
+    job_tip = "Submit molecules as a job: a level of theory, a task and resources"
+    keymap.bind(win, a, "build.new_job", job_tip)
     a.triggered.connect(lambda _c=False: open_job_dialog(win))
     win.a_new_job = a
     build = None
@@ -470,7 +471,10 @@ def install(win) -> None:
     if row is not None:
         btn = QPushButton("New job...")
         btn.setObjectName("new_job_btn")
-        btn.setToolTip(a.toolTip())
+        if isinstance(getattr(win, "keymap", None), keymap.Keymap):
+            win.keymap.follow_tooltip(btn, "build.new_job", job_tip)
+        else:
+            btn.setToolTip(a.toolTip())
         btn.clicked.connect(lambda _c=False: open_job_dialog(win))
         row.insertWidget(0, btn)
         win.new_job_btn = btn

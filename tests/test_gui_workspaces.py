@@ -2,6 +2,7 @@
 restarts), the conformer playback bar under the view, the molecule status line, and the Library's run folders."""
 
 import os
+import sys
 import time
 from dataclasses import replace
 
@@ -95,7 +96,10 @@ def test_workspace_definitions():
     keys = [w.key for w in workspaces.WORKSPACES]
     assert keys == ["build", "calculate", "simulate", "analyze", "library"]
     assert workspaces.DEFAULT in keys
-    assert len({w.shortcut for w in workspaces.WORKSPACES}) == len(keys)
+    from quantabench.gui import keymap
+
+    ws_keys = [keymap.portable(k) for w in workspaces.WORKSPACES for k in keymap.default_keys(w.action_name)]
+    assert len(set(ws_keys)) == len(keys)                                  # one key each, from the keymap
     for ws in workspaces.WORKSPACES:
         assert ws.docks and len(set(ws.docks)) == len(ws.docks)          # a dock appears once per workspace
     assert set(workspaces.MANAGED) == {n for ws in workspaces.WORKSPACES for n in ws.docks}
@@ -140,7 +144,12 @@ def test_switching_shows_each_workspaces_docks(tmp_path):
         view = next(a.menu() for a in w.menuBar().actions() if a.text().replace("&", "") == "View")
         sub = next(a.menu() for a in view.actions() if a.menu() is not None and a.text() == "Workspace")
         assert [a.text() for a in sub.actions()] == [ws.label for ws in workspaces.WORKSPACES]
-        assert w.workspaces.actions["library"].shortcut() == QKeySequence(f"{workspaces.SHORTCUT_MODIFIER}+5")
+        from quantabench.gui import keymap
+
+        assert w.workspaces.actions["library"].shortcut() == keymap.default_keys("workspace.library")[0]
+        assert w.workspaces.actions["library"].objectName() == "workspace.library"
+        assert QKeySequence("Ctrl+Alt+5" if sys.platform == "darwin" else "Alt+5") == \
+            w.workspaces.actions["library"].shortcut()
         sub.actions()[4].trigger()
         assert w.workspaces.current == "library"
         with pytest.raises(KeyError):
@@ -152,10 +161,11 @@ def test_switching_shows_each_workspaces_docks(tmp_path):
 @needs_display
 def test_no_two_actions_share_a_shortcut(tmp_path):
     """Qt fires neither action of an ambiguous shortcut: the workspace keys must not take the mouse modes' Ctrl+1 ...
-    Ctrl+3 or any other key the window uses."""
+    Ctrl+3 or any other key the window uses. The same key may be used where the two can never both be active (the
+    2D and the 3D view's zoom keys, the table's and the views' Select all: ``keymap.scopes_overlap``)."""
     from PySide6.QtGui import QAction, QKeySequence
 
-    from quantabench.gui import workspaces
+    from quantabench.gui import keymap, workspaces
 
     app = _app()
     w = _window(tmp_path, show=False)
@@ -164,11 +174,17 @@ def test_no_two_actions_share_a_shortcut(tmp_path):
         for a in w.findChildren(QAction):
             for seq in a.shortcuts():
                 key = seq.toString(QKeySequence.SequenceFormat.PortableText)
-                if key:
-                    assert key not in seen or seen[key] is a, f"{key}: {seen.get(key).text()!r} and {a.text()!r}"
-                    seen[key] = a
+                if not key:
+                    continue
+                for other in seen.get(key, []):
+                    if other is a:
+                        continue
+                    sa, so = keymap.BY_NAME[a.objectName()].scope, keymap.BY_NAME[other.objectName()].scope
+                    assert not keymap.scopes_overlap(sa, so), f"{key}: {other.text()!r} and {a.text()!r}"
+                seen.setdefault(key, []).append(a)
         assert {"Ctrl+1", "Ctrl+2", "Ctrl+3"} <= set(seen)                  # the mouse modes keep theirs
-        assert {ws.shortcut for ws in workspaces.WORKSPACES} <= set(seen)
+        assert {keymap.portable(k) for ws in workspaces.WORKSPACES for k in keymap.default_keys(ws.action_name)} \
+            <= set(seen)
     finally:
         _close(app, w)
 

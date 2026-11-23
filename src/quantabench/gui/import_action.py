@@ -21,6 +21,8 @@ from pathlib import Path
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
+from . import keymap
+
 FILE_FILTER = ("Calculation outputs (*.out *.log *.dat *.txt *.output *.lis *.spartan);;"
                "Gaussian (*.log *.out);;ORCA / Psi4 / xtb / MOPAC (*.out *.dat);;Spartan documents (*.spartan);;"
                "All files (*)")
@@ -97,8 +99,8 @@ def import_files(win, paths: list[str] | None = None) -> None:
 
 def install(win) -> None:
     action = QAction("Import calculation output...", win)
-    action.setToolTip("Read a Gaussian, ORCA, Psi4, Q-Chem, xtb, MOPAC, ... output file with cclib "
-                      "(geometry, energies, charges, frequencies and IR intensities), or a Spartan document")
+    keymap.bind(win, action, "file.import_output", "Read a Gaussian, ORCA, Psi4, Q-Chem, xtb, MOPAC, ... output file "
+                "with cclib (geometry, energies, charges, frequencies and IR intensities), or a Spartan document")
     action.triggered.connect(lambda _checked=False: import_files(win))
     menu = None
     for a in win.menuBar().actions():

@@ -531,6 +531,33 @@ Newest entries at the bottom. One entry per working session or nightly run.
   controls as one value, a round trip read back through `BuildConfig`, `control.machine_lines` and a new dialog, and
   the Machines dock's newer values kept). Screenshots: `docs/dev/screenshots/SETTINGS-1/compute_*.png`.
 
+## 2026-11-22: Settings > Controls, key bindings with presets (UI-9, branch `feat/ui-9-controls`)
+- **Why:** Brandon asked to reconsider every key binding (without copying Spartan's for IP reasons) and to add
+  Controls to Settings: a QuantaBench default, keymaps from other programs and Spartan's as options, reset and rebind.
+- **The registry** (`gui/keymap.py`): every command with a key is a named `QAction` (`objectName` = its name in
+  `SPECS`: title, category, default keys as `StandardKey` or portable text, scope). Scopes (window, views, 3D view,
+  2D view, Molecules dock, table, Methods guide) give where a key works and which keys conflict (`scopes_overlap`).
+  The modules that set keys (main window, workspaces, project, review, jobs, clipboard, pop-out, the views, the table,
+  the Methods guide) bind named actions; the 3D view's VTK keys became actions with a `KeyDispatcher` on the VTK
+  widget, and `dispatch_key` runs a view's keys when Qt's shortcut map did not (an inactive window, as in tests).
+- **Default keymap** chosen from Qt's standard keys, Apple's HIG and Microsoft's keyboard guidelines plus
+  QuantaBench's logic; written up with a full table in docs/CONTROLS.md. Changes: Open project Ctrl+Shift+O (no
+  Ctrl+Alt: AltGr), Open run folder Ctrl+Shift+R, Close project Ctrl+W, Help = the platform's key, workspaces ⌥⌘1-5 on
+  macOS, ⌘. cancels on macOS, plain keys only in the structure views (arrows step conformers and molecules, Space
+  plays, + - zoom, Ctrl+arrows turn the 3D view, Esc / Ctrl+A on atoms), Edit > Find a molecule.
+- **Presets** (key assignments only, from public docs): Avogadro 2 (avogadro.cc), VMD (User's Guide, Hot Keys),
+  Spartan (the Spartan'26 manual's text: PgUp/PgDn/Home/End, Ctrl+V; its menu accelerators are only in pictures).
+  PyMOL, GaussView and Maestro considered, not built.
+- **Settings > Controls** (`gui/controls_page.py`, Tools > Keyboard controls...): preset with sources, searchable table,
+  key capture, conflict question (Swap / Clear the other / Cancel), Clear, Reset this action, Reset to QuantaBench
+  defaults, Export/Import JSON; applied on OK. Kept per computer in the window settings (modifiers differ by OS).
+- **Tests:** `tests/test_gui_controls.py` (16); workspaces, viewer3d and methods-guide key tests moved to the actions.
+  Windows full suite (offscreen Qt, `PYVISTA_OFF_SCREEN=true`): 1,818 passed, 20 failed: 14 `test_lanes`, 2 real-MOPAC
+  and 3 GUI tests that also fail on `main` there (TEST-WIN-1), and ENG-3's Settings tab list, fixed here; the GUI files
+  again after main's merges: 157 passed, the same 3. Screenshots: `docs/dev/screenshots/UI-9/`.
+- **Open:** after #39 (UI-4) and #44 (UI-7) merge, bind their actions through `keymap.bind` (names reserved in
+  `SPECS`); the mouse is not rebindable. Next: whichever of UI-4/UI-7 lands, then the follow-up binding.
+
 ## 2026-11-22: Settings > Build defaults, Spartan's Import Filters and Conformer Rules (SETTINGS-1, branch `feat/settings-1-build-defaults`)
 - **Spartan's two settings** (from its manual): the Import Filters remove water from PDB and SD files and HCl from SD
   files; the Conformer Rules are Normal, Skeletal or Thorough, and Thorough "considers twist-boat conformers of
@@ -729,6 +756,20 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **macOS CI after that merge:** `test_pipeline.py`'s tests with a stand-in gfn1-xtb failed twice at the memory guard
   (2.4 GB in use against a 2.4 GB budget, the runner's free memory: more GUI tests run before them in one process).
   They test conformer failures and the CPU fallback, not the guard, so they now run with it off (`NO_GUARD`).
+
+## 2026-11-22: UI-9 with UI-4 and UI-7 merged (branch `feat/ui-9-controls`, PR #50)
+- After #39 (UI-4) and #44 (UI-7) merged, `main` was merged into the branch and their actions moved onto the keymap:
+  `clipboard._named_action` binds through `keymap.bind` (Copy molecules in the Molecules dock's scope; `DEFAULT_KEYS`
+  removed, `default_shortcuts` reads `SPECS`, which gained the canonical-SMILES Copy as); UI-7's `gui/action_ids.py` is
+  gone (its names were the registry's already); Build > Minimize is the action `kit.minimize` and the Minimize
+  button's tooltip shows its key. No literal shortcut is left outside `keymap.py`.
+- A crash found on the way: with the Model Kit's dock, `test_gui_workspaces` crashed in Qt after other GUI modules
+  (gdb: a dock tab bar retired with deleteLater was destroyed under its running move animation, whose end shows the
+  half-deleted widget). `WorkspaceManager` now restores and applies layouts with `QMainWindow` animations off.
+- Tests: cloud (xvfb) the GUI files, viewers and `test_edit`: 317 passed. Windows full suite (offscreen Qt,
+  `PYVISTA_OFF_SCREEN=true`): 1,899 passed, 23 failed, all TEST-WIN-1: 14 `test_lanes`, 2 real-MOPAC, 3 GUI (also on
+  `main`), and the memory guard late in a full run (`test_vibrations` x3, `test_pipeline::test_gfn1_xtb_real`; alone
+  they pass, 23 of 23).
 
 ## 2026-11-22: the lifeline guard for native programs on macOS and Linux (ENG-3b, branch `feat/eng-3b-posix-lifeline`)
 - **Why:** Brandon asked for the same watchdog on the MacBook. Until now a GUI or CLI killed outright there (SIGKILL,

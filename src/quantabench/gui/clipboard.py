@@ -7,10 +7,10 @@ CONTRACT:
         the same actions in the molecule list's right-click menu (``MoleculeListView.menu_hooks``), accepts drops on
         the window and on the molecule list, and lets Ctrl+V in the Molecules box paste a structure (see below).
 
-    ACTIONS / DEFAULT_KEYS / default_shortcuts(name)
+    ACTIONS / default_shortcuts(name)
         The actions are QActions named by ``objectName`` ("edit.paste", "edit.copy_molecules",
-        "edit.copy_as.<kind>"), kept in ``win.actions_by_name``; their default keys are in ``DEFAULT_KEYS``, the one
-        place they are set, so a keymap (UI-9, Settings > Controls) can rebind them by name. No ``QShortcut``.
+        "edit.copy_as.<kind>"), kept in ``win.actions_by_name``; their keys come from the window's keymap
+        (``gui.keymap``: defaults in ``SPECS``, rebinding on Settings > Controls). No ``QShortcut``.
 
 Paste reads the clipboard's formats in this order and uses the first one that gives molecules (the log says
 which): ChemDraw CDX, CDXML, an MDL molfile, file URLs, text. Format names are compared ignoring case:
@@ -66,7 +66,7 @@ import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QMimeData, QObject, Qt
+from PySide6.QtCore import QEvent, QMimeData, QObject
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -77,6 +77,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QTextEdit,
 )
+
+from . import keymap
 
 _log = logging.getLogger(__name__)
 
@@ -106,22 +108,11 @@ ACTIONS = {
     "edit.copy_molecules": ("Copy molecules", "Copy the selected rows as a table (ID, SMILES, name and the data-field "
                             "columns shown) for a spreadsheet, or to paste back here"),
 }
-#: objectName -> default key: a QKeySequence.StandardKey (the platform's keys) or a key string. The one place the
-#: keys are set; a keymap (UI-9) rebinds the actions by name (``win.actions_by_name``)
-DEFAULT_KEYS: dict[str, object] = {
-    "edit.paste": QKeySequence.StandardKey.Paste,
-    "edit.copy_molecules": "Ctrl+Shift+C",
-}
 
 
 def default_shortcuts(name: str) -> list[QKeySequence]:
-    """The default keys of action ``name`` (``DEFAULT_KEYS``), [] for none."""
-    spec = DEFAULT_KEYS.get(name)
-    if spec is None:
-        return []
-    if isinstance(spec, QKeySequence.StandardKey):
-        return list(QKeySequence.keyBindings(spec))
-    return [QKeySequence(spec)]
+    """The default keys of action ``name``: the keymap's (``gui.keymap.SPECS``, the one place keys are set)."""
+    return keymap.default_keys(name)
 
 
 def triggers(action, event) -> bool:
@@ -902,15 +893,12 @@ def _list_menu(win, menu: QMenu) -> None:
     menu.addAction(win.a_paste)
 
 
-def _named_action(win, name: str, slot, text: str = "", tip: str = "") -> QAction:
-    """A QAction named ``name`` (its objectName) with its default keys (``DEFAULT_KEYS``), in
-    ``win.actions_by_name``, where a keymap finds it."""
+def _named_action(win, name: str, slot, text: str = "", tip: str = "", widget=None) -> QAction:
+    """A QAction named ``name`` (its objectName) with its keys from the window's keymap (``gui.keymap``: the defaults
+    are in ``keymap.SPECS``, Settings > Controls rebinds them), also in ``win.actions_by_name``. ``widget``: where a
+    dock-local action lives (Copy molecules: the Molecules dock)."""
     a = QAction(text or ACTIONS[name][0], win)
-    a.setObjectName(name)
-    a.setToolTip(tip or ACTIONS.get(name, ("", ""))[1])
-    keys = default_shortcuts(name)
-    if keys:
-        a.setShortcuts(keys)
+    keymap.bind(win, a, name, tip or ACTIONS.get(name, ("", ""))[1], widget)
     a.triggered.connect(lambda _checked=False: slot())
     if not hasattr(win, "actions_by_name"):
         win.actions_by_name = {}
@@ -921,13 +909,11 @@ def _named_action(win, name: str, slot, text: str = "", tip: str = "") -> QActio
 def install(win) -> None:
     menu = _edit_menu(win)
     a_paste = _named_action(win, "edit.paste", lambda: edit_paste(win))
-    a_paste.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
     menu.addAction(a_paste)
     menu.addSeparator()
-    # Ctrl+Shift+C in the Molecules dock only: the Analyze table's own Ctrl+Shift+C (copy with column titles) stays
-    a_copy = _named_action(win, "edit.copy_molecules", lambda: copy_molecules(win))
-    a_copy.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-    win.mol_dock.addAction(a_copy)
+    # Ctrl+Shift+C in the Molecules dock only (the keymap's "molecules" scope): the Analyze table's own Ctrl+Shift+C
+    # (copy with column titles) stays
+    a_copy = _named_action(win, "edit.copy_molecules", lambda: copy_molecules(win), widget=win.mol_dock)
     menu.addAction(a_copy)
     copy_menu = QMenu("Copy as", win)
     copy_menu.setObjectName("edit.copy_as")

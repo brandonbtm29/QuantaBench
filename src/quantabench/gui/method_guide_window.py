@@ -14,7 +14,7 @@ entries (``guide:<anchor>``) stay in the window; DOI links open in the web brows
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..chem import method_guide as guide
+from . import keymap
 
 TITLE = "Methods guide"
 KEY_ROLE = Qt.ItemDataRole.UserRole
@@ -81,7 +82,9 @@ class MethodsGuideWindow(QWidget):
         self.tree.currentItemChanged.connect(self._on_item)
         self.search.textChanged.connect(self.apply_filter)
         self.search.returnPressed.connect(self._open_first)
-        QShortcut(QKeySequence.StandardKey.Find, self, activated=self.search.setFocus)
+        # Find (Ctrl+F): a named action of the keymap (scope "guide"), with the main window's keys when it has them
+        self.a_find = keymap.local_action(self, "help.guide_find", self.search.setFocus)
+        keymap.bind(parent, self.a_find, "help.guide_find")
         self.apply_filter("")
 
     # ------------------------------------------------------------------ navigation
