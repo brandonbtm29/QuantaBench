@@ -309,39 +309,69 @@ The LaunchAgent is for the user to install; QuantaBench does not install service
 was installed on 2026-11-12, at his request (`launchctl print gui/$(id -u)/io.github.brandonbtm29.quantabench-worker`
 shows it; a test `kill -KILL` of the worker was followed by a new one within a second).
 
-## The MD benchmark (MD-BENCH-1)
+## The MD benchmark (MD-BENCH-1, MD-BENCH-2)
 
 The throughput benchmark gives molecules/hour per engine. An MD job needs a different number: how many ns/day
 this machine's LAMMPS runs a molecular liquid. `md` in a benchmark list measures it:
 
 ```
-quantabench-cli machines --bench md [--md-size small|pilot] [--md-variants LIST] [--md-threads N] [--max-seconds 60]
+quantabench-cli machines --bench md [--md-size slab|small|pilot-slab|pilot] [--md-variants LIST] [--md-threads N]
+                                    [--md-lammps PATH] [--max-seconds 60]
 quantabench-cli machines --bench default,md        (the engines as well)
 quantabench-cli worker --bench-methods default,md  (at the worker's start; auto: only what is missing)
-quantabench-cli md estimate (DIR | --atoms N --ns NS) [--dispersion ewald] [--include-unverified] [--all-variants]
+quantabench-cli md estimate (DIR | --atoms N --ns NS) [--dispersion ewald] [--geometry slab|bulk]
+                            [--include-unverified] [--all-variants]
 ```
 
-It is never in the default list, so a worker starts as fast as before unless `md` is asked for.
+It is never in the default list, so a worker starts as fast as before unless `md` is asked for. A default run (the
+slab, five variants on a machine with the GPU package) takes at most about 6 minutes, each variant stopping after
+60 s, plus the box's one-time build (100 s on one slow cloud core). In the cloud container (one thread, three CPU
+variants at 30 s) it took 207 s with the build.
 
-- **The system.** Liquid C6F14, OPLS-AA with the Watkins-Jorgensen perfluoroalkane types (`md.forcefield`), at
-  QuantaBench's density estimate. `small` is 150 molecules (3,000 atoms, a 37 Å cube). `pilot` is the 489
-  molecules (9,780 atoms) of MD-2's pilot slab.
-  - It is packed by Packmol, else as a lattice, then minimized, compressed to the estimated density in 1 ps of
-    NVT and minimized again.
+- **The systems** (`--md-size`). Liquid C6F14, OPLS-AA with the Watkins-Jorgensen perfluoroalkane types
+  (`md.forcefield`), at QuantaBench's density estimate.
+  - `slab` (the default): 190 molecules (3,800 atoms) as a liquid slab, 40 x 40 Å and about 39 Å thick, with half
+    its thickness of vacuum on each side (a box of about 40 x 40 x 78 Å). It times what a surface-tension run does:
+    the slab's styles (no tail correction for a cutoff), pppm/disp's dispersion mesh of the slab box with its vacuum
+    (18 x 18 x 36), the pressure tensor every 10 steps and the density profile. The lateral edge is the pilot's, and
+    box / liquid is 2 as in every `md liquid-slab` size, so its cost per atom is the pilot slab's.
+  - `pilot-slab`: the pilot slab itself (489 molecules, 9,780 atoms, 40 x 40 x 100 Å of liquid and 50 Å of vacuum
+    on each side). Run it once on a machine to check the atom scaling below; it takes about twice as long.
+  - `small`: a bulk cube of 150 molecules (3,000 atoms, 37 Å) with the bulk NPT stage's styles (tail correction).
+    `pilot`: the pilot's 489 molecules as a bulk box. These time the bulk stage.
+  - The box is packed by Packmol, else as a lattice, then minimized, compressed to the estimated density in 1 ps of
+    NVT and minimized again. A slab is then opened along z the way `in.slab` does it and relaxed for 1 ps.
   - This is done once per QuantaBench version and size, in the machine's cache folder (`md_bench/`), not in the
-    synced settings.
+    synced settings. If it fails, its inputs and logs stay in `md_bench/failed-<size>-<time>/`, and the reason says
+    how LAMMPS ended: an exit code of 143, -15 or 241 is a SIGTERM from outside QuantaBench (QuantaBench stops LAMMPS
+    only at its time limit or on a cancel, and says so).
+- **Which LAMMPS.** The one QuantaBench finds: this computer's path in the settings, `QUANTABENCH_LAMMPS`, PATH,
+  the running environment, then conda environments. `--md-lammps PATH` times that file instead.
+  - If this computer's settings path or `QUANTABENCH_LAMMPS` names a file that does not exist, the benchmark stops
+    and says so. It does not time whatever LAMMPS comes next (on the MacBook on 2026-11-21, a variable that lost its
+    backslashes on its way through PowerShell and SSH sent it to the venv's PyPI wheel).
+  - The machine's log line names the program and where it was found. Each record names the build (`lammps_build`:
+    version, accelerator APIs, source).
+  - A LAMMPS whose OPENMP package was built without OpenMP (`lmp -h`: "OPENMP package API: Serial", the macOS PyPI
+    wheel) runs the CPU variants on one thread, and the record notes it. On the MacBook use conda-forge's LAMMPS
+    (`--md-lammps ~/miniforge3/envs/qb-lammps/bin/lmp`).
 - **The runs.** One LAMMPS process per variant, each ending without `clear` (`in.run`, which chains bulk and slab
   with `clear`, hung on the GPU package).
   - Each run reads the cached box, draws velocities at 298.15 K from a fixed seed, does `run 0`, 100 warm-up
     steps, then NVT at 1 fs. The timed run stops at 10,000 steps or after `--max-seconds` (default 60; LAMMPS'
     `timer timeout`), whichever comes first.
   - ns/day is LAMMPS' own `Performance:` line for the timed run.
-  - Variants are `<accelerator>-<dispersion>`, with the dispersion variants of `md liquid-slab` and its default
-    long-range settings (since MD-LR, `ewald` with Coulomb 1e-6 and the slab-safe dispersion mesh; each record names
-    them in `long_range`, and a record without it timed the older, coarser settings):
+  - Variants are `<accelerator>-<dispersion>`, with `md liquid-slab`'s long-range options and their defaults
+    (MD-LR, `md.long_range`):
+    - `ewald`: `lj/long/coul/long` 12 Å + `pppm/disp`, Coulomb 1e-6, dispersion G = 2.77 / rc and a mesh no coarser
+      than 0.52 / G, computed from the box it runs in (the slab's, vacuum and all).
+    - `cutoff12`, `cutoff16`, `cutoff18`: `lj/cut/coul/long` + `pppm` 1e-5 (the bulk box with LAMMPS' tail
+      correction, the slab without).
     - `cpu-*`: `-sf omp -pk omp N`, N = `--md-threads`, by default this machine's one-lane thread budget, at most
       its physical cores.
-    - `gpu-*`: `-sf gpu -pk gpu 1`, cutoff variants only (LAMMPS has no GPU version of the `ewald` styles).
+    - `gpu-*`: `-sf hybrid gpu omp -pk gpu 1 [device_type generic] pair/only on -pk omp N` (the pair style on the
+      GPU, PPPM and the bonds on N OpenMP threads), cutoff variants only (LAMMPS has no GPU version of the `ewald`
+      styles).
     - `kokkos-*`: `-k on g 1 -sf kk`, or `-k on t N -sf kk` for an OpenMP KOKKOS build.
   - The default is `cpu-ewald`, `cpu-cutoff12` and `cpu-cutoff16`, plus `gpu-cutoff12` and `gpu-cutoff16` where
     `lmp -h` lists the GPU package and a compatible GPU. KOKKOS only runs when listed in `--md-variants`.
@@ -356,24 +386,45 @@ It is never in the default list, so a worker starts as fast as before unless `md
   - The result is `check`: `ok`, `mismatch` (shown as *unverified*) or `skipped` (no CPU reference). The `run 0`
     numbers of both runs are stored, so a mismatch shows which term differs.
 - **In the registry.** `md_throughput` in `machines/<name>.json` holds:
-  - the LAMMPS version, its packages and accelerators, and the system;
-  - per variant: ns/day, atoms, threads, steps, seconds, the `run 0` values and the check.
-  - A file without the key (an older QuantaBench) loads as before.
+  - the LAMMPS version, its packages and accelerators, and the system (size, geometry, atoms, box, vacuum);
+  - per variant: ns/day, atoms, threads, steps, seconds, the build, the long-range settings (`long_range`,
+    `long_range_settings`), the k-space grids and G values LAMMPS used (`kspace`), LAMMPS' timing breakdown
+    (`breakdown`, % per section), the `run 0` values and the check.
+  - Keys are `cpu-ewald` for a bulk box and `cpu-ewald@slab` for a slab, so a machine keeps both. A file without
+    the key (an older QuantaBench) loads as before; a record without `long_range` timed the settings of before MD-LR.
   - Variants not measured again are kept. A failed re-measurement replaces the old number. A run without LAMMPS
     keeps the old numbers and notes the attempt.
-  - `quantabench-cli machines` shows it as `md: cpu-ewald 6.5 ns/day (9,780 atoms, 6 thr), gpu-cutoff16 10.6
-    ns/day (9,780 atoms, OpenCL) [pressure check: mismatch]`, and the Machines dock as its "MD (ns/day)" column
-    (the full line in its tooltip).
-- **Estimates.** `md estimate` and `md liquid-slab` scale a variant's ns/day by the benchmark's atoms / the job's
-  atoms (PPPM MD costs about linearly in atoms at fixed density).
+  - `quantabench-cli machines` shows it as, for example, `md: cpu-ewald@slab 6.6 ns/day (3,800 atoms, 8 thr), gpu-cutoff16@slab
+    21 ns/day (3,800 atoms, OpenCL) [pressure check: ok]`, and the Machines dock as its "MD (ns/day)" column (the
+    full line in its tooltip).
+- **Estimates and scaling.** `md estimate`, `md liquid-slab` and the long-range recommendation scale a variant's
+  ns/day to the job:
+  - by the atoms: ns/day x measured atoms / the job's atoms (PPPM MD costs about linearly in atoms at a fixed
+    density);
+  - when the job's box is known and the record has its box and timing breakdown, the k-space share (`Kspace`, %)
+    scales with the box volume instead of the atoms, since the meshes follow the box: time per step ∝ (1 - f) x
+    N / N_measured + f x V / V_measured. For the `md liquid-slab` sizes (box / liquid = 2, as in the `slab`
+    benchmark) both rules give the same number. A thinner slab in the same 2 x 50 Å of vacuum (`--molecules`) has
+    more mesh per atom, and the second rule sees that.
+  - Records of the job's geometry are used (`--geometry slab`, the default, for a liquid-slab folder). An
+    accelerator with none falls back to the other geometry's, and the estimate says so: a bulk record leaves out the
+    slab's vacuum mesh, so its hours are a lower bound.
   - A cutoff that was not measured is scaled from the nearest one on the same accelerator by (rc_measured/rc)³,
     and the estimate says so.
   - Unverified variants are left out unless `--include-unverified`.
-  - `quantabench.md.bench.estimate_hours(md_throughput, atoms, ns, dispersion=...)` is the same in Python.
+  - `quantabench.md.bench.estimate_hours(md_throughput, atoms, ns, dispersion=..., geometry=..., box=...)` is the
+    same in Python; `scaled_rate` is the rule.
+- **In the recommendation.** `md liquid-slab` without `--long-range` (and with `--gpu auto`) recommends a long-range
+  method for this computer. Its speed comes from this computer's benchmark when it has a record of the recommended
+  accelerator and dispersion, scaled as above, else from the pilot table (`md.long_range.PILOT_TABLE`). The
+  "Recommended for this setup" line says which, for example `(this machine's MD benchmark: gpu-cutoff16@slab 50 ns/day on 3,800
+  atoms, GPU + 6 CPU threads, 2026-11-24, scaled to 9,780 atoms)` or `(pilot table: pilot B, GPU + 6 CPU threads)`.
+  An unverified GPU record is not used. With both GPU and CPU records it also notes their ratio on this machine.
 - **Without LAMMPS** the benchmark is skipped with the reason (`md: not measured (LAMMPS not found (...))`).
   Nothing else in the profile changes.
 - **Not yet.** MPI ranks (`mpirun -np N lmp`, often faster than OpenMP threads for LAMMPS on a CPU) are not
-  benchmarked. The KOKKOS variants have not run on a KOKKOS build yet.
+  benchmarked. The KOKKOS variants have not run on a KOKKOS build yet. A worker started with `--bench-methods
+  default,md` in auto mode does not re-measure a machine that has only bulk records.
 
 ## API (version 1)
 

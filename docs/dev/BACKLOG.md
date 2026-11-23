@@ -1175,6 +1175,33 @@ benchmark"; code: `md/bench.py`.
   - A "Benchmark MD" button in the Machines dock. Use ns/day for splitting MD jobs across machines once MD runs as
     worker jobs (SIM-1).
 
+## MD-BENCH-2: A small slab benchmark that matches the surface-tension runs · in-PR 2026-11-23 (branch `feat/md-bench-2-small-slab`; the real runs wait for quiet machines)
+Brandon (2026-11-23): "I would like to have a Benchmark for the MD section, but maybe we could use a smaller
+simulation?" Code: `md/bench.py`, `md/long_range.py`; docs: docs/WORKERS.md, "The MD benchmark".
+- Done (2026-11-23):
+  - `--md-size slab` (the default): 190 C6F14 (3,800 atoms), 40 x 40 Å, ~39 Å of liquid with half that of vacuum on
+    each side (box / liquid = 2, like every `md liquid-slab` size), opened as `in.slab` does it
+    (`md.liquid.open_box_lines`, shared) and relaxed 1 ps; slab styles, the slab box's pppm/disp mesh (18 x 18 x 36),
+    the pressure tensor and the density profile in the timed run. `pilot-slab` (9,780 atoms) to check the scaling.
+  - Records keyed `<variant>@slab` beside the bulk ones; each names geometry, box, threads, accelerator,
+    `lammps_build`, `long_range` + `long_range_settings`, `kspace` (grids and G from the log) and `breakdown`.
+  - `scaled_rate`: atoms, with the k-space share by the box volume when both boxes are known. `estimate_hours`,
+    `md estimate --geometry`, `md liquid-slab`'s estimate prefer the job's geometry.
+  - `recommend_long_range`: `MachineInfo.benchmark` (this computer's, from `detect_machine`) replaces the pilot
+    table's speed when it has a verified matching record; `speed_source` and the summary line name the source.
+  - The MacBook's 2026-11-21 failure: a mangled `QUANTABENCH_LAMMPS` (`$HOME` expanded by PowerShell, backslashes
+    dropped by the Mac's shell) was skipped silently and the venv's PyPI wheel (OPENMP "Serial") was timed. Now refused
+    (`external.configured_problems`), `--md-lammps PATH`, serial OpenMP detected, failed set-ups kept with
+    `exit_reason`. The exit 143 itself: a SIGTERM from outside QuantaBench; which process sent it is not known (DEVLOG).
+  - Tests: `tests/test_md_bench_slab.py` (unit tests and an 800-atom real slab run), `tests/test_md_bench.py`
+    updated. Cloud smoke run of the default slab: built in 100 s, 207 s in all (1 thread, 30 s per variant).
+- Next:
+  - The real runs, when the machines are quiet: on the workstation `quantabench-cli machines --bench md
+    --md-threads 8` (the slab, five variants) and once `--md-size pilot-slab` to check the atom scaling against the
+    pilots; on the MacBook `--md-lammps ~/miniforge3/envs/qb-lammps/bin/lmp`.
+  - A worker in auto mode with `--bench-methods ...,md` does not re-measure a machine that has only bulk records.
+  - After A-fine: its numbers into `PILOT_TABLE` (MD-LR's follow-up); the benchmark then only replaces speeds.
+
 ## MD-1: Counter-ions in vacuum SMD (Windows LAMMPS non-determinism + ion-pair heating) · ready
 - On the Windows workstation, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a
   TFA⁻ + Na⁺ on graphite setup with "Out of range atoms - cannot compute PPPM" (also with
