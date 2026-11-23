@@ -287,14 +287,24 @@ def method_text(method: str, cutoff: float, accelerator: str = "") -> str:
 # ------------------------------------------------------------------------------------------- the machine
 @dataclass
 class MachineInfo:
-    """What the recommendation needs to know about the machine that will run the folder."""
+    """What the recommendation needs to know about the machine that will run the folder. ``benchmark``: that
+    machine's MD benchmark (``MachineProfile.md_throughput``, ``md.bench``), whose measured ns/day replaces the pilot
+    table's speeds; ``detect_machine`` fills it in for this computer, a stated machine (``--gpu yes|no``) has none."""
 
     gpu: bool = False                   # LAMMPS there has the GPU package and found a GPU it can use
     note: str = ""                      # how that was decided
     threads: int | None = None
+    benchmark: dict = field(default_factory=dict, repr=False, compare=False)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        md = d.pop("benchmark") or {}
+        if md:
+            from . import bench
+
+            d["benchmark"] = {"date": md.get("date", ""), "lammps": md.get("lammps", ""),
+                              "variants": sorted(bench.rated(md))}
+        return d
 
 
 def detect_machine(refresh: bool = False) -> MachineInfo:
@@ -302,31 +312,38 @@ def detect_machine(refresh: bool = False) -> MachineInfo:
     did a GPU variant of this machine's MD benchmark (if any) pass the CPU/GPU pressure check?"""
     from . import bench
 
+    md = _this_benchmark()
     info, why = bench.find_lammps(refresh)
     if info is None:
-        return MachineInfo(False, f"{why}; recommending for the CPU")
+        return MachineInfo(False, f"{why}; recommending for the CPU", benchmark=md)
     ok, why = bench.can_run(info, bench.Variant("gpu", "cutoff16"))
     if not ok:
-        return MachineInfo(False, f"LAMMPS {info.version or info.path}: {why}")
+        return MachineInfo(False, f"LAMMPS {info.version or info.path}: {why}", benchmark=md)
     api = info.accelerators.get("GPU", {}).get("api", "")
     note = f"LAMMPS {info.version} has the GPU package{f' ({api})' if api else ''} and found a GPU"
     if _gpu_check_failed():
         return MachineInfo(False, f"{note}, but its GPU variants failed the CPU/GPU pressure check of "
-                                  "`machines --bench md`; recommending for the CPU")
-    return MachineInfo(True, note)
+                                  "`machines --bench md`; recommending for the CPU", benchmark=md)
+    return MachineInfo(True, note, benchmark=md)
+
+
+def _this_benchmark() -> dict:
+    """This machine's MD benchmark from the registry (``md_throughput``), {} when it has none."""
+    try:
+        from ..dist import profile as profile_mod
+
+        me = profile_mod.machine_name()
+        md = next((p.md_throughput for p in profile_mod.load_profiles() if p.name == me), None) or {}
+    except Exception:  # noqa: BLE001 - no registry: the pilot table stands
+        return {}
+    return dict(md) if isinstance(md, dict) else {}
 
 
 def _gpu_check_failed() -> bool:
     """True when this machine's MD benchmark has GPU variants and none of them passed the CPU/GPU check."""
     from . import bench
 
-    try:
-        from ..dist import profile as profile_mod
-
-        me = profile_mod.machine_name()
-        md = next((p.md_throughput for p in profile_mod.load_profiles() if p.name == me), None) or {}
-    except Exception:  # noqa: BLE001 - no registry: the lmp -h answer stands
-        return False
+    md = _this_benchmark()
     recs = [r for k, r in (md.get("variants") or {}).items() if k.startswith("gpu-") and isinstance(r, dict)
             and r.get("check")]
     return bool(recs) and not any(bench.verified(r) for r in recs)
@@ -354,12 +371,13 @@ class LongRangeRecommendation:
     accelerator: str                    # "gpu" | "cpu"
     settings: dict                      # ``settings(...)``: every long-range value, resolved
     reason: str                         # one line
-    ns_per_day: float | None = None     # for this setup's atoms, from the pilot table
-    speed_basis: str = ""
+    ns_per_day: float | None = None     # for this setup's atoms: this machine's MD benchmark, else the pilot table
+    speed_basis: str = ""               # where ns_per_day comes from; starts with its source
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     inputs: dict = field(default_factory=dict)
     provisional: bool = PROVISIONAL
+    speed_source: str = ""              # "benchmark" (this machine's, md.bench), "pilot table" or "" (no speed)
 
     @property
     def dispersion(self) -> str:
@@ -386,6 +404,10 @@ class LongRangeRecommendation:
         return d
 
 
+#: atoms per molecule the speeds assume when only the number of molecules is given (C6F14, the pilots' liquid)
+PILOT_ATOMS_PER_MOLECULE = 20
+
+
 def _speed(row_id: str, n_atoms: int | None, n_molecules: int | None) -> tuple[float | None, str]:
     """(ns/day for this many atoms, its basis) from a ``PILOT_TABLE`` row: scaled by the atom ratio, as
     ``md.bench.estimate_hours`` does (PPPM MD costs about linearly in the atoms at a fixed density)."""
@@ -393,7 +415,7 @@ def _speed(row_id: str, n_atoms: int | None, n_molecules: int | None) -> tuple[f
     if not row.ns_per_day:
         return None, ""
     where = f"GPU + {row.threads} CPU threads" if row.accelerator == "gpu" else f"{row.threads} CPU threads"
-    basis = f"pilot {row_id}, {where}"
+    basis = f"pilot table: pilot {row_id}, {where}"
     scale = 1.0
     if n_atoms:
         scale = row.atoms / float(n_atoms)
@@ -406,6 +428,57 @@ def _speed(row_id: str, n_atoms: int | None, n_molecules: int | None) -> tuple[f
     return row.ns_per_day * scale, basis
 
 
+def _benchmark_speed(md: Mapping | None, method: str, cutoff: float, accelerator: str, geometry: str,
+                     n_atoms: int | None, n_molecules: int | None, box: Sequence[float] | None
+                     ) -> tuple[float | None, str]:
+    """(ns/day for this setup, its basis) from a machine's MD benchmark (``md.bench``): the record of the same
+    accelerator and dispersion (a cutoff not measured is scaled from the nearest one), preferring the setup's geometry,
+    scaled to its atoms by ``md.bench.scaled_rate`` (and its box). Unverified GPU records are not used. (None, "")
+    when the benchmark has nothing that fits."""
+    if not md:
+        return None, ""
+    from . import bench
+
+    atoms = n_atoms or (n_molecules * PILOT_ATOMS_PER_MOLECULE if n_molecules else None)
+    dispersion = dispersion_name(method, cutoff)
+    # an ewald record from before MD-LR (no ``long_range``) timed the old, coarser pppm/disp: not this setup's
+    usable = {k: r for k, r in bench.rated(md).items()
+              if not (bench.split_key(k)[0].endswith("-ewald") and not r.get("long_range"))}
+    probe = atoms or max((int(r.get("atoms") or 0) for r in usable.values()), default=0)
+    if probe <= 0:
+        return None, ""
+    e = bench.best_estimate({"variants": usable}, probe, 1.0, dispersion=dispersion, accelerator=accelerator,
+                            geometry=geometry, box=box if atoms else None)
+    if e is None:
+        return None, ""
+    rec = (md.get("variants") or {}).get(e.key) or {}
+    threads = int(rec.get("threads") or 1)
+    where = f"GPU + {threads} CPU threads" if accelerator == "gpu" else f"{threads} CPU thread{'s' * (threads != 1)}"
+    when = str(rec.get("date") or md.get("date") or "")[:10]
+    basis = (f"this machine's MD benchmark: {e.key} {bench.fmt_ns(e.measured_ns_per_day)} ns/day on "
+             f"{e.measured_atoms:,} atoms, {where}" + (f", {when}" if when else ""))
+    if atoms and atoms != e.measured_atoms:
+        basis += (f", scaled to {atoms:,} atoms" if n_atoms else
+                  f", scaled to {n_molecules:,} molecules of C6F14's size")
+    if e.note:
+        basis += f"; {e.note}"
+    return e.ns_per_day, basis
+
+
+def _setup_speed(row_id: str | None, machine: MachineInfo, method: str, cutoff: float, accelerator: str,
+                 geometry: str, n_atoms: int | None, n_molecules: int | None, box: Sequence[float] | None
+                 ) -> tuple[float | None, str, str]:
+    """(ns/day, basis, source): this machine's MD benchmark when it has a fitting record, else the pilot table's row
+    ``row_id`` (None: no row fits)."""
+    v, basis = _benchmark_speed(machine.benchmark, method, cutoff, accelerator, geometry, n_atoms, n_molecules, box)
+    if v:
+        return v, basis, "benchmark"
+    if row_id is None:
+        return None, "", ""
+    v, basis = _speed(row_id, n_atoms, n_molecules)
+    return v, basis, ("pilot table" if v else "")
+
+
 def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = None, n_molecules: int | None = None,
                          n_atoms: int | None = None, machine: MachineInfo | bool | None = None,
                          purpose: str = "screen") -> LongRangeRecommendation:
@@ -413,8 +486,15 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
 
     ``geometry``: "slab" (a liquid-vapour interface; "interface" works too) or "bulk". ``box``: (lx, ly, lz) in Å (the
     slab's box with its vacuum); its lateral edges limit the cutoff (``md.liquid.plan_box`` needs > 2 rc + 1).
-    ``n_atoms`` (else ``n_molecules``) scales the pilot speed. ``machine``: ``MachineInfo``, a bool (GPU usable) or
-    None (CPU). ``purpose``: "screen" or "reference". Rules (``PILOT_TABLE``; provisional until A-fine):
+    ``n_atoms`` (else ``n_molecules``) scales the speed. ``machine``: ``MachineInfo``, a bool (GPU usable) or None
+    (CPU). ``purpose``: "screen" or "reference".
+
+    The speed (``ns_per_day``, ``speed_basis``, ``speed_source``) is this machine's MD benchmark when
+    ``machine.benchmark`` has a record of the recommended accelerator and dispersion (``detect_machine`` fills it in;
+    ``md.bench.scaled_rate``: ns/day x measured atoms / atoms, the k-space share by the box volume when ``box`` is
+    given), preferring the setup's geometry; else the pilot table's. The summary line names the source.
+
+    Rules (``PILOT_TABLE``; provisional until A-fine):
 
     * reference → full long-range dispersion, converged settings, on the CPU (no tail approximation, the slab at the
       bulk density);
@@ -445,8 +525,9 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
                             f"real-space cutoff is {rc:g} Å (G and the mesh follow it)")
         s = settings("ewald", rc)
         notes.extend(notes_for(s, geo, machine))
-        v, basis = _speed(row, n_atoms, n_molecules)
-        return LongRangeRecommendation("ewald", rc, "cpu", s, reason, v, basis, warnings, notes, inputs)
+        v, basis, src = _setup_speed(row, machine, "ewald", rc, "cpu", geo, n_atoms, n_molecules, box)
+        return LongRangeRecommendation("ewald", rc, "cpu", s, reason, v, basis, warnings, notes, inputs,
+                                       speed_source=src)
 
     if purpose == "reference":
         rec = ewald("a reference value needs converged full long-range dispersion: no tail approximation, the slab "
@@ -456,24 +537,33 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
     if geo == "bulk":
         rc = 12.0 if max_rc >= 12.0 else max(CUTOFF_RANGE[0], math.floor(max_rc))
         s = settings("cutoff", rc)
-        v, basis = _speed("C-bulk", n_atoms, n_molecules) if gpu else (None, "")
-        if not gpu:
-            basis = "no pilot ran a CPU-only cutoff bulk; `md estimate` uses this machine's MD benchmark"
+        accel = "gpu" if gpu else "cpu"
+        v, basis, src = _setup_speed("C-bulk" if gpu else None, machine, "cutoff", rc, accel, geo, n_atoms,
+                                     n_molecules, box)
+        if not v:
+            basis = ("no pilot ran a CPU-only cutoff bulk, and this machine has no MD benchmark of it "
+                     "(quantabench-cli machines --bench md --md-size small)")
         return LongRangeRecommendation(
-            "cutoff", rc, "gpu" if gpu else "cpu", s,
+            "cutoff", rc, accel, s,
             "a uniform liquid needs no interface treatment: a 12 Å cutoff with LAMMPS' homogeneous tail gave the same "
             "bulk density as converged pppm/disp (pilots C and B 1.6714 and 1.6719, A-fine 1.6720 g/cm³)"
-            + (", and the GPU runs it" if gpu else ""), v, basis or "", warnings, notes, inputs)
+            + (", and the GPU runs it" if gpu else ""), v, basis or "", warnings, notes, inputs, speed_source=src)
     if gpu and max_rc >= 16.0:
         s = settings("cutoff", 16.0)
-        v, basis = _speed("B", n_atoms, n_molecules)
+        v, basis, src = _setup_speed("B", machine, "cutoff", 16.0, "gpu", geo, n_atoms, n_molecules, box)
         notes.extend(notes_for(s, geo, machine))
+        if src == "benchmark":
+            ew, _b, ew_src = _setup_speed(None, machine, "ewald", DEFAULT_CUTOFF["ewald"], "cpu", geo, n_atoms,
+                                          n_molecules, box)
+            if ew_src == "benchmark" and ew:
+                notes.append(f"this machine's MD benchmark: {v:.3g} ns/day for this, {ew:.3g} for full long-range "
+                             f"dispersion on the CPU ({v / ew:.1f} x)")
         a_fine = PILOT_TABLE["A-fine"]
         return LongRangeRecommendation(
             "cutoff", 16.0, "gpu", s,
             "LAMMPS can use a GPU here, and 16 Å + tail reproduced Tsige & Grest's C6F14 value (pilot B: 11.71 ± 0.30 "
             f"vs 11.25 mN/m) at about 3 times the speed of full long-range dispersion on the CPU ({a_fine.ns_per_day:g} "
-            f"ns/day on {a_fine.threads} threads)", v, basis, warnings, notes, inputs)
+            f"ns/day on {a_fine.threads} threads)", v, basis, warnings, notes, inputs, speed_source=src)
     if gpu:
         return ewald(f"the lateral box ({lateral:.1f} Å) is too narrow for a 16 Å cutoff (needs more than 33 Å), and a "
                      "shorter cutoff biases a slab (pilot C at 12 Å: plateau 4.7 % below the bulk), so full long-range "

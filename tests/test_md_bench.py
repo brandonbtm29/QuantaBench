@@ -305,7 +305,8 @@ def test_md_estimate_cli_and_the_liquid_slab_hook(tmp_path, capsys):
     profile.save_profile(MachineProfile(name="bench-pc", md_throughput=md, updated="2026-11-20T12:00:00+00:00"))
     assert cli.main(["md", "estimate", "--atoms", "9780", "--ns", "13", "--dispersion", "ewald"]) == 0
     out = capsys.readouterr().out
-    assert "13 ns of 9,780 atoms (ewald)" in out and "bench-pc" in out and "cpu-ewald" in out and "2.0 days (48 h)" in out
+    assert "13 ns of 9,780 atoms (ewald, slab)" in out and "bench-pc" in out and "cpu-ewald" in out
+    assert "2.0 days (48 h)" in out and "bulk box, from the bulk benchmark" in out      # no slab record: noted
     assert cli.main(["md", "estimate", "--atoms", "9780", "--ns", "13", "--include-unverified", "--all-variants",
                      "--json"]) == 0
     rows = json.loads(capsys.readouterr().out)["estimates"]
@@ -323,7 +324,7 @@ def test_md_estimate_cli_and_the_liquid_slab_hook(tmp_path, capsys):
     readme = (out_dir / "README.txt").read_text(encoding="utf-8")
     assert "RUN TIME ESTIMATE" in readme and "with cpu-ewald" in readme
     assert cli.main(["md", "estimate", str(out_dir)]) == 0
-    assert f"13 ns of {n_atoms:,} atoms (ewald)" in capsys.readouterr().out
+    assert f"13 ns of {n_atoms:,} atoms (ewald, slab)" in capsys.readouterr().out
 
 
 # ------------------------------------------------------------------------------------------- the wiring
@@ -445,7 +446,7 @@ def test_real_short_benchmark_and_the_check(monkeypatch):
     for a variant with the same physics and fails for one without the bulk's tail correction (a stand-in for a GPU
     package that gets the pressure wrong: the GPU package itself is not in the PyPI wheel)."""
     info = _real_lammps()
-    monkeypatch.setitem(bench.SYSTEMS, "tiny", {"lateral": 26.0, "n_molecules": 40})
+    monkeypatch.setitem(bench.SYSTEMS, "tiny", {"config": {"lateral": 26.0, "n_molecules": 40}})
     fake_gpu = bench.LammpsInfo(info.path, info.source, info.version, sorted({*info.packages, "GPU"}),
                                 {**info.accelerators, "GPU": {"api": "OpenCL", "precision": "mixed"}}, True)
     real_args, real_input = bench.accelerator_args, bench.bench_input
