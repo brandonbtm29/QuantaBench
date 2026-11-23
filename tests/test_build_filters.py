@@ -258,3 +258,42 @@ def test_a_worker_from_before_settings_1_refuses_the_filters(monkeypatch):
     with pytest.raises(worker_mod.RequestError, match="unknown config field.*strip_counterions.*strip_water"):
         worker_mod.validate_config({"method": "mmff", "strip_water": True, "strip_counterions": "sodium"})
     assert worker_mod.validate_config({"method": "mmff"}) == {"method": "mmff"}
+
+
+def test_twist_boat_seeds_is_an_advanced_science_setting(monkeypatch, tmp_path):
+    """SETTINGS-1 follow-up: how many of the lowest conformers seed the twist-boats (default 5) is a science setting
+    that only matters with thorough ring conformers."""
+    mol = Chem.AddHs(Chem.MolFromSmiles("CC1CCCCC1"))
+    cs = conformers.generate(mol, 10, 10.0, 0.5, seed=42, timeout_s=0)
+    m = Chem.Mol(cs.mol)
+    ids, _e = conformers.twist_boats(m, cs.conf_ids, cs.energies_kcal, "MMFF94s", n_seeds=2)
+    assert len(ids) == 2 * 6                                     # 2 seeds x 3 rotations x 2 mirror images
+    ids, _e = conformers.twist_boats(Chem.Mol(cs.mol), cs.conf_ids, cs.energies_kcal, "MMFF94s")
+    assert len(ids) == min(conformers.TWIST_BOAT_SEEDS, len(cs.conf_ids)) * 6 and conformers.TWIST_BOAT_SEEDS == 20
+    seen = []
+    real = conformers.twist_boats
+    monkeypatch.setattr(conformers, "twist_boats", lambda *a, **k: seen.append(k.get("n_seeds")) or real(*a, **k))
+    conformers.generate(mol, 10, 10.0, 0.5, seed=42, timeout_s=0, ring_conformers="thorough", twist_boat_seeds=3)
+    assert seen == [3]
+    assert pipeline.BuildConfig().twist_boat_seeds == 20 and "twist_boat_seeds" in jobs.SCIENCE_FIELDS
+    s = settings_mod.Settings()
+    s.build.twist_boat_seeds = 0
+    assert pipeline.BuildConfig.from_settings(s).twist_boat_seeds == 1
+    assert cli.config_from_args(cli.build_parser().parse_args(["build", "CCO", "--twist-boat-seeds", "20"])) \
+        .twist_boat_seeds == 20
+    with pytest.raises(SystemExit, match="twist-boat-seeds"):
+        cli.config_from_args(cli.build_parser().parse_args(["build", "CCO", "--twist-boat-seeds", "0"]))
+    # a difference only with thorough ring conformers
+    stored = dataclasses.asdict(pipeline.BuildConfig(twist_boat_seeds=5))
+    assert jobs.config_differences(stored, pipeline.BuildConfig(twist_boat_seeds=20)) == {}
+    thorough = dataclasses.asdict(pipeline.BuildConfig(ring_conformers="thorough"))
+    assert set(jobs.config_differences(thorough, pipeline.BuildConfig(ring_conformers="thorough",
+                                                                       twist_boat_seeds=7))) == {"twist_boat_seeds"}
+    # a thorough run stored before the setting made its twist-boats from 5 conformers, and resumes so
+    old = {k: v for k, v in thorough.items() if k != "twist_boat_seeds"}
+    assert jobs.stored_config(old).twist_boat_seeds == 5
+    assert set(jobs.config_differences(old, pipeline.BuildConfig(ring_conformers="thorough"))) == {"twist_boat_seeds"}
+    assert worker_mod.validate_config({"twist_boat_seeds": 20}) == {"twist_boat_seeds": 20}
+    for bad in (0, 5000, "5", 2.5):
+        with pytest.raises(worker_mod.RequestError, match="twist_boat_seeds"):
+            worker_mod.validate_config({"twist_boat_seeds": bad})

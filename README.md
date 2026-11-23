@@ -19,7 +19,7 @@ dynamics. Every step is visible in an OVITO-style 3D workspace.
 
 | Stage | What happens |
 |---|---|
-| Input | SMILES, InChI, InChIKeys, chemical names or CAS (PubChem); SDF/MOL (V2000, V3000), MOL2, PDB, XYZ, ChemDraw CDX/CDXML, Marvin MRV, CML, CIF, Gaussian/ORCA inputs, SMILES and InChI lists, CSV and Excel lists (CompTox exports: DTXSID, preferred name, SMILES / QSAR-ready / MS-ready fallback); other formats through Open Babel when installed. Spartan-style import options (2D to 3D, hydrogens, data fields, filters, atom order); paste from ChemDraw (CDX, CDXML, MOL) and drag and drop |
+| Input | SMILES, InChI, InChIKeys, chemical names or CAS (PubChem); SDF/MOL (V2000, V3000), MOL2, PDB, XYZ, ChemDraw CDX/CDXML, Marvin MRV, CML, CIF, Gaussian/ORCA inputs, SMILES and InChI lists, CSV and Excel lists (CompTox exports: DTXSID, preferred name, SMILES / QSAR-ready / MS-ready fallback); other formats through Open Babel when installed. Spartan-style import options (2D to 3D, hydrogens, data fields, filters, atom order); paste from ChemDraw (CDX, CDXML, MOL), spreadsheets and text, Copy as (SMILES, InChI, InChIKey, MOL/SDF, XYZ, CDXML) and drag and drop |
 | Standardize & protonate | Largest fragment (strips counter-ions, named in the results; metal complexes drawn as ions are refused, not computed without their metal), neutral parent, dominant charge state at your pH, spin from drawn radicals. PFAS-aware: carboxylates, sulfonates and acidic perfluoroalkane sulfonamides are handled |
 | Conformer search | RDKit ETKDGv3, MMFF94s pre-optimization, energy window, symmetry-aware RMSD de-duplication; or **CREST** (iMTD-GC metadynamics with GFN2-xTB / GFN-FF); or **auto**: CREST for flexible neutral molecules (9+ rotatable bonds), RDKit for the rest, optionally with both pools refined |
 | Refinement | **AIMNet2** (ML, ωB97M-D3 quality, neutral and charged), **GFN1/GFN2-xTB** (dxtb, PyTorch; tblite; or the xtb program), **GFN-FF**, **PM7/PM6** (MOPAC), or MMFF94s, optionally in an implicit solvent (ALPB, COSMO). On GPU when available with automatic CPU fallback; on a GPU all conformers of a molecule are optimized in one batch |
@@ -111,10 +111,16 @@ own lane setting.
 
 Type a SMILES, name or CAS number in the Molecules box and press Enter, or use File > Open for structure
 files and lists. **Edit > Paste** (Ctrl+V) adds what is on the clipboard: a structure copied in ChemDraw
-(its own format), a MOL or SD block, CDXML, Marvin, or lines of SMILES and names. The log says which
-format was used. In a text field, Ctrl+V pastes text as usual. **Edit > Copy as SMILES / MOL / CDXML**
-goes the other way, for the selected molecules (as entered); in ChemDraw, paste with Ctrl+V or Edit >
-Paste Special. You can also drop files on the window (a folder opens as a run folder) or drop text on it.
+(its own format), a MOL or SD block, XYZ, CDXML, Marvin, cells copied from a spreadsheet (or CSV text) with a
+SMILES column, or lines of SMILES, InChI, InChIKeys and names. A paste takes the same Import Options as File >
+Open, so a table's other columns can become columns of the molecule list. The log says which format was used.
+In a text field, Ctrl+V pastes text as usual. The Import Options choices, and whether the dialog asks, can be
+changed later in Tools > Settings > Import. **Edit > Copy molecules** (Ctrl+Shift+C in the Molecules list) copies
+the selected rows as a table (ID, SMILES, name and the data-field columns shown) for Excel, or to paste back.
+**Edit > Copy as** (also on the molecule list's right-click menu) goes the other way, for the selected molecules: SMILES as entered, canonical SMILES, InChI, InChIKey,
+MOL (an SD file for several), XYZ of the conformer shown, or CDXML; in ChemDraw, paste with Ctrl+V or Edit >
+Paste Special. You can also drop files on the window or the molecule list (several at once; a run folder opens
+as one, a project folder as a project, any other folder as the files in it), or drop text on it.
 
 ## Importing structures
 
@@ -149,12 +155,18 @@ quantabench-cli build --file set.sdf --import-options "post_fields=true,id_field
 **Settings > Build defaults** has the build's own filters, for every input (SMILES, names and files alike): water,
 acids and counter-ions picked by name are stripped before *Keep largest fragment*, so a hydrate's ion pair can be
 computed dry, or a salt's anion kept where the cation is larger. Its *Ring conformers: Thorough* (Spartan's Conformer
-Rules) also searches twist-boats of six-membered rings. Both are science settings, stored with each run:
+Rules) also searches twist-boats of six-membered rings, and *Keep the counter-ions as separate entries* computes
+K-PFOS as PFOS⁻ and K⁺ in the same run. All are science settings, stored with each run:
 
 ```bash
 quantabench-cli build "O.[Na+].[O-]C(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --strip water,sodium
 quantabench-cli build "OC1CCCC2CCCCC12" --ring-conformers thorough
+quantabench-cli build "[K+].[O-]S(=O)(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --counterion-entries
 ```
+
+Right-click a molecule in the list for **Look up**: PubChem, the NIST WebBook, nmrshiftdb2 and EPA CompTox open in the
+browser with its InChIKey, InChI or CAS RN. Settings > Lookups edits the URL templates (`%inchikey`, `%inchi`, `%cas`,
+`%smiles`, `%name`) and PubChem's cache folder and maximum age.
 
 ## Workspaces
 
@@ -236,7 +248,11 @@ Toolbar mouse modes: **Rotate** (Ctrl+1, the default), **Select** (Ctrl+2: drag 
 (Ctrl+3: as in Avogadro's manipulate tool, pressing on an atom grabs its whole molecule, or the
 adsorbate on a surface; press on a selected atom to grab only the selection. Drag turns the grabbed
 atoms rigidly about their center, Shift+drag slides them in the view plane; a click does not change
-the selection). Labels: element, index (0-based, as in ASE and RDKit),
+the selection) and **Build** (Ctrl+4: the Model Kit. Pick an element, then its geometry (metals from
+the periodic table take coordination geometries), or a fragment, in the Model Kit dock; click a free
+valence (a stub) to attach it or an atom to replace it; Ctrl+Z / Ctrl+Y undo and redo, Minimize runs
+MMFF94, or UFF where MMFF94 has no parameters, and Add to list hands the structure to the molecule
+list). Labels: element, index (0-based, as in ASE and RDKit),
 element + index, or charge. Colors: element (Jmol), charge (red = negative, white = 0, blue =
 positive, on a scale symmetric about zero, as Spartan and Avogadro draw ESP maps), or tag (surface
 gray, adsorbate orange).

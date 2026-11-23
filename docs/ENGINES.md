@@ -159,6 +159,11 @@ What the standardization does with research records (every step is in the molecu
   where the counter-ion is the larger ion (tetrabutylammonium trifluoroacetate computes the trifluoroacetate). The
   notes say "stripped before the largest-fragment rule (build filters): O (water), [Na+] (sodium)", and
   `removed_fragments` lists them first. Off by default; science settings (stored with the run, sent to workers).
+- **Counter-ions as separate entries** (`counterion_entries`, `chem.salts`, off by default): the removed fragments
+  that are ions or named counter-ions (never water, a copy of the kept ion or a neutral molecule) become molecules of
+  the run, `<record>_<formula>` (`kpfos_K+`), named after the ion, with the record's posted fields and a
+  `counterion_of` column listing every record of the run it came from; one per InChIKey, none for an ion the list
+  already has. The list is expanded before a grid chunks it, so every machine agrees.
 - **Metal salts.** A bondless Al³⁺, Zn²⁺, Fe²⁺/Fe³⁺ or Cu²⁺ cation (as well as Na⁺, K⁺, Ca²⁺, Mg²⁺,
   Ba²⁺, Sr²⁺) is a counter-ion when the rest of the record is an organic ion and counter-ions: fosetyl-Al
   (`[Al+3]` + 3 ethyl phosphonates) computes one ethyl phosphonate anion, and `removed_fragments` lists
@@ -750,16 +755,19 @@ killed at its time limit, a closed terminal.
 |---|---|---|
 | Windows | every program `run_program` starts (xtb, CREST's wsl.exe, MOPAC, Psi4, g-xTB) and tblite's CPCM helper is created suspended, put in a job object of its own with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, then resumed; whatever it starts joins the job. The lanes are in one such job of their parent (the GUI or the CLI), and each lane's programs in jobs nested in it | Windows, when the last handle to the job closes: only QuantaBench holds it. A cancel or a time limit ends the whole job, also a child whose parent has already exited (which `taskkill /T` misses) |
 | a `wsl:` program (CREST) | wsl.exe and its helpers (a second wsl.exe, wslhost.exe, conhost.exe) are in the job. Inside WSL the program runs under a guard script, with wsl.exe's stdin as its lifeline (a pipe QuantaBench holds open and never writes) | when wsl.exe ends, WSL hangs up the Linux session (SIGHUP), which ends an ordinary program. The guard's watchdog then kills the program's whole process group (SIGTERM, SIGKILL 2 s later): programs that ignore SIGHUP, CREST's xtb. It does the same when the lifeline reaches EOF (QuantaBench died but wsl.exe lived on). When the program ends, the guard sends SIGTERM to what it left in its group (CREST's xtb after a cancel) and exits with the program's code |
-| Linux, macOS | programs run in their own session | a cancel or a time limit kills the process group; a lane's programs are recorded and killed by its parent when the lane dies |
+| Linux, macOS | every program runs in its own session under the same guard (`/bin/sh -c GUARD /bin/sh -c STACK_WRAPPER prog args`), with its stdin as the lifeline (since ENG-3b, 2026-11-22) | when the QuantaBench process dies, however (SIGKILL included), the kernel closes its end of the pipe and the watchdog kills the program's process group. A cancel or a time limit kills the process group; a lane's programs are recorded and killed by its parent when the lane dies |
 
 - The job sets no other limit: priority, affinity and memory are as before (Run priority and free threads, below).
 - Measured on the workstation (WSL 2, kernel 6.18): ending wsl.exe ends the Linux processes of its session; a process
   that ignores SIGHUP (`nohup`) or runs in another session (`setsid`) did not end before the guard. Through the guard,
   a program and its child that both ignore SIGHUP end when the GUI is killed outright, with the job and with only the
   lifeline (`tests/test_proctree.py`).
-- **Limits.** On Linux and macOS there are no job objects: a GUI or CLI killed outright (SIGKILL, a crash) still leaves
-  a program that is running there until it ends. Inside WSL, a process that starts a session of its own (`setsid`, a
-  daemon) is outside the guard's group; neither CREST nor xtb does.
+- On Linux and macOS the process `run_program` starts is the guard: the run's peak memory is the largest resident set
+  among the guard's descendants (the program and what it starts, as `ru_maxrss` counts it), and its CPU time comes
+  through the guard, which waits for the program. A program killed by a signal still comes back as that signal.
+- **Limits.** A process that starts a session of its own (`setsid`, a daemon) is outside the guard's group, inside WSL
+  and on Linux or macOS; neither CREST nor xtb does. A program given text on its stdin (`run_program(stdin_text=...)`,
+  which no engine uses) runs without the guard.
 
 ## Run priority and free threads
 
@@ -1233,9 +1241,11 @@ quantabench-cli pubchem lookup 335-67-1 --experimental                          
   User-Agent is `QuantaBench/<version> (+https://github.com/brandonbtm29/QuantaBench)`, with no email.
   Requests are batched where PUG REST allows: properties 100 CIDs a request, synonyms and registry numbers 50.
 - **Cache:** every answer (200, 404, 400) goes into one SQLite file, by default the per-machine cache folder
-  (`QUANTABENCH_CACHE_DIR/pubchem/pubchem_cache.sqlite`; `--cache DIR` elsewhere). An interrupted run (Ctrl+C,
-  network loss: it stops after 10 failures in a row) resumes from where it stopped when run again, and
-  `--offline` never touches the network. Keep the cache out of SyncThing unless only one machine writes it.
+  (`QUANTABENCH_CACHE_DIR/pubchem/pubchem_cache.sqlite`; Settings > Lookups > PubChem cache > Folder, or
+  `--cache DIR`, elsewhere). An interrupted run (Ctrl+C, network loss: it stops after 10 failures in a row) resumes
+  from where it stopped when run again, and `--offline` never touches the network. Keep the cache out of SyncThing
+  unless only one machine writes it. Settings > Lookups > Maximum age (`lookups.pubchem_max_age_days`, 0 = no
+  limit) makes an older answer a miss: it is asked again and replaced; `--offline` still reads it.
 - **Requests for a list of N molecules** with an empty cache: about N lookups + N/100 + 2·N/50 batches, plus N
   PUG View records with `--experimental`. For 14,000 CAS RNs that is about 14,700 requests (1 h at 4/s) without
   `--experimental` and 28,700 (2 h) with it, while PubChem reports Green; up to 4x longer under Red.

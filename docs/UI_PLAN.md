@@ -21,15 +21,16 @@ molecule/system navigator, the playback bar and the job monitor.
 
 1. **Build:** import (SMILES, InChI, names, CAS, CompTox tables, and files in many formats, with
    Spartan-style import options: UI-4), a 2D sketcher (an embedded open-source editor, Ketcher or
-   Schrödinger's Sketcher: UI-6), a Spartan-style 3D model kit (atoms by hybridization, groups, rings,
-   PFAS fragments, geometry tools, minimize: UI-7), one undo/redo history for 2D and 3D, isomer/tautomer
+   Schrödinger's Sketcher: UI-6), a 3D model kit (element, then geometry; metals with coordination
+   geometries; groups, rings, PFAS fragments, geometry tools, minimize: UI-7), one undo/redo history for 2D and 3D, isomer/tautomer
    generation, surfaces/slabs/boxes/packing.
 2. **Calculate (molecular):** one job dialog built around a *level of theory* and a *task* (see below).
    Presets plus an Advanced section. Conformer distributions, frequencies, constraints/scans,
    transition states.
 3. **Simulate (MD):** system → force field → protocol (minimize / equilibrate NVT/NPT / production /
    steered / annealing) → engine (OpenMM, LAMMPS) and resources → live telemetry (T, E, P, pull
-   force) → trajectory.
+   force) → trajectory. The design, from the MD front-end survey (RES-1), is
+   [SIMULATE_DESIGN.md](SIMULATE_DESIGN.md); it waits for Brandon's approval before SIM-1.
 4. **Analyze:** spreadsheet (molecules × properties) with formula columns and plots; spectra (IR, with
    experimental overlay; clicking a peak animates the mode); surfaces (ESP-colored SAS first, orbitals
    later); trajectory analysis (RDF, MSD, density profiles, work/PMF); overlay/align.
@@ -91,15 +92,18 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
   and Gaussian/ORCA inputs, and anything else Open Babel reads when the user has it installed. An Import
   Options dialog modeled on Spartan's (2D → 3D, grow hydrogens, post SD fields to the table, filters for
   water, HCl and counter-ions, atom label order) is shown when a file has choices. Ctrl+V pastes from
-  ChemDraw and other editors; Copy as SMILES / MOL / CDXML goes back.
+  ChemDraw, other editors, spreadsheets and text (through the same Import Options); Copy as SMILES, canonical
+  SMILES, InChI, InChIKey, MOL/SDF, XYZ or CDXML goes back (Edit menu and the molecule list's right-click menu);
+  files and folders can be dropped on the window or the list.
 - **2D sketcher (UI-6).** A mature open-source editor embedded in a dock (QtWebEngine): Schrödinger's
   Sketcher (BSD-3, RDKit-based), Brandon's choice on 2026-11-07 (Ketcher was the other candidate). It
   hands a MOL block to the pipeline; the 3D view follows. Writing a ChemDraw-class editor from scratch is
   years of work and not the goal.
-- **3D model kit (UI-7).** Built into the PyVista view, like Spartan's: pick an atom type with its
-  hybridization (or a group, ring or PFAS fragment) and click a free valence to attach it; set bond
+- **3D model kit (UI-7).** Built into the PyVista view: pick an element, then its geometry (or a group,
+  ring or PFAS fragment), and click a free valence to attach it; set bond
   lengths, angles and dihedrals; minimize with MMFF. Every edit is an undoable command on one edit model
-  shared with the sketcher.
+  shared with the sketcher. Built 2026-11-22: the 3D view's Build mode (Ctrl+4) and the Model Kit dock in
+  the Build workspace, with Edit > Undo / Redo (`docs/dev/MODEL_KIT_GUI.md`).
 
 ## Job model: level of theory × task × resources
 

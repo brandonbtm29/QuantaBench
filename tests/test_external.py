@@ -401,9 +401,24 @@ def test_keyboard_interrupt_kills_the_child(tmp_path):
         external.run_program([sys.executable, "-c", "import os, time; open('pid', 'w').write(str(os.getpid())); "
                               "time.sleep(60)"], tmp_path, should_stop=interrupt, poll_s=0.1)
     pid = int((tmp_path / "pid").read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
-    assert signal.SIGTERM  # (silence unused-import linters on some platforms)
+    assert _ended(pid)
+    assert signal.SIGTERM and os  # (silence unused-import linters on some platforms)
+
+
+def _ended(pid: int, timeout: float = 10.0) -> bool:
+    """Gone, or a zombie: under the lifeline guard the program is the guard's child, and once the guard has gone too
+    its parent is the system's reaper (which a container's init may never be)."""
+    import psutil
+
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        try:
+            if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
+                return True
+        except psutil.NoSuchProcess:
+            return True
+        time.sleep(0.05)
+    return False
 
 
 @posix_only
