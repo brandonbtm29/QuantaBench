@@ -23,6 +23,23 @@
 - `machines --bench md` records the long-range settings of each variant it times (`long_range`); `cpu-ewald` now times
   the new defaults.
 
+### Lane plans fit the memory that is free (MEM-1, 2026-11-22)
+- `auto` lanes are capped by the memory available when the run starts (less 2 GB), not only by three quarters of the
+  RAM. On the workstation the desktop and other programs use about 20 of its 32 GB, and Psi4 lanes planned on the RAM
+  alone left it under 1 GB free (2026-11-12/13). The plan's reason says `capped by memory (N GB free of M GB)`.
+
+### SETTINGS-1 follow-ups: salts as separate entries, lanes at the physical cores, twist-boat seeds (2026-11-22)
+- **Keep the counter-ions as separate entries** (Settings > Build defaults, `build --counterion-entries`; science
+  setting `counterion_entries`, off): the counter-ions a build removes become molecules of the run. K-PFOS gives
+  PFOS⁻ and `kpfos_K+`, whose `counterion_of` column names the records it came from; posted fields are copied; one
+  entry per InChIKey in a run.
+- **Automatic lanes** never exceed the physical cores. A typed lane spec may go up to the logical threads, and the
+  plan line says when it runs more lanes than cores (hyperthreads add little for these engines).
+- **Twist-boat seeds** (Build defaults, `--twist-boat-seeds`; science setting `twist_boat_seeds`, default 20, was
+  5): Thorough ring conformers seed twist-boats from the 20 lowest conformers. On 45 QSAR molecules with saturated
+  six-membered rings, 20 seeds lowered the refined best conformer of 6 fused polycyclics by 0.1-2.8 kcal/mol and
+  never raised one; the force-field step took 2.6x as long. Thorough runs stored before keep 5 when resumed.
+
 ### The lifeline guard for native programs on macOS and Linux (ENG-3b, 2026-11-22)
 - xtb, CREST, MOPAC, Psi4 and g-xTB on the MacBook (and Linux) now end when the GUI or CLI that started them dies,
   even of SIGKILL: they run under the guard CREST through WSL already had, whose lifeline is their stdin. Run timings

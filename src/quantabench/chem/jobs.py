@@ -68,7 +68,7 @@ MAX_CRASHES = 2                    # a molecule that killed the process this oft
 # formats and the output folder only change speed or which files are written.
 SCIENCE_FIELDS = (
     "method", "ph", "protonate", "protonation_method", "keep_largest_fragment", "strip_water", "strip_acids",
-    "strip_counterions", "ring_conformers", "max_conformers",
+    "strip_counterions", "counterion_entries", "ring_conformers", "twist_boat_seeds", "max_conformers",
     "refine_top", "energy_window_kcal", "rmsd_threshold", "fmax", "max_steps", "optimizer",
     "temperature_k", "xtb_properties", "seed", "frequencies", "freq_hessian", "symmetry_number", "freq_qrrho",
     "freq_imag_retries", "solvent", "conformer_search", "crest_method", "crest_quick", "crest_min_rotors",
@@ -80,7 +80,8 @@ SCIENCE_FIELDS = (
 #: Science fields added after run folders existed whose behaviour before them differs from today's default: a stored
 #: config without the field ran with this value (RANK-2: every run before the rank step ranked at the refinement
 #: level). ``stored_science`` and ``config_differences`` use it, so an old run folder resumes as it was started.
-LEGACY_DEFAULTS = {"rank_method": "refine", "freq_imag_retries": 0}   # 2026-11-12: imaginary modes removed
+LEGACY_DEFAULTS = {"rank_method": "refine", "freq_imag_retries": 0,   # 2026-11-12: imaginary modes removed
+                   "twist_boat_seeds": 5}                              # thorough ring conformers before 2026-11-22
 #: Run options: not science (they change no number, so a resume may change them without --force) but chosen for the
 #: run, not for the machine. A resume keeps the values the run was started with unless they are given again
 #: (``stored_run_options``); this machine's settings fill in only what the run predates. Before RESUME-1 a resume took
@@ -90,7 +91,7 @@ RUN_OPTION_FIELDS = ("qm_memory_gb", "qm_keep_cubes", "molecule_timeout_s")
 #: fields that only matter with another field's value: rank_window_kj only when a rank step runs, crest_min_rotors only
 #: with the search "auto", crest_with_rdkit only where CREST can run. (field, the other field, its value(s) that make
 #: the field idle)
-_ONLY_WITH = {"rank_window_kj": ("rank_method", "refine"),
+_ONLY_WITH = {"rank_window_kj": ("rank_method", "refine"), "twist_boat_seeds": ("ring_conformers", "normal"),
               "crest_min_rotors": ("conformer_search", ("rdkit", "crest")),
               "crest_with_rdkit": ("conformer_search", "rdkit")}
 
@@ -1028,6 +1029,10 @@ def _run_resumable(inputs, cfg, run_dir, progress, should_stop, log, on_result, 
             log("Note: method 'auto' picks the engine per machine; when splitting a list across machines, "
                 "set the method explicitly so all chunks use the same level of theory.")
         if inputs:
+            from . import salts
+
+            # counter-ions as entries of their own: from the whole list, before the chunk, so every machine agrees
+            inputs = salts.expand(inputs, cfg, log)
             warnings: list[str] = []
             selected = [x for x in dedupe_ids(inputs, warnings) if in_chunk(x.id, chunk)]
             for w in warnings:

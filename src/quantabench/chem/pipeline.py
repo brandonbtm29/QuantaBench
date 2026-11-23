@@ -62,10 +62,15 @@ class BuildConfig:
     strip_water: bool = False
     strip_acids: bool = False
     strip_counterions: str = ""
+    # the counter-ions the build removes become entries of their own in the run (chem.salts): K-PFOS gives PFOS- and
+    # K+, linked by summary.csv's counterion_of; de-duplicated by InChIKey
+    counterion_entries: bool = False
     max_conformers: int = 50
     # ring conformers of the RDKit search (Spartan's Conformer Rules; conformers.RING_CONFORMERS): "normal" | "thorough"
     # (also twist-boats of saturated six-membered rings)
     ring_conformers: str = "normal"
+    # "thorough": twist-boats are made from this many of the lowest force-field conformers (conformers.twist_boats)
+    twist_boat_seeds: int = 20
     refine_top: int = 20                  # refine at most this many force-field conformers
     # the refinement level's window: the force-field pool keeps this + 4 kcal/mol, and with rank_method "refine" the
     # refined conformers are pruned with it; a rank step prunes with rank_window_kj instead (chem.rank)
@@ -151,7 +156,9 @@ class BuildConfig:
         cfg = cls(method=b.refine_method, ph=b.ph, protonate=b.protonate, keep_largest_fragment=b.keep_largest_fragment,
                   strip_water=b.strip_water, strip_acids=b.strip_acids,
                   strip_counterions=canonical_counterions(b.strip_counterions, strict=False),
+                  counterion_entries=b.counterion_entries,
                   ring_conformers=b.ring_conformers if b.ring_conformers in confs.RING_CONFORMERS else "normal",
+                  twist_boat_seeds=max(1, int(b.twist_boat_seeds)),
                   max_conformers=b.max_conformers, energy_window_kcal=b.energy_window_kcal,
                   rank_method=b.rank_method, rank_window_kj=b.rank_window_kj,
                   rmsd_threshold=b.rmsd_threshold, fmax=b.fmax, max_steps=b.max_steps, temperature_k=b.temperature_k,
@@ -260,7 +267,12 @@ class MoleculeResult:
             "qm_method": (self.qm or {}).get("level", ""), "qm_energy_eV": (self.qm or {}).get("energy_ev", ""),
             **self._rank_fields(best),
             "seconds": round(sum(self.timings.values()), 2), "notes": " | ".join(self.notes),
-        } | self._posted_fields()
+        } | self._counterion_of() | self._posted_fields()
+
+    def _counterion_of(self) -> dict:
+        """``counterion_of``: the records a counter-ion entry came from (``chem.salts``), only on such rows."""
+        parents = (self.input.meta or {}).get("qb_counterion_of")
+        return {"counterion_of": ";".join(str(p) for p in parents)} if parents else {}
 
     def _rank_fields(self, best: ConformerResult | None) -> dict:
         """The rank step's summary columns: the method asked for, the level used, the best conformer's rank energy,
@@ -287,7 +299,8 @@ SUMMARY_COLUMNS = frozenset(
     ("id name status error input_smiles smiles inchikey canonical_smiles input_inchikey input_charge charge "
      "multiplicity removed_fragments method forcefield device phase solvent solvation_model phase_notes "
      "conformer_search conformer_fallback n_embedded n_conformers best_energy_eV best_converged dipole_debye "
-     "qm_method qm_energy_eV rank_method rank_level rank_energy_eV rank_pick_changed rank_n_pool seconds notes").split())
+     "qm_method qm_energy_eV rank_method rank_level rank_energy_eV rank_pick_changed rank_n_pool seconds notes "
+     "counterion_of").split())
 
 ProgressFn = Callable[[int, int, str, str], None]   # (molecule index, total, stage, message)
 BATCHED_MODES = ("auto", "on", "off")
@@ -727,14 +740,16 @@ def _conformer_search(prepared: Chem.Mol, result: MoleculeResult, cfg: BuildConf
             if should_stop():
                 raise Cancelled()
             rd = confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,
-                                cfg.seed, threads, seeds=seeds, ring_conformers=cfg.ring_conformers)
+                                cfg.seed, threads, seeds=seeds, ring_conformers=cfg.ring_conformers,
+                                twist_boat_seeds=cfg.twist_boat_seeds)
             both = search_rule.merge_pools(cs, rd, cfg.refine_top, cfg.rmsd_threshold)
             result.conformer_search = search_rule.MERGED
             return both                     # its notes, the merge note among them, are logged with the pool's
     result.conformer_search = "rdkit"
     # Keep a wider force-field window: the refined ranking can differ from MMFF's.
     return confs.generate(prepared, cfg.max_conformers, cfg.energy_window_kcal + 4.0, cfg.rmsd_threshold,
-                          cfg.seed, threads, seeds=seeds, ring_conformers=cfg.ring_conformers)
+                          cfg.seed, threads, seeds=seeds, ring_conformers=cfg.ring_conformers,
+                          twist_boat_seeds=cfg.twist_boat_seeds)
 
 
 def _engine_properties(result: MoleculeResult, mol: Chem.Mol, best: ConformerResult, cfg: BuildConfig,
@@ -1269,6 +1284,9 @@ def run(inputs: list[MoleculeInput], cfg: BuildConfig, progress: ProgressFn = _n
     device = resources.select_device(cfg.gpu, cfg.gpu_index, cfg.gpu_memory_fraction)
     log(f"Resources: {threads} CPU threads, device {device}")
     cfg = replace(cfg, memory_budget_gb=resolved_budget(cfg, 1, log))
+    from . import salts
+
+    inputs = salts.expand(inputs, cfg, log)            # counter-ions as entries of their own (counterion_entries)
     with priority.children_at(cfg.priority):          # xtb, CREST, Psi4 started here run at the run's priority
         return _run_inputs(inputs, cfg, device, threads, progress, should_stop, log, run_dir, on_result)
 

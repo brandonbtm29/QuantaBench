@@ -271,6 +271,8 @@ def _config(args, base=None, **extra):
         "molecule_timeout_s": getattr(args, "molecule_timeout", None),
         "priority": getattr(args, "priority", None), "free_threads": getattr(args, "free_threads", None),
         "ring_conformers": getattr(args, "ring_conformers", None),
+        "counterion_entries": getattr(args, "counterion_entries", None),
+        "twist_boat_seeds": getattr(args, "twist_boat_seeds", None),
     }.items() if v is not None}
     if getattr(args, "strip", None) is not None:
         overrides.update(strip_options(args.strip))
@@ -278,6 +280,8 @@ def _config(args, base=None, **extra):
         overrides["crest_quick"] = False
     if overrides.get("crest_min_rotors", 0) < 0:
         raise SystemExit("--crest-min-rotors must be 0 or more")
+    if overrides.get("twist_boat_seeds", 1) < 1:
+        raise SystemExit("--twist-boat-seeds must be 1 or more")
     if getattr(args, "qm_freq", None) is not None:
         overrides["qm_frequencies"] = args.qm_freq
     if getattr(args, "cubes", None) is not None:
@@ -1011,9 +1015,16 @@ def add_build_science_args(q: argparse.ArgumentParser) -> None:
                         "acids (HCl, HBr, HI, HF, ...) and counter-ion names (sodium, potassium, ammonium, chloride, "
                         "tetrabutylammonium, ...; Settings > Build defaults lists them); 'none' for no filter "
                         "(default from settings)")
+    q.add_argument("--counterion-entries", action=argparse.BooleanOptionalAction, default=None,
+                   help="the counter-ions the build removes become entries of their own in the run (K-PFOS: PFOS- "
+                        "and K+, linked by summary.csv's counterion_of; one entry per distinct ion; default from "
+                        "settings: off)")
     q.add_argument("--ring-conformers", choices=["normal", "thorough"],
                    help="RDKit search: thorough also makes twist-boat conformers of saturated six-membered rings "
                         "(Spartan's Conformer Rules; default from settings: normal)")
+    q.add_argument("--twist-boat-seeds", type=int, metavar="N",
+                   help="with --ring-conformers thorough: make twist-boats from the N lowest force-field conformers "
+                        "(default 5)")
     q.add_argument("--max-confs", type=int)
     q.add_argument("--refine-top", type=int)
     q.add_argument("--window", type=float, help="energy window at the refinement level, kcal/mol (the force-field "

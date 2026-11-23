@@ -155,11 +155,13 @@ quantabench-cli build --file set.sdf --import-options "post_fields=true,id_field
 **Settings > Build defaults** has the build's own filters, for every input (SMILES, names and files alike): water,
 acids and counter-ions picked by name are stripped before *Keep largest fragment*, so a hydrate's ion pair can be
 computed dry, or a salt's anion kept where the cation is larger. Its *Ring conformers: Thorough* (Spartan's Conformer
-Rules) also searches twist-boats of six-membered rings. Both are science settings, stored with each run:
+Rules) also searches twist-boats of six-membered rings, and *Keep the counter-ions as separate entries* computes
+K-PFOS as PFOS⁻ and K⁺ in the same run. All are science settings, stored with each run:
 
 ```bash
 quantabench-cli build "O.[Na+].[O-]C(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --strip water,sodium
 quantabench-cli build "OC1CCCC2CCCCC12" --ring-conformers thorough
+quantabench-cli build "[K+].[O-]S(=O)(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --counterion-entries
 ```
 
 Right-click a molecule in the list for **Look up**: PubChem, the NIST WebBook, nmrshiftdb2 and EPA CompTox open in the

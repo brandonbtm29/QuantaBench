@@ -159,6 +159,11 @@ What the standardization does with research records (every step is in the molecu
   where the counter-ion is the larger ion (tetrabutylammonium trifluoroacetate computes the trifluoroacetate). The
   notes say "stripped before the largest-fragment rule (build filters): O (water), [Na+] (sodium)", and
   `removed_fragments` lists them first. Off by default; science settings (stored with the run, sent to workers).
+- **Counter-ions as separate entries** (`counterion_entries`, `chem.salts`, off by default): the removed fragments
+  that are ions or named counter-ions (never water, a copy of the kept ion or a neutral molecule) become molecules of
+  the run, `<record>_<formula>` (`kpfos_K+`), named after the ion, with the record's posted fields and a
+  `counterion_of` column listing every record of the run it came from; one per InChIKey, none for an ion the list
+  already has. The list is expanded before a grid chunks it, so every machine agrees.
 - **Metal salts.** A bondless Al³⁺, Zn²⁺, Fe²⁺/Fe³⁺ or Cu²⁺ cation (as well as Na⁺, K⁺, Ca²⁺, Mg²⁺,
   Ba²⁺, Sr²⁺) is a counter-ion when the rest of the record is an organic ion and counter-ions: fosetyl-Al
   (`[Al+3]` + 3 ethyl phosphonates) computes one ethyl phosphonate anion, and `removed_fragments` lists
@@ -1056,7 +1061,7 @@ quantabench-cli build "OC(=O)C(F)(F)C(F)(F)C(F)(F)F PFBA" --method xtb-gfn2 --so
   - `--cubes` makes the density and ESP cubes and the surface descriptors.
   - `--no-keep-cubes` deletes the two cube files (about 16 MB per molecule) once the surface descriptors and the ESP profile are saved. The Surfaces panel then has no QM surface to draw for that molecule.
   - For an ESP study of many molecules: `--qm wb97x-d/6-31g* --cubes --no-qm-polarizability --no-keep-cubes`.
-  - `--qm-memory GB` sets the memory of each Psi4 job (default: Settings > Engines > QM memory, 4 GB). The lane plan then runs as many QM lanes as the RAM holds (three quarters of it), sharing the thread budget.
+  - `--qm-memory GB` sets the memory of each Psi4 job (default: Settings > Engines > QM memory, 4 GB). The lane plan then runs as many QM lanes as the memory holds, sharing the thread budget: three quarters of the RAM, and no more than the memory available when the run starts less 2 GB (MEM-1, 2026-11-22: the workstation's desktop uses about 20 of its 32 GB, and five 4 GB Psi4 lanes planned on the RAM alone left it under 1 GB). The plan says so: `capped by memory (11 GB free of 31 GB)`. Close other programs before a large QM run, or give the lanes explicitly (`--lanes`).
   - `--qm-memory`, `--keep-cubes`/`--no-keep-cubes` and `--molecule-timeout` belong to the run: `build --resume` (and Build > Resume run folder) keeps the values the run was started with and says so ("Run options kept from the run: ..."); give one again to change it (RESUME-1). Before RESUME-1 (2026-11-14) a resume took them from the settings.
   - `--lanes` is stored with the run too: the spec, whether it was chosen (`--lanes`) or the machine's setting, and the machine (RESUME-2). A resume on the machine that chose it, without `--lanes`, uses it again ("Lanes kept from the run: --lanes auto"); another machine uses its own setting and says so, and the run keeps its choice for a later resume where it was made. `status` prints the stored spec. Lane specs stay per machine on purpose: a GPU lane or a thread count does not carry over.
 - **Memory and density fitting.** DF-SCF keeps its three-index integrals, naux · nbf(nbf+1)/2 · 8 bytes, in memory only when they fit (`MemDFJK`). Otherwise they go to disk (`DiskDFJK`): many times slower, and as large in scratch.

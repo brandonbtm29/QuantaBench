@@ -1204,6 +1204,16 @@ Found 2026-11-22 (ENG-3), each also on `main`:
 - `test_vibrations.py` (3) stop at the memory guard late in a full run (2.9 GB in use against a 2.8 GB budget); alone
   they pass.
 
+## MEM-1: Memory on the workstation · in-PR 2026-11-22 (branch `fix/mem-1-lane-plan-free-memory`; the `.wslconfig` needs-Brandon)
+- Done (in-PR): `auto` lane plans are capped by the memory available at the plan less 2 GB, not only 0.75 x the RAM
+  (DEVLOG 2026-11-22).
+- needs-Brandon: a `.wslconfig` (`%UserProfile%\.wslconfig`; it takes effect after `wsl --shutdown`, which stops every
+  WSL and Docker job), so the WSL VM (CREST lanes, their /dev/shm folders, Docker) never takes more than 12 GB:
+  `[wsl2]` `memory=12GB`, `swap=4GB`; `[experimental]` `autoMemoryReclaim=dropCache` (the documented default, written
+  out so a later WSL does not change it unseen).
+- Ideas, not done: CREST's /dev/shm choice could also require Windows' own free memory (it checks WSL's MemAvailable,
+  which counts up to the VM's cap); a Psi4 job's memory could be capped at the lane's share when it starts.
+
 ## VAL-1: Validation tooling against Spartan · done 2026-11-05 (the 300-molecule run is done; three data questions need-Brandon)
 Done (docs/VALIDATION.md):
 - Spartan wide table: `inchikey`, `canonical_smiles` of the structure as Spartan drew it (formal charges from
@@ -1446,6 +1456,11 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
     *Look up* menu, the cache folder and maximum age (`lookups.pubchem_cache_dir`, `pubchem_max_age_days`). Left: the
     folder of reference tables; the nmrshiftdb2 template (its documented 13C JCAMP export) is not checked against
     the site.
+  - **Follow-ups** (Brandon, 2026-11-22; in PR `feat/settings-1-followups`): salts as separate entries
+    (`counterion_entries`, `chem.salts`: K-PFOS gives PFOS⁻ and K⁺, linked by `counterion_of`; no new counter-ion
+    names); Automatic lanes never above the physical cores, typed specs up to the logical threads with a note;
+    `twist_boat_seeds` (Thorough ring conformers, default 20 after a 45-molecule check, an advanced science setting).
+    Waiting for Brandon: Spartan's NMR URL template for the nmrshiftdb2 lookup.
   - **Machines** (Available Servers, Embedded Server): the `dist` settings (workers, port, bind, token), now
     only in settings.json.
 - Later: **Molecule display** (default 3D style, atom labels such as charges and exposed area, surface style; the

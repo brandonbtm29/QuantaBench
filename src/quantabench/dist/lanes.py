@@ -150,7 +150,8 @@ acids, 4:2-8:2 FTOH and FTSA, FBSA, FOSA, HFPO-DA, ADONA (24); wall times includ
   on (``BuildConfig.dxtb_gpu``) one lane on the GPU. It was not faster either: on the workstation's ROCm wheels (no
   MAGMA, ``gpu_linalg_available``) 1 GPU + 4 x 2 CPU lanes took 77.4 s for the 12 PFAS against 49.9 s for
   6 x 2 CPU lanes.
-* lanes are capped by memory (0.75 x RAM over a per-lane working set; Psi4 adds its memory per job) and
+* lanes are capped by memory (0.75 x RAM, and no more than the memory available when the plan is made less 2 GB
+  (MEM-1), over a per-lane working set; Psi4 adds its memory per job) and
   ``settings.resources.parallel_molecules`` (> 0) fixes the number of lanes. The plan never uses more
   threads than the run's thread budget (``priority.budget_of``: with CPU threads 0 the logical threads minus
   ``BuildConfig.free_threads``, at least 25 % and 2 of them at priority ``background``). On Windows a pool runs
@@ -187,6 +188,9 @@ TEST_SCRATCH_ENV = "QUANTABENCH_TEST_LANE_SCRATCH"
 TYPICAL_ELEMENTS = (1, 6, 7, 8, 9, 16)
 #: Working set of one lane process in GB, by workload, for the memory cap of the auto plan
 LANE_MEMORY_GB = {"mmff": 0.4, "native": 0.6, "torch": 1.2, "external": 0.6}
+#: what the lanes leave of the memory available when the plan is made (MEM-1): the system and the user's programs
+#: grow too, and "available" counts the file cache
+FREE_RESERVE_GB = 2.0
 GPU_LANE_THREADS = 4
 #: Threads per lane of the CREST plan on a CPU with known performance cores (Apple Silicon); see plan_auto
 CREST_LANE_THREADS = 4
@@ -242,6 +246,7 @@ class _CPUReport:
     gpus: list
     torch_backend: str = "none"
     performance_cores: int = 0       # ``resources.performance_cores()``: Apple Silicon's, 0 = none known
+    ram_available_gb: float = 0.0    # available memory now (what the user's other programs leave); 0 = unknown
 
 
 def cpu_report() -> _CPUReport:
@@ -249,8 +254,9 @@ def cpu_report() -> _CPUReport:
 
     from .. import resources
 
-    return _CPUReport(resources.physical_cores(), resources.logical_cores(),
-                      psutil.virtual_memory().total / 1024**3, [], "unknown", resources.performance_cores())
+    vm = psutil.virtual_memory()
+    return _CPUReport(resources.physical_cores(), resources.logical_cores(), vm.total / 1024**3, [], "unknown",
+                      resources.performance_cores(), vm.available / 1024**3)
 
 
 def _gpus(report) -> tuple[str, list]:
@@ -387,6 +393,19 @@ def gpu_benchmark_verdict(method: str, device: str, profile, solvent: str = "") 
     return False, f"no GPU lane: {numbers}, so a GPU lane would be slower than a CPU lane"
 
 
+def lane_memory_gb(hw) -> tuple[float, str]:
+    """(GB the lanes may use, how it was set) for a hardware report: 0.75 x the RAM, and no more than the memory
+    available when the report was made less ``FREE_RESERVE_GB`` (MEM-1: the workstation's desktop and other programs use
+    about 20 of its 32 GB, and 0.75 x 32 GB of Psi4 lanes left it under 1 GB on 2026-11-13). A report without the
+    available memory (``ram_available_gb`` 0) is planned on the RAM alone, as before."""
+    ram = float(getattr(hw, "ram_gb", 0) or 0)
+    gb, text = ram * 0.75, f"{ram:.0f} GB"
+    free = float(getattr(hw, "ram_available_gb", 0) or 0)
+    if free > 0 and ram > 0 and free - FREE_RESERVE_GB < gb:
+        gb, text = max(0.0, free - FREE_RESERVE_GB), f"{free:.0f} GB free of {ram:.0f} GB"
+    return gb, text
+
+
 def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_MACHINE) -> tuple[list[Lane], str]:
     """The lanes of spec "auto" and a one-line reason. ``report``: a ``resources.HardwareReport`` (or
     ``cpu_report()``, which knows no GPU); None detects the GPU through PyTorch only when the engine can use
@@ -436,7 +455,8 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
             why_gpu, bench_why, device = bench_why, "", "cpu"
     cap = max_lanes()
     per_lane_gb = LANE_MEMORY_GB[kind] + (_qm_memory_gb(cfg) if cfg.qm_method else 0.0)
-    by_memory = max(1, int(float(hw.ram_gb or 0) * 0.75 / per_lane_gb)) if hw.ram_gb else total
+    memory_gb, memory_text = lane_memory_gb(hw)
+    by_memory = max(1, int(memory_gb / per_lane_gb)) if hw.ram_gb else total
 
     lanes: list[Lane] = []
     if parallel_molecules > 0:
@@ -486,10 +506,13 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
             reason = f"{method} on the CPU: 2-thread lanes on the physical cores"
         n = max(0, min(wanted, by_memory - len(lanes)))
         if n < wanted:
-            reason += f", capped by memory ({hw.ram_gb:.0f} GB)"
+            reason += f", capped by memory ({memory_text})"
             if cfg.qm_method and n > 1:     # Psi4 scales with threads: the lanes that fit share the budget
                 per = max(per, budget // n)
                 reason += f" ({_qm_memory_gb(cfg):g} GB per QM job): {per} threads each"
+        if n + len(lanes) > cores:        # never more lanes than physical cores: hyperthreads add little here
+            n = max(0, cores - len(lanes))
+            reason += f", at most one lane per physical core ({cores})"
         if cap is not None and n + len(lanes) > cap:
             n = cap - len(lanes)
             reason += f", capped at {cap} lanes (Windows)"
@@ -631,6 +654,19 @@ def describe(lanes: list[Lane]) -> str:
     return " + ".join(parts) + f" = {threads(sum(x.threads for x in lanes))}"
 
 
+def smt_note(lanes: list[Lane], report=None) -> str:
+    """' More lanes than the 12 physical cores: ...' when a spec runs more CPU lanes than the machine has physical cores
+    (up to the logical count is allowed); '' otherwise."""
+    from .. import resources
+
+    physical = int(getattr(report, "physical_cores", 0) or resources.physical_cores())
+    n = sum(1 for x in lanes if x.device == "cpu")
+    if n <= physical:
+        return ""
+    return (f" More lanes than the {physical} physical cores: hyperthreads add little for these engines, so the "
+            "extra lanes mostly share cores.")
+
+
 def plan_text(spec: str | None, cfg=None, report=None, parallel_molecules: int | None = None) -> str:
     """Human-readable plan for a lane spec, never raises (for the settings dialog). ``report`` None uses
     ``cpu_report()``: no torch import, so GPU lanes show as unavailable until hardware detection has run."""
@@ -647,7 +683,7 @@ def plan_text(spec: str | None, cfg=None, report=None, parallel_molecules: int |
             out = f"{describe(lanes)} of {total}. {reason}."
         else:
             lanes = parse_lanes(text, cfg, hw)
-            out = f"{describe(lanes)} of {total}."
+            out = f"{describe(lanes)} of {total}." + smt_note(lanes, hw)
     except Exception as exc:     # noqa: BLE001 - shown to the user as text
         out = f"Not usable here: {exc}"
     if report is None and getattr(hw, "torch_backend", "") == "unknown":
