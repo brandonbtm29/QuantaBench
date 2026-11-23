@@ -36,7 +36,6 @@ TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
 TORCH_ROCM_INDEX="https://download.pytorch.org/whl/rocm10.0"   # pytorch.org's ROCm build, Nov 2026
 MINIFORGE_DIR="$HOME/miniforge3"
 MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
-APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 # builds of external programs (scripts/fork-packages.json "linux" > "programs"), one folder per release
 PROGRAMS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/QuantaBench/programs"
 
