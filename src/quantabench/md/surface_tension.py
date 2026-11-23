@@ -74,12 +74,24 @@ def read_slab_box(path: str | Path) -> dict[str, float]:
     return out
 
 
+def merge_steps(a: np.ndarray) -> np.ndarray:
+    """Rows merged by their step (first column): the last occurrence of a step wins, in step order. A file appended
+    to by resumed segments (SIM-1) has no repeats once the supervisor cut it, but a hand-made resume may."""
+    if a.ndim != 2 or len(a) < 2:
+        return a
+    steps = a[:, 0]
+    if np.all(np.diff(steps) > 0):
+        return a
+    _u, last = np.unique(steps[::-1], return_index=True)
+    return a[len(a) - 1 - last]
+
+
 def read_pressure_tensor(path: str | Path) -> np.ndarray:
-    """Rows (step, Pxx, Pyy, Pzz) of ``pressure_tensor.txt`` (atm)."""
+    """Rows (step, Pxx, Pyy, Pzz) of ``pressure_tensor.txt`` (atm), merged by step."""
     a = np.loadtxt(path, comments="#", ndmin=2)
     if a.shape[1] < 4:
         raise ValueError(f"{path}: expected 4 columns (step, Pxx, Pyy, Pzz)")
-    return a[:, :4]
+    return merge_steps(a[:, :4])
 
 
 def read_profiles(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -111,14 +123,19 @@ def read_profiles(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]
     if z is None or not blocks:
         return np.array([], dtype=int), np.array([]), np.zeros((0, 0))
     n = min(len(steps), len(blocks))
-    return np.array(steps[:n]), z, np.array(blocks[:n])
+    st, bl = np.array(steps[:n]), np.array(blocks[:n])
+    if n > 1 and not np.all(np.diff(st) > 0):            # merged by step, the last block of a step wins
+        _u, last = np.unique(st[::-1], return_index=True)
+        keep = n - 1 - last
+        st, bl = st[keep], bl[keep]
+    return st, z, bl
 
 
 def read_bulk_density(path: str | Path) -> np.ndarray:
     """Rows (step, density g/cm³, volume Å³, lx, ly, lz, pe) of ``bulk_density.txt`` (none yet: shape (0, 0))."""
     with warnings.catch_warnings():          # a run shorter than the first 1-ps average leaves only the header
         warnings.simplefilter("ignore", UserWarning)
-        return np.loadtxt(path, comments="#", ndmin=2)
+        return merge_steps(np.loadtxt(path, comments="#", ndmin=2))
 
 
 def log_performance(path: str | Path) -> list[float]:
@@ -365,6 +382,17 @@ def read_lj_types(folder: str | Path) -> tuple[list[LJType], str, dict[tuple[int
 
 
 # ------------------------------------------------------------------------------------------------- analysis
+def _segments(folder: Path) -> list[dict]:
+    """The segments of the folder's run.json (SIM-1): part, machine, variant, threads, steps, ns/day, exit."""
+    p = folder / "run.json"
+    try:
+        run = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    keys = ("n", "part", "machine", "variant", "threads", "first_step", "last_step", "ns", "ns_per_day", "status")
+    return [{k: s.get(k) for k in keys} for s in run.get("segments", [])]
+
+
 def _setup(folder: Path) -> dict:
     p = folder / "liquid_setup.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
@@ -492,6 +520,13 @@ def analyze(folder: str | Path, *, skip_ns: float | None = None, block_ns: float
         out["reference"]["density_rel"] = (out["bulk"]["density_g_cm3"] - ref_d) / ref_d
     perf = {stage: log_performance(folder / f"log.{stage}") for stage in ("bulk", "slab")}
     out["performance_ns_day"] = {k: (v[-1] if v else None) for k, v in perf.items()}
+    segs = _segments(folder)
+    if segs:             # a run of segments (SIM-1): each one's speed, and the stage's from its longest segment
+        out["segments"] = segs
+        for stage in ("bulk", "slab"):
+            mine = [s for s in segs if s["part"] == stage and s.get("ns_per_day")]
+            if mine:
+                out["performance_ns_day"][stage] = max(mine, key=lambda s: s.get("ns") or 0.0)["ns_per_day"]
     if (cfg.get("dispersion") or "").startswith("cutoff"):
         fit = out.get("density", {}).get("tanh_fit")
         lj = read_lj_types(folder) if fit and out.get("cutoff_A") else None
@@ -584,6 +619,11 @@ def format_report(r: dict) -> str:
     perf = r.get("performance_ns_day", {})
     if any(perf.values()):
         L.append(f"| speed (ns/day) | bulk {_f(perf.get('bulk'), '.2f')}, slab {_f(perf.get('slab'), '.2f')} |")
+    segs = [s for s in r.get("segments", []) if s.get("last_step") is not None]
+    if len(segs) > 1:
+        L.append("| segments | " + "; ".join(
+            f"{s['part']} {s['first_step']:,}-{s['last_step']:,} {s.get('variant') or ''} x {s.get('threads')} on "
+            f"{s.get('machine')}: {_f(s.get('ns_per_day'), '.2f')} ns/day" for s in segs) + " |")
     L += ["", "## Checks", ""]
     L += [f"- {'ok' if c['ok'] else '**check**'}: {c['check']}: {c['detail']}" for c in r.get("checks", [])]
     if r.get("notes"):

@@ -30,7 +30,9 @@ molecule/system navigator, the playback bar and the job monitor.
 3. **Simulate (MD):** system → force field → protocol (minimize / equilibrate NVT/NPT / production /
    steered / annealing) → engine (OpenMM, LAMMPS) and resources → live telemetry (T, E, P, pull
    force) → trajectory. The design, from the MD front-end survey (RES-1), is
-   [SIMULATE_DESIGN.md](SIMULATE_DESIGN.md); it waits for Brandon's approval before SIM-1.
+   [SIMULATE_DESIGN.md](SIMULATE_DESIGN.md) (approved by Brandon on 2026-11-23). SIM-1 PR 1 runs MD folders as
+   jobs (segments, pause, resume, live ns/day and ETA in the Jobs dock; Simulate > Run MD folder...); the panel
+   itself is PR 2.
 4. **Analyze:** spreadsheet (molecules × properties) with formula columns and plots; spectra (IR, with
    experimental overlay; clicking a peak animates the mode); surfaces (ESP-colored SAS first, orbitals
    later); trajectory analysis (RDF, MSD, density profiles, work/PMF); overlay/align.
@@ -51,7 +53,7 @@ Library workspace and the project document (UI-2) build on this.
 (the first of a tab group in front) and keeps the user's arrangement per workspace (`saveState`, in the
 window settings). The panels are the same objects in every workspace, so a new workspace or a new panel is a
 line in `WORKSPACES` plus a dock with an object name. Today's mapping: Build = molecules + Appearance;
-Calculate = pipeline, Machines, Appearance; Simulate = the surface builder and LAMMPS export (stub); Analyze =
+Calculate = pipeline, Machines, Appearance; Simulate = the surface builder, LAMMPS export and Run MD folder (the Jobs dock below); Analyze =
 the Table and Plot (UI-3) in front, surfaces, Appearance, the conformer table and spectra behind their tabs;
 Library = run folders under the output folder.
 

@@ -932,6 +932,53 @@ physical cores; check whether Thorough ring conformers should seed from more tha
 - Nothing was run on the workstation or the Mac besides read-only checks (the Mac's run output, its `.venv/bin/lmp`
   launcher, `/bin/sh` → bash, its conda envs) and the Windows test suite.
 
+## 2026-11-23: MD runs as jobs, SIM-1 PR 1 (branch `feat/sim-1-md-run-jobs`)
+- **The ask** (Brandon, 2026-11-23): start building the Simulate workspace; later, default geometries and common
+  setups. The design's v1 is two PRs; this is the first: segments, pause and resume, live telemetry, the CLI, MD jobs
+  in the queue. Read first: SIMULATE_DESIGN.md §5/§7/§12/§14, MD-LR (#52), and the split test plan (portable
+  checkpoints are a data file plus the step; binary restarts only for the same machine and build).
+- **LAMMPS facts checked with the PyPI build (22 Jul 2025) before building on them:**
+  - `fix halt ... error soft` ends the current run but not the input: the later runs are skipped (the timer is set to
+    time out) and the input goes on, so a plain `in.bulk` would have written `bulk_final.data` after a skipped NPT.
+    Hence a check after every `run ... upto`: a run that stopped short of its end step writes the pause checkpoint and
+    quits. A halt that lands exactly on a stage's end is caught by the next stage's (skipped) run.
+  - On a resume, `fix ave/time` with one sample per row writes the start step again at its setup, as does a dump;
+    `fix ave/chunk` with 100 samples per block does not (its window would start before the step). So the cut before a
+    resume removes the step itself for the first two and keeps it for the third; and pauses land on multiples of the
+    output periods (`pause_every`, the least common multiple), else a profile block would be lost.
+  - The restart header's flag numbering is not what the source I remembered had: 22 Jul 2025 writes VERSION 0,
+    SMALLINT 1, IMAGEINT 48, TAGINT 2, BIGINT 3, UNITS 4, NTIMESTEP 5. The first parser (UNITS 5, NTIMESTEP 6)
+    returned None for every file, and the supervisor quietly fell back to the data file: caught in the manual
+    end-to-end run. `restart_step` now finds the units string by its content and takes the bigint after it.
+  - `write_data` puts "timestep = N" in its first line, so a data checkpoint describes itself too.
+  - `jump SELF label` inside `if` works for skipping finished stages in a segment input (`-in file`).
+- **End-to-end in the cloud** (540-atom hexane slab, 1 thread): a straight run (two segments), a pause in the slab at
+  3,000 and a resume (one pressure-tensor series 0-31,000 every 10 steps, profiles every 100, frames every 500, the
+  thermo row at 3,000 identical in both logs), a stop during the slab and a resume from the periodic restart at 3,000
+  (83 rows cut, then appended), a pause at the compress/NPT boundary in the bulk and its resume through the `jump`s.
+- **GUI:** an MD job starts `quantabench-cli md run|resume DIR` detached (Windows: no console, its own process group,
+  out of the caller's job where allowed) and follows `run.json` and `progress.json` every 2 s. It runs beside builds;
+  one MD job at a time here, as the design's per-resource rule until SCHED-3. A supervisor started this way logs only
+  to `supervisor.log` (its stdout is that file, so it does not echo too). Scripted smoke test under xvfb with
+  screenshots: running (0.0074 / 0.207 ns · 62.4 ns/day · ETA 5 min), pausing, paused with Resume enabled.
+- **Not changed:** the liquid slab's default dispersion (the design said `cutoff16`; MD-LR's recommendation decides
+  it now), `md/bench.py` (MD-BENCH-2 is changing it; only its `find_lammps`, `can_run`, `accelerator_args` and
+  `default_threads` are used).
+- **Docs:** SIMULATE_DESIGN.md (status approved, §5 as built, §7 Brandon's scheduler clarification, §12 PR 1 as built,
+  §14 the recommendations PR 1 takes, §15 setup templates and pre-flight checks), ENGINES.md ("MD runs as jobs"),
+  ARCHITECTURE.md, UI_PLAN.md; BACKLOG SIM-1, new SIM-2 and SIM-3, SCHED-3.
+- **Windows (the workstation, the installer's `lmp.exe` 4 Jul 2026 on PATH):** the full suite on 38b8953: 19 failed,
+  1945 passed, 95 skipped, 2 xfailed, 2 xpassed in 20 min 37 s. The 19 are the ones MD-BENCH-2's run on the same
+  machine had this night (14 in `test_lanes.py`, 2 MOPAC, 2 in `test_gui.py`, `test_gui_workspaces.py`'s switching
+  test; TEST-WIN-1), none in SIM-1's files. SIM-1's tests with `test_md_liquid.py` and `test_lammps.py`: 66 passed,
+  3 skipped (AmberTools; the GPU test), in 2 min 48 s; the supervisor tests ran with the real `lmp.exe`, and the GUI
+  test started a detached supervisor from the offscreen window. With `QB_TEST_MD_GPU=1` the CPU-then-GPU test passed
+  on the RX 9060 XT (OpenCL, `device_type generic`, 2 threads, below normal, 32 s): one series across the join, the
+  potential energy at the join within 1e-4.
+- Nothing on the workstation or the Mac was started or stopped (A-fine, CREST's water phase and the GAFF2 slab kept
+  running). The tests above ran 540-atom LAMMPS jobs there on 1-2 threads at below-normal priority, behind the
+  pytest lock.
+
 ## 2026-11-23: ask before re-running a changed MD benchmark (MD-BENCH-3, branch `feat/md-bench-3-rerun-prompt`)
 - **Why:** Brandon, when #54 and #55 were released: "just ask the user if they would like to rerun the new benchmark
   if a future release changes the benchmarking process." MD-BENCH-2 already raised `MD_BENCH_VERSION` to 2 (the slab
