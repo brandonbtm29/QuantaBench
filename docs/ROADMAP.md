@@ -152,8 +152,9 @@ external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENG
 - [ ] A settings dialog as detailed as Spartan's Preferences (SETTINGS-1: Compute, import filters, Lookups,
       Machines left).
 - [x] Structure input like Spartan's: import from many formats with an Import Options dialog and ChemDraw
-      clipboard (UI-4), an embedded 2D sketcher (UI-6), the 3D model kit's edit model (UI-7). Left: the model
-      kit's build mode in the 3D view, and hand checks on Windows and macOS. Plan in UI_PLAN.md.
+      clipboard (UI-4), an embedded 2D sketcher (UI-6), the 3D model kit (UI-7: the edit model, and the build
+      mode in the 3D view with the Model Kit dock, in PR). Left: hand checks on Windows and macOS. Plan in
+      UI_PLAN.md.
 - [x] **Conformer ranking** (RANK-1, RANK-2): a rank step after refinement, g-xTB with a GFN1-xTB CPCM term in
       water and AIMNet2 in the gas phase, on by default; chosen after benchmarks against DFT (VALIDATION.md).
 - [x] **Run tooling:** run timings in every run folder and `timings` (SCHED-1 step 1), a review of the molecules
