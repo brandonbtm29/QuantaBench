@@ -988,8 +988,8 @@ the setups he asked for). Docs: docs/ENGINES.md, "MD runs as jobs".
     running runs when a project opens (`JobQueue.attach_md`).
   - Learned rates: each finished segment's ns/day into the machine's record next to the MD benchmark (design §5).
   - `STOP` and `supervisor.lock` in the SyncThing folder's `.stglobalignore` (needs-Brandon: his folder).
-  - A CPU-then-GPU segment on the workstation (`QB_TEST_MD_GPU=1 pytest tests/test_md_supervisor.py`), once its runs
-    leave the GPU free.
+  - Done 2026-11-23: the CPU-then-GPU segment test passed on the workstation's RX 9060 XT
+    (`QB_TEST_MD_GPU=1 pytest tests/test_md_supervisor.py -k gpu`).
 
 ## SIM-2: Setup templates (default geometries and common setups) · ready (after SIM-1 PR 1; GUI after PR 2)
 Brandon (2026-11-23): "For the MD, I would like to eventually have some default geometries and common set ups." Design:

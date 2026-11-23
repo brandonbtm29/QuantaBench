@@ -762,7 +762,7 @@ from the list below:
   continuous pressure-tensor and density-profile series with the same energy at the join; a stopped segment resumes
   from its last restart file; a run that moved to another build resumes from the data file; a later segment uses
   other engine settings. The CPU-then-GPU segment test runs where `QB_TEST_MD_GPU=1` is set and LAMMPS has the GPU
-  package.
+  package; it passed on the workstation's RX 9060 XT (2026-11-23).
 
 The plan as written:
 - `md.sim`: System, Parameterization, Protocol/Stage, Run/Segment as JSON dataclasses, filled by today's writers.

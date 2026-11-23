@@ -931,5 +931,14 @@ physical cores; check whether Thorough ring conformers should seed from more tha
 - **Docs:** SIMULATE_DESIGN.md (status approved, §5 as built, §7 Brandon's scheduler clarification, §12 PR 1 as built,
   §14 the recommendations PR 1 takes, §15 setup templates and pre-flight checks), ENGINES.md ("MD runs as jobs"),
   ARCHITECTURE.md, UI_PLAN.md; BACKLOG SIM-1, new SIM-2 and SIM-3, SCHED-3.
+- **Windows (the workstation, the installer's `lmp.exe` 4 Jul 2026 on PATH):** the full suite on 38b8953: 19 failed,
+  1945 passed, 95 skipped, 2 xfailed, 2 xpassed in 20 min 37 s. The 19 are the ones MD-BENCH-2's run on the same
+  machine had this night (14 in `test_lanes.py`, 2 MOPAC, 2 in `test_gui.py`, `test_gui_workspaces.py`'s switching
+  test; TEST-WIN-1), none in SIM-1's files. SIM-1's tests with `test_md_liquid.py` and `test_lammps.py`: 66 passed,
+  3 skipped (AmberTools; the GPU test), in 2 min 48 s; the supervisor tests ran with the real `lmp.exe`, and the GUI
+  test started a detached supervisor from the offscreen window. With `QB_TEST_MD_GPU=1` the CPU-then-GPU test passed
+  on the RX 9060 XT (OpenCL, `device_type generic`, 2 threads, below normal, 32 s): one series across the join, the
+  potential energy at the join within 1e-4.
 - Nothing on the workstation or the Mac was started or stopped (A-fine, CREST's water phase and the GAFF2 slab kept
-  running).
+  running). The tests above ran 540-atom LAMMPS jobs there on 1-2 threads at below-normal priority, behind the
+  pytest lock.
