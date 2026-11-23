@@ -12,6 +12,11 @@ LAMMPS and their surface tension.
     quantabench-cli md estimate (DIR | --atoms N --ns NS) [--dispersion ewald] [--geometry slab|bulk]
         [--machine NAME] [--all-variants] [--include-unverified] [--json]
                                                  run time from each machine's MD benchmark (MD-BENCH-1/2)
+    quantabench-cli md run DIR [--variant auto|cpu|gpu|gpu-cutoff16] [--threads N] [--priority P] [--detach]
+    quantabench-cli md status DIR [--json]
+    quantabench-cli md pause DIR [--now]
+    quantabench-cli md resume DIR [--variant ...] [--threads N] [--detach]
+        MD runs as jobs (SIM-1, md.supervisor): segments, pause through a STOP file, resume from a checkpoint
 """
 
 from __future__ import annotations
@@ -108,6 +113,97 @@ def register(msub) -> None:
                     help="also variants whose CPU/GPU pressure check failed")
     es.add_argument("--json", action="store_true")
     es.set_defaults(func=_estimate)
+
+    # SIM-1: MD runs as jobs (md.supervisor)
+    for name, resume, text in (("run", False, "run an MD folder as a job: its parts one segment at a time, with "
+                                               "progress.json, pause and resume"),
+                               ("resume", True, "continue a paused, stopped or failed MD run from its newest "
+                                                "checkpoint")):
+        rp = msub.add_parser(name, help=text)
+        rp.add_argument("dir", help="a folder written by md liquid-slab or md smd (or the Surface builder)")
+        rp.add_argument("--variant", default="auto",
+                        help="auto (default: the GPU where LAMMPS has one and the folder's dispersion has GPU "
+                             "styles), cpu, gpu, kokkos, or a full name such as gpu-cutoff16")
+        rp.add_argument("--threads", type=int, help="CPU (OpenMP) threads; with a GPU, those of PPPM and the bonded "
+                                                     "terms (default: this machine's thread budget)")
+        rp.add_argument("--priority", choices=["normal", "low", "background"],
+                        help="run priority of LAMMPS (default: the settings')")
+        rp.add_argument("--lammps", help="the LAMMPS executable (default: the one QuantaBench finds: settings, PATH)")
+        rp.add_argument("--detach", action="store_true",
+                        help="start the supervisor in the background and return (follow it with md status)")
+        rp.add_argument("--force", action="store_true", help="take over a lock left by another machine")
+        rp.set_defaults(func=_md_run, resume=resume)
+    sp = msub.add_parser("status", help="where an MD run is: state, ns, ns/day, ETA, segments, alerts")
+    sp.add_argument("dir")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=_md_status)
+    pp = msub.add_parser("pause", help="pause an MD run at its next pause point (a checkpoint is written there)")
+    pp.add_argument("dir")
+    pp.add_argument("--now", action="store_true",
+                    help="stop LAMMPS if the run has not paused within 30 s (the next segment then starts from the "
+                         "last restart file)")
+    pp.set_defaults(func=_md_pause)
+
+
+def _md_run(args) -> int:
+    from .md import sim
+    from .md import supervisor as SV
+
+    folder = Path(args.dir).expanduser()
+    if not sim.is_run_folder(folder):
+        print(f"{folder}: not an MD run folder (md liquid-slab or md smd writes one)", file=sys.stderr)
+        return 2
+    variant = None if (args.variant or "auto") == "auto" else args.variant
+    if args.detach:
+        holder = SV.lock_holder(folder)
+        if holder is not None:
+            print(f"{folder}: already running (pid {holder.get('pid')} on {holder.get('machine')})", file=sys.stderr)
+            return 1
+        proc = SV.start_detached(folder, resume=args.resume, variant=variant, threads=args.threads,
+                                 lammps=args.lammps)
+        if not SV.wait_started(folder, proc):
+            print(f"The supervisor did not start (exit {proc.poll()}); see {folder / sim.SUPERVISOR_LOG}",
+                  file=sys.stderr)
+            return 1
+        print(f"Started the supervisor (pid {proc.pid}); follow it with: quantabench-cli md status {folder}")
+        return 0
+    SV.install_signal_handlers()
+    import os
+
+    echo = None if os.environ.get(SV.DETACHED_ENV) else print
+    try:
+        run = SV.Supervisor(folder, variant=variant, threads=args.threads, lammps=args.lammps,
+                            priority=args.priority, resume=args.resume, force=args.force, echo=echo).run()
+    except sim.RunError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("Stopped; continue with: quantabench-cli md resume " + str(folder), file=sys.stderr)
+        return 130
+    return {"done": 0, "paused": 0, "stopped": 3}.get(run.state, 1)
+
+
+def _md_status(args) -> int:
+    from .md import supervisor as SV
+
+    st = SV.read_status(Path(args.dir).expanduser())
+    if args.json:
+        print(json.dumps(st, indent=1, default=str))
+    else:
+        print(SV.format_status(st))
+    return 2 if st.get("state") == "unknown" else 0
+
+
+def _md_pause(args) -> int:
+    from .md import sim
+    from .md import supervisor as SV
+
+    try:
+        print(SV.request_pause(Path(args.dir).expanduser(), now=args.now))
+    except sim.RunError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
 
 
 def _liquid_slab(args) -> int:

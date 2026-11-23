@@ -64,8 +64,8 @@ WORKSPACES: tuple[Workspace, ...] = (
               "the job queue and the machines that run it",
               left=("molecules",), right=("pipeline", "machines", "appearance"), bottom=("results", "jobs")),
     Workspace("simulate", "Simulate",
-              "Simulate: molecular dynamics set-up (the surface builder and LAMMPS export today)",
-              left=("molecules",), right=("simulate", "appearance"), bottom=("results",)),
+              "Simulate: molecular dynamics set-up (the surface builder and LAMMPS export) and MD runs as jobs",
+              left=("molecules",), right=("simulate", "appearance"), bottom=("results", "jobs")),
     # the table across the bottom (its plot on the right), with the selected molecule's conformers, spectra and
     # surfaces a tab away
     Workspace("analyze", "Analyze",

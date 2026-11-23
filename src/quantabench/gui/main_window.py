@@ -994,14 +994,24 @@ class MainWindow(QMainWindow):
             "graphite slab, lets you move it in the 3D view, and writes the system and a LAMMPS steered-MD set-up "
             "(<code>system.data</code>, <code>in.smd</code>). <code>quantabench-cli md smd</code> does the same from "
             "the command line and <code>md parse</code> reads the run back.<br><br>"
+            "<b>Run MD folder...</b> runs a folder written by <code>md liquid-slab</code>, <code>md smd</code> or "
+            "the Surface builder as a job: one LAMMPS segment at a time in a process of its own, with its progress in "
+            "ns, ns/day and the ETA in the Jobs dock, Pause (a checkpoint) and Resume. Closing the window leaves it "
+            "running; <code>quantabench-cli md status</code> follows it too.<br><br>"
             "Next: the Simulate workspace proper (system, force field, protocol, engine, live telemetry), designed "
-            "in the MD front-end survey (BACKLOG RES-1, SIM-1).")
+            "in docs/SIMULATE_DESIGN.md (SIM-1).")
         text.setWordWrap(True)
         text.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(text)
         btn = QPushButton("Surface builder...")
         btn.clicked.connect(self.open_surface_builder)
         lay.addWidget(btn)
+        md_btn = QPushButton("Run MD folder...")
+        md_btn.setObjectName("run_md_folder_btn")
+        md_btn.setToolTip("Run, resume or follow an MD run folder as a job (pause and resume, live ns/day and ETA)")
+        md_btn.clicked.connect(lambda _c=False: self.run_md_folder())
+        lay.addWidget(md_btn)
+        self.run_md_btn = md_btn
         ovito = QPushButton(self.a_ovito.text())
         ovito.setEnabled(self.a_ovito.isEnabled())
         ovito.clicked.connect(self.open_in_ovito)
@@ -2029,6 +2039,12 @@ class MainWindow(QMainWindow):
 
         return queue.submit(Job(name=name, ids=list(ids), cfg=cfg, todo=todo, run_dir=run_dir,
                                 total=total or len(ids), done_before=done, **meta))
+
+    def run_md_folder(self, folder=None):
+        """Simulate > Run MD folder... (SIM-1): an MD run folder as a job (``gui.job_monitor.run_md_folder``)."""
+        from .job_monitor import run_md_folder
+
+        return run_md_folder(self, folder)
 
     def _start_job(self, job) -> None:
         """The job queue's way to run a job: one build, as Run all always started it."""
