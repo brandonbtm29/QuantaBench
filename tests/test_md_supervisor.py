@@ -45,7 +45,8 @@ def _config(**kw):
 
 def _supervisor(folder, info, **kw):
     kw.setdefault("threads", 1)
-    return SV.Supervisor(folder, lammps=info.path, priority=PRIORITY, echo=None, progress_every_s=0.2, **kw)
+    kw.setdefault("variant", "cpu")          # the GPU only in the test that asks for it
+    return SV.Supervisor(folder, lammps=info.path, priority=PRIORITY, echo=None, progress_every_s=0.1, **kw)
 
 
 def _progress(folder) -> dict:

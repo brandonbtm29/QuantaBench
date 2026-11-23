@@ -147,7 +147,7 @@ def test_run_md_folder_runs_a_real_tiny_slab(tmp_path):
         from quantabench.gui import job_queue as JQ
 
         def one_thread(job):                  # a tiny run on a shared machine: 1 thread (the default is the budget)
-            job.md_threads = 1
+            job.md_threads, job.md_variant = 1, "cpu"
             return JQ._start_md_supervisor(job)
 
         w.job_queue.md_start = one_thread
