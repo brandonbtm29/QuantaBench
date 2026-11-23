@@ -8,7 +8,6 @@
   `quantabench-cli machines` prints a note under that machine with the command (`--json`: `md_bench_rerun`), the
   Machines dock shows this computer's note with **Run MD benchmark** and **Not now** and marks other machines' MD
   numbers "older benchmark (version N)", and a worker logs the note at start and leaves the benchmark alone.
-- Tests: two example paths with a real user name now use `me`.
 
 ### MD runs as jobs: segments, pause and resume (SIM-1 PR 1, 2026-11-23)
 - **`quantabench-cli md run DIR`** runs a folder written by `md liquid-slab`, `md smd` or the Surface builder under a

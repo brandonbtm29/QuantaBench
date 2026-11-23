@@ -1209,8 +1209,7 @@ if a future release changes the benchmarking process." Code: `md/bench.py` (`VER
 never re-runs it), `gui/machines_panel.py` (notice with Run MD benchmark / Not now, "older benchmark" marks); docs:
 docs/WORKERS.md, "The MD benchmark", docs/UI_PLAN.md (Machines dock).
 - Done (2026-11-23): the prompt in the CLI and the Machines dock, the worker's note, tests
-  (`tests/test_md_bench_rerun.py`). Also two test paths with a real user name -> `me` (the same lines as FIX-9's
-  #57, so either merges cleanly) and a machine name out of an older DEVLOG entry.
+  (`tests/test_md_bench_rerun.py`).
 - Open: "Not now" hides the notice until the next start; remember it per version instead? A worker could tell its
   grid clients (`/v1/info`) that its benchmark is older, for the Machines dock's rows of workers.
 

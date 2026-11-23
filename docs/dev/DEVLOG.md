@@ -810,8 +810,8 @@ physical cores; check whether Thorough ring conformers should seed from more tha
 - **Lanes:** `plan_auto` already gave one lane per physical core for most engines. The 2-thread lanes of external
   programs could exceed the physical cores on a machine with more than two threads per core; now every automatic plan
   stops at the physical cores. `parse_lanes` already refused more lanes than logical threads; `plan_text` now
-  adds a note when a typed spec runs more lanes than physical cores. The coordinator relayed the workstation's MD
-  and CREST measurements: flat scaling past ~6-8 threads per job.
+  adds a note when a typed spec runs more lanes than physical cores. The coordinator relayed NOVA's MD and CREST
+  measurements: flat scaling past ~6-8 threads per job.
 - **Twist-boat seeds**:
   - **What the sources say.** Spartan's manual: Thorough "considers twist-boat conformers of six-membered rings (in
     addition to chair conformers)". Wavefunction's conformer FAQ: twist-boats "are unlikely by default", and its
@@ -995,6 +995,4 @@ physical cores; check whether Thorough ring conformers should seed from more tha
 - **The worker** logs the note at start and leaves the benchmark alone: `md_measured` is unchanged, so auto mode with
   `--bench-methods ...,md` still measures only a machine that has no MD numbers. `--bench always` re-runs it because
   that was asked for.
-- **Also:** the two test paths with a real user name (FIX-9, #57) now use `me`, the same lines as #57 so either PR
-  merges cleanly after the other, and an older DEVLOG entry names "the workstation" instead of the machine.
 - Screenshots: `docs/dev/screenshots/MD-BENCH-3/` (the notice; after a run). Tests: `tests/test_md_bench_rerun.py`.
