@@ -98,7 +98,7 @@ def test_md_jobs_run_beside_builds_pause_and_resume(tmp_path, monkeypatch):
         assert f"MD job {a.number}</b>: gpu-cutoff16 x 6 threads, beside the builds" in usage_html(w, None)
         # Pause: the STOP file (request_pause); the job shows "pausing" until the supervisor ends
         assert mon.cancel_selected() and pauses and a.status == "cancelling"
-        assert it.text(3) == "pausing"
+        assert it.text(3) == "pausing" and "(pausing)" in mon.detail.text()
         status["a"] = {**status["a"], "state": "paused", "alive": False,
                        "segments": status["a"]["segments"] + [{"n": 2, "part": "slab", "status": "paused"}]}
         procs["a"].code = 0

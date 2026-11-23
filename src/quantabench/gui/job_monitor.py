@@ -242,7 +242,8 @@ class JobMonitor(QWidget):
             self._shown_log = (0, 0)
             self._update_buttons()
             return
-        lines = [f"<b>{html.escape(job.name)}</b> ({job.status})"]
+        shown = "pausing" if job.is_md and job.status == "cancelling" else job.status
+        lines = [f"<b>{html.escape(job.name)}</b> ({shown})"]
         if job.summary:
             lines.append(html.escape(job.summary))
         cfg = job.cfg
