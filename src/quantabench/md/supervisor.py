@@ -601,7 +601,8 @@ class Supervisor:
                 "machine": self.machine, "variant": seg.variant if seg else "", "threads": seg.threads if seg else 0,
                 "engine_pid": seg.pid if seg else None, "supervisor_pid": os.getpid(),
                 "updated": sim.now_iso(), "heartbeat": time.time(), "message": message,
-                "alerts": T.alerts(tail.state, target_T=self._target_T(run), running=True) if tail is not None else []}
+                "alerts": T.alerts(tail.state, target_T=self._target_T(run) if stage is not None and stage.kind in
+                                   ("npt", "production") else None, running=True) if tail is not None else []}
         if run.ns_total:
             prog["fraction"] = prog["ns_done"] / run.ns_total
         with contextlib.suppress(OSError):
