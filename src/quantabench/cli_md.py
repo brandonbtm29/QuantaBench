@@ -9,8 +9,9 @@ LAMMPS and their surface tension.
         (the long-range options and their recommendation: md.long_range, MD-LR)
     quantabench-cli md liquid-slab --list-ff
     quantabench-cli md surface-tension DIR [--skip-ns 2] [--block-ns 1] [--json]
-    quantabench-cli md estimate (DIR | --atoms N --ns NS) [--dispersion ewald] [--machine NAME] [--all-variants]
-        [--include-unverified] [--json]          run time from each machine's MD benchmark (MD-BENCH-1)
+    quantabench-cli md estimate (DIR | --atoms N --ns NS) [--dispersion ewald] [--geometry slab|bulk]
+        [--machine NAME] [--all-variants] [--include-unverified] [--json]
+                                                 run time from each machine's MD benchmark (MD-BENCH-1/2)
 """
 
 from __future__ import annotations
@@ -98,6 +99,9 @@ def register(msub) -> None:
     es.add_argument("--atoms", type=int, help="atoms of the job")
     es.add_argument("--ns", type=float, help="simulated time, ns")
     es.add_argument("--dispersion", help="ewald, cutoff12, cutoff16, ... (default: any measured variant)")
+    es.add_argument("--geometry", choices=["slab", "bulk"], default="slab",
+                    help="the job's: slab (a liquid-slab run, the default) uses the slab benchmark, bulk the bulk "
+                         "box's; a machine without that one falls back to the other, noted")
     es.add_argument("--machine", help="only this machine (default: every machine in the registry)")
     es.add_argument("--all-variants", action="store_true", help="every measured variant, not only the fastest")
     es.add_argument("--include-unverified", action="store_true",
@@ -296,8 +300,10 @@ def _runtime_estimate(s) -> None:
     from .md import bench
 
     ns = s.config.bulk_ns + s.config.settle_ns + s.config.production_ns
+    lx, ly, lz = s.target_box
     try:
-        lines = bench.estimate_lines(s.n_atoms, ns, s.config.dispersion)
+        lines = bench.estimate_lines(s.n_atoms, ns, s.config.dispersion, geometry="slab",
+                                     box=(lx, ly, lz + 2.0 * float(s.config.vacuum)))
     except Exception as exc:  # noqa: BLE001 - an estimate never stops a setup
         lines = []
         print(f"  Run time: no estimate ({type(exc).__name__}: {exc})")
@@ -310,8 +316,9 @@ def _runtime_estimate(s) -> None:
     for line in lines:
         print(f"    {line}")
     readme = s.out_dir / "README.txt"
-    note = ("The benchmark is a bulk box; the slab's vacuum lengthens its k-space grid, so the slab runs somewhat "
-            "slower. quantabench-cli md estimate <this folder> repeats this with newer benchmarks.")
+    note = ("The hours come from each machine's slab benchmark (a bulk-box benchmark leaves out the slab's vacuum "
+            "mesh: a lower bound) and include the bulk stage at the slab's speed. quantabench-cli md estimate <this "
+            "folder> repeats this with newer benchmarks.")
     with open(readme, "a", encoding="utf-8") as fh:
         fh.write("\nRUN TIME ESTIMATE\n  " + head + "\n" + "".join(f"    {x}\n" for x in lines) + f"  {note}\n")
 
@@ -321,6 +328,7 @@ def _estimate(args) -> int:
     from .md import bench
 
     atoms, ns, dispersion = args.atoms, args.ns, args.dispersion
+    geometry, box = getattr(args, "geometry", "slab") or "slab", None
     if args.dir:
         try:
             meta = json.loads((Path(args.dir).expanduser() / "liquid_setup.json").read_text(encoding="utf-8"))
@@ -331,6 +339,9 @@ def _estimate(args) -> int:
         atoms = atoms or int(meta.get("n_atoms") or 0)
         ns = ns or sum(float(cfg.get(k) or 0.0) for k in ("bulk_ns", "settle_ns", "production_ns"))
         dispersion = dispersion or cfg.get("dispersion")
+        target = meta.get("box_target_A") or []
+        if geometry == "slab" and len(target) == 3:
+            box = (float(target[0]), float(target[1]), float(target[2]) + 2.0 * float(cfg.get("vacuum") or 0.0))
     if not atoms or not ns or atoms <= 0 or ns <= 0:
         print("give a liquid-slab folder, or --atoms and --ns", file=sys.stderr)
         return 2
@@ -344,15 +355,17 @@ def _estimate(args) -> int:
     rows = []
     for p in profiles:
         est = bench.estimate_hours(p.md_throughput, atoms, ns, dispersion=dispersion,
-                                   include_unverified=args.include_unverified)
+                                   include_unverified=args.include_unverified, geometry=geometry, box=box)
         for e in (est if args.all_variants else est[:1]):
-            rows.append({"machine": p.name, "variant": e.variant, "hours": round(e.hours, 2),
+            rows.append({"machine": p.name, "variant": e.variant, "geometry": e.geometry, "hours": round(e.hours, 2),
                          "ns_per_day": round(e.ns_per_day, 4), "measured_ns_per_day": e.measured_ns_per_day,
                          "measured_atoms": e.measured_atoms, "threads": e.threads, "check": e.check, "note": e.note})
     if args.json:
-        print(json.dumps({"atoms": atoms, "ns": ns, "dispersion": dispersion, "estimates": rows}, indent=1))
+        print(json.dumps({"atoms": atoms, "ns": ns, "dispersion": dispersion, "geometry": geometry, "box_A": box,
+                          "estimates": rows}, indent=1))
         return 0
-    print(f"{ns:g} ns of {atoms:,} atoms ({dispersion or 'any dispersion'}), from each machine's MD benchmark:")
+    print(f"{ns:g} ns of {atoms:,} atoms ({dispersion or 'any dispersion'}, {geometry}), from each machine's MD "
+          "benchmark:")
     if not rows:
         print("  no machine has a matching MD benchmark (quantabench-cli machines --bench md on each)")
         return 0
@@ -360,8 +373,10 @@ def _estimate(args) -> int:
         flag = "" if r["check"] in ("", "ok") else f"  [pressure check: {r['check']}: unverified]"
         print(f"  {r['machine']:24s} {r['variant']:14s} {bench.format_hours(r['hours']):>18s}  "
               f"({bench.fmt_ns(r['ns_per_day'])} ns/day here; measured {bench.fmt_ns(r['measured_ns_per_day'])} on "
-              f"{r['measured_atoms']:,} atoms" + (f", {r['note']}" if r["note"] else "") + ")" + flag)
-    print("  Hours scale the benchmark's ns/day by its atoms / these atoms; a slab with vacuum runs somewhat slower.")
+              f"{r['measured_atoms']:,} atoms, {r['geometry']} box" + (f", {r['note']}" if r["note"] else "") + ")"
+              + flag)
+    print("  Hours scale the benchmark's ns/day by its atoms / these atoms (with the job's box, its k-space share by "
+          "the box volume: docs/WORKERS.md, \"The MD benchmark\").")
     return 0
 
 

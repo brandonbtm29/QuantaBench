@@ -519,24 +519,7 @@ def slab_input(tm: TypedMolecule, cfg: LiquidSlabConfig, elements_by_type: Seque
     L += ["neighbor        2.0 bin", "neigh_modify    delay 0 every 1 check yes", ""]
     L += pair_energy_guard()
     L += [
-          "# --- open the box along z ---",
-          "# Store every atom's unwrapped z and its molecule's centre of mass, shift each molecule by whole box",
-          "# lengths so that its centre lies in the bulk box (molecules stay whole), then add the vacuum.",
-          "variable        zlo0 equal $(zlo)",
-          "variable        lz0 equal $(lz)",
-          "compute         molchunk all chunk/atom molecule",
-          "compute         molcom all com/chunk molchunk",
-          "compute         molcomz all chunk/spread/atom molchunk c_molcom[3]",
-          "fix             zsave all store/state 0 zu c_molcomz",
-          "thermo_style    custom step temp press pe",
-          "run             0 post no",
-          "variable        kshift atom floor((f_zsave[2]-v_zlo0)/v_lz0)",
-          "variable        znew atom f_zsave[1]-v_kshift*v_lz0",
-          "change_box      all z final $(v_zlo0-v_vacuum) $(v_zlo0+v_lz0+v_vacuum) units box",
-          "set             group all image NULL NULL 0",
-          "set             group all z v_znew",
-          "unfix           zsave",
-          "uncompute       molcomz", "uncompute       molcom", "uncompute       molchunk",
+          *open_box_lines(),
           *(["# the box is now longer along z: the dispersion mesh again from disp_h", *disp_mesh_lines()]
             if _uses_disp_mesh(cfg) else []),
           "reset_timestep  0",
@@ -567,6 +550,30 @@ def slab_input(tm: TypedMolecule, cfg: LiquidSlabConfig, elements_by_type: Seque
           "write_data      slab_final.data nocoeff",
           'print           "QB_SLAB done"', ""]
     return "\n".join(L) + "\n"
+
+
+def open_box_lines() -> list[str]:
+    """Input lines that turn the bulk box into a slab: every molecule made whole across the z boundary (its centre of
+    mass put back into the bulk box), then ``v_vacuum`` Å of empty space added on each side. Leaves ``v_zlo0`` and
+    ``v_lz0`` (the bulk box) defined. Shared by ``in.slab`` and the MD benchmark's slab box (``md.bench``)."""
+    return ["# --- open the box along z ---",
+            "# Store every atom's unwrapped z and its molecule's centre of mass, shift each molecule by whole box",
+            "# lengths so that its centre lies in the bulk box (molecules stay whole), then add the vacuum.",
+            "variable        zlo0 equal $(zlo)",
+            "variable        lz0 equal $(lz)",
+            "compute         molchunk all chunk/atom molecule",
+            "compute         molcom all com/chunk molchunk",
+            "compute         molcomz all chunk/spread/atom molchunk c_molcom[3]",
+            "fix             zsave all store/state 0 zu c_molcomz",
+            "thermo_style    custom step temp press pe",
+            "run             0 post no",
+            "variable        kshift atom floor((f_zsave[2]-v_zlo0)/v_lz0)",
+            "variable        znew atom f_zsave[1]-v_kshift*v_lz0",
+            "change_box      all z final $(v_zlo0-v_vacuum) $(v_zlo0+v_lz0+v_vacuum) units box",
+            "set             group all image NULL NULL 0",
+            "set             group all z v_znew",
+            "unfix           zsave",
+            "uncompute       molcomz", "uncompute       molcom", "uncompute       molchunk"]
 
 
 RUN_INPUT = """# QuantaBench: bulk NPT and then the slab, in one LAMMPS run (the same as in.bulk followed by in.slab)

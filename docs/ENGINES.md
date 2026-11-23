@@ -1378,8 +1378,13 @@ written before MD-LR keep their settings: nothing reads the defaults at run time
 
 **The recommendation** (`md.long_range.recommend_long_range`). From the setup (slab or bulk, the box, the molecules
 and atoms, whether LAMMPS can use a GPU on the machine, the purpose) it picks the method, cutoff, accelerator and
-accuracies, says why in one line, and gives a speed from the pilots (C6F14, OPLS-AA W&J, 9,780 atoms, the
-workstation; scaled by the atom ratio like `md estimate`):
+accuracies, says why in one line, and gives a speed. The speed is this computer's own MD benchmark when it has a
+record of the recommended accelerator and dispersion (`machines --bench md`, MD-BENCH-2; preferring the setup's
+geometry, slab or bulk), else the pilots' (C6F14, OPLS-AA W&J, 9,780 atoms, the workstation); either is scaled to the
+setup's atoms like `md estimate` (docs/WORKERS.md, "The MD benchmark": with the box known, the k-space share by the
+box volume). The line names its source: `(this machine's MD benchmark: gpu-cutoff16@slab ...)` or `(pilot table:
+pilot B, GPU + 6 CPU threads)`. The benchmark is used only with `--gpu auto` (this computer), and an unverified GPU
+record never is:
 
 | setup | recommended | because | pilot speed |
 |---|---|---|---|
@@ -1396,7 +1401,8 @@ Isele-Holder et al. 2012), pppm/disp looser than the converged settings, a mesh 
 validated, Coulomb looser than 1e-5, a box too narrow for the cutoff. The user's choice always wins; when it differs,
 both are printed and recorded. The numbers live in one table, `md.long_range.PILOT_TABLE` (with each row's
 source), and are **provisional until the A-fine run** (pilot A with these settings, due 2026-11-24/25) gives its σ.
-Caveat: the CPU speeds compare 4 threads (16 Å) with 8 (pppm/disp); `machines --bench md` measures both on one machine.
+Caveat: the CPU speeds compare 4 threads (16 Å) with 8 (pppm/disp); `machines --bench md` measures both on one machine,
+and its numbers then replace the pilots' speeds on that machine.
 
 For the Simulate panel (SIM-1): `md.long_range.options()` (choices, labels, defaults, ranges),
 `recommend_long_range(...)`, `settings(...)` / `config_kwargs(...)` (to `LiquidSlabConfig`), `check_settings(...)`,
@@ -1471,10 +1477,12 @@ installer's `lmp.exe`, which has the GPU package.
 **How long it takes** (MD-BENCH-1). `quantabench-cli machines --bench md` measures this machine's ns/day for each
 variant on a liquid C6F14 box (docs/WORKERS.md, "The MD benchmark"). With that in the registry, `md liquid-slab`
 prints the hours of bulk + slab on each machine and adds them to README.txt, and `quantabench-cli md estimate DIR`
-(or `--atoms N --ns NS --dispersion ewald`) repeats it later. The hours scale the measured ns/day by the atom ratio.
-The benchmark box has no vacuum, and the slab's longer k-space grid makes the slab somewhat slower, so read them
-as a lower bound. A GPU variant that failed the benchmark's CPU/GPU pressure check is left out unless
-`--include-unverified`.
+(or `--atoms N --ns NS --dispersion ewald [--geometry slab|bulk]`) repeats it later. The default benchmark is a
+3,800-atom slab with vacuum (MD-BENCH-2), so its k-space grids are a slab's; the hours scale its ns/day by the atom
+ratio, and the k-space share by the box volume when the folder's box differs in shape. A machine that has only a
+bulk-box benchmark (`--md-size small|pilot`, or one from before MD-BENCH-2) is used with a note: its hours leave out
+the slab's vacuum mesh and are a lower bound. A GPU variant that failed the benchmark's CPU/GPU pressure check is left
+out unless `--include-unverified`.
 
 ## Not available yet
 

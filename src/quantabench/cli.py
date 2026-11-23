@@ -33,7 +33,7 @@ Splitting work (``quantabench.dist``):
     quantabench-cli build --file cohort.xlsx --method gfn1-xtb --lanes auto     # parallel processes here
     quantabench-cli lanes auto                                                  # what a lane spec means here
     quantabench-cli machines [--refresh] [--bench mmff,gfn1-xtb]                # machine registry + throughput
-    quantabench-cli machines --bench md [--md-size pilot]                       # LAMMPS ns/day per variant (MD-BENCH-1)
+    quantabench-cli machines --bench md [--md-size slab|small|pilot-slab|pilot]  # LAMMPS ns/day per variant (MD-BENCH-1/2)
     quantabench-cli build --file cohort.xlsx --method mmff --chunk-weights auto # this machine's weighted share;
         # the first machine stores the split (settings/machines/splits), the others reuse it for that list
     quantabench-cli worker                                                      # serve jobs over Tailscale
