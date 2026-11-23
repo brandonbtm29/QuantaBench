@@ -10,7 +10,8 @@ from their folder when selected (``ResultStore``, an LRU cache).
     MoleculeTableModel   rows + batched inserts (one beginInsertRows per batch); sort() in Python by a key; data
                          fields posted on import (File > Open's Import Options) as extra columns after the fixed ones
     MoleculeFilter       search (id, name, SMILES, formula) and status filter; sorting goes to the source
-    MoleculeListView     the table, with the few QListWidget-style helpers the window and tests use
+    MoleculeListView     the table, with the few QListWidget-style helpers the window and tests use; its right-click
+                         menu is filled by ``menu_hooks`` (``gui.clipboard`` adds Copy as and Paste)
     ResultStore          ``win.results``: results by id (in memory only for imports; the others from disk)
     read_run_folder      rows of a run folder from its job table (or its summary.csv)
 
@@ -27,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, Signal
-from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableView
+from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QMenu, QTableView
 
 from .. import units
 
@@ -493,9 +494,27 @@ class MoleculeListView(QTableView):
         hh.setSortIndicator(-1, Qt.SortOrder.AscendingOrder)       # input order until a header is clicked
         self.setSortingEnabled(True)
         self._current = ""
+        #: callables ``hook(menu)`` that add actions to the right-click menu, in order (``gui.clipboard``: Copy as and
+        #: Paste); no menu shows when none adds anything
+        self.menu_hooks: list = []
         self.selectionModel().currentRowChanged.connect(self._on_current)
         self.proxy.modelReset.connect(self._on_current)
         self.proxy.layoutChanged.connect(self._on_current)
+
+    def context_menu(self) -> QMenu:
+        """The right-click menu for the current selection (``menu_hooks``); the caller shows or deletes it."""
+        menu = QMenu(self)
+        for hook in self.menu_hooks:
+            hook(menu)
+        return menu
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        menu = self.context_menu()
+        if not menu.isEmpty():
+            menu.exec(event.globalPos())
+        else:
+            event.ignore()
+        menu.deleteLater()
 
     def _on_current(self, *_args) -> None:
         ident = self.current_id()

@@ -34,7 +34,7 @@ class Fragment:
 
 
 _LIBRARY: tuple[Fragment, ...] = (
-    # ---- groups (Spartan's Groups list)
+    # ---- functional groups
     Fragment("methyl", "[*:1]C", "group", "CH3"),
     Fragment("ethyl", "[*:1]CC", "group", "C2H5"),
     Fragment("hydroxyl", "[*:1]O", "group", "OH"),
@@ -125,8 +125,8 @@ def perfluoroalkyl(n: int) -> Fragment:
 
 
 def from_smiles(smiles: str, name: str = "", category: str = "group") -> Fragment:
-    """A fragment typed by the user (the kit's SMILES button). Without a ``*`` the first atom of the SMILES is
-    the attachment atom (it must have a hydrogen to give up), as in Spartan."""
+    """A fragment typed by the user (the Model Kit's SMILES box). Without a ``*`` the first atom of the SMILES is
+    the attachment atom (it must have a hydrogen to give up)."""
     smiles = smiles.strip()
     with rdBase.BlockLogs():
         mol = Chem.MolFromSmiles(smiles)

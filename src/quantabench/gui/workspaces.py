@@ -27,8 +27,9 @@ from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPainter, 
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QToolBar, QWidget
 
 #: bump when the default layouts change incompatibly: saved arrangements of an older version are dropped
-#: (2: Analyze gained the Table and Plot docks, UI-3; 3: Calculate gained the Jobs dock, UI-5)
-STATE_VERSION = 3
+#: (2: Analyze gained the Table and Plot docks, UI-3; 3: Calculate gained the Jobs dock, UI-5; 4: Build gained the
+#: Model Kit dock, UI-7)
+STATE_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ class Workspace:
         return self.left + self.right + self.bottom
 
 
-#: the workspace shortcuts' modifier: Alt+1 ... Alt+5 (Ctrl+1 ... Ctrl+3 are the mouse modes). On macOS Control+1 ...
+#: the workspace shortcuts' modifier: Alt+1 ... Alt+5 (Ctrl+1 ... Ctrl+4 are the mouse modes). On macOS Control+1 ...
 #: (Qt's "Meta"): Command+Shift+3/4/5 are the system's screenshots, and Option+digit types characters ([ on a German
 #: keyboard), which the SMILES box needs.
 SHORTCUT_MODIFIER = "Meta" if sys.platform == "darwin" else "Alt"
@@ -58,8 +59,9 @@ def _key(n: int) -> str:
 
 WORKSPACES: tuple[Workspace, ...] = (
     Workspace("build", "Build", _key(1),
-              "Build: add molecules (SMILES, names, CAS, files, the 2D sketcher) and set how they look",
-              left=("molecules",), right=("appearance",), bottom=("results",)),
+              "Build: add molecules (SMILES, names, CAS, files, the 2D sketcher, the 3D Model Kit) and set how they "
+              "look",
+              left=("molecules",), right=("modelkit", "appearance"), bottom=("results",)),
     Workspace("calculate", "Calculate", _key(2),
               "Calculate: the pipeline (conformers, refinement, ranking, properties, QM), the review before a run, "
               "the job queue and the machines that run it",
