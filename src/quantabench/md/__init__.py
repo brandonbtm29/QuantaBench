@@ -17,6 +17,12 @@ It is pure Python, so the CLI, ``md.liquid`` and the GUI import it freely.
 ``md.bench`` (MD-BENCH-1) times this machine's LAMMPS on a liquid C6F14 box per accelerator and dispersion variant
 (``machines --bench md``), checks GPU variants against the CPU at ``run 0``, and estimates MD run times from that.
 
+MD runs as jobs (SIM-1): ``md.sim`` is the run of a written folder as data (``run.json``: system, parameterization,
+protocol with its parts and stages, segments), with the checkpoint and output-cut rules; ``md.supervisor`` runs a
+folder's parts as segments, one LAMMPS process at a time, with pause through a STOP file and resume from a checkpoint
+(``quantabench-cli md run/status/pause/resume``); ``md.telemetry`` reads the live progress from the engine's own log.
+All three are pure Python.
+
 None of them import the LAMMPS Python module (or OpenFF, ParmEd) at import time.
 """
 

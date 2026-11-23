@@ -14,6 +14,10 @@ temperatures and memory, mirrored from the machine monitor strip (MON-1) in the 
 A job on a worker (the job dialog's Run on, DIST-3) is listed with its machine; Cancel sends the cancel there, and
 when it ends its molecules' rows in the Molecules list take the results (``apply_remote_rows``).
 
+An MD job (SIM-1: a run folder run by its own supervisor process) shows its progress in ns with ns/day and the ETA;
+Cancel pauses it at its next pause point (a checkpoint is written), and Resume queues the folder again to continue.
+Simulate > Run MD folder... (``run_md_folder``) submits one, or follows a run that is already going.
+
 ``install(win)`` makes the queue (``win.job_queue``, with ``make_follower`` for jobs on workers), the dock (object
 name "jobs", in the Calculate workspace next to Results), Build > New job... (Ctrl+J) and a New job... button next to
 the Pipeline dock's Run buttons.
@@ -49,7 +53,7 @@ C_NAME, C_MACHINE, C_STATUS, C_PROGRESS, C_TIME = 1, 2, 3, 4, 5
 HERE = "this computer"
 NUMBER_ROLE = Qt.ItemDataRole.UserRole
 STATUS_COLORS = {"running": "#2471a3", "cancelling": "#d35400", "done": "#1e8449", "failed": "#c0392b",
-                 "cancelled": "gray", "queued": ""}
+                 "cancelled": "gray", "queued": "", "paused": "#b7950b", "pausing": "#d35400"}
 
 
 def _duration(s: float) -> str:
@@ -96,12 +100,16 @@ class JobMonitor(QWidget):
         self.up_btn.clicked.connect(lambda _c=False: self.move_selected(-1))
         self.down_btn = QPushButton("Down")
         self.down_btn.clicked.connect(lambda _c=False: self.move_selected(1))
+        self.resume_btn = QPushButton("Resume")
+        self.resume_btn.setObjectName("md_resume_btn")
+        self.resume_btn.setToolTip("An MD run that paused, stopped or failed: continue it from its newest checkpoint")
+        self.resume_btn.clicked.connect(lambda _c=False: self.resume_selected())
         self.open_btn = QPushButton("Open output folder")
         self.open_btn.clicked.connect(lambda _c=False: self.open_selected())
         self.clear_btn = QPushButton("Clear finished")
         self.clear_btn.clicked.connect(lambda _c=False: self.queue.clear_finished())
         buttons = QHBoxLayout()
-        for b in (self.new_btn, self.cancel_btn, self.up_btn, self.down_btn, self.open_btn):
+        for b in (self.new_btn, self.cancel_btn, self.resume_btn, self.up_btn, self.down_btn, self.open_btn):
             buttons.addWidget(b)
         buttons.addStretch(1)
         buttons.addWidget(self.clear_btn)
@@ -208,10 +216,11 @@ class JobMonitor(QWidget):
         it.setText(C_MACHINE, machine + (" (unreachable)" if job.unreachable else ""))
         it.setToolTip(C_MACHINE, f"{machine}: worker job {job.remote_id}" if job.remote_id else machine)
         live = job.active or (job.is_remote and job.status == "queued")
-        status = job.status + (f": {job.current}" if live and job.current else "")
-        it.setText(C_STATUS, job.status)
+        shown = "pausing" if job.is_md and job.status == "cancelling" else job.status
+        status = shown + (f": {job.current}" if live and job.current else "")
+        it.setText(C_STATUS, shown)
         it.setToolTip(C_STATUS, status + (f"\n{job.error}" if job.error else ""))
-        color = STATUS_COLORS.get(job.status, "")
+        color = STATUS_COLORS.get(shown, "")
         it.setForeground(C_STATUS, self.palette().text() if not color else _brush(color))
         it.setText(C_PROGRESS, job.progress_text() + (f"  ({job.current})" if live and job.current else ""))
         it.setText(C_TIME, _duration(job.elapsed()))
@@ -237,7 +246,9 @@ class JobMonitor(QWidget):
         if job.summary:
             lines.append(html.escape(job.summary))
         cfg = job.cfg
-        if job.is_remote:
+        if job.is_md:
+            lines += md_detail_lines(job)
+        elif job.is_remote:
             where = job.machine or job.run_on
             lines.append(html.escape(f"on {where}" + (f", worker job {job.remote_id}" if job.remote_id else "")
                                      + ": that machine's threads, GPU and priority"
@@ -266,6 +277,14 @@ class JobMonitor(QWidget):
         job = self.selected()
         self.cancel_btn.setEnabled(job is not None and job.status in ("queued", "running")
                                    and (not job.is_remote or job.follower is not None))
+        md_running = job is not None and job.is_md and job.status == "running"
+        self.cancel_btn.setText("Pause" if md_running else "Cancel")
+        self.cancel_btn.setToolTip("Pause the MD run at its next pause point (a checkpoint is written there)"
+                                   if md_running else
+                                   "A queued job: it never starts. The running job: stop it after the current step")
+        self.resume_btn.setVisible(any(j.is_md for j in self.queue.jobs))
+        self.resume_btn.setEnabled(job is not None and job.is_md and job.status in ("paused", "failed", "cancelled")
+                                   and job.output_dir is not None)
         queued = self.queue.queued()
         self.up_btn.setEnabled(job is not None and job.status == "queued" and queued and queued[0] is not job)
         self.down_btn.setEnabled(job is not None and job.status == "queued" and queued and queued[-1] is not job)
@@ -277,12 +296,21 @@ class JobMonitor(QWidget):
         job = self.selected()
         if job is None:
             return False
-        if job.status == "queued" or job.is_remote:
+        if job.status == "queued" or job.is_remote or job.is_md:
             return self.queue.cancel(job.number)
         if job.status == "running" and job is self.queue.running:
             self.win.cancel_build()
             return job.status == "cancelling"
         return False
+
+    def resume_selected(self):
+        job = self.selected()
+        if job is None:
+            return None
+        new = self.queue.resume_md(job.number)
+        if new is not None:
+            self.select(new.number)
+        return new
 
     def move_selected(self, by: int) -> bool:
         job = self.selected()
@@ -316,6 +344,63 @@ class JobMonitor(QWidget):
         self.timer.stop()
 
 
+def md_detail_lines(job) -> list[str]:
+    """The selected MD job's details (HTML lines): its folder's state, where it is, speed, ETA, alerts, segments."""
+    st = job.md or {}
+    prog = st.get("progress") or {}
+    out = []
+    state = st.get("state")
+    if state:
+        out.append(html.escape(f"run: {state}" + (" (no supervisor: Resume continues it)" if st.get("stale") else "")))
+    if prog.get("step") is not None:
+        out.append(html.escape(f"part {prog.get('part')} ({prog.get('stage')}), step {prog['step']:,} of "
+                               f"{prog.get('part_end') or 0:,}; {prog.get('variant')} x {prog.get('threads')} threads "
+                               f"on {prog.get('machine')}"))
+    if prog.get("ns_per_day") or prog.get("eta_text"):
+        out.append(html.escape(f"{(prog.get('ns_per_day') or 0):.3g} ns/day over the last minutes"
+                               + (f", ETA {prog['eta_text']}" if prog.get("eta_text") else "")))
+    for a in prog.get("alerts") or []:
+        out.append(f"<span style='color:#d35400'>{html.escape(a)}</span>")
+    segs = st.get("segments") or []
+    if segs:
+        out.append(html.escape("segments: " + "; ".join(
+            f"{s.get('n')} {s.get('part')} {s.get('status')}"
+            + (f" {s.get('ns_per_day'):.3g} ns/day" if s.get("ns_per_day") else "") for s in segs[-4:])))
+    return out
+
+
+def run_md_folder(win, folder=None):
+    """Simulate > Run MD folder...: run (or resume, or follow) a folder written by md liquid-slab, md smd or the
+    Surface builder as an MD job. Returns the job, or None."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    from ..md import sim
+    from .job_queue import md_job
+
+    if folder is None:
+        start = str(getattr(getattr(win, "s", None), "output_dir", "") or "")
+        folder = QFileDialog.getExistingDirectory(win, "Run an MD folder", start)
+        if not folder:
+            return None
+    if not sim.is_run_folder(folder):
+        QMessageBox.information(win, "Run an MD folder", f"{folder} is not an MD run folder: md liquid-slab, md smd "
+                                "or the Surface builder writes one (run.json, or a liquid_setup.json or smd_setup.json "
+                                "with its inputs).")
+        return None
+    queue = win.job_queue
+    if any(j.is_md and j.output_dir is not None and str(j.output_dir) == str(folder) and j.status not in FINISHED
+           for j in queue.jobs):
+        return None
+    job = queue.submit(md_job(folder))
+    dock = getattr(win, "jobs_dock", None)
+    if dock is not None:
+        dock.show()
+        dock.raise_()
+    if getattr(win, "job_monitor", None) is not None:
+        win.job_monitor.select(job.number)
+    return job
+
+
 def _brush(color: str):
     from PySide6.QtGui import QBrush, QColor
 
@@ -337,7 +422,13 @@ def usage_html(win, job, remote: list[str] | None = None) -> str:
         parts.append(f"<b>Job {job.number}</b>: {threads} thread{'s' if threads != 1 else ''}"
                      f"{' (auto)' if not cfg.threads else ''}, GPU {html.escape(cfg.gpu)}, priority "
                      f"{html.escape(cfg.priority)}")
-    else:
+    md = getattr(getattr(win, "job_queue", None), "md_running", None)
+    if md is not None:
+        prog = (md.md or {}).get("progress") or {}
+        what = (f"{html.escape(str(prog.get('variant') or 'LAMMPS'))} x {prog.get('threads')} threads"
+                if prog.get("threads") else "LAMMPS in its own process")
+        parts.append(f"<b>MD job {md.number}</b>: {what}, beside the builds")
+    elif job is None or job.cfg is None:
         parts.append("<b>No job running here</b>" if remote else "<b>No job running</b>")
     if remote:
         counts: dict[str, int] = {}
