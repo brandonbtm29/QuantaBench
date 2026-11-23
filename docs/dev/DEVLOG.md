@@ -895,3 +895,39 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   Python default (`LiquidSlabConfig()`) stays `ewald` with the slab-safe settings.
 - Nothing on the workstation or the Mac was touched (A-fine, the GAFF2 slab and the GPU check kept running); A-fine's
   logs and `bulk_density.txt` were only read.
+
+## 2026-11-23: a small slab MD benchmark (MD-BENCH-2, branch `feat/md-bench-2-small-slab`)
+- **The ask** (Brandon, 2026-11-23): a benchmark for the MD section, with a smaller simulation. After MD-LR (#52) the
+  cost of `ewald` depends on the slab box (pppm/disp's mesh follows the box, vacuum and all), so the bulk cubes of
+  MD-BENCH-1 no longer time what a σ run does.
+- **The box.** 190 C6F14 (3,800 atoms) in the pilot's 40 x 40 Å lateral box, ~39 Å of liquid and half that of vacuum
+  on each side. Why those proportions: every `md liquid-slab` size has box / liquid = 2 (40 or 50 Å lateral, 100 Å
+  of liquid, 2 x 50 Å of vacuum), so with the same ratio the dispersion mesh per atom is the pilot's (18 x 18 x 36
+  for 3,800 atoms against 18 x 18 x 90 for 9,780: 3.07 against 2.98 points per atom) and ns/day scales by the atoms.
+  50 Å of vacuum on a 39 Å slab would have given 1.8 x the pilot's mesh per atom. The lateral edge keeps 16 Å
+  cutoffs legal (> 33 Å). What it does not match: a 39 Å slab has more of its atoms near a surface than a 100 Å one,
+  so its pair work per atom is somewhat lower; `--md-size pilot-slab` is there to measure that once.
+- **The slab's records** carry the k-space grids LAMMPS reported and its timing breakdown. Cloud smoke run (PyPI LAMMPS
+  22 Jul 2025, 1 thread, 30 s per variant): cpu-ewald 3.96, cpu-cutoff12 5.57, cpu-cutoff16 3.07 ns/day; Coulomb grid
+  24 x 24 x 48 and dispersion 18 x 18 x 36 for `ewald` (k-space 29 % of the time), 16 x 16 x 25 for `cutoff12`
+  (12 %); box built in 100 s, 207 s in all. Hence `scaled_rate`: the k-space share scales with the box volume when
+  the job's box differs in shape (a thinner slab in 2 x 50 Å of vacuum), the rest with the atoms.
+- **The MacBook's failure (2026-11-21), what the records show.** Its registry file names the LAMMPS source as "this
+  environment (environment variable: C:Users<name>/miniforge3/envs/qb-lammps/bin/lmp not found)": the variable was
+  set in a command sent from PowerShell on the workstation, where `$HOME` expanded to the Windows home folder, and the
+  Mac's shell dropped the unquoted backslashes. No LAMMPS path for the Mac was in the settings. `find_program` skipped
+  the bad value and took the next hit, the venv's PyPI wheel (`.venv/bin/lmp`, a `#!/bin/sh` launcher for a Python
+  script that runs the real binary), whose macOS build has "OPENMP package API: Serial": the pilot box's set-up ran on
+  one thread. Reproduced here: with such a value in `QUANTABENCH_LAMMPS`, main's `find_lammps` returns the venv's
+  `lmp` with the same source string; the branch refuses it.
+- **The exit 143** came about 2 minutes after the start (the run's output file on the Mac, read only). 143 is how a
+  shell reports a child killed by SIGTERM. QuantaBench was not the sender: it stops LAMMPS only on a cancel (the record
+  then says `cancelled`) or at its 3,600 s limit (`timed out`). LAMMPS crashes give SIGSEGV/SIGABRT, memory kills
+  SIGKILL. The same session wrote the GAFF2 start script 24 s after the benchmark began and, after it died, looked for
+  the benchmark's `log.prep` and for time limits in `bench.py`, so the stop was not its plan. Which process sent the
+  signal is not known: the benchmark deleted its set-up folder, logs and all. Here the same LAMMPS version (the Linux
+  wheel) on one thread builds that pilot box without error in 273 s, and PyPI's wrapper does not explain 143 on
+  its own (on Linux a SIGTERM to the wrapper gives -15, to the binary 241, and the binary is orphaned when only the
+  wrapper is killed). Now a failed set-up keeps its inputs and logs, and the reason names the signal (`exit_reason`).
+- Nothing was run on the workstation or the Mac besides read-only checks (the Mac's run output, its `.venv/bin/lmp`
+  launcher, `/bin/sh` → bash, its conda envs) and the Windows test suite.

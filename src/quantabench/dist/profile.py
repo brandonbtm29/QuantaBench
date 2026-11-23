@@ -892,7 +892,9 @@ def refresh_from_cli(bench: bool, methods=None, devices=None, max_seconds: float
                 print(f"Benchmarking {names} on {machine_name()} ({what}{', in ' + solvent if solvent else ''}, "
                       f"up to {max_seconds:.0f} s per method and device)", file=out)
             if want_md:
-                size = (md_options or {}).get("size") or "small"
+                from ..md import bench as md_bench
+
+                size = (md_options or {}).get("size") or md_bench.DEFAULT_SIZE
                 print(f"MD benchmark on {machine_name()} (LAMMPS, liquid C6F14, {size} box; up to {max_seconds:.0f} s "
                       "per variant, plus a one-time box set-up)", file=out)
         kw = {"md_options": md_options} if md_options else {}
@@ -940,6 +942,8 @@ def _machines_cli(args) -> int:
                 return 2
             extra["md_options"] = {"size": getattr(args, "md_size", None) or md_bench.DEFAULT_SIZE,
                                    "variants": variants, "threads": int(getattr(args, "md_threads", 0) or 0)}
+            if getattr(args, "md_lammps", None):
+                extra["md_options"]["lammps_path"] = args.md_lammps
         prof, _ = refresh_from_cli(bool(methods), methods, devices, args.max_seconds, args.wsl,
                                    out=sys.stderr if args.json else sys.stdout,
                                    solvent=getattr(args, "solvent", "") or "",
@@ -984,12 +988,16 @@ def register_cli(subparsers) -> None:
     m.add_argument("--solvent", default="",
                    help="with --bench: benchmark in this implicit solvent (e.g. water), keyed <method>+water@<device> "
                         "so it never mixes with gas phase; methods without a model for it are skipped")
-    m.add_argument("--md-size", choices=("small", "pilot"), default="small",
-                   help="with --bench md: the liquid C6F14 box, small (3,000 atoms, the default) or pilot (9,780 "
-                        "atoms, MD-2's pilot slab)")
+    m.add_argument("--md-size", choices=("slab", "small", "pilot-slab", "pilot"), default="slab",
+                   help="with --bench md: the liquid C6F14 box. slab (the default): 3,800 atoms as a slab with "
+                        "vacuum, what surface-tension runs do; pilot-slab: MD-2's 9,780-atom pilot slab; small: a "
+                        "3,000-atom bulk cube; pilot: the pilot's atoms as a bulk box")
     m.add_argument("--md-variants", metavar="LIST",
                    help="with --bench md: <cpu|gpu|kokkos>-<ewald|cutoff12|cutoff16|cutoff18>, comma list (default: "
                         "cpu-ewald, cpu-cutoff12, cpu-cutoff16 and, with the GPU package, gpu-cutoff12, gpu-cutoff16)")
+    m.add_argument("--md-lammps", metavar="PATH",
+                   help="with --bench md: time this LAMMPS executable (default: the one QuantaBench finds: this "
+                        "computer's path in the settings, QUANTABENCH_LAMMPS, PATH, this environment, conda)")
     m.add_argument("--md-threads", type=int, default=0,
                    help="with --bench md: OpenMP threads of the CPU variants (default: this machine's one-lane thread "
                         "budget, at most its physical cores)")
