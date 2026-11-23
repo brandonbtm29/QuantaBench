@@ -191,7 +191,15 @@ def test_write_liquid_slab_lattice(hexane, tmp_path):
         _check_input_syntax((tmp_path / name).read_text(encoding="utf-8"))
     bulk, slab = (tmp_path / "in.bulk").read_text(encoding="utf-8"), (tmp_path / "in.slab").read_text(encoding="utf-8")
     assert "pair_style      lj/long/coul/long long long ${rc}" in bulk and "pppm/disp" in slab
-    assert "force/disp/real 0.0001 force/disp/kspace 0.002" in slab
+    # MD-LR: the slab-safe dispersion k-space (G from the cutoff, the mesh from the box), Coulomb 1e-6
+    mesh = "kspace_modify   mesh/disp $(ceil(lx/v_disp_h):%.0f) $(ceil(ly/v_disp_h):%.0f) $(ceil(lz/v_disp_h):%.0f)"
+    for text in (bulk, slab):
+        assert "kspace_modify   gewald/disp ${disp_g} order/disp 5" in text and "force/disp" not in text
+        assert "variable disp_g         index 0.230833" in text and "variable disp_h         index 2.25271" in text
+        assert "mesh spacing <= 2.25 A" in text.splitlines()[2]                    # the header, in ASCII
+        assert "variable kacc           index 1e-06" in text
+    assert bulk.count(mesh) == 1 and slab.count(mesh) == 2            # the slab's mesh again once its box is open
+    assert slab.index(mesh, slab.index(mesh) + 1) > slab.index("change_box      all z final")
     assert "tail yes" not in bulk + slab and "mix/disp" not in slab        # geometric mixing: no mix/disp geom
     assert "fix             squeeze all deform" in bulk                    # lattice start: compression stage
     assert "npt temp ${T} ${T} ${tdamp} iso ${P} ${P} ${pdamp}" in bulk
@@ -215,10 +223,46 @@ def test_cutoff_variant_has_tail_in_bulk_only(c6f14, tmp_path):
     assert "lj/cut/coul/long ${rc}" in bulk and "variable rc             index 16" in bulk
     assert "pair_modify     mix geometric tail yes" in bulk
     assert "tail yes" not in slab and "kspace_style    pppm ${kacc}" in slab and "pppm/disp" not in slab
+    assert "variable kacc           index 1e-05" in slab and "disp_h" not in slab     # B's Coulomb accuracy
     readme = (tmp_path / "README.txt").read_text(encoding="utf-8")
     assert "-sf hybrid gpu omp -pk gpu 1 device_type generic pair/only on -pk omp 4 -in in.slab" in readme
     for text in (bulk, slab):                     # the guard against a GPU run without nonbonded forces
         assert "variable        qb_epair equal abs(ecoul)+abs(evdwl-etail)" in text and '"quit 3"' in text
+
+
+def test_long_range_config_resolution():
+    """MD-LR: the config's long-range fields resolve per method; a cutoff that contradicts the label is refused."""
+    from types import SimpleNamespace
+
+    from quantabench.md import long_range as LR
+
+    e = L.LiquidSlabConfig().resolved()
+    assert (e.dispersion, e.cutoff, e.kspace_accuracy, e.disp_grid) == ("ewald", 12.0, 1e-6, "spacing")
+    assert e.disp_gewald == pytest.approx(2.77 / 12) and e.disp_spacing == pytest.approx(0.52 / (2.77 / 12))
+    e10 = L.LiquidSlabConfig(cutoff=10.0).resolved()
+    assert e10.disp_gewald == pytest.approx(0.277) and e10.disp_spacing == pytest.approx(0.52 / 0.277)
+    c = L.LiquidSlabConfig(dispersion="cutoff16").resolved()
+    assert (c.cutoff, c.kspace_accuracy, c.disp_gewald, c.disp_spacing) == (16.0, 1e-5, None, None)
+    assert L.LiquidSlabConfig(dispersion="cutoff16", cutoff=16.0).resolved().cutoff == 16.0
+    with pytest.raises(ValueError, match="disagree"):
+        L.LiquidSlabConfig(dispersion="cutoff16", cutoff=14.0).resolved()
+    with pytest.raises(ValueError, match="disp_grid"):
+        L.LiquidSlabConfig(disp_grid="auto").resolved()
+    assert L.LiquidSlabConfig(kspace_accuracy=1e-5).resolved().kspace_accuracy == 1e-5     # an explicit value stays
+    assert e.long_range == LR.settings("ewald")
+    # accuracy mode: LAMMPS picks G and the mesh (A-fine's accuracies by default), no mesh/disp lines
+    a = L.LiquidSlabConfig(disp_grid="accuracy").resolved()
+    lines = L._kspace(SimpleNamespace(mixing="geometric"), a)
+    assert "kspace_modify   force/disp/real 1e-05 force/disp/kspace 2e-05" in lines
+    assert not any("mesh/disp" in x or "gewald/disp" in x for x in lines)
+    old = L._kspace(SimpleNamespace(mixing="arithmetic"),
+                    L.LiquidSlabConfig(disp_grid="accuracy", disp_real_accuracy=1e-4, disp_kspace_accuracy=2e-3,
+                                       kspace_accuracy=1e-5).resolved())
+    assert "kspace_modify   force/disp/real 0.0001 force/disp/kspace 0.002" in old       # the pre-MD-LR settings
+    assert any(x.startswith("kspace_modify   mix/disp geom") for x in old)
+    spacing = L._kspace(SimpleNamespace(mixing="arithmetic"), e)
+    assert any(x.startswith("kspace_modify   mix/disp geom") for x in spacing)
+    assert L._kspace(SimpleNamespace(mixing="geometric"), c) == ["kspace_style    pppm ${kacc}"]
 
 
 def test_gpu_switches():
@@ -421,7 +465,11 @@ def test_cli_liquid_slab_and_surface_tension(tmp_path):
     out = tmp_path / "hex"
     assert cli.main(["md", "liquid-slab", "--smiles", HEXANE, "--name", "hexane", "-o", str(out), "--lateral", "26",
                      "--thickness", "20", "--packing", "lattice", "--dispersion", "cutoff12", "--sigma-ref", "17.9"]) == 0
-    assert (out / "in.slab").is_file() and json.loads((out / "liquid_setup.json").read_text(encoding="utf-8"))["config"]["reference_sigma"] == 17.9
+    meta = json.loads((out / "liquid_setup.json").read_text(encoding="utf-8"))
+    assert (out / "in.slab").is_file() and meta["config"]["reference_sigma"] == 17.9
+    lr = meta["long_range"]          # an explicit choice wins; the recommendation (whatever this machine) differs
+    assert meta["config"]["dispersion"] == "cutoff12" and lr["chosen_by"] == "user" and lr["differences"]
+    assert any("4.7 %" in w for w in lr["warnings"]) and lr["recommendation"]["summary"].startswith("Recommended")
     assert cli.main(["md", "liquid-slab", "--smiles", "CCO", "-o", str(tmp_path / "x")]) == 2      # refused by OPLS rules
     assert cli.main(["md", "liquid-slab", "--list-ff"]) == 0
     _synthetic_run(tmp_path / "syn")
@@ -430,8 +478,53 @@ def test_cli_liquid_slab_and_surface_tension(tmp_path):
     assert cli.main(["md", "surface-tension", str(tmp_path)]) == 2           # no slab_box.txt
 
 
+def test_cli_long_range_options(tmp_path, capsys):
+    """MD-LR: without a choice the recommendation for the stated machine is used and printed; explicit options win
+    and both are shown; contradictory options are refused."""
+    base = ["md", "liquid-slab", "--smiles", HEXANE, "--name", "hexane", "--lateral", "34", "--thickness", "16",
+            "--packing", "lattice"]
+
+    def setup(name):
+        return json.loads((tmp_path / name / "liquid_setup.json").read_text(encoding="utf-8"))
+
+    assert cli.main([*base, "-o", str(tmp_path / "gpu"), "--gpu", "yes"]) == 0
+    out = capsys.readouterr().out
+    assert "Recommended for this setup: 16 Å LJ cutoff + tail correction on the GPU because" in out
+    assert "Using it:" in out
+    m = setup("gpu")
+    assert m["config"]["dispersion"] == "cutoff16" and m["config"]["kspace_accuracy"] == 1e-5
+    assert m["long_range"]["chosen_by"] == "recommendation" and not m["long_range"]["differences"]
+    readme = (tmp_path / "gpu" / "README.txt").read_text(encoding="utf-8")
+    assert "LONG-RANGE SETTINGS" in readme and "Chosen (recommendation)" in readme and "provisional" in readme
+
+    assert cli.main([*base, "-o", str(tmp_path / "cpu"), "--gpu", "no"]) == 0
+    out = capsys.readouterr().out
+    assert "full long-range dispersion (pppm/disp, 12 Å real space) on the CPU because" in out
+    assert setup("cpu")["config"]["dispersion"] == "ewald"
+
+    assert cli.main([*base, "-o", str(tmp_path / "mine"), "--gpu", "yes", "--long-range", "ewald", "--cutoff", "14",
+                     "--disp-accuracy", "1e-4", "2e-3", "--coulomb-accuracy", "1e-5"]) == 0
+    out = capsys.readouterr().out
+    assert "Your choice: full long-range dispersion: lj/long/coul/long 14 Å" in out
+    assert "It differs from the recommendation in: method: ewald (recommended: cutoff)" in out
+    assert "2 x 2 x 8" in out                                     # the loose-accuracy warning
+    c = setup("mine")["config"]
+    assert (c["dispersion"], c["cutoff"], c["disp_grid"], c["disp_kspace_accuracy"]) == ("ewald", 14.0, "accuracy", 2e-3)
+    assert "force/disp/real 0.0001 force/disp/kspace 0.002" in (tmp_path / "mine" / "in.slab").read_text(encoding="utf-8")
+
+    assert cli.main([*base, "-o", str(tmp_path / "ref"), "--gpu", "yes", "--purpose", "reference"]) == 0
+    assert setup("ref")["config"]["dispersion"] == "ewald" and "the GPU stays idle" in capsys.readouterr().out
+
+    for bad in (["--dispersion", "cutoff16", "--cutoff", "14"], ["--long-range", "cutoff", "--disp-spacing", "2"],
+                ["--long-range", "pme"], ["--cutoff", "40"], ["--dispersion", "cutoff16", "--long-range", "ewald"],
+                ["--disp-grid", "spacing", "--disp-accuracy", "1e-5", "2e-5"]):
+        assert cli.main([*base, "-o", str(tmp_path / "bad"), "--gpu", "no", *bad]) == 2, bad
+
+
 def test_md_modules_import_without_heavy_dependencies():
-    code = ("import sys; import quantabench.md.liquid, quantabench.md.forcefield, quantabench.md.surface_tension, "
+    code = ("import sys; import quantabench.md.long_range; "
+            "assert 'numpy' not in sys.modules, 'md.long_range must stay pure Python'; "
+            "import quantabench.md.liquid, quantabench.md.forcefield, quantabench.md.surface_tension, "
             "quantabench.md.bench, quantabench.cli_md; "
             "print(any(m in sys.modules for m in ('lammps', 'torch', 'openff', 'parmed')))")
     src = str(Path(L.__file__).resolve().parents[2])
@@ -466,6 +559,15 @@ def test_lammps_smoke_run(hexane, tmp_path, dispersion):
         assert np.ptp(xyz, axis=0).max() < 12.0
     r = S.analyze(tmp_path, skip_ns=0.0)
     assert math.isfinite(r["sigma"]["mean_mN_m"]) and r["performance_ns_day"]["slab"] > 0
+    if dispersion == "ewald":         # MD-LR: G from the cutoff, the slab's mesh from its opened box
+        from quantabench.md import long_range as LR
+
+        log = (tmp_path / "log.slab").read_text(encoding="utf-8")
+        g = [float(x) for x in re.findall(r"Dispersion G vector \(1/distance\)\s*=\s*(\S+)", log)]
+        grids = [tuple(int(v) for v in m) for m in re.findall(r"Dispersion grid = (\d+) (\d+) (\d+)", log)]
+        assert g and all(x == pytest.approx(2.77 / 12, rel=1e-5) for x in g)
+        assert grids[-1] == LR.disp_mesh((box["lx"], box["ly"], box["lz"]), s.config.disp_spacing)
+        assert grids[-1][2] > 4 * grids[0][2]                      # the bulk box's mesh before the box opened
 
 
 @pytest.mark.external

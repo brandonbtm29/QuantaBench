@@ -1285,8 +1285,8 @@ A pure liquid's surface tension σ from a liquid-vapour slab in LAMMPS, starting
 
 ```
 quantabench-cli md liquid-slab --smiles "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --name c6f14 -o c6f14_ewald \
-    [--ff oplsaa|openff|gaff2] [--dispersion ewald|cutoff12|cutoff16|cutoff18] [--size pilot|full] [--molecules N] \
-    [--sigma-ref 12.33 --density-ref 1.67 --ref-note "..."]
+    [--ff oplsaa|openff|gaff2] [--long-range auto|ewald|cutoff] [--cutoff RC] [--purpose screen|reference] \
+    [--gpu auto|yes|no] [--size pilot|full] [--molecules N] [--sigma-ref 12.33 --density-ref 1.67 --ref-note "..."]
 cd c6f14_ewald && lmp -in in.bulk && lmp -in in.slab          # README.txt: OpenMP, MPI and GPU commands
 quantabench-cli md surface-tension c6f14_ewald                 # sigma +- error, densities, checks (.json, .md)
 quantabench-cli md liquid-slab --list-ff                       # which force fields are installed
@@ -1306,17 +1306,93 @@ the bulk box), 5 nm of vacuum added on each side (still periodic in z), then NVT
 plus 10 ns of production; the pressure tensor every 10 fs (`fix ave/time`), the mass density in 0.5 Å bins along z
 averaged over 10 ps blocks (`compute chunk/atom bin/1d` + `fix ave/chunk`), `fix momentum` against drift.
 
-**Long-range dispersion** (`--dispersion`):
+**Long-range interactions** (`md.long_range`, MD-LR). Two methods, a cutoff, and the k-space accuracies, each a
+command-line option; without a choice the folder gets the recommendation for its setup (below), and the
+recommendation is printed and written to README.txt and `liquid_setup.json` (`long_range`) either way:
 
-| variant | pair and kspace styles | σ | runs on |
+| `--long-range` | pair and kspace styles | σ | runs on |
 |---|---|---|---|
-| `ewald` (default) | `lj/long/coul/long long long 12.0` + `pppm/disp 1e-5`, dispersion accuracies 1e-4 (real space) and 2e-3 (k-space) as LAMMPS' Howto_dispersion recommends for real units | the Tsige/Grest choice (in 't Veld et al. 2007; Isele-Holder et al. 2012) | CPU (OPENMP, INTEL, OPT; LAMMPS has no GPU styles for it) |
-| `cutoff12` | `lj/cut/coul/long 12.0` + `pppm 1e-5` | plain truncation: biased low (up to 20 % for alkanes, Ismail et al. 2007) | CPU or GPU package |
-| `cutoff16`, `cutoff18` | the same with a 16 or 18 Å cutoff | smaller bias, more pairs | CPU or GPU package |
+| `ewald`: full long-range dispersion | `lj/long/coul/long long long rc` (rc 12 Å) + `pppm/disp`: Coulomb 1e-6; dispersion G = 2.77/rc and a mesh no coarser than 0.52/G, from the box (the slab-safe rule below) | the r⁻⁶ sum is complete: no tail correction, the slab keeps the bulk density (in 't Veld et al. 2007; Isele-Holder et al. 2012) | CPU (OPENMP, INTEL, OPT; LAMMPS has no GPU styles for it) |
+| `cutoff`: LJ cutoff + tail | `lj/cut/coul/long rc` (rc 16 Å) + `pppm 1e-5` | raw σ biased low (up to 20 % for alkanes at 12 Å, Ismail et al. 2007); the analysis adds the tail (below), which does not restore the slab's density | CPU or GPU package |
+
+| option | what | default |
+|---|---|---|
+| `--cutoff RC` | **LJ cutoff (screening length)**, Å (8-30): the real-space cutoff of the LJ and Coulomb terms; with `cutoff` the LJ ends there | `ewald` 12, `cutoff` 16 |
+| `--purpose` | what the recommendation aims at: `screen` (σ to a few %, the fastest on the machine) or `reference` (numerically converged, no tail approximation) | `screen` |
+| `--gpu` | can LAMMPS use a GPU on the machine that will run the folder? `auto`: this computer's (`lmp -h` lists the GPU package and a GPU, and the MD benchmark's CPU/GPU check, if run, passed) | `auto` |
+| `--coulomb-accuracy A` | PPPM's relative force accuracy | `ewald` 1e-6, `cutoff` 1e-5 |
+| `--disp-grid` | `ewald`'s dispersion k-space: `spacing` (the rule) or `accuracy` (LAMMPS picks G and the mesh) | `spacing` |
+| `--disp-gewald G`, `--disp-spacing H` | the rule's G (1/Å) and largest mesh spacing (Å) | 2.77/rc, 0.52/G |
+| `--disp-accuracy REAL KSPACE` | `force/disp/real`, `force/disp/kspace` (kcal/mol/Å) for `accuracy` | 1e-5 2e-5 |
+| `--dispersion` | the method and cutoff in one word, as before MD-LR: `ewald`, `cutoff12`, `cutoff16`, ... | |
 
 The bulk NPT of the cutoff variants uses `pair_modify tail yes` (valid in a homogeneous liquid, so the bulk density
 is right); the slab never does. With Lorentz-Berthelot mixing (openff, gaff2) the `ewald` variant adds
 `kspace_modify mix/disp geom` (geometric mixing in k-space only; LAMMPS Howto_dispersion).
+
+**Why `ewald`'s defaults changed (slab-safe pppm/disp).** Until MD-LR the inputs used LAMMPS Howto_dispersion's
+accuracies, `force/disp/real 1e-4` and `force/disp/kspace 2e-3`, with Coulomb at 1e-5. LAMMPS turns accuracies into
+G and a mesh with an error estimate for a uniform density; a slab is half vacuum, and for pilot A's C6F14 slab
+(40.3 x 40.3 x 200.9 Å) it chose G 0.171 1/Å and a **2 x 2 x 8** dispersion mesh. Re-evaluating A's 101 production
+frames with other settings (`Runs\md-pilot-2026-11-20\mesh_check_2026-11-22\mesh_check.md`, on the workstation;
+the same frames, so the differences carry little noise):
+
+| settings | dispersion G, grid | Coulomb grid | Δσ against A (mN/m) | ms/step (8 threads) |
+|---|---|---|---|---|
+| A (the old default) | 0.171, 2 x 2 x 8 | 1e-5: 15 x 15 x 72 | 0 | 9.3 |
+| A's G, `mesh/disp 10 10 50` / `20 20 100` | 0.171, 10 x 10 x 50 / 20 x 20 x 100 | 1e-5 | +1.19 / +1.19 ± 0.02 | 9.3 / 10.0 |
+| `force/disp/real 1e-5`, `force/disp/kspace 2e-5` | 0.231, 18 x 18 x 90 | 1e-5 | +1.49 ± 0.02 | 10.4 |
+| the same, `mesh/disp 30 30 150` | 0.231, 30 x 30 x 150 | 1e-5 | +1.49 ± 0.02 | |
+| **A-fine's: those + Coulomb 1e-6** | 0.231, 18 x 18 x 90 | 1e-6: 24 x 24 x 120 | **+1.33 ± 0.03** | 13.1 |
+| `force/disp/real 1e-6`, `force/disp/kspace 2e-5`, Coulomb 1e-6 | 0.272, 24 x 24 x 120 | 1e-6 | +1.36 ± 0.03 | |
+| Coulomb 1e-7 | 0.231, 18 x 18 x 90 | 1e-7: 40 x 40 x 200 | +1.34 ± 0.03 | 26.6 |
+
+So A's 10.70 mN/m was 1.36 ± 0.03 low for numerical reasons: the dispersion mesh −1.19, the real-space truncation
+of r⁻⁶ −0.30 (at G·rc = 2.05 the real-space part still carries 21 % of r⁻⁶ at rc and drops what lies beyond), Coulomb
+PPPM at 1e-5 +0.15. A-fine's settings are converged to 0.02-0.03 mN/m and cost 40 % more than A's (6.6 against
+9.3 ns/day in a 2,000-step benchmark on 8 threads). The defaults are those settings, written as a rule that does
+not depend on LAMMPS' estimate:
+
+- `kspace_modify gewald/disp G order/disp 5` with **G = 2.77 / rc** (A-fine's slab: 0.2305 at 12 Å); 1.8 % of r⁻⁶ is
+  left at rc (G·rc 3.26 moved σ by only 0.02-0.03 more);
+- `kspace_modify mesh/disp $(ceil(lx/v_disp_h)) ...` with **h = 0.52 / G** (2.25 Å at 12 Å), computed by LAMMPS from
+  the box after `read_data` and again after the slab's box is opened; pppm/disp rounds each count up to a product of
+  2, 3 and 5. For A's box that is A-fine's 18 x 18 x 90 exactly. In the mesh check h·G = 0.69 (at A's G) and 0.57
+  (at G 0.28) were still converged, 1.17 lost 0.19 mN/m;
+- Coulomb PPPM at 1e-6.
+
+The rule is the default because it is the more robust of the two ways: the mesh follows the box whatever the vacuum
+(an accuracy-based mesh shrinks as the vacuum grows), and the bulk and the slab get the same G (LAMMPS' estimate gave
+A-fine 0.2375 in the bulk and 0.2305 in the slab). `--disp-grid accuracy` keeps LAMMPS' choice, with A-fine's
+accuracies by default. The literature's explicit surface set (Isele-Holder et al. 2012: G 0.28, h ≈ 4.2 Å, rc 10 Å)
+came out about 0.2 mN/m low for this slab with its 4.2 Å mesh and converged with a 2 Å one (mesh check). Folders
+written before MD-LR keep their settings: nothing reads the defaults at run time.
+
+**The recommendation** (`md.long_range.recommend_long_range`). From the setup (slab or bulk, the box, the molecules
+and atoms, whether LAMMPS can use a GPU on the machine, the purpose) it picks the method, cutoff, accelerator and
+accuracies, says why in one line, and gives a speed from the pilots (C6F14, OPLS-AA W&J, 9,780 atoms, the
+workstation; scaled by the atom ratio like `md estimate`):
+
+| setup | recommended | because | pilot speed |
+|---|---|---|---|
+| slab, GPU usable, lateral box > 33 Å, screen | 16 Å cutoff + tail, on the GPU | pilot B reproduced Tsige & Grest: 11.71 ± 0.30 against 11.25 mN/m | 21.0 ns/day (GPU + 6 threads) |
+| slab, CPU only | `ewald`, the defaults above | a cutoff's speed comes from the GPU (16 Å: 3.9 ns/day on 4 threads); no tail, and the slab keeps the bulk density (A: +0.05 %) | 6.6 (8 threads) |
+| slab, GPU, lateral box ≤ 33 Å | `ewald` | 16 Å does not fit (`plan_box` needs > 2 rc + 1), and shorter cutoffs bias a slab | 6.6 (8 threads) |
+| a reference value | `ewald`, the defaults above | converged to ~0.03 mN/m, no tail approximation | 6.6 (8 threads) |
+| bulk liquid | 12 Å cutoff + LAMMPS' homogeneous tail | valid in a uniform liquid: C 1.6714, B 1.6719 and A-fine 1.6720 g/cm³ | 13.4 (GPU + 4 threads) |
+
+Warnings (never blocking): a cutoff under 16 Å in a slab (pilot C at 12 Å: plateau 4.7 % below its bulk, raw σ 29 %
+below Tsige & Grest; the tail restores σ to 11.12, not the density), a cutoff + tail for a reference value (a residual
+low bias of a few %: B's 11.71 against ≈ 12.06 for converged settings on A's frames; −5 % for hexane at 16 Å,
+Isele-Holder et al. 2012), pppm/disp looser than the converged settings, a mesh or G outside what the mesh check
+validated, Coulomb looser than 1e-5, a box too narrow for the cutoff. The user's choice always wins; when it differs,
+both are printed and recorded. The numbers live in one table, `md.long_range.PILOT_TABLE` (with each row's
+source), and are **provisional until the A-fine run** (pilot A with these settings, due 2026-11-24/25) gives its σ.
+Caveat: the CPU speeds compare 4 threads (16 Å) with 8 (pppm/disp); `machines --bench md` measures both on one machine.
+
+For the Simulate panel (SIM-1): `md.long_range.options()` (choices, labels, defaults, ranges),
+`recommend_long_range(...)`, `settings(...)` / `config_kwargs(...)` (to `LiquidSlabConfig`), `check_settings(...)`,
+`notes_for(...)`, `differences(...)` and `detect_machine()`. The module is pure Python.
 
 **Force fields** (`--ff`, `md.forcefield`):
 

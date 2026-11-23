@@ -2,6 +2,27 @@
 
 ## Unreleased (after 0.3.0)
 
+### Long-range settings for slabs: options and recommendations (MD-LR, 2026-11-23)
+- **Slab-safe pppm/disp defaults** for `md liquid-slab`'s full long-range dispersion (`ewald`): G = 2.77 / rc and a
+  dispersion mesh no coarser than 0.52 / G, computed in the input from the box (again once the slab's box is open),
+  and Coulomb PPPM at 1e-6. The old defaults (LAMMPS Howto_dispersion's `force/disp/real 1e-4`,
+  `force/disp/kspace 2e-3`, Coulomb 1e-5) gave pilot A's C6F14 slab a 2 x 2 x 8 dispersion mesh and a σ 1.36 mN/m
+  too low (mesh check); the new ones are the A-fine run's converged settings (18 x 18 x 90 for A's box), about 40 %
+  slower. Folders written before keep their settings.
+- **The options**, on the command line and in `LiquidSlabConfig`: `--long-range ewald|cutoff` (full long-range
+  dispersion, or an LJ cutoff + the analytic tail), `--cutoff` (the LJ cutoff, "screening length"),
+  `--coulomb-accuracy`, `--disp-grid spacing|accuracy`, `--disp-gewald`, `--disp-spacing`, `--disp-accuracy REAL
+  KSPACE`. `--dispersion ewald|cutoff16|...` still works. `md.long_range` gives the Simulate panel the same choices
+  with labels, defaults and ranges.
+- **Recommendations by setup:** `md.recommend_long_range` picks the method, cutoff, accelerator and accuracies from
+  the geometry (slab or bulk), the box, the size, whether LAMMPS can use a GPU (`--gpu auto|yes|no`) and the purpose
+  (`--purpose screen|reference`), with a one-line reason and a speed from the pilots: 16 Å + tail on a GPU, converged
+  pppm/disp on a CPU-only machine and for reference values, a warning for 12 Å slabs. Without a choice
+  `md liquid-slab` uses it; with one, it prints both and where they differ. README.txt and `liquid_setup.json` record
+  both. The numbers are provisional until A-fine finishes.
+- `machines --bench md` records the long-range settings of each variant it times (`long_range`); `cpu-ewald` now times
+  the new defaults.
+
 ### Paste, drag-and-drop and Copy as (UI-4, 2026-11-22)
 - Edit > Paste (Ctrl+V) now takes XYZ, CSV and spreadsheet cells with a SMILES column, InChI and InChIKeys besides
   ChemDraw, MOL/SD, CDXML, Marvin and SMILES, and goes through File > Open's Import Options (filters, 2D → 3D,

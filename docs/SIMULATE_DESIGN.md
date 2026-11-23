@@ -26,7 +26,9 @@ data model, its engines and force fields, and the order to build it in.
   source (section 9.1). OPLS-AA stays the reference for perfluoroalkanes; OpenFF Sage (with NAGL charges later) is
   the general route; GAFF2 needs a fluorocarbon refit before it is used for PFAS liquids.
 - **σ by default: 16 Å LJ cutoff + tail correction, on the GPU** (Brandon, 2026-11-22). Ewald dispersion on the CPU
-  stays as the check. The C6F14 target is Freire 2006 (12.33 mN/m); OPLS-AA's shortfall is documented, not corrected.
+  stays as the check. Brandon later the same day: options for the user, with recommendations based on the setup;
+  MD-LR's `md.long_range.recommend_long_range` gives 16 Å + tail where LAMMPS can use a GPU and converged Ewald
+  dispersion on a CPU-only machine or for a reference value. The C6F14 target is Freire 2006 (12.33 mN/m); OPLS-AA's shortfall is documented, not corrected.
 - **Splitting a calculation across machines waits for a consistency test** with pilot A (section 6). v1 runs on this
   computer; machine splitting is v2.
 - **The queue schedules by resource** (SCHED-3, section 7): a GPU-bound job and a CPU-bound job run side by side, and
@@ -604,6 +606,12 @@ The data model carries the resolution from the start; v1 and v2 offer all-atom o
   - Ewald dispersion with its accuracy.
 
   The tail correction is switched on automatically for a cutoff run.
+
+  MD-LR (2026-11-23) built this node's options and defaults as `md.long_range`: the two methods, the cutoff labelled
+  "LJ cutoff (screening length)", the Coulomb and dispersion k-space settings (slab-safe by default), and
+  `recommend_long_range(...)`, which picks them from the setup (slab or bulk, box, size, whether LAMMPS can use a GPU,
+  screen or reference) with a reason and a speed. The node shows the recommendation, lets the user override any
+  value, and shows `check_settings(...)`'s warnings and `differences(...)` beside it (docs/ENGINES.md).
 - **Electrostatics:** PPPM and its accuracy, the slab correction where the box has one non-periodic direction.
 - **Combining rule and cross terms:** the mixing rule, and explicit pair coefficients where two parts disagree (a
   surface against a liquid).

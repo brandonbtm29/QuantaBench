@@ -469,6 +469,8 @@ def test_real_short_benchmark_and_the_check(monkeypatch):
         assert v[name]["ns_per_day"] > 0 and v[name]["atoms"] == 800 and v[name]["steps"] == 200
         assert set(bench.RUN0_KEYS) <= set(v[name]["run0"])
     assert "check" not in v["cpu-ewald"]
+    assert "mesh spacing ≤ 2.25 Å" in v["cpu-ewald"]["long_range"]          # MD-LR: the settings it timed
+    assert v["gpu-cutoff16"]["long_range"].startswith("16 Å LJ cutoff + tail")
     assert v["gpu-cutoff12"]["check"] == "ok", v["gpu-cutoff12"]["check_detail"]
     assert v["gpu-cutoff16"]["check"] == "mismatch" and "pressure" in v["gpu-cutoff16"]["check_detail"]
     assert v["gpu-cutoff12"]["reference_run0"]["press"] == pytest.approx(v["gpu-cutoff12"]["run0"]["press"], abs=1e-6)
