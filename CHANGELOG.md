@@ -2,6 +2,11 @@
 
 ## Unreleased (after 0.3.0)
 
+### Lane plans fit the memory that is free (MEM-1, 2026-11-22)
+- `auto` lanes are capped by the memory available when the run starts (less 2 GB), not only by three quarters of the
+  RAM. On the workstation the desktop and other programs use about 20 of its 32 GB, and Psi4 lanes planned on the RAM
+  alone left it under 1 GB free (2026-11-12/13). The plan's reason says `capped by memory (N GB free of M GB)`.
+
 ### SETTINGS-1 follow-ups: salts as separate entries, lanes at the physical cores, twist-boat seeds (2026-11-22)
 - **Keep the counter-ions as separate entries** (Settings > Build defaults, `build --counterion-entries`; science
   setting `counterion_entries`, off): the counter-ions a build removes become molecules of the run. K-PFOS gives
