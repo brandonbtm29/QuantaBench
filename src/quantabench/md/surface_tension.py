@@ -398,6 +398,53 @@ def _setup(folder: Path) -> dict:
     return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
 
 
+def sim_engine(folder: Path) -> str:
+    """The engine of a run folder's run.json ("lammps" when there is none)."""
+    try:
+        return json.loads((Path(folder) / "run.json").read_text(encoding="utf-8")).get("engine") or "lammps"
+    except (OSError, ValueError):
+        return "lammps"
+
+
+def _ta_every_fs(folder: Path, dt: float) -> float:
+    cfg = _setup(folder).get("config", {})
+    return float(cfg.get("ta_every") or 1) * dt
+
+
+def _sigma_stats(steps: np.ndarray, sig: np.ndarray, dt: float, skip_steps: int, block_ns: float, min_blocks: int,
+                 notes: list[str]) -> dict:
+    """Block average, statistical inefficiency and blocking curve of a σ series (steps, mN/m) after ``skip_steps``."""
+    keep = steps >= skip_steps
+    st, x = steps[keep], sig[keep]
+    if len(x) < 8:
+        raise ValueError(f"only {len(x)} σ samples after the first {skip_steps * dt / 1e6:g} ns: the production run "
+                         "has not started (or use --skip-ns)")
+    every = float(np.median(np.diff(st))) if len(st) > 1 else 1.0
+    dt_sample_ns = every * dt / 1e6
+    span_ns = (st[-1] - st[0] + every) * dt / 1e6
+    per_block = int(round(block_ns / dt_sample_ns))
+    nb = len(x) // max(1, per_block)
+    if nb < min_blocks:
+        per_block = max(1, len(x) // min_blocks)
+        notes.append(f"production is {span_ns:.3g} ns: fewer than {min_blocks} blocks of {block_ns:g} ns, so "
+                     f"{min_blocks} blocks of {per_block * dt_sample_ns:.3g} ns were used (a rough error bar)")
+    ba = block_average(x, per_block)
+    g = statistical_inefficiency(x)
+    sem_g = float(x.std(ddof=1) * math.sqrt(g / len(x)))
+    curve = blocking_curve(x)
+    half = len(x) // 2
+    out = {"mean_mN_m": ba.mean, "sem_mN_m": ba.sem, "n_blocks": ba.n_blocks,
+           "block_ns": per_block * dt_sample_ns, "block_means_mN_m": ba.block_means,
+           "statistical_inefficiency": g, "correlation_time_ps": 0.5 * (g - 1.0) * dt_sample_ns * 1e3,
+           "sem_from_inefficiency_mN_m": sem_g, "n_samples": int(len(x)), "sample_every_fs": every * dt,
+           "production_ns": span_ns, "first_half_mN_m": float(x[:half].mean()), "second_half_mN_m": float(x[half:].mean()),
+           "blocking_curve": [{"block_ps": s * dt_sample_ns * 1e3, "sem_mN_m": e, "sem_err": u} for s, e, u in curve]}
+    settle = sig[steps < skip_steps]
+    if len(settle):
+        out["settle_mean_mN_m"] = float(settle.mean())
+    return out
+
+
 def analyze(folder: str | Path, *, skip_ns: float | None = None, block_ns: float = 1.0,
             min_blocks: int = 4) -> dict:
     """The surface tension, densities and checks of a finished (or running) slab folder."""
@@ -411,6 +458,7 @@ def analyze(folder: str | Path, *, skip_ns: float | None = None, block_ns: float
     dt = box.get("dt", cfg.get("timestep", 1.0))
     settle_steps = box.get("settle_steps", round(cfg.get("settle_ns", 2.0) * 1e6 / dt))
     skip_steps = settle_steps if skip_ns is None else round(skip_ns * 1e6 / dt)
+    openmm = (sim_engine(folder) == "openmm")
     out: dict = {"folder": str(folder), "generator": f"QuantaBench {__version__}",
                  "analyzed": datetime.now().isoformat(timespec="seconds"),
                  "molecule": setup.get("molecule", {}).get("name"), "smiles": setup.get("molecule", {}).get("smiles"),
@@ -419,46 +467,80 @@ def analyze(folder: str | Path, *, skip_ns: float | None = None, block_ns: float
                  "n_molecules": setup.get("n_molecules"), "box_A": [box.get("lx"), box.get("ly"), lz],
                  "bulk_lz_A": box.get("bulk_lz"), "timestep_fs": dt, "skip_ns": skip_steps * dt / 1e6}
 
-    # --- σ from the pressure tensor ---
-    p = read_pressure_tensor(folder / "pressure_tensor.txt")
-    prod = p[p[:, 0] >= skip_steps]
-    if len(prod) < 8:
-        raise ValueError(f"only {len(prod)} pressure samples after the first {skip_steps * dt / 1e6:g} ns: the "
-                         "production run has not started (or use --skip-ns)")
-    sig = sigma_series(prod, lz)
-    every = float(np.median(np.diff(prod[:, 0]))) if len(prod) > 1 else 1.0
-    dt_sample_ns = every * dt / 1e6
-    span_ns = (prod[-1, 0] - prod[0, 0] + every) * dt / 1e6
-    per_block = int(round(block_ns / dt_sample_ns))
-    nb = len(sig) // max(1, per_block)
-    if nb < min_blocks:
-        per_block = max(1, len(sig) // min_blocks)
-        notes.append(f"production is {span_ns:.3g} ns: fewer than {min_blocks} blocks of {block_ns:g} ns, so "
-                     f"{min_blocks} blocks of {per_block * dt_sample_ns:.3g} ns were used (a rough error bar)")
-    ba = block_average(sig, per_block)
-    g = statistical_inefficiency(sig)
-    sem_g = float(sig.std(ddof=1) * math.sqrt(g / len(sig)))
-    curve = blocking_curve(sig)
-    half = len(sig) // 2
-    out["sigma"] = {
-        "mean_mN_m": ba.mean, "sem_mN_m": ba.sem, "n_blocks": ba.n_blocks,
-        "block_ns": per_block * dt_sample_ns, "block_means_mN_m": ba.block_means,
-        "statistical_inefficiency": g, "correlation_time_ps": 0.5 * (g - 1.0) * dt_sample_ns * 1e3,
-        "sem_from_inefficiency_mN_m": sem_g, "n_samples": int(len(sig)), "sample_every_fs": every * dt,
-        "production_ns": span_ns, "first_half_mN_m": float(sig[:half].mean()), "second_half_mN_m": float(sig[half:].mean()),
-        "blocking_curve": [{"block_ps": s * dt_sample_ns * 1e3, "sem_mN_m": e, "sem_err": u} for s, e, u in curve],
-        "pressure_atm": {"Pxx": float(prod[:, 1].mean()), "Pyy": float(prod[:, 2].mean()), "Pzz": float(prod[:, 3].mean())},
-    }
-    settle = p[p[:, 0] < skip_steps]
-    if len(settle):
-        out["sigma"]["settle_mean_mN_m"] = float(sigma_series(settle, lz).mean())
-    if ba.n_blocks >= 2 and abs(out["sigma"]["first_half_mN_m"] - out["sigma"]["second_half_mN_m"]) > 3 * max(ba.sem, 1e-9) * math.sqrt(2):
+    # --- σ from the pressure tensor (an OpenMM run: its rerun, and its on-the-fly samples; OPENMM-1) ---
+    pt_path = folder / "pressure_tensor.txt"
+    kb = None
+    if (folder / "sigma_kb.txt").is_file():
+        from . import openmm_sigma as OS
+
+        kb = OS.read_kb(folder)
+    rerun_stats = None
+    p = None
+    if pt_path.is_file():
+        p = read_pressure_tensor(pt_path)
+        if (p[:, 0] >= skip_steps).sum() >= 8 or kb is None:
+            rerun_stats = _sigma_stats(p[:, 0], sigma_series(p, lz), dt, skip_steps, block_ns, min_blocks, notes)
+            prod = p[p[:, 0] >= skip_steps]
+            rerun_stats["pressure_atm"] = {"Pxx": float(prod[:, 1].mean()), "Pyy": float(prod[:, 2].mean()),
+                                           "Pzz": float(prod[:, 3].mean())}
+    elif kb is None:
+        raise FileNotFoundError(f"{pt_path}: no pressure tensor (an OpenMM run: md surface-tension reruns its frames)")
+    kb_stats = None
+    if kb is not None and (kb[:, 0] >= skip_steps).sum() >= 8:
+        kb_stats = _sigma_stats(kb[:, 0], kb[:, 1], dt, skip_steps, block_ns, min_blocks, [])
+        kb_stats["source"] = "on the fly, the run's own engine (sigma_kb.txt)"
+        if rerun_stats is not None:
+            from . import openmm_sigma as OS
+
+            rs = {int(s): v for s, v in zip(p[:, 0], sigma_series(p, lz))}
+            kb_stats["check"] = OS.compare_series(kb, rs, skip_steps)
+    if openmm:
+        out["engine"] = "openmm"
+    if kb_stats is not None and (rerun_stats is None or (kb_stats.get("check") or {}).get("ok")):
+        main = kb_stats
+        if rerun_stats is not None:
+            out["sigma_rerun"] = {**rerun_stats, "source": "rerun of the saved frames in double precision"}
+            if "pressure_atm" in rerun_stats:
+                main["pressure_atm"] = rerun_stats["pressure_atm"]
+            chk = kb_stats["check"]
+            checks.append({"check": "on-the-fly sigma vs the double-precision rerun", "ok": True,
+                           "detail": f"{chk['mean_diff_mN_m']:+.3f} ± {chk['sem_diff_mN_m']:.3f} mN/m over "
+                                     f"{chk['n']} frames (rms {chk['rms_diff_mN_m']:.2f})"})
+        else:
+            notes.append("σ from the run's on-the-fly samples, not yet checked against a double-precision rerun of "
+                         "its frames (md surface-tension reruns them)")
+    elif rerun_stats is not None:
+        main = rerun_stats
+        if openmm:
+            main["source"] = "rerun of the saved frames in double precision (pressure_tensor.txt)"
+        if kb_stats is not None:
+            out["sigma_on_the_fly"] = kb_stats
+            chk = kb_stats.get("check")
+            if chk:
+                checks.append({"check": "on-the-fly sigma vs the double-precision rerun", "ok": False,
+                               "detail": f"{chk['mean_diff_mN_m']:+.3f} ± {chk['sem_diff_mN_m']:.3f} mN/m over "
+                                         f"{chk['n']} frames: the on-the-fly samples are biased; σ is the rerun's"})
+    else:
+        raise ValueError(f"fewer than 8 σ samples after the first {skip_steps * dt / 1e6:g} ns: the production run "
+                         "has not started (or use --skip-ns)")
+    out["sigma"] = main
+    ba_mean, ba_sem = main["mean_mN_m"], main["sem_mN_m"]
+    if main["n_blocks"] >= 2 and abs(main["first_half_mN_m"] - main["second_half_mN_m"]) > 3 * max(ba_sem, 1e-9) * math.sqrt(2):
         checks.append({"check": "sigma drift", "ok": False,
-                       "detail": f"first half {out['sigma']['first_half_mN_m']:.2f}, second half "
-                                 f"{out['sigma']['second_half_mN_m']:.2f} mN/m: not converged or not equilibrated"})
+                       "detail": f"first half {main['first_half_mN_m']:.2f}, second half "
+                                 f"{main['second_half_mN_m']:.2f} mN/m: not converged or not equilibrated"})
     min_ns = 7.0
-    checks.append({"check": "production length", "ok": span_ns >= min_ns,
-                   "detail": f"{span_ns:.3g} ns (Tsige & Grest 2008 needed at least 7 ns for perfluoroalkanes)"})
+    checks.append({"check": "production length", "ok": main["production_ns"] >= min_ns,
+                   "detail": f"{main['production_ns']:.3g} ns (Tsige & Grest 2008 needed at least 7 ns for "
+                             "perfluoroalkanes)"})
+    if openmm and (folder / "test_area.txt").is_file():
+        from . import openmm_sigma as OS
+
+        ta = OS.test_area_sigma(folder, float(out.get("temperature_K") or 298.15), skip_steps,
+                                block=max(1, int(main["n_samples"] / max(1, main["n_blocks"]) * main["sample_every_fs"]
+                                                 / max(1.0, _ta_every_fs(folder, dt)))))
+        if ta:
+            out["sigma_test_area"] = ta
 
     # --- densities from the profiles ---
     prof_path = folder / "density_profile.txt"
@@ -514,7 +596,7 @@ def analyze(folder: str | Path, *, skip_ns: float | None = None, block_ns: float
     ref_s, ref_d = cfg.get("reference_sigma"), cfg.get("reference_density")
     if ref_s:
         out["reference"] = {"sigma_mN_m": ref_s, "note": cfg.get("reference_note", ""),
-                            "sigma_diff_mN_m": ba.mean - ref_s, "sigma_rel": (ba.mean - ref_s) / ref_s}
+                            "sigma_diff_mN_m": ba_mean - ref_s, "sigma_rel": (ba_mean - ref_s) / ref_s}
     if ref_d and "bulk" in out:
         out.setdefault("reference", {})["density_g_cm3"] = ref_d
         out["reference"]["density_rel"] = (out["bulk"]["density_g_cm3"] - ref_d) / ref_d
@@ -539,9 +621,9 @@ def analyze(folder: str | Path, *, skip_ns: float | None = None, block_ns: float
             out["sigma"]["tail"] = {"mN_m": tail, "sharp_interface_mN_m": sharp, "w_A": w, "rc_A": rc,
                                     "mixing": mixing, "rho_liquid_g_cm3": rl, "rho_vapour_g_cm3": rv,
                                     "method": "mean-field LJ tail for a tanh profile (Blokhuis et al. 1995)"}
-            out["sigma"]["corrected_mN_m"] = ba.mean + tail
+            out["sigma"]["corrected_mN_m"] = ba_mean + tail
             if ref_s:
-                out["reference"]["sigma_corrected_rel"] = (ba.mean + tail - ref_s) / ref_s
+                out["reference"]["sigma_corrected_rel"] = (ba_mean + tail - ref_s) / ref_s
             notes.append(f"plain LJ cutoff at {rc:g} Å, no tail correction in the slab: the LJ beyond rc adds "
                          f"{tail:.2f} mN/m (sharp interface {sharp:.2f}), computed afterwards from the fitted profile. "
                          "It does not undo the slab's lower density, so compare with the ewald variant")
@@ -587,9 +669,22 @@ def format_report(r: dict) -> str:
          f"{s['block_ns']:.3g} ns) |",
          f"| SEM from the statistical inefficiency | {_f(s['sem_from_inefficiency_mN_m'], '.2f')} (g = "
          f"{_f(s['statistical_inefficiency'], '.1f')}, τ = {_f(s['correlation_time_ps'], '.2f')} ps) |",
-         f"| first / second half | {s['first_half_mN_m']:.2f} / {s['second_half_mN_m']:.2f} |",
-         f"| ⟨Pxx⟩, ⟨Pyy⟩, ⟨Pzz⟩ (atm) | {s['pressure_atm']['Pxx']:.1f}, {s['pressure_atm']['Pyy']:.1f}, "
-         f"{s['pressure_atm']['Pzz']:.1f} |"]
+         f"| first / second half | {s['first_half_mN_m']:.2f} / {s['second_half_mN_m']:.2f} |"]
+    if s.get("pressure_atm"):
+        L.append(f"| ⟨Pxx⟩, ⟨Pyy⟩, ⟨Pzz⟩ (atm) | {s['pressure_atm']['Pxx']:.1f}, {s['pressure_atm']['Pyy']:.1f}, "
+                 f"{s['pressure_atm']['Pzz']:.1f} |")
+    if r.get("engine") == "openmm":           # OPENMM-1: where σ came from, and the other estimates
+        L.insert(L.index("|---|---|") + 1, f"| engine | OpenMM; σ: {s.get('source', '')} |")
+        for key, label in (("sigma_rerun", "σ from the double-precision rerun of the frames"),
+                           ("sigma_on_the_fly", "σ on the fly (not used: biased against the rerun)"),
+                           ("sigma_test_area", "σ by test-area (second estimate)")):
+            x = r.get(key)
+            if x:
+                L.append(f"| {label} | {x['mean_mN_m']:.2f} ± {_f(x['sem_mN_m'], '.2f')} ({x['n_samples']} samples) |")
+        chk = s.get("check") or (r.get("sigma_on_the_fly") or {}).get("check")
+        if chk:
+            L.append(f"| on the fly − rerun, same frames | {chk['mean_diff_mN_m']:+.3f} ± {chk['sem_diff_mN_m']:.3f} mN/m "
+                     f"({chk['n']} frames, rms {chk['rms_diff_mN_m']:.2f}) |")
     if "tail" in s:
         t = s["tail"]
         L.insert(L.index("|---|---|") + 2,

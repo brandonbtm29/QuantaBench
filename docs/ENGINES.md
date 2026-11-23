@@ -1551,6 +1551,81 @@ keeps binary restart files and trajectory dumps on the machine that wrote them (
 build), while logs, data files (`*.pause.data`, `bulk_final.data`), the pressure tensor, the profiles and `run.json`
 sync, so a run can be analyzed, and resumed from its data file, on another machine.
 
+## OpenMM, the second MD engine (`--engine openmm`; OPENMM-1)
+
+A liquid-slab folder runs on **LAMMPS** (the reference engine) or on **OpenMM**. OpenMM runs much faster on GPUs, at
+reduced arithmetic precision: single precision on Apple GPUs (they have no FP64; "mixed" fails there), mixed on most
+others (NVIDIA, AMD). σ itself is computed afterwards in double precision. LAMMPS stays the reference.
+
+```
+conda env create -f envs/openmm.yml                     # the qb-openmm environment: openmm and numpy only
+quantabench-cli doctor                                   # "OpenMM (MD engine)": its platforms and precisions
+quantabench-cli md liquid-slab --smiles ... -o DIR --engine openmm [--kb-every 20] [--frame-every 1000] [--ta-every 0]
+quantabench-cli md run DIR [--variant auto|gpu|cpu|opencl|opencl-mixed|cuda|hip] [--detach]
+quantabench-cli md run DIR --engine openmm               # switch a folder that has not started
+quantabench-cli md surface-tension DIR [--rerun auto|lammps|openmm|openmm-reference|none] [--threads 4]
+```
+
+Settings > Engines > **MD engine** sets the default for new folders (`engines.md_engine`), with **OpenMM Python** for
+the environment's interpreter (blank: QuantaBench finds `qb-openmm` in the usual conda folders). Simulate > Run MD
+folder... asks which engine runs a liquid-slab folder that has not started, with the same note.
+
+**The same model.** `md.openmm_engine` builds the OpenMM `System` from the folder's own LAMMPS files (`system.data`,
+`ff.params`, the styles and 1-4 scaling in `liquid_setup.json`): harmonic bonds and angles (k = 2K), `opls`,
+`fourier` and `harmonic` dihedrals and `cvff` impropers as periodic torsions, `special_bonds 0 0 f`, Lorentz-Berthelot
+mixing natively and geometric mixing (and any explicit `pair_coeff i j`) through a `CustomNonbondedForce` table,
+Coulomb PME, the LJ cut at rc (with the homogeneous tail in the bulk NPT) or LJ-PME for full long-range dispersion
+(`ewald`; for geometric force fields a short-range table makes both halves geometric, as LAMMPS' pppm/disp). Anything
+it cannot translate is refused by name. `tests/test_md_openmm.py` compares every bonded term and the nonbonded total
+with LAMMPS `run 0` on the same minimized box, for OPLS-AA (geometric; `opls` dihedrals; `cvff` impropers of C6F6) and
+a GAFF2-like model (`fourier` dihedrals, Lorentz-Berthelot, Coulomb 1-4 × 1/1.2), with a cutoff, with the tail, and
+with LJ-PME: bonded terms agree to 1e-6, the nonbonded total within 2e-4 of its terms. On pilot B's slab
+(9,780 atoms) OpenMM's energy, 497.80 kcal/mol, is LAMMPS' at a Coulomb accuracy of 1e-7 (497.79); at the cutoff
+variants' 1e-5 LAMMPS gives 497.40 (its PPPM error, not OpenMM's).
+
+**The run** (`md.openmm_run`, started by the run supervisor in the OpenMM environment with QuantaBench's source on
+PYTHONPATH; `caffeinate -i -s` on macOS) has the stages of `in.bulk` and `in.slab` and writes the same files, so
+`md status`, the Jobs dock and `md surface-tension` read it like a LAMMPS run: `bulk_density.txt`, `bulk_final.data`,
+`slab_box.txt`, `density_profile.txt`, `slab_final.data`, and a LAMMPS-shaped log (thermo rows, `Performance:` lines,
+the `QB_*` tags). Thermostat: Langevin (1/ps; 20/ps during the warm-up and a lattice start's compression); barostat:
+Monte Carlo every 25 steps, isotropic; `CMMotionRemover` every 1000 steps. Checkpoints are OpenMM state XML files
+(`<part>.pause.xml` when STOP pauses it, `<part>.state.a/b.xml` every `restart_every` steps), which any machine,
+platform or OpenMM build reads, so a run can move between the Mac and the workstation; the supervisor cuts the outputs
+at the checkpoint's step before a resume, the frames (`slab.dcd`, kind "dcd") included. Platform and precision:
+`auto` is the fastest GPU platform at mixed precision where it has it, else single (Apple), else the CPU; or
+`--variant opencl-mixed`, `cuda`, `cpu`, ... per segment.
+
+**σ in double precision.** The pressure tensor σ comes from is not taken from a single-precision GPU (one sample's σ
+was 19 mN/m off there: Runs/mac-gpu-2026-11-23). Two series are written instead:
+
+- **On the fly** (`sigma_kb.txt`, every `kb_every` = 20 steps): σ_inst = [U(+ε) − U(−ε)] / (2ε · 2A), the energy at
+  two boxes whose area is scaled by 1 ± ε at constant volume with every atom moved with the box, which is the
+  Kirkwood-Buff virial σ of that configuration. Two energy evaluations per sample cost about 20 % (pilot B's slab on
+  the M3 Max: 84 → 67 ns/day). Two details make it the same number as LAMMPS' virial: a force group that is never
+  integrated adds −U_ij(rc) for each pair within the LJ cutoff, so a pair crossing rc under the strain does not add
+  an "impulsive" jump (without it +1 to +2 mN/m on a small hexane slab at 8 Å); and ε = 1e-4, because the LJ force
+  jumps at rc and a central difference across that kink is biased in proportion to ε (−0.16 mN/m at 1e-3, −0.04 at
+  2e-4 on that slab).
+- **The frames** (`slab.dcd`, every `frame_every` = 1000 steps) are evaluated again on the CPU in double precision by
+  `md surface-tension` (`md.openmm_sigma.rerun`): a LAMMPS `rerun` with the folder's own model (`compute pressure NULL
+  virial`) where QuantaBench finds LAMMPS, else OpenMM's CPU platform (or `openmm-reference`, double throughout), into
+  `pressure_tensor.txt` (the equipartition kinetic part added). The rerun's Coulomb k-space accuracy is at least 1e-6:
+  at the cutoff variants' 1e-5, LAMMPS' PPPM virial was off by +0.36 mN/m in σ on a frame of pilot B and +0.9 on the
+  small hexane slab, against 1e-6 and 1e-7 (which agree within 0.01) and OpenMM's PME.
+
+Why both: σ's samples decorrelate in ~20 fs (bond vibrations dominate the virial), so the error bar shrinks with the
+number of samples, and frames are big (117 KB each for 9,780 atoms). Pilot B's own 10-fs pressure series, thinned,
+gives a block error of 0.30 mN/m every 10 fs, 0.30 every 20 fs, 0.38 every 50 fs, 0.81 every 100 fs, 2.9 every 1 ps
+over 10 ns: 1-ps frames alone are ten times less precise than pilot B. So `md surface-tension` compares the on-the-fly
+samples with the rerun at the frames both have; when the mean difference is within 0.1 mN/m plus twice its standard
+error, σ is the on-the-fly series (its error bar), and the rerun's own value is reported beside it; otherwise σ is the
+rerun's and the check fails in the report. With `ta_every` the run also samples the test-area method (Gloor et al.
+2005; ΔU(±ε) of the nonbonded energy with molecules moved as wholes), a second estimate in the report. The LJ tail
+for a cutoff is added afterwards as for LAMMPS runs.
+
+**Validation against pilot B** (C6F14, OPLS-AA, 16 Å cutoff, from pilot B's own packing, on the M3 Max's GPU in
+single precision): see `Runs\openmm-validation-2026-11-23\` and docs/PLATFORMS.md.
+
 ## Not available yet
 
 - NMR shieldings (Psi4 has none; planned through PySCF).

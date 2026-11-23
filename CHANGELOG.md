@@ -2,6 +2,27 @@
 
 ## Unreleased (after 0.3.0)
 
+### OpenMM as a second MD engine, with the Apple GPU (OPENMM-1, 2026-11-23)
+- **The MD engine is a choice:** LAMMPS (the reference) or OpenMM, which runs much faster on GPUs at reduced
+  arithmetic precision (single on Apple GPUs, mixed on most others); σ itself is computed afterwards in double
+  precision. `md liquid-slab --engine openmm`, `md run --engine openmm` (a folder that has not started), Settings >
+  Engines > **MD engine** (with the OpenMM Python path), and Simulate > Run MD folder... asks for a liquid-slab folder
+  that has not started; each says what the choice means.
+- **`envs/openmm.yml`** (the `qb-openmm` conda environment); `doctor`, `machines` and Settings > Engines > Detect show
+  OpenMM's platforms (CUDA, OpenCL, HIP, CPU) and the precisions each allows (Apple: single only).
+- **The same folder, the same model:** OpenMM builds the folder's LAMMPS model (harmonic, opls, fourier, cvff;
+  1-4 scaling; Lorentz-Berthelot or geometric mixing; PME; an LJ cutoff with the tail, or LJ-PME for full long-range
+  dispersion), checked term by term against LAMMPS. The run supervisor runs it like a LAMMPS run (segments, pause,
+  resume from portable state XML, progress, the Jobs dock) and it writes the same files, plus `slab.dcd` and
+  on-the-fly σ samples (`sigma_kb.txt`). Pilot B's slab runs at 84 ns/day on the M3 Max's GPU and 137 on the
+  workstation's RX 9060 XT (LAMMPS' GPU package: 21).
+- **`md surface-tension` on an OpenMM run** first evaluates its saved frames in double precision (`--rerun auto`:
+  LAMMPS where found, else OpenMM's CPU platform; `--threads`), checks the on-the-fly samples against them, and
+  reports σ with the error bar of the series that passed (the other beside it), plus an optional test-area estimate.
+- `machines --bench md` times an `openmm-gpu-cutoff16` variant where OpenMM has a GPU; `md estimate` and the long-range
+  recommendation use it (on OpenMM, full long-range dispersion runs on the GPU as LJ-PME).
+- Fixed: `md run --detach --priority P` started the supervisor at the settings' priority instead of P.
+
 ### MD runs as jobs: segments, pause and resume (SIM-1 PR 1, 2026-11-23)
 - **`quantabench-cli md run DIR`** runs a folder written by `md liquid-slab`, `md smd` or the Surface builder under a
   run supervisor: one LAMMPS process (segment) per part at the run priority, the GPU where LAMMPS has one and the

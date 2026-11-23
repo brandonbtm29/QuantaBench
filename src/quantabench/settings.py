@@ -116,6 +116,9 @@ class EngineSettings:
     # /mnt/c (before 2026-11-20: every file CREST writes crosses to the Windows disk). Native CREST is not affected.
     crest_wsl_scratch: str = "auto"
     crest_wsl_shm_min_gb: float = 2.0  # "auto": /dev/shm and WSL's free memory keep this much, plus 2x the job's size
+    # the engine new MD folders are written for (OPENMM-1): "lammps" (the reference) or "openmm" (fast on GPUs at
+    # reduced arithmetic precision; σ is computed afterwards in double precision: md.openmm_sigma)
+    md_engine: str = "lammps"
 
 
 @dataclass

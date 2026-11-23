@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import html
 import time
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
@@ -392,6 +393,8 @@ def run_md_folder(win, folder=None):
     if any(j.is_md and j.output_dir is not None and str(j.output_dir) == str(folder) and j.status not in FINISHED
            for j in queue.jobs):
         return None
+    if choose_md_engine(win, folder) is None:
+        return None
     job = queue.submit(md_job(folder))
     dock = getattr(win, "jobs_dock", None)
     if dock is not None:
@@ -400,6 +403,43 @@ def run_md_folder(win, folder=None):
     if getattr(win, "job_monitor", None) is not None:
         win.job_monitor.select(job.number)
     return job
+
+
+def choose_md_engine(win, folder) -> str | None:
+    """The MD engine of a liquid-slab folder that has not started (OPENMM-1): asked with the note on what each
+    engine gives, the folder's own engine first; the folder is switched if another is chosen. Other folders (a run
+    that has started, a steered pull) keep theirs. None: cancelled."""
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    from ..md import liquid as L
+    from ..md import sim
+
+    folder = Path(folder)
+    if not (folder / "liquid_setup.json").is_file():
+        return "lammps"
+    try:
+        run = sim.Run.load(folder)
+    except sim.RunError:
+        return "lammps"
+    if run.segments:
+        return run.engine
+    labels = {"lammps": "LAMMPS (the reference engine)",
+              "openmm": "OpenMM (much faster on GPUs, reduced arithmetic precision)"}
+    order = [run.engine, *(e for e in L.ENGINES if e != run.engine)]
+    import textwrap
+
+    item, ok = QInputDialog.getItem(win, "MD engine", f"Run {folder.name} with:\n\n" + textwrap.fill(L.ENGINE_NOTE, 80),
+                                    [labels[e] for e in order], 0, False)
+    if not ok:
+        return None
+    engine = next(e for e, text in labels.items() if text == item)
+    if engine != run.engine:
+        try:
+            L.set_engine(folder, engine)
+        except (sim.RunError, ValueError) as exc:
+            QMessageBox.warning(win, "MD engine", str(exc))
+            return None
+    return engine
 
 
 def _brush(color: str):

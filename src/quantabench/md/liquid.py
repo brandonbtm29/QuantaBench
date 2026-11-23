@@ -71,6 +71,10 @@ SIZES: dict[str, tuple[float, float]] = {
     "pilot": (40.0, 100.0),
     "full": (50.0, 100.0),
 }
+ENGINES = ("lammps", "openmm")
+ENGINE_NOTE = ("OpenMM runs much faster on GPUs, at reduced arithmetic precision: single precision on Apple GPUs "
+               "(no FP64), mixed on most others. σ itself is computed afterwards in double precision (a rerun of "
+               "the saved frames), and checked there. LAMMPS stays the reference engine.")
 DISPERSION_HELP = ("ewald (lj/long/coul/long + pppm/disp), cutoff12 / cutoff16 / cutoff18 (lj/cut/coul/long + "
                    "pppm, plain LJ truncation at 12/16/18 Å, any cutoffN for 8-30 Å)")
 
@@ -132,6 +136,19 @@ class LiquidSlabConfig:
     pause_every: int | None = None           # steps between STOP-file checks; None: the output blocks' period
     momentum_every: int = 1000
     seed: int = 20261120
+    # engine (OPENMM-1): "lammps" (the reference engine, these inputs) or "openmm" (md.openmm_run: the same model and
+    # files on OpenMM, fast on GPUs at lower arithmetic precision; σ is computed afterwards in double precision)
+    engine: str = "lammps"
+    openmm_platform: str = "auto"            # auto (the fastest GPU platform, else CPU) | OpenCL | CUDA | HIP | CPU
+    openmm_precision: str = "auto"           # auto (mixed where the GPU has FP64, else single) | single | mixed | double
+    friction: float = 1.0                    # 1/ps, OpenMM's Langevin thermostat (LAMMPS: Nosé-Hoover, tdamp)
+    barostat_every: int = 25                 # steps between OpenMM's Monte Carlo barostat moves (bulk NPT)
+    frame_every: int = 1000                  # OpenMM: steps between slab frames (slab.dcd) for the σ rerun; 0 = none
+    kb_every: int = 20                       # OpenMM: steps between on-the-fly Kirkwood-Buff σ samples; 0 = off
+    kb_strain: float = 1.0e-4                # ... the area strain of their central difference (bias ∝ strain: 0.16
+                                             # mN/m at 1e-3 for hexane at 8 Å, from the LJ force jump at rc)
+    ta_every: int = 0                        # OpenMM: steps between test-area samples (a second σ estimate); 0 = off
+    ta_strain: float = 5.0e-4
     # what the analysis compares against (optional, any source)
     reference_sigma: float | None = None     # mN/m
     reference_density: float | None = None   # g/cm³
@@ -139,6 +156,8 @@ class LiquidSlabConfig:
 
     def resolved(self) -> LiquidSlabConfig:
         kind, rc = parse_dispersion(self.dispersion)
+        if self.engine not in ENGINES:
+            raise ValueError(f"engine {self.engine!r}: {' or '.join(ENGINES)}")
         if self.size not in SIZES:
             raise ValueError(f"size {self.size!r}: choose {', '.join(SIZES)}")
         if kind == "cutoff" and self.cutoff is not None and abs(float(self.cutoff) - rc) > 1e-9:
@@ -160,6 +179,8 @@ class LiquidSlabConfig:
         periods = [int(self.pressure_every), int(self.profile_freq), 1000]
         if min(periods) <= 0 or int(self.restart_every) <= 0:
             raise ValueError("pressure_every, profile_freq and restart_every must be positive")
+        if self.engine == "openmm":          # the OpenMM run's own outputs: frames and on-the-fly σ samples
+            periods += [int(p) for p in (self.frame_every, self.kb_every, self.ta_every) if p and int(p) > 0]
         base = 1
         for p in periods:
             base = base * p // math.gcd(base, p)
@@ -724,6 +745,8 @@ def protocol_for(cfg: LiquidSlabConfig, compress: bool) -> sim.Protocol:
         restart_files=["bulk.restart.a", "bulk.restart.b"], done_tag="QB_BULK done", product="bulk_final.data",
         needs=["system.data", "ff.params"])
     s = _steps(cfg.settle_ns * 1e6 / dt) + _steps(cfg.production_ns * 1e6 / dt)
+    if cfg.engine == "openmm":
+        return _openmm_protocol(cfg, bulk, s)
     outs = [sim.OutputFile("pressure_tensor.txt", "ave/time", cfg.pressure_every, rewrites_start=True),
             sim.OutputFile("density_profile.txt", "ave/chunk", cfg.profile_freq,
                            rewrites_start=cfg.profile_repeat <= 1)]
@@ -737,6 +760,31 @@ def protocol_for(cfg: LiquidSlabConfig, compress: bool) -> sim.Protocol:
         product="slab_final.data", needs=["bulk_final.data", "ff.params"])
     return sim.Protocol("liquid-slab", "Liquid slab (surface tension)", [bulk, slab], dispersion=cfg.dispersion,
                         restart_every=int(cfg.restart_every), pause_every=int(cfg.pause_every))
+
+
+def _openmm_protocol(cfg: LiquidSlabConfig, bulk: sim.Part, slab_steps: int) -> sim.Protocol:
+    """The same stages run by ``md.openmm_run`` (OPENMM-1): its inputs are ``liquid_setup.json`` and the LAMMPS
+    files, its checkpoints OpenMM state XML files, its outputs those of ``in.slab`` plus the frames and the
+    on-the-fly σ samples (``pressure_tensor.txt`` comes later, from the frames: ``md surface-tension``)."""
+    dt = float(cfg.timestep)
+    bulk = replace(bulk, input="liquid_setup.json", restart_files=["bulk.state.a.xml", "bulk.state.b.xml"],
+                   outputs=[sim.OutputFile("bulk_density.txt", "ave/time", 1000, rewrites_start=False)])
+    outs = [sim.OutputFile("density_profile.txt", "ave/chunk", cfg.profile_freq, rewrites_start=False)]
+    if cfg.frame_every:
+        outs.append(sim.OutputFile("slab.dcd", "dcd", cfg.frame_every, rewrites_start=True))
+    if cfg.kb_every:
+        outs.append(sim.OutputFile("sigma_kb.txt", "ave/time", cfg.kb_every, rewrites_start=True))
+    if cfg.ta_every:
+        outs.append(sim.OutputFile("test_area.txt", "ave/time", cfg.ta_every, rewrites_start=True))
+    slab = sim.Part("slab", "liquid_setup.json", "log.slab", stages=[
+        sim.Stage("open-box", "open-box", 0, 0, dt, f"{cfg.vacuum:g} Å of vacuum on each side"),
+        sim.Stage("nvt", "production", 0, slab_steps, dt,
+                  f"NVT {cfg.settle_ns:g} ns settle + {cfg.production_ns:g} ns production")],
+        outputs=outs, restart_files=["slab.state.a.xml", "slab.state.b.xml"], done_tag="QB_SLAB done",
+        product="slab_final.data", needs=["bulk_final.data", "ff.params"])
+    return sim.Protocol("liquid-slab", "Liquid slab (surface tension), OpenMM", [bulk, slab],
+                        dispersion=cfg.dispersion, restart_every=int(cfg.restart_every),
+                        pause_every=int(cfg.pause_every))
 
 
 def run_record(tm: TypedMolecule, cfg: LiquidSlabConfig, meta: Mapping, *, legacy: bool = False) -> sim.Run:
@@ -772,8 +820,57 @@ def run_record(tm: TypedMolecule, cfg: LiquidSlabConfig, meta: Mapping, *, legac
     if legacy:
         notes.append("inputs written before SIM-1: no STOP lines, so 'md pause' can only stop the run now (the next "
                      "segment resumes from the last periodic restart file); rewrite the folder for pauses")
+    if cfg.engine == "openmm":
+        variant = ""                    # OpenMM picks its platform (the GPU where it has one) per segment
+        physics["engine"] = {"name": "openmm", "platform": cfg.openmm_platform, "precision": cfg.openmm_precision,
+                             "thermostat": f"Langevin, friction {cfg.friction:g}/ps",
+                             "barostat": f"Monte Carlo, isotropic, every {cfg.barostat_every} steps",
+                             "vdw": ("LJ-PME" if LR.method_of(cfg.dispersion) == "ewald" else "LJ cutoff"),
+                             "sigma": "rerun of the frames in double precision (md surface-tension); on-the-fly "
+                                      f"Kirkwood-Buff every {cfg.kb_every} steps" if cfg.kb_every else
+                                      "rerun of the frames in double precision (md surface-tension)",
+                             "note": ENGINE_NOTE}
+        notes.append("OpenMM engine: " + ENGINE_NOTE)
     return sim.Run("liquid-slab", name=tm.name, system=system, parameterization=par, protocol=proto,
-                   variant=variant, legacy=legacy, notes=notes)
+                   engine=cfg.engine, variant=variant, legacy=legacy, notes=notes)
+
+
+def set_engine(folder: str | Path, engine: str, **openmm_settings) -> sim.Run:
+    """Switch a liquid-slab folder that has not started yet to ``engine`` ("lammps" or "openmm"; OPENMM-1): its
+    ``liquid_setup.json`` config and ``run.json`` (protocol, checkpoints, outputs) are rewritten; the LAMMPS inputs
+    stay (the OpenMM engine reads the same data and coefficients). ``openmm_settings``: LiquidSlabConfig fields of the
+    OpenMM run (``frame_every``, ``kb_every``, ``openmm_platform``, ...)."""
+    folder = Path(folder)
+    if engine not in ENGINES:
+        raise ValueError(f"engine {engine!r}: {' or '.join(ENGINES)}")
+    run = sim.Run.load(folder) if (folder / sim.RUN_FILE).is_file() else None
+    if run is not None and run.segments:
+        if run.engine == engine and not openmm_settings:
+            return run
+        raise sim.RunError(f"{folder}: the run has started on {run.engine}; its engine can only change before the "
+                           "first segment (write a new folder)")
+    meta = read_setup(folder)
+    from dataclasses import fields as dc_fields
+
+    known = {f.name for f in dc_fields(LiquidSlabConfig)}
+    bad = sorted(set(openmm_settings) - known)
+    if bad:
+        raise ValueError(f"unknown settings {bad}")
+    raw = {k: v for k, v in (meta.get("config") or {}).items() if k in known}
+    raw.update(engine=engine, **openmm_settings)
+    raw["pause_every"] = None
+    cfg = LiquidSlabConfig(**raw).resolved()
+    meta["config"] = asdict(cfg)
+    (folder / "liquid_setup.json").write_text(json.dumps(meta, indent=1) + "\n", encoding="utf-8")
+    new = run_record(TypedMolecule.from_dict(meta["molecule"]), cfg, meta)
+    if run is not None:
+        new.id, new.created = run.id, run.created
+    new.save(folder)
+    readme = folder / "README.txt"
+    if engine == "openmm" and readme.is_file():
+        with open(readme, "a", encoding="utf-8") as fh:
+            fh.write("\n" + "\n".join(x for x in openmm_section(cfg) if x) + "\n")
+    return new
 
 
 def load_folder(folder: str | Path) -> tuple[TypedMolecule, LiquidSlabConfig, dict]:
@@ -907,6 +1004,27 @@ def _job_section(cfg: LiquidSlabConfig) -> list[str]:
             "  Without QuantaBench: create a file named STOP to pause; in.bulk and in.slab run as before."]
 
 
+def openmm_section(cfg: LiquidSlabConfig) -> list[str]:
+    """README lines of a folder written for the OpenMM engine (OPENMM-1)."""
+    fe, ke, te = int(cfg.frame_every or 0), int(cfg.kb_every or 0), int(cfg.ta_every or 0)
+    return ["ENGINE: OpenMM (OPENMM-1)",
+            f"  {ENGINE_NOTE}",
+            "  quantabench-cli md run <this folder> runs the same stages with OpenMM (md.openmm_run) in the OpenMM",
+            "  environment (conda env create -f envs/openmm.yml), from system.data, ff.params and liquid_setup.json;",
+            "  the LAMMPS inputs above stay valid (lmp runs the same model). Thermostat: Langevin "
+            f"({cfg.friction:g}/ps); barostat: Monte Carlo every {cfg.barostat_every} steps.",
+            f"  Platform: {cfg.openmm_platform}, precision {cfg.openmm_precision} (md run --variant opencl-mixed, "
+            "cuda, cpu, ...).",
+            "  Checkpoints: <part>.pause.xml and <part>.state.a/b.xml (OpenMM state XML: any machine, platform or build).",
+            f"  slab.dcd: frames every {fe} steps ({fe * cfg.timestep / 1000:g} ps)" if fe else "  No frames are saved.",
+            f"  sigma_kb.txt: Kirkwood-Buff sigma on the fly every {ke} steps (finite difference of the energy over the "
+            "area)" if ke else "  No on-the-fly sigma samples.",
+            f"  test_area.txt: test-area samples every {te} steps (a second sigma estimate)" if te else "",
+            "  quantabench-cli md surface-tension <this folder> first evaluates the frames in double precision (LAMMPS",
+            "  rerun, else OpenMM's CPU platform) into pressure_tensor.txt, checks the on-the-fly samples against them,",
+            "  and reports sigma as for a LAMMPS run."]
+
+
 def _long_range_section(cfg: LiquidSlabConfig, s: LiquidSetup) -> list[str]:
     """README lines: the choice, who made it, and the recommendation when it was asked for (md.long_range)."""
     lr = s.long_range or {}
@@ -975,6 +1093,7 @@ def _readme(tm: TypedMolecule, cfg: LiquidSlabConfig, s: LiquidSetup, counts: di
     if tm.notes:
         L += ["  Notes:"] + [f"    - {n}" for n in tm.notes]
     L += ["", *_commands(cfg), "", *_job_section(cfg), "",
+          *([*openmm_section(cfg), ""] if cfg.engine == "openmm" else []),
           "OUTPUTS",
           "  log.bulk, log.slab        LAMMPS logs (thermo every 1 ps; Performance: ns/day at the end of each run)",
           "  bulk_density.txt          1-ps averages over the NPT run: density (g/cm3), volume, box, pe",

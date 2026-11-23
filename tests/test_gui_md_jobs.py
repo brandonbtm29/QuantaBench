@@ -125,7 +125,9 @@ def test_md_jobs_run_beside_builds_pause_and_resume(tmp_path, monkeypatch):
         _close(app, w)
 
 
-def test_run_md_folder_runs_a_real_tiny_slab(tmp_path):
+def test_run_md_folder_runs_a_real_tiny_slab(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
     from quantabench.md import bench
     from quantabench.md import forcefield as F
     from quantabench.md import liquid as L
@@ -140,6 +142,8 @@ def test_run_md_folder_runs_a_real_tiny_slab(tmp_path):
                              production_ns=0.002, pressure_every=10, profile_every=10, profile_repeat=10,
                              profile_freq=100, restart_every=1000, dump_every=0, vacuum=20.0)
     L.write_liquid_slab(tm, folder, cfg, density_estimate=0.66)
+    asked = []
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: (asked.append(a[3]) or a[3][0], True)))
     app = _app()
     w = _window(tmp_path)
     try:
@@ -153,11 +157,55 @@ def test_run_md_folder_runs_a_real_tiny_slab(tmp_path):
         w.job_queue.md_start = one_thread
         job = w.run_md_folder(str(folder))
         assert job is not None and job.is_md and job.status == "running"
+        assert asked and asked[0][0].startswith("LAMMPS")          # OPENMM-1: the engine asked, the folder's first
         assert w.run_md_folder(str(folder)) is None                       # the same folder is not submitted twice
         assert _wait(app, lambda: job.status in ("done", "failed"), 240), (job.status, list(job.log))
         assert job.status == "done", (job.error, list(job.log))
         assert job.progress_text().startswith("0.0065 / 0.0065 ns")
         assert job.md.get("state") == "done" and len(job.md.get("segments")) == 2
         assert (folder / "pressure_tensor.txt").is_file() and (folder / "supervisor.log").is_file()
+    finally:
+        _close(app, w)
+
+
+def test_run_md_folder_asks_the_engine_and_switches_to_openmm(tmp_path, monkeypatch):
+    """OPENMM-1: an unstarted liquid-slab folder is run on the engine chosen in the dialog (with the note on what
+    OpenMM gives); Cancel submits nothing; a started run is not asked again."""
+    from PySide6.QtWidgets import QInputDialog
+
+    from quantabench.gui import job_monitor as JM
+    from quantabench.md import forcefield as F
+    from quantabench.md import liquid as L
+    from quantabench.md import sim
+
+    folder = tmp_path / "hexane"
+    tm = F.type_molecule("CCCCCC", "hexane", "oplsaa")
+    L.write_liquid_slab(tm, folder, L.LiquidSlabConfig(lateral=18.0, slab_thickness=18.0, packing="lattice",
+                                                       dispersion="cutoff8", dump_every=0), density_estimate=0.66)
+    seen = {}
+
+    def pick(answer, ok=True):
+        def get_item(parent, title, label, items, current=0, editable=False):
+            seen.update(label=label, items=list(items))
+            return next(i for i in items if i.startswith(answer)), ok
+        return staticmethod(get_item)
+
+    app = _app()
+    w = _window(tmp_path)
+    try:
+        monkeypatch.setattr(QInputDialog, "getItem", pick("OpenMM", ok=False))
+        assert w.run_md_folder(str(folder)) is None and sim.Run.load(folder).engine == "lammps"
+        assert " ".join(seen["label"].split()).endswith(L.ENGINE_NOTE) and seen["items"][0].startswith("LAMMPS")
+        monkeypatch.setattr(QInputDialog, "getItem", pick("OpenMM"))
+        assert JM.choose_md_engine(w, folder) == "openmm"
+        run = sim.Run.load(folder)
+        assert run.engine == "openmm" and run.protocol.parts[1].restart_files == ["slab.state.a.xml",
+                                                                                  "slab.state.b.xml"]
+        assert L.load_folder(folder)[1].engine == "openmm"
+        run.segments.append(sim.Segment(n=1, part="bulk", status="paused"))
+        run.save(folder)
+        monkeypatch.setattr(QInputDialog, "getItem", pick("LAMMPS"))
+        seen.clear()
+        assert JM.choose_md_engine(w, folder) == "openmm" and not seen      # started: not asked, not switched
     finally:
         _close(app, w)

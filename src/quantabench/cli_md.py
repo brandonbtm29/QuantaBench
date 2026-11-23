@@ -6,9 +6,12 @@ LAMMPS and their surface tension.
         [--gpu auto|yes|no] [--coulomb-accuracy A] [--disp-grid spacing|accuracy] [--disp-gewald G]
         [--disp-spacing H] [--disp-accuracy REAL KSPACE] [--dispersion ewald|cutoff12|cutoff16|...]
         [--size pilot|full] [--molecules N] [--sigma-ref 12.33 --density-ref 1.67] [--run]
+        [--engine lammps|openmm] [--frame-every N] [--kb-every N] [--ta-every N] (OPENMM-1)
         (the long-range options and their recommendation: md.long_range, MD-LR)
     quantabench-cli md liquid-slab --list-ff
     quantabench-cli md surface-tension DIR [--skip-ns 2] [--block-ns 1] [--json]
+        [--rerun auto|lammps|openmm|openmm-reference|none] [--threads N]   (an OpenMM run: its frames in double
+        precision first, OPENMM-1)
     quantabench-cli md estimate (DIR | --atoms N --ns NS) [--dispersion ewald] [--geometry slab|bulk]
         [--machine NAME] [--all-variants] [--include-unverified] [--json]
                                                  run time from each machine's MD benchmark (MD-BENCH-1/2)
@@ -29,8 +32,8 @@ LR_PURPOSES = ("screen", "reference")
 
 
 def register(msub) -> None:
-    ls = msub.add_parser("liquid-slab", help="LAMMPS liquid-vapour slab of a pure liquid (bulk NPT, then NVT slab) "
-                                             "for its surface tension")
+    ls = msub.add_parser("liquid-slab", help="liquid-vapour slab of a pure liquid (bulk NPT, then NVT slab) for its "
+                                             "surface tension, for LAMMPS or OpenMM")
     ls.add_argument("--smiles", help="the molecule (neutral; one fragment)")
     ls.add_argument("--name", default="", help="a short name for files and reports")
     ls.add_argument("-o", "--out", help="folder for system.data, ff.params, in.bulk, in.slab, README.txt")
@@ -67,6 +70,22 @@ def register(msub) -> None:
     lr.add_argument("--dispersion", default=None,
                     help="the method and cutoff in one word, as before: ewald, cutoff12, cutoff16, cutoff18, ... "
                          "(= --long-range cutoff --cutoff 16)")
+    en = ls.add_argument_group("MD engine (OPENMM-1)")
+    en.add_argument("--engine", choices=["lammps", "openmm"], default=None,
+                    help="lammps (the reference engine) or openmm (the same model and files on OpenMM: much faster on "
+                         "GPUs at reduced arithmetic precision, single on Apple GPUs and mixed on most others; σ is "
+                         "computed afterwards in double precision). Default: Settings > Engines > MD engine (lammps)")
+    en.add_argument("--frame-every", type=int, metavar="STEPS",
+                    help="openmm: steps between saved slab frames (slab.dcd) for the double-precision σ rerun "
+                         "(default 1000; 0 = none)")
+    en.add_argument("--kb-every", type=int, metavar="STEPS",
+                    help="openmm: steps between on-the-fly Kirkwood-Buff σ samples (default 20; 0 = off)")
+    en.add_argument("--ta-every", type=int, metavar="STEPS",
+                    help="openmm: steps between test-area samples, a second σ estimate (default 0 = off)")
+    en.add_argument("--openmm-platform", default=None, metavar="P",
+                    help="openmm: auto (default), OpenCL, CUDA, HIP or CPU")
+    en.add_argument("--openmm-precision", default=None, metavar="P",
+                    help="openmm: auto (mixed where the GPU has FP64, else single), single, mixed or double")
     ls.add_argument("--size", choices=["pilot", "full"], default="pilot",
                     help="pilot: 4 x 4 nm lateral, full: 5 x 5 nm; both a 10 nm liquid slab")
     ls.add_argument("--molecules", type=int, help="number of molecules (sets the slab thickness; the lateral size stays)")
@@ -96,6 +115,12 @@ def register(msub) -> None:
     st.add_argument("--skip-ns", type=float, help="time skipped before averaging (default: the setup's settle time)")
     st.add_argument("--block-ns", type=float, default=1.0, help="block length for the error bar (default 1 ns)")
     st.add_argument("--json", action="store_true", help="print the full JSON report")
+    st.add_argument("--rerun", choices=["auto", "lammps", "openmm", "openmm-reference", "none"], default="auto",
+                    help="an OpenMM run: how its saved frames are evaluated in double precision first (auto: LAMMPS "
+                         "where QuantaBench finds it, else OpenMM's CPU platform; none: use what is there)")
+    st.add_argument("--threads", type=int, help="threads of that rerun (default 2)")
+    st.add_argument("--kspace-accuracy", type=float, metavar="A",
+                    help="Coulomb k-space accuracy of a LAMMPS rerun (default: the run's, at most 1e-6)")
     st.set_defaults(func=_surface_tension)
 
     es = msub.add_parser("estimate", help="run time of an MD job on each machine, from its MD benchmark "
@@ -123,7 +148,11 @@ def register(msub) -> None:
         rp.add_argument("dir", help="a folder written by md liquid-slab or md smd (or the Surface builder)")
         rp.add_argument("--variant", default="auto",
                         help="auto (default: the GPU where LAMMPS has one and the folder's dispersion has GPU "
-                             "styles), cpu, gpu, kokkos, or a full name such as gpu-cutoff16")
+                             "styles), cpu, gpu, kokkos, or a full name such as gpu-cutoff16. An OpenMM run: auto, "
+                             "gpu, cpu, or a platform with an optional precision (opencl, opencl-mixed, cuda-single)")
+        rp.add_argument("--engine", choices=["lammps", "openmm"],
+                        help="run a liquid-slab folder that has not started on this engine (its run.json is "
+                             "rewritten; default: the folder's)")
         rp.add_argument("--threads", type=int, help="CPU (OpenMP) threads; with a GPU, those of PPPM and the bonded "
                                                      "terms (default: this machine's thread budget)")
         rp.add_argument("--priority", choices=["normal", "low", "background"],
@@ -154,13 +183,25 @@ def _md_run(args) -> int:
         print(f"{folder}: not an MD run folder (md liquid-slab or md smd writes one)", file=sys.stderr)
         return 2
     variant = None if (args.variant or "auto") == "auto" else args.variant
+    if getattr(args, "engine", None):
+        from .md import liquid as L
+
+        if not (folder / "liquid_setup.json").is_file():
+            print(f"{folder}: --engine is for liquid-slab folders", file=sys.stderr)
+            return 2
+        try:
+            run = L.set_engine(folder, args.engine)
+        except (sim.RunError, ValueError) as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        print(f"Engine: {run.engine}" + (f" ({L.ENGINE_NOTE})" if run.engine == "openmm" else ""))
     if args.detach:
         holder = SV.lock_holder(folder)
         if holder is not None:
             print(f"{folder}: already running (pid {holder.get('pid')} on {holder.get('machine')})", file=sys.stderr)
             return 1
         proc = SV.start_detached(folder, resume=args.resume, variant=variant, threads=args.threads,
-                                 lammps=args.lammps)
+                                 lammps=args.lammps, priority=args.priority)
         if not SV.wait_started(folder, proc):
             print(f"The supervisor did not start (exit {proc.poll()}); see {folder / sim.SUPERVISOR_LOG}",
                   file=sys.stderr)
@@ -237,7 +278,7 @@ def _liquid_slab(args) -> int:
                              vacuum=args.vacuum, density=args.density, packing=args.packing, bulk_ns=args.bulk_ns,
                              settle_ns=args.settle_ns, production_ns=args.production_ns, seed=args.seed,
                              reference_sigma=args.sigma_ref, reference_density=args.density_ref,
-                             reference_note=args.ref_note)
+                             reference_note=args.ref_note, **_engine_kwargs(args))
     try:
         cfg, record = _apply_long_range(cfg, explicit, args, tm, args.density or rho)
     except ValueError as exc:
@@ -258,8 +299,16 @@ def _liquid_slab(args) -> int:
     for n in tm.notes + s.notes:
         print(f"  note: {n}")
     _runtime_estimate(s)
-    print(f"  Run: cd {s.out_dir} && lmp -in in.bulk && lmp -in in.slab   (OpenMP, MPI and GPU commands: README.txt)")
+    if s.config.engine == "openmm":
+        print(f"  Engine: OpenMM. {L.ENGINE_NOTE}")
+        print(f"  Run: quantabench-cli md run {s.out_dir} [--detach]   (needs the OpenMM environment, envs/openmm.yml)")
+    else:
+        print(f"  Run: cd {s.out_dir} && lmp -in in.bulk && lmp -in in.slab   (OpenMP, MPI and GPU commands: README.txt)")
     print(f"  Then: quantabench-cli md surface-tension {s.out_dir}")
+    if args.run and s.config.engine == "openmm":
+        print("--run is for LAMMPS (its Python module); an OpenMM folder runs with: quantabench-cli md run "
+              f"{s.out_dir}", file=sys.stderr)
+        return 1
     if args.run:
         from . import resources
 
@@ -277,6 +326,32 @@ def _liquid_slab(args) -> int:
         L.run_liquid_slab(s.out_dir, variables=variables)
         return _surface_tension(_Args(dir=str(s.out_dir), skip_ns=None, block_ns=1.0, json=False))
     return 0
+
+
+def default_engine() -> str:
+    """Settings > Engines > MD engine (``engines.md_engine``): "lammps" unless set to "openmm"."""
+    try:
+        from . import settings as settings_mod
+
+        e = str(getattr(settings_mod.load().engines, "md_engine", "") or "lammps").strip().lower()
+    except Exception:  # noqa: BLE001 - no settings: the reference engine
+        e = "lammps"
+    return e if e in ("lammps", "openmm") else "lammps"
+
+
+def _engine_kwargs(args) -> dict:
+    out: dict = {"engine": getattr(args, "engine", None) or default_engine()}
+    for key in ("frame_every", "kb_every", "ta_every"):
+        v = getattr(args, key, None)
+        if v is not None:
+            if v < 0:
+                raise SystemExit(f"--{key.replace('_', '-')} must be 0 or more")
+            out[key] = v
+    for key in ("openmm_platform", "openmm_precision"):
+        v = getattr(args, key, None)
+        if v:
+            out[key] = v
+    return out
 
 
 def _long_range_choice(args) -> dict:
@@ -344,7 +419,7 @@ def _apply_long_range(cfg, explicit: dict, args, tm, density: float):
     base = cfg.resolved()
     n, box = L.plan_box(tm, density, base, check=False)
     slab_box = (box[0], box[1], box[2] + 2.0 * float(base.vacuum))
-    machine = LR.machine_for(args.gpu)
+    machine = LR.machine_for(args.gpu, getattr(cfg, "engine", "lammps"))
     rec = LR.recommend_long_range("slab", slab_box, n_molecules=n, n_atoms=n * tm.n_atoms, machine=machine,
                                   purpose=args.purpose)
     method = explicit.get("method", rec.method)
@@ -483,6 +558,20 @@ def _surface_tension(args) -> int:
     if not (folder / "slab_box.txt").is_file():
         print(f"{folder}: no slab_box.txt (has in.slab run yet?)", file=sys.stderr)
         return 2
+    from .md import openmm_sigma as OS
+
+    if OS.is_openmm_run(folder) and (folder / OS.FRAMES).is_file() and getattr(args, "rerun", "auto") != "none":
+        n = OS.pending_frames(folder)
+        if n:
+            print(f"OpenMM run: evaluating {n} saved frames in double precision ({args.rerun}) ...", file=sys.stderr)
+            try:
+                res = OS.rerun(folder, args.rerun, threads=getattr(args, "threads", None),
+                               kspace_accuracy=getattr(args, "kspace_accuracy", None),
+                               echo=lambda m: print(m, file=sys.stderr))
+            except (RuntimeError, OSError, ValueError) as exc:
+                print(f"{folder}: the rerun failed: {exc}", file=sys.stderr)
+                return 1
+            print(f"  {res['frames']} frames by {res['method']} in {res['seconds']:.0f} s", file=sys.stderr)
     try:
         r = S.analyze(folder, skip_ns=args.skip_ns, block_ns=args.block_ns)
     except (ValueError, OSError) as exc:

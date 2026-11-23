@@ -112,6 +112,9 @@ class MachineProfile:
     notes: list[str] = field(default_factory=list)
     # -- MD-BENCH-1: {"lammps", "packages", "system", "variants": {"cpu-ewald": {"ns_per_day", ...}}, ...}
     md_throughput: dict = field(default_factory=dict)
+    # -- OPENMM-1: the OpenMM environment and its platforms ({"version", "python", "source", "platforms": [{"name",
+    # "precisions", "devices"}]}, or {"error"}); {} when not probed
+    openmm: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -524,6 +527,16 @@ def local_profile(bench: bool = False, methods=None, *, devices: Sequence[str] |
         wsl_programs=via_wsl,
         notes=list(rep.notes),
     )
+    try:                                        # OPENMM-1: which OpenMM platforms this machine has
+        from ..md import openmm_engine as OE
+
+        desc = OE.probe_platforms()
+        p.openmm = ({"error": desc["error"]} if desc.get("error") else
+                    {"version": desc.get("version", ""), "source": desc.get("source", ""),
+                     "platforms": [{k: q.get(k) for k in ("name", "precisions", "devices")}
+                                   for q in desc.get("platforms", []) if q.get("name") != "Reference"]})
+    except Exception as exc:  # noqa: BLE001 - a profile never fails on it
+        p.openmm = {"error": f"{type(exc).__name__}: {exc}"}
     measured: dict[str, dict] = {}
     if bench:
         engine_methods, want_md = split_md(methods)
@@ -833,6 +846,10 @@ def describe(p: MachineProfile, this: bool = False, now: float | None = None,
     failed = {k: v.get("error") for k, v in p.benchmarks.items() if v.get("error") and k not in p.throughput}
     for k, err in failed.items():
         lines.append(f"  benchmark {k} failed: {err}")
+    if p.openmm and not p.openmm.get("error"):
+        plats = ", ".join(f"{q['name']} ({'/'.join(q.get('precisions') or [])})" for q in p.openmm.get("platforms", [])
+                          if q.get("precisions"))
+        lines.append(f"  OpenMM:     {p.openmm.get('version')}: {plats}")
     if p.md_throughput:
         from ..md.bench import describe_lines
 

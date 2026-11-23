@@ -74,6 +74,9 @@ def _doctor(args) -> int:
         else:
             prof = profile.local_profile()
         out["profile"] = prof.to_dict()
+        from .md import openmm_engine as OE
+
+        out["openmm"] = OE.probe_platforms()
         out["run_priority"] = priority_info(settings_mod.load(), rep.logical_cores)
         from . import sensors
 
@@ -132,6 +135,13 @@ def _doctor(args) -> int:
                                                             ": not a pinned build (scripts/fork-packages.json)"))
     py = external.find_python_with("psi4", "psi4_python")
     print(f"    {'OK ' if py else '-- '} {'psi4 Python':30s} {py or 'no interpreter that can import psi4'}")
+    from .md import openmm_engine as OE  # OPENMM-1: the second MD engine and its platforms
+
+    omm = OE.probe_platforms()
+    lines = OE.platform_lines(omm)
+    print(f"    {'-- ' if omm.get('error') else 'OK '} {'OpenMM (MD engine)':30s} {lines[0]}")
+    for line in lines[1:]:
+        print(f"        {'':30s} {line.strip()}")
     print("  Optional      " + ", ".join(f"{k}={'yes' if v else 'no'}" for k, v in rep.optional_packages.items()))
     from . import sketcher_assets
     from .gui import sketcher_web
@@ -784,7 +794,7 @@ def _settings(args) -> int:
     if args.engine_path:
         from .chem import external
 
-        known = (*external.PROGRAMS, "psi4_python")
+        known = (*external.PROGRAMS, "psi4_python", "openmm_python")
         for item in args.engine_path:
             name, sep, value = item.partition("=")
             if not sep or name.strip() not in known:
@@ -1334,7 +1344,8 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--set-dir", nargs="?", const="", help="new settings folder ('' = default)")
     se.add_argument("--init", action="store_true", help="write settings.json with defaults if missing")
     se.add_argument("--engine-path", action="append", metavar="NAME=PATH",
-                    help="path of an external program (xtb, crest, mopac, psi4, psi4_python) for this machine only, "
+                    help="path of an external program (xtb, crest, mopac, psi4, psi4_python, openmm_python) for this "
+                         "machine only, "
                          "or for the machine --machine NAME names (engines.machine_paths; the settings file is "
                          "shared); NAME= finds it automatically again")
     se.add_argument("--priority", choices=["normal", "low", "background", "default"],
