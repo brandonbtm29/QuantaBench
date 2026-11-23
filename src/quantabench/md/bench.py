@@ -35,7 +35,11 @@ LAMMPS' own ``Performance:`` line of the timed run. Variants are ``<accelerator>
             when asked for
 
 The dispersion variants are those of ``md.liquid``: ``ewald`` (``lj/long/coul/long`` + ``pppm/disp``),
-``cutoff12``/``cutoff16``/``cutoff18`` (``lj/cut/coul/long`` + ``pppm``, with the bulk's tail correction).
+``cutoff12``/``cutoff16``/``cutoff18`` (``lj/cut/coul/long`` + ``pppm``, with the bulk's tail correction), with
+``md.liquid``'s default long-range settings (``md.long_range``). Since MD-LR (2026-11-23) that is, for ``ewald``,
+Coulomb PPPM 1e-6 and an explicit dispersion mesh (slower than before); each record names its settings in
+``long_range``, and a record without that key timed the old, coarser ones (Coulomb 1e-5, LAMMPS' Howto_dispersion
+accuracies).
 
 The CPU/GPU check
 -----------------
@@ -85,6 +89,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+
+from . import long_range as LR
 
 MD_BENCH_VERSION = 1
 SMILES = "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"     # perfluorohexane, C6F14
@@ -546,7 +552,7 @@ def run_variant(lammps: LammpsInfo, tm, work: Path, v: Variant, threads: int, *,
     kind, rc = dispersion_cutoff(v.dispersion)
     rec: dict = {"accelerator": label, "dispersion": v.dispersion, "cutoff_A": rc, "threads": n,
                  "args": " ".join(args), "timestep_fs": TIMESTEP, "lammps": lammps.version, "date": _now(),
-                 "bench_version": MD_BENCH_VERSION, "error": ""}
+                 "bench_version": MD_BENCH_VERSION, "long_range": LR.describe(LR.settings(kind, rc)), "error": ""}
     if v.accelerator == "gpu":
         gpu = lammps.accelerators.get("GPU", {})
         rec["gpu_api"], rec["gpu_precision"] = gpu.get("api", ""), gpu.get("precision", "")

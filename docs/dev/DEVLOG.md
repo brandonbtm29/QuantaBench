@@ -865,3 +865,33 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   folder's worker.json and the saved job list say "cancelled", and after a resume nothing starts in a second. Without
   the fix it fails at the first check. `test_machine_control.py`, `test_worker.py` and `test_work_sharing.py`: 74
   passed (Linux).
+
+## 2026-11-23: long-range settings for slabs (MD-LR, branch `feat/md-lr-slab-defaults`)
+- **The ask** (Brandon, 2026-11-22): options for the long-range method, the grid and the "screening length" (the LJ
+  cutoff), and recommendations based on the setup. Background read first: the pilot A/B/C reports and summary, the
+  mesh check (2026-11-22), A-fine's README and logs, the split-test plan and the literature review (2026-11-22).
+- **Slab-safe pppm/disp, by rule rather than by accuracy.** Two ways were possible: A-fine's accuracies
+  (`force/disp/real 1e-5`, `force/disp/kspace 2e-5`) or an explicit G and mesh. The explicit rule won: LAMMPS'
+  estimate assumes a uniform density (a slab's vacuum dilutes it, which is how A got 2 x 2 x 8), it gave A-fine a
+  different G in the bulk (0.2375) and the slab (0.2305), and a rule can be checked before a run. G·rc = 2.77 and
+  h·G = 0.52 are A-fine's slab values; with A's box they give A-fine's 18 x 18 x 90 exactly. The mesh is computed in
+  the input (`mesh/disp $(ceil(lx/v_disp_h):%.0f) ...`) after `read_data` and again after `change_box`, so it follows
+  the real box (lattice or Packmol start, NPT, `-var vacuum`). Checked with the PyPI LAMMPS (22 Jul 2025): pppm/disp
+  accepts `gewald/disp` + `mesh/disp` without the two accuracies, rounds a requested 53 up to 54 (products of 2, 3, 5;
+  `disp_mesh` does the same), re-reads the mesh after the box opens (hexane smoke slab: 12 x 12 x 9 in the bulk box,
+  12 x 12 x 54 after), and `in.run` (bulk, `clear`, slab) runs with the index variables defined in both.
+- **Recommendations from the pilots, checked against the reports:** GPU → 16 Å + tail (B: 11.71 ± 0.30 vs Tsige &
+  Grest 11.25; 21.0 ns/day on GPU + 6 threads); CPU only → converged pppm/disp (6.6 ns/day on 8 threads in the mesh
+  check's benchmark; 16 Å on the CPU ran at 3.9 on 4 threads); reference values → converged pppm/disp; a warning for
+  12 Å slabs (C: plateau −4.7 %). Bulk → 12 Å with LAMMPS' homogeneous tail: A-fine's finished 1 ns NPT averages
+  1.6720 ± 0.0013 g/cm³ (last 0.8 ns, 10 blocks, computed here from its `bulk_density.txt`), the same as B's 1.6719
+  and C's 1.6714 with the tail, so A's 1.6645 was the coarse mesh.
+- **Two numbers in the brief that the reports don't back:** B's GPU + CPU speed is 21.0 ns/day in its report (20.98),
+  not 24; and the CPU comparison (6.6 vs 3.9 ns/day) is 8 threads against 4. The table uses the reports' numbers
+  and says the thread counts.
+- **The CLI's default is now the recommendation** (`--long-range auto`). On a machine whose LAMMPS has the GPU
+  package (the workstation's installer `lmp.exe`), a plain `md liquid-slab` writes a 16 Å cutoff folder; on the Mac
+  or in CI, pppm/disp. `--gpu yes|no` states the machine that will run the folder when it is not this one. The
+  Python default (`LiquidSlabConfig()`) stays `ewald` with the slab-safe settings.
+- Nothing on the workstation or the Mac was touched (A-fine, the GAFF2 slab and the GPU check kept running); A-fine's
+  logs and `bulk_density.txt` were only read.

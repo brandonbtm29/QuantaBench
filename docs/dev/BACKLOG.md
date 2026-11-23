@@ -1052,6 +1052,35 @@ and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecula
 - Open: the C6F14 reference. Freire et al. 2006 measured 12.33 mN/m at 298.15 K; Jasper's compilation (Stiles &
   Cady 1952) gives 11.44. The plan uses 12.33; both are recorded in the pilot READMEs.
 
+## MD-LR: Long-range settings for slabs: options and recommendations · in-PR 2026-11-23 (branch `feat/md-lr-slab-defaults`)
+Brandon (2026-11-22): "I like giving the users options to decide on the grid method and screening length, but I like
+the idea of giving them recommendations based on their setup." Earlier: the screening length (the LJ cutoff) as an
+option when a force field is set up. Code: `md/long_range.py`; docs: docs/ENGINES.md, "Liquid-slab MD and surface
+tension".
+- Done (2026-11-23):
+  - Slab-safe pppm/disp defaults: `gewald/disp` = 2.77 / rc and `mesh/disp` from the box (h ≤ 0.52 / G, computed by
+    LAMMPS after `read_data` and again after the slab's box opens), Coulomb 1e-6. They reproduce A-fine's converged
+    grid (18 x 18 x 90, G 0.2305) for pilot A's box. The old defaults gave A a 2 x 2 x 8 mesh, σ 1.36 mN/m low.
+  - Options in `LiquidSlabConfig` and on the command line (`--long-range`, `--cutoff`, `--coulomb-accuracy`,
+    `--disp-grid`, `--disp-gewald`, `--disp-spacing`, `--disp-accuracy`; `--dispersion` kept).
+  - `md.recommend_long_range` (geometry, box, molecules/atoms, machine, purpose → method, cutoff, accelerator,
+    accuracies, reason, speed), `check_settings` (warnings), `differences`, `detect_machine` (`--gpu auto`). The
+    CLI uses the recommendation when nothing is chosen and prints both when a choice differs; README.txt and
+    `liquid_setup.json` record both. One table of pilot numbers, `PILOT_TABLE`, provisional until A-fine.
+  - Tests: `tests/test_md_long_range.py`; `tests/test_md_liquid.py` (inputs, config, CLI, a LAMMPS smoke run that
+    checks G and the slab's mesh in the log).
+- Next:
+  - When A-fine finishes (`Runs\md-pilot-2026-11-20\c6f14_oplsaa_ewald_finemesh`): put its σ, plateau and production
+    ns/day in `PILOT_TABLE["A-fine"]`, check that the recommendations still hold, and set `PROVISIONAL = False`.
+  - Measure `cpu-cutoff16` and `cpu-ewald` at the same thread count on the workstation (`machines --bench md
+    --md-size pilot --md-threads 8`): the CPU comparison behind "CPU only → pppm/disp" is 3.9 ns/day on 4 threads
+    against 6.6 on 8.
+  - The same mesh check on the GAFF2 slab's frames (Lorentz-Berthelot with `mix/disp geom`) when it is done: the
+    rule was validated on OPLS-AA (geometric mixing) only.
+  - SIM-1: the Simulate panel's Van der Waals node calls `md.long_range.options()`, `recommend_long_range()` and
+    `check_settings()`.
+  - Old `cpu-ewald` benchmark records (without `long_range`) timed the coarse settings; rerun `machines --bench md`.
+
 ## MD-BENCH-1: An MD benchmark of each machine (ns/day) · in-PR 2026-11-20 (branch `feat/md-bench`, after PR #33; the workstation run needs-Brandon)
 Brandon (2026-11-20): "Maybe the worker benchmarking could include a short MD run?" Docs: docs/WORKERS.md, "The MD
 benchmark"; code: `md/bench.py`.

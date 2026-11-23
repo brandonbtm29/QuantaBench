@@ -25,14 +25,18 @@ The protocol, and why
   NVT. The box stays periodic in z (two interfaces, no walls, no slab correction): with 2 x 50 Å of vacuum
   the periodic images of a neutral slab interact negligibly, and a molecule that evaporates crosses the boundary
   instead of being lost.
-* **Long-range dispersion** (``dispersion``) is the main systematic choice:
-  ``ewald``: ``lj/long/coul/long long long 12`` + ``pppm/disp`` (Ewald sums for r⁻⁶ as well as for charges; in 't
-  Veld, Ismail & Grest 2007; Isele-Holder et al. 2012), the Tsige/Grest recommendation. CPU only (no GPU styles).
-  ``cutoff12``: ``lj/cut/coul/long 12`` + ``pppm``: plain truncation of the LJ terms, which biases σ low (up to
-  20 % for alkanes at 12 Å, Ismail et al. 2007). ``cutoff16``/``cutoff18``: the same with a longer cutoff, which
-  the GPU package runs. The bulk NPT of the cutoff variants uses ``pair_modify tail yes`` (valid in a
-  homogeneous liquid, so the bulk density is right); the slab never does (the tail correction assumes a
-  uniform density).
+* **Long-range dispersion** (``dispersion`` and ``cutoff``; the options, their defaults and the recommendation are in
+  ``md.long_range``) is the main systematic choice:
+  ``ewald``: ``lj/long/coul/long long long rc`` + ``pppm/disp`` (Ewald sums for r⁻⁶ as well as for charges; in 't
+  Veld, Ismail & Grest 2007; Isele-Holder et al. 2012), rc 12 Å by default. CPU only (no GPU styles). Its dispersion
+  k-space is set explicitly (MD-LR): G = 2.77 / rc and a mesh no coarser than 0.52 / G per direction, computed in the
+  input from the box (again after the slab's box is opened), with Coulomb PPPM at 1e-6. LAMMPS' own choice from the
+  Howto_dispersion accuracies gave pilot A's slab a 2 x 2 x 8 mesh and a σ 1.36 mN/m too low (``md.long_range``).
+  ``cutoffN`` (``cutoff12``, ``cutoff16``, ...): ``lj/cut/coul/long N`` + ``pppm`` (1e-5): plain truncation of the LJ
+  terms, which biases σ low (up to 20 % for alkanes at 12 Å, Ismail et al. 2007) until ``md surface-tension`` adds the
+  tail; the GPU package runs it. The bulk NPT of the cutoff variants uses ``pair_modify tail yes`` (valid in a
+  homogeneous liquid, so the bulk density is right); the slab never does (the tail correction assumes a uniform
+  density).
 * **Outputs for σ** (Kirkwood & Buff 1949): σ = (Lz/2)·⟨Pzz − (Pxx + Pyy)/2⟩ over the production run, the pressure
   tensor written every ``pressure_every`` steps; the mass density along z in ``profile_bin_A`` bins, averaged
   every 10 ps, for the plateau density, the vapour density, the interface width and the slab's drift.
@@ -58,6 +62,7 @@ from pathlib import Path
 import numpy as np
 
 from .. import __version__
+from . import long_range as LR
 from .forcefield import AVOGADRO, ForceFieldError, TypedMolecule
 
 SIZES: dict[str, tuple[float, float]] = {
@@ -66,7 +71,7 @@ SIZES: dict[str, tuple[float, float]] = {
     "full": (50.0, 100.0),
 }
 DISPERSION_HELP = ("ewald (lj/long/coul/long + pppm/disp), cutoff12 / cutoff16 / cutoff18 (lj/cut/coul/long + "
-                   "pppm, plain LJ truncation at 12/16/18 Å)")
+                   "pppm, plain LJ truncation at 12/16/18 Å, any cutoffN for 8-30 Å)")
 
 
 def parse_dispersion(name: str) -> tuple[str, float]:
@@ -87,11 +92,15 @@ class LiquidSlabConfig:
     temperature: float = 298.15
     pressure_atm: float = 1.0
     timestep: float = 1.0
-    dispersion: str = "ewald"
-    cutoff: float | None = None              # None: from ``dispersion`` (ewald: 12 Å real-space cutoff)
-    kspace_accuracy: float = 1.0e-5          # relative force accuracy of pppm and of pppm/disp's Coulomb part
-    disp_real_accuracy: float = 1.0e-4       # pppm/disp, kcal/mol/Å: LAMMPS Howto_dispersion's values for real units
-    disp_kspace_accuracy: float = 2.0e-3
+    # long range (md.long_range: the options, the slab-safe defaults and the recommendation)
+    dispersion: str = "ewald"                # "ewald" (full long-range dispersion) | "cutoffN" (LJ cutoff N Å + tail)
+    cutoff: float | None = None              # LJ cutoff (screening length), Å; None: ewald 12, cutoffN N
+    kspace_accuracy: float | None = None     # Coulomb PPPM relative accuracy; None: ewald 1e-6, cutoff 1e-5
+    disp_grid: str = "spacing"               # ewald: "spacing" (G and mesh from rc and the box) | "accuracy"
+    disp_gewald: float | None = None         # ewald, spacing: G in 1/Å; None: 2.77 / cutoff
+    disp_spacing: float | None = None        # ewald, spacing: largest dispersion-mesh spacing, Å; None: 0.52 / G
+    disp_real_accuracy: float = LR.DISP_REAL_ACCURACY      # ewald, accuracy: force/disp/real (kcal/mol/Å)
+    disp_kspace_accuracy: float = LR.DISP_KSPACE_ACCURACY  # ewald, accuracy: force/disp/kspace
     # box
     size: str = "pilot"
     lateral: float | None = None             # Å; None: from ``size``
@@ -130,9 +139,21 @@ class LiquidSlabConfig:
         kind, rc = parse_dispersion(self.dispersion)
         if self.size not in SIZES:
             raise ValueError(f"size {self.size!r}: choose {', '.join(SIZES)}")
+        if kind == "cutoff" and self.cutoff is not None and abs(float(self.cutoff) - rc) > 1e-9:
+            raise ValueError(f"dispersion {self.dispersion!r} and cutoff {self.cutoff:g} Å disagree: give "
+                             f"dispersion='cutoff{self.cutoff:g}'")
         lat, thick = SIZES[self.size]
-        return replace(self, cutoff=self.cutoff or rc, lateral=self.lateral or lat,
-                       slab_thickness=self.slab_thickness or thick)
+        s = LR.settings(kind, self.cutoff or rc, kspace_accuracy=self.kspace_accuracy, disp_grid=self.disp_grid,
+                        disp_gewald=self.disp_gewald, disp_spacing=self.disp_spacing,
+                        disp_real_accuracy=self.disp_real_accuracy, disp_kspace_accuracy=self.disp_kspace_accuracy)
+        return replace(self, cutoff=s["cutoff"], kspace_accuracy=s["kspace_accuracy"],
+                       disp_gewald=s.get("disp_gewald"), disp_spacing=s.get("disp_spacing"),
+                       lateral=self.lateral or lat, slab_thickness=self.slab_thickness or thick)
+
+    @property
+    def long_range(self) -> dict:
+        """The long-range settings, resolved (``md.long_range.settings``)."""
+        return LR.settings_of(self)
 
 
 @dataclass
@@ -149,11 +170,14 @@ class LiquidSetup:
     packing: str
     min_contact: float
     notes: list[str] = field(default_factory=list)
+    long_range: dict = field(default_factory=dict)   # the choice and the recommendation (md.long_range), if any
 
 
 # ---------------------------------------------------------------------------------------------- the box
-def plan_box(tm: TypedMolecule, density: float, cfg: LiquidSlabConfig) -> tuple[int, tuple[float, float, float]]:
-    """(molecules, box at ``density``): lateral L x L, thickness from ``slab_thickness`` or ``n_molecules``."""
+def plan_box(tm: TypedMolecule, density: float, cfg: LiquidSlabConfig, check: bool = True
+             ) -> tuple[int, tuple[float, float, float]]:
+    """(molecules, box at ``density``): lateral L x L, thickness from ``slab_thickness`` or ``n_molecules``.
+    ``check``: refuse a lateral box of 2 x the cutoff + 1 Å or less."""
     v = tm.mass / density / AVOGADRO * 1e24            # Å³ per molecule
     lat = float(cfg.lateral)
     if cfg.n_molecules:
@@ -161,7 +185,7 @@ def plan_box(tm: TypedMolecule, density: float, cfg: LiquidSlabConfig) -> tuple[
     else:
         n = max(2, int(round(lat * lat * float(cfg.slab_thickness) / v)))
     t = n * v / (lat * lat)
-    if lat < 2.0 * float(cfg.cutoff) + 1.0:
+    if check and lat < 2.0 * float(cfg.cutoff) + 1.0:
         raise ValueError(f"lateral box {lat:.1f} Å is too small for a {cfg.cutoff:g} Å cutoff (needs > 2 x cutoff)")
     return n, (lat, lat, t)
 
@@ -359,23 +383,51 @@ def _styles(tm: TypedMolecule, cfg: LiquidSlabConfig, stage: str) -> list[str]:
 
 
 def _kspace(tm: TypedMolecule, cfg: LiquidSlabConfig) -> list[str]:
+    """kspace_style and kspace_modify lines; after read_data (the dispersion mesh is computed from the box)."""
     kind, _rc = parse_dispersion(cfg.dispersion)
-    if kind == "ewald":
-        L = ["kspace_style    pppm/disp ${kacc}",
-             "# pppm/disp's dispersion accuracies set explicitly (LAMMPS Howto_dispersion: 0.0001 / 0.002 for real",
-             "# units); without them LAMMPS stops, and its automatic choice is called inaccurate or slow",
-             f"kspace_modify   force/disp/real {cfg.disp_real_accuracy:g} force/disp/kspace {cfg.disp_kspace_accuracy:g}"]
-        if tm.mixing == "arithmetic":
-            L.append("kspace_modify   mix/disp geom    # Lorentz-Berthelot in real space, geometric in k-space (LAMMPS "
-                     "Howto_dispersion)")
-        return L
-    return ["kspace_style    pppm ${kacc}"]
+    if kind != "ewald":
+        return ["kspace_style    pppm ${kacc}"]
+    L = ["kspace_style    pppm/disp ${kacc}"]
+    if cfg.disp_grid == "accuracy":
+        L += ["# dispersion: LAMMPS picks G and the mesh from these two accuracies (kcal/mol/A). Its error estimate",
+              "# assumes a uniform density: for a slab, half vacuum, keep them tight (md.long_range; at LAMMPS'",
+              "# Howto_dispersion values, 1e-4 / 2e-3, it gave pilot A's slab a 2 x 2 x 8 mesh, sigma 1.2 mN/m low)",
+              f"kspace_modify   force/disp/real {cfg.disp_real_accuracy:g} force/disp/kspace {cfg.disp_kspace_accuracy:g}"]
+    else:
+        g, h = float(cfg.disp_gewald), float(cfg.disp_spacing)
+        L += [f"variable disp_g         index {g:.6g}      # 1/A, dispersion Ewald splitting (G*rc = {g * cfg.cutoff:.3g})",
+              f"variable disp_h         index {h:.6g}      # A, largest dispersion-mesh spacing (h*G = {h * g:.3g})",
+              "# dispersion set explicitly, not from LAMMPS' error estimate (which assumes a uniform density and",
+              "# gave pilot A's slab a 2 x 2 x 8 mesh, sigma 1.36 mN/m too low): G from the cutoff, the mesh from the box.",
+              f"kspace_modify   gewald/disp ${{disp_g}} order/disp {LR.DISP_ORDER}",
+              *disp_mesh_lines()]
+    if tm.mixing == "arithmetic":
+        L.append("kspace_modify   mix/disp geom    # Lorentz-Berthelot in real space, geometric in k-space (LAMMPS "
+                 "Howto_dispersion)")
+    return L
+
+
+def disp_mesh_lines() -> list[str]:
+    """The dispersion mesh from the current box: ceil(L / disp_h) per direction (LAMMPS immediate variables)."""
+    return ["kspace_modify   mesh/disp $(ceil(lx/v_disp_h):%.0f) $(ceil(ly/v_disp_h):%.0f) $(ceil(lz/v_disp_h):%.0f)"]
+
+
+def _uses_disp_mesh(cfg: LiquidSlabConfig) -> bool:
+    return parse_dispersion(cfg.dispersion)[0] == "ewald" and cfg.disp_grid != "accuracy"
+
+
+def _ascii(text: str) -> str:
+    """Comment text for the LAMMPS inputs in ASCII (Å, ≤, σ, · spelled out)."""
+    for a, b in (("Å", "A"), ("≤", "<="), ("σ", "sigma"), ("·", "*"), ("⁻⁶", "^-6"), ("±", "+-")):
+        text = text.replace(a, b)
+    return text
 
 
 def _header(tm: TypedMolecule, cfg: LiquidSlabConfig, what: str) -> list[str]:
     return [f"# QuantaBench {__version__}: {what}",
             f"# {tm.name} ({tm.smiles}), {tm.label}",
-            f"# dispersion variant '{cfg.dispersion}'. Generated {datetime.now():%Y-%m-%d %H:%M}; see README.txt.",
+            f"# dispersion variant '{cfg.dispersion}': {_ascii(LR.describe(cfg.long_range))}.",
+            f"# Generated {datetime.now():%Y-%m-%d %H:%M}; see README.txt.",
             "# Override any 'index' variable on the command line, e.g.  -var production_ns 2", ""]
 
 
@@ -383,8 +435,8 @@ def _variables(cfg: LiquidSlabConfig) -> list[str]:
     return [f"variable T              index {cfg.temperature:g}       # K",
             f"variable P              index {cfg.pressure_atm:g}          # atm",
             f"variable dt             index {cfg.timestep:g}          # fs",
-            f"variable rc             index {cfg.cutoff:g}         # Å, real-space cutoff",
-            f"variable kacc           index {cfg.kspace_accuracy:g}",
+            f"variable rc             index {cfg.cutoff:g}         # Å, LJ cutoff (screening length), real space",
+            f"variable kacc           index {cfg.kspace_accuracy:g}        # Coulomb PPPM, relative accuracy",
             f"variable seed           index {cfg.seed}",
             f"variable tdamp          index {cfg.tdamp:g}",
             f"variable pdamp          index {cfg.pdamp:g}",
@@ -485,6 +537,8 @@ def slab_input(tm: TypedMolecule, cfg: LiquidSlabConfig, elements_by_type: Seque
           "set             group all z v_znew",
           "unfix           zsave",
           "uncompute       molcomz", "uncompute       molcom", "uncompute       molchunk",
+          *(["# the box is now longer along z: the dispersion mesh again from disp_h", *disp_mesh_lines()]
+            if _uses_disp_mesh(cfg) else []),
           "reset_timestep  0",
           "timestep        ${dt}",
           'print           "QB_SLAB lx $(lx:%.6f) ly $(ly:%.6f) lz $(lz:%.6f) zlo $(zlo:%.6f) zhi $(zhi:%.6f) '
@@ -563,7 +617,7 @@ def _commands(cfg: LiquidSlabConfig) -> list[str]:
     if kind == "ewald":
         L += ["  GPU: not for this variant. LAMMPS has no GPU version of lj/long/coul/long or pppm/disp (their",
               "  accelerated versions are OPENMP, INTEL and OPT), so run it on the CPU as above. The GPU-friendly",
-              "  variants are cutoff16 / cutoff18 (quantabench-cli md liquid-slab ... --dispersion cutoff16)."]
+              "  option is an LJ cutoff + tail (quantabench-cli md liquid-slab ... --long-range cutoff --cutoff 16)."]
     else:
         g = " ".join(gpu_switches(True, 4))
         L += ["  GPU (GPU package; the pair style on the GPU, PPPM and the bonded terms on 4 OpenMP threads):",
@@ -580,13 +634,32 @@ def _commands(cfg: LiquidSlabConfig) -> list[str]:
     return L
 
 
+def _long_range_section(cfg: LiquidSlabConfig, s: LiquidSetup) -> list[str]:
+    """README lines: the choice, who made it, and the recommendation when it was asked for (md.long_range)."""
+    lr = s.long_range or {}
+    rec = lr.get("recommendation")
+    if not rec:
+        return []
+    L = ["", "LONG-RANGE SETTINGS (md.long_range)",
+         f"  Chosen ({lr.get('chosen_by', 'user')}): {LR.method_text(cfg.long_range['method'], cfg.cutoff)}.",
+         f"  {rec['summary']}"]
+    if lr.get("differences"):
+        L.append("  The choice differs from the recommendation: " + "; ".join(lr["differences"]) + ".")
+    L += [f"  Warning: {w}." for w in lr.get("warnings", [])]
+    L += [f"  Note: {n}." for n in lr.get("notes", [])]
+    if rec.get("provisional"):
+        L.append(f"  The recommendation is {LR.PROVISIONAL_NOTE}.")
+    return L
+
+
 def _readme(tm: TypedMolecule, cfg: LiquidSlabConfig, s: LiquidSetup, counts: dict[str, int]) -> str:
-    kind, rc = parse_dispersion(cfg.dispersion)
+    kind, _rc = parse_dispersion(cfg.dispersion)
     lx, ly, lz = s.target_box
-    disp = {"ewald": f"lj/long/coul/long long long {rc:g} + kspace pppm/disp {cfg.kspace_accuracy:g} (dispersion "
-                     f"Ewald; force/disp/real {cfg.disp_real_accuracy:g}, force/disp/kspace {cfg.disp_kspace_accuracy:g})",
-            "cutoff": f"lj/cut/coul/long {rc:g} + kspace pppm {cfg.kspace_accuracy:g}: LJ truncated at {rc:g} Å "
-                      "(bulk: with the tail correction; slab: without, so sigma is biased low)"}[kind]
+    slab_box = (lx, ly, lz + 2.0 * cfg.vacuum)
+    lr = cfg.long_range
+    disp = LR.describe(lr, slab_box if _uses_disp_mesh(cfg) else None)
+    if kind == "cutoff":
+        disp += "; sigma without the tail is biased low"
     L = [f"QuantaBench {__version__}: liquid-vapour slab of {tm.name}", "=" * 60, "",
          "WHAT THIS SIMULATES",
          f"  {s.n_molecules} molecules of {tm.name} ({tm.smiles}), {s.n_atoms} atoms, M = {tm.mass:.3f} g/mol.",
@@ -600,6 +673,7 @@ def _readme(tm: TypedMolecule, cfg: LiquidSlabConfig, s: LiquidSetup, counts: di
          f"  three directions; NVT at {cfg.temperature:g} K for {cfg.settle_ns:g} ns to settle + {cfg.production_ns:g} ns of "
          "production (one run;", "  the analysis skips the settle time).",
          f"  Long-range interactions: {disp}.",
+         *_long_range_section(cfg, s),
          "",
          "FORCE FIELD",
          f"  {tm.label}.",
@@ -657,8 +731,13 @@ def _readme(tm: TypedMolecule, cfg: LiquidSlabConfig, s: LiquidSetup, counts: di
 
 
 def write_liquid_slab(tm: TypedMolecule, out_dir: str | Path, config: LiquidSlabConfig | None = None, *,
-                      density_estimate: float | None = None, density_source: str = "") -> LiquidSetup:
-    """Write a runnable liquid-slab folder for the typed molecule ``tm`` (see the module docstring)."""
+                      density_estimate: float | None = None, density_source: str = "",
+                      long_range: Mapping | None = None) -> LiquidSetup:
+    """Write a runnable liquid-slab folder for the typed molecule ``tm`` (see the module docstring).
+
+    ``long_range``: optional record of how the long-range settings were chosen, written to README.txt and
+    liquid_setup.json: ``{"chosen_by": "user" | "recommendation", "recommendation": LongRangeRecommendation.to_dict(),
+    "differences": [...], "warnings": [...]}`` (the CLI's; the Simulate panel passes the same)."""
     cfg = (config or LiquidSlabConfig()).resolved()
     tm.check()
     if abs(tm.net_charge) > 1e-6:
@@ -697,10 +776,11 @@ def write_liquid_slab(tm: TypedMolecule, out_dir: str | Path, config: LiquidSlab
     (out / "in.run").write_text(RUN_INPUT, encoding="utf-8")
     setup = LiquidSetup(out_dir=out, files=[], config=cfg, n_molecules=n, n_atoms=n * tm.n_atoms, box=tuple(box),
                         target_box=tuple(target), density_estimate=float(rho), density_source=how, packing=packing,
-                        min_contact=contact, notes=notes)
+                        min_contact=contact, notes=notes, long_range=dict(long_range or {}))
     (out / "README.txt").write_text(_readme(tm, cfg, setup, counts), encoding="utf-8")
     meta = {"generator": f"QuantaBench {__version__}", "created": datetime.now().isoformat(timespec="seconds"),
-            "kind": "liquid-slab", "config": asdict(cfg), "n_molecules": n, "n_atoms": n * tm.n_atoms,
+            "kind": "liquid-slab", "config": asdict(cfg), "long_range": {**cfg.long_range, **dict(long_range or {})},
+            "n_molecules": n, "n_atoms": n * tm.n_atoms,
             "counts": counts, "box_packed_A": list(box), "box_target_A": list(target),
             "density_pack_g_cm3": float(rho), "density_source": how, "packing": packing,
             "min_intermolecular_contact_A": contact, "notes": notes, "molecule": tm.to_dict(),
