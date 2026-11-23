@@ -91,13 +91,11 @@ SPECS: tuple[ActionSpec, ...] = (
     ActionSpec("file.open_output_folder", "Open output folder", "File"),
     ActionSpec("file.quit", "Quit", "File", ("Ctrl+Q",)),
     # ---------------------------------------------------------------- Edit
-    ActionSpec("edit.undo", "Undo", "Edit", (SK.Undo,), note="Model Kit (UI-7)"),
-    ActionSpec("edit.redo", "Redo", "Edit", (SK.Redo, "Ctrl+Shift+Z"), note="Model Kit (UI-7)"),
+    ActionSpec("edit.undo", "Undo", "Edit", (SK.Undo,)),
+    ActionSpec("edit.redo", "Redo", "Edit", (SK.Redo, "Ctrl+Shift+Z", "Ctrl+Y")),
     ActionSpec("edit.paste", "Paste", "Edit", (SK.Paste,)),
-    ActionSpec("edit.copy_molecules", "Copy molecules", "Edit", ("Ctrl+Shift+C",), scope="molecules",
-               note="UI-4"),
-    *(ActionSpec(f"edit.copy_as.{kind}", f"Copy as {label}", "Edit", note="" if kind in ("smiles", "mol", "cdxml")
-                 else "UI-4") for kind, label in COPY_KINDS),
+    ActionSpec("edit.copy_molecules", "Copy molecules", "Edit", ("Ctrl+Shift+C",), scope="molecules"),
+    *(ActionSpec(f"edit.copy_as.{kind}", f"Copy as {label}", "Edit") for kind, label in COPY_KINDS),
     ActionSpec("edit.find_molecule", "Find a molecule", "Edit", (SK.Find,)),
     # ---------------------------------------------------------------- Selection (the shown molecule's atoms)
     ActionSpec("selection.select_all", "Select all atoms", "Selection", (SK.SelectAll,), scope="views"),
@@ -111,13 +109,13 @@ SPECS: tuple[ActionSpec, ...] = (
     ActionSpec("build.resume", "Resume run folder", "Build"),
     ActionSpec("build.sketch", "Sketch a molecule...", "Build"),
     ActionSpec("build.surface_builder", "Surface builder...", "Build"),
-    ActionSpec("build.model_kit", "Model kit (Build mode)", "Build", note="Model Kit (UI-7)"),
-    ActionSpec("kit.minimize", "Minimize the Model Kit's structure", "Build", note="Model Kit (UI-7)"),
+    ActionSpec("build.model_kit", "Model kit (Build mode)", "Build"),
+    ActionSpec("kit.minimize", "Minimize the Model Kit's structure", "Build"),
     # ---------------------------------------------------------------- Mouse modes of the 3D view
     ActionSpec("view.mode_rotate", "Rotate mode", "Mouse mode", ("Ctrl+1",)),
     ActionSpec("view.mode_select", "Select mode", "Mouse mode", ("Ctrl+2",)),
     ActionSpec("view.mode_move", "Move mode", "Mouse mode", ("Ctrl+3",)),
-    ActionSpec("view.mode_build", "Build mode (Model Kit)", "Mouse mode", ("Ctrl+4",), note="Model Kit (UI-7)"),
+    ActionSpec("view.mode_build", "Build mode (Model Kit)", "Mouse mode", ("Ctrl+4",)),
     # ---------------------------------------------------------------- View
     ActionSpec("view.reset", "Reset view", "View", ("R",), scope="views"),
     ActionSpec("view.show_2d", "Show 2D", "View", ("Ctrl+D",)),

@@ -30,8 +30,9 @@ from PySide6.QtWidgets import QDockWidget, QMainWindow, QToolBar, QWidget
 from . import keymap
 
 #: bump when the default layouts change incompatibly: saved arrangements of an older version are dropped
-#: (2: Analyze gained the Table and Plot docks, UI-3; 3: Calculate gained the Jobs dock, UI-5)
-STATE_VERSION = 3
+#: (2: Analyze gained the Table and Plot docks, UI-3; 3: Calculate gained the Jobs dock, UI-5; 4: Build gained the
+#: Model Kit dock, UI-7)
+STATE_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -55,8 +56,9 @@ class Workspace:
 
 WORKSPACES: tuple[Workspace, ...] = (
     Workspace("build", "Build",
-              "Build: add molecules (SMILES, names, CAS, files, the 2D sketcher) and set how they look",
-              left=("molecules",), right=("appearance",), bottom=("results",)),
+              "Build: add molecules (SMILES, names, CAS, files, the 2D sketcher, the 3D Model Kit) and set how they "
+              "look",
+              left=("molecules",), right=("modelkit", "appearance"), bottom=("results",)),
     Workspace("calculate", "Calculate",
               "Calculate: the pipeline (conformers, refinement, ranking, properties, QM), the review before a run, "
               "the job queue and the machines that run it",

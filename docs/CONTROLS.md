@@ -125,9 +125,8 @@ keys, choose the *Spartan* keymap.
 
 ## The default keymap
 
-\* the platform's standard key (`QKeySequence.StandardKey`): it follows the system. "Ctrl" is ⌘ on macOS. Actions
-marked "not merged yet" come with open pull requests (the Model Kit, UI-7; clipboard and Copy molecules, UI-4); their
-names are reserved here and the page lists them once they are in the build.
+\* the platform's standard key (`QKeySequence.StandardKey`): it follows the system. "Ctrl" is ⌘ on macOS. The
+Model Kit's actions (UI-7) and Paste, Copy molecules and Copy as (UI-4) are in the registry like every other.
 
 | Category | Action | Windows / Linux | macOS | Where | Name |
 |---|---|---|---|---|---|
@@ -142,15 +141,16 @@ names are reserved here and the page lists them once they are in the build.
 | File | Export... | Ctrl+E | ⌘E | window | `file.export` |
 | File | Open output folder | - | - | window | `file.open_output_folder` |
 | File | Quit | Ctrl+Q | ⌘Q | window | `file.quit` |
-| Edit | Undo (Model Kit (UI-7), not merged yet) | Ctrl+Z\* | ⌘Z | window | `edit.undo` |
-| Edit | Redo (Model Kit (UI-7), not merged yet) | Ctrl+Y\*, Ctrl+Shift+Z | ⇧⌘Z | window | `edit.redo` |
+| Edit | Undo | Ctrl+Z\* | ⌘Z | window | `edit.undo` |
+| Edit | Redo | Ctrl+Y\*, Ctrl+Shift+Z | ⇧⌘Z, ⌘Y | window | `edit.redo` |
 | Edit | Paste | Ctrl+V\* | ⌘V | window | `edit.paste` |
-| Edit | Copy molecules (UI-4, not merged yet) | Ctrl+Shift+C | ⇧⌘C | Molecules dock | `edit.copy_molecules` |
+| Edit | Copy molecules | Ctrl+Shift+C | ⇧⌘C | Molecules dock | `edit.copy_molecules` |
 | Edit | Copy as SMILES | - | - | window | `edit.copy_as.smiles` |
-| Edit | Copy as InChI (UI-4, not merged yet) | - | - | window | `edit.copy_as.inchi` |
-| Edit | Copy as InChIKey (UI-4, not merged yet) | - | - | window | `edit.copy_as.inchikey` |
-| Edit | Copy as MOL | - | - | window | `edit.copy_as.mol` |
-| Edit | Copy as XYZ (UI-4, not merged yet) | - | - | window | `edit.copy_as.xyz` |
+| Edit | Copy as Canonical SMILES | - | - | window | `edit.copy_as.canonical` |
+| Edit | Copy as InChI | - | - | window | `edit.copy_as.inchi` |
+| Edit | Copy as InChIKey | - | - | window | `edit.copy_as.inchikey` |
+| Edit | Copy as MOL / SDF | - | - | window | `edit.copy_as.mol` |
+| Edit | Copy as XYZ | - | - | window | `edit.copy_as.xyz` |
 | Edit | Copy as CDXML | - | - | window | `edit.copy_as.cdxml` |
 | Edit | Find a molecule | Ctrl+F\* | ⌘F | window | `edit.find_molecule` |
 | Selection | Select all atoms | Ctrl+A\* | ⌘A | views | `selection.select_all` |
@@ -162,12 +162,12 @@ names are reserved here and the page lists them once they are in the build.
 | Build | Resume run folder | - | - | window | `build.resume` |
 | Build | Sketch a molecule... | - | - | window | `build.sketch` |
 | Build | Surface builder... | - | - | window | `build.surface_builder` |
-| Build | Model kit (Build mode) (Model Kit (UI-7), not merged yet) | - | - | window | `build.model_kit` |
-| Build | Minimize the Model Kit's structure (Model Kit (UI-7), not merged yet) | - | - | window | `kit.minimize` |
+| Build | Model kit (Build mode) | - | - | window | `build.model_kit` |
+| Build | Minimize the Model Kit's structure | - | - | window | `kit.minimize` |
 | Mouse mode | Rotate mode | Ctrl+1 | ⌘1 | window | `view.mode_rotate` |
 | Mouse mode | Select mode | Ctrl+2 | ⌘2 | window | `view.mode_select` |
 | Mouse mode | Move mode | Ctrl+3 | ⌘3 | window | `view.mode_move` |
-| Mouse mode | Build mode (Model Kit) (Model Kit (UI-7), not merged yet) | Ctrl+4 | ⌘4 | window | `view.mode_build` |
+| Mouse mode | Build mode (Model Kit) | Ctrl+4 | ⌘4 | window | `view.mode_build` |
 | View | Reset view | R | R | views | `view.reset` |
 | View | Show 2D | Ctrl+D | ⌘D | window | `view.show_2d` |
 | View | Hydrogens in 2D | - | - | window | `view.hydrogens_2d` |
@@ -249,7 +249,8 @@ Source: [Avogadro 2 documentation, Keyboard Shortcuts](https://avogadro.cc/docs/
 
 No counterpart, so not mapped: the Template, Bond-centric manipulation, Auto-optimization, Measure and Animation tools
 (Ctrl+3, Ctrl+6-9), Ctrl+arrows to pan, Alt for larger steps, the Draw tool's element and bond-order keys, and the
-Build menu's Adjust hydrogens (Ctrl+Alt+H) and Bond atoms (Ctrl+B); the Model Kit may take some after UI-7.
+Build menu's Adjust hydrogens (Ctrl+Alt+H) and Bond atoms (Ctrl+B): the Model Kit's tools are buttons, not actions
+with keys, so far.
 Gave way: QuantaBench's arrow keys for conformers and molecules (Avogadro's arrows turn the view), and Ctrl+arrows
 (QuantaBench's turn keys, now the plain arrows).
 
@@ -291,7 +292,7 @@ as an option; it is not the default.
 | Paste | Ctrl+V | Paste (as the default) |
 
 No counterpart, so not mapped: Insert or Delete held while clicking (insert a fragment, delete what is clicked: mouse
-actions, which the Model Kit may take after UI-7), 3 (toggle stereo 3D), Enter in the spreadsheet (Qt's own), and the
+actions; the Model Kit's Delete is a button), 3 (toggle stereo 3D), Enter in the spreadsheet (Qt's own), and the
 mouse-button modifiers (QuantaBench's mouse is not rebindable). Spartan's menus have accelerators too, but the manual
 shows them only in pictures of the menus, not in its text, so they are not here. Gave way: Home and End for the first
 and last conformer.

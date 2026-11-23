@@ -21,8 +21,8 @@ molecule/system navigator, the playback bar and the job monitor.
 
 1. **Build:** import (SMILES, InChI, names, CAS, CompTox tables, and files in many formats, with
    Spartan-style import options: UI-4), a 2D sketcher (an embedded open-source editor, Ketcher or
-   Schrödinger's Sketcher: UI-6), a Spartan-style 3D model kit (atoms by hybridization, groups, rings,
-   PFAS fragments, geometry tools, minimize: UI-7), one undo/redo history for 2D and 3D, isomer/tautomer
+   Schrödinger's Sketcher: UI-6), a 3D model kit (element, then geometry; metals with coordination
+   geometries; groups, rings, PFAS fragments, geometry tools, minimize: UI-7), one undo/redo history for 2D and 3D, isomer/tautomer
    generation, surfaces/slabs/boxes/packing.
 2. **Calculate (molecular):** one job dialog built around a *level of theory* and a *task* (see below).
    Presets plus an Advanced section. Conformer distributions, frequencies, constraints/scans,
@@ -107,10 +107,11 @@ Three ways in, all ending in the same `chem.inputs.MoleculeInput` so the CLI and
   Sketcher (BSD-3, RDKit-based), Brandon's choice on 2026-11-07 (Ketcher was the other candidate). It
   hands a MOL block to the pipeline; the 3D view follows. Writing a ChemDraw-class editor from scratch is
   years of work and not the goal.
-- **3D model kit (UI-7).** Built into the PyVista view, like Spartan's: pick an atom type with its
-  hybridization (or a group, ring or PFAS fragment) and click a free valence to attach it; set bond
+- **3D model kit (UI-7).** Built into the PyVista view: pick an element, then its geometry (or a group,
+  ring or PFAS fragment), and click a free valence to attach it; set bond
   lengths, angles and dihedrals; minimize with MMFF. Every edit is an undoable command on one edit model
-  shared with the sketcher.
+  shared with the sketcher. Built 2026-11-22: the 3D view's Build mode (Ctrl+4) and the Model Kit dock in
+  the Build workspace, with Edit > Undo / Redo (`docs/dev/MODEL_KIT_GUI.md`).
 
 ## Job model: level of theory × task × resources
 

@@ -96,7 +96,10 @@ class ResultsFolder(QObject):
             self.unfold()
 
     def _record(self) -> None:
-        if self.folded_from is not None and not self.dock.isFloating():
+        """The height the layout gave the fold (it applies it later, and no lower than the dock's minimum). A height
+        that is not below the one before the fold means a resize by hand got there first (a slow event loop runs this
+        after it): keep the computed fold height, or unfolding would undo the user's resize."""
+        if self.folded_from is not None and not self.dock.isFloating() and self.dock.height() < self.folded_from:
             self.folded_to = self.dock.height()
 
     def unfold(self) -> None:

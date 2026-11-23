@@ -6,7 +6,7 @@ viewer (PyVista), and under them the playback bar that steps through the selecte
 either one is highlighted in both, and the measurement for the last 2-4 picked atoms is shown in the status bar.
 
 Around the views, the activity bar on the left switches between task workspaces (``gui.workspaces``, UI-1): Build
-(molecule list, Appearance, the 2D sketcher), Calculate (the pipeline: select a stage to edit its parameters and see
+(molecule list, the Model Kit, Appearance, the 2D sketcher), Calculate (the pipeline: select a stage to edit its parameters and see
 its status for the selected molecule; the Machines dock), Simulate, Analyze (the molecules x properties table and its
 plot, conformers, spectra, surfaces) and Library (run folders). A workspace only arranges the docks; every dock
 exists once and keeps its state, and each workspace remembers how the user arranged it. The status bar shows the
@@ -77,10 +77,14 @@ from .settings_dialog import SettingsDialog, method_keys, method_label
 from .viewer2d import MoleculeViewer2D
 from .viewer3d import COLOR_MODES, LABEL_MODES, STYLES, MoleculeViewer3D
 
+#: The 3D view's mouse modes: (mode, text, tip). Their actions are named ``view.mode_<mode>``; their keys are in
+#: ``gui.keymap`` (Settings > Controls).
 MODE_ACTIONS = (("rotate", "Rotate", "Drag rotates the view (click selects, Ctrl+click adds)"),
                 ("select", "Select", "Drag draws a selection box"),
                 ("move", "Move", "Drag on a molecule rotates it rigidly, Shift+drag slides it "
-                                 "(press on a selected atom to move only the selection)"))
+                                 "(press on a selected atom to move only the selection)"),
+                ("build", "Build", "Model Kit: click a free valence (stub) to attach the chosen atom or fragment, "
+                                   "an atom to replace it; drag rotates, Ctrl+click selects"))
 BATCHED_CHOICES = (("auto", "Auto (batched on a GPU)"), ("on", "Always batched"), ("off", "One at a time (ASE)"))
 
 STAGES = [
@@ -161,6 +165,8 @@ class MainWindow(QMainWindow):
     moleculeResult = Signal(object)
     #: File > Open run folder listed a run folder (its Path): the Table dock reads its summary and descriptor tables.
     runFolderOpened = Signal(object)
+    #: The 3D view's mouse mode changed ("rotate", "select", "move", "build"); the Model Kit opens an edit on "build".
+    viewModeChanged = Signal(str)
 
     def __init__(self, s: settings_mod.Settings):
         # No program version probe on the GUI thread while the window is built (ENG-3): a program whose version is not
@@ -250,6 +256,7 @@ class MainWindow(QMainWindow):
             job_monitor,
             machine_monitor,
             machines_panel,
+            model_kit,
             plot_panel,
             popout,
             project_actions,
@@ -264,7 +271,7 @@ class MainWindow(QMainWindow):
 
         for panel in (spectra_panel, surface_panel, table_panel, plot_panel, project_actions, import_action,
                       machines_panel, machine_monitor, job_monitor, update_action, clipboard, sketcher_dock,
-                      review_panel, results_fold, popout):
+                      model_kit, review_panel, results_fold, popout):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
@@ -1644,8 +1651,9 @@ class MainWindow(QMainWindow):
         self.results.clear()
         self.run_folder = None
         self.conf_table.setRowCount(0)
-        self.viewer.clear()
-        self.viewer2d.clear()
+        if not self.kit_owns_view():          # an open Model Kit edit keeps its model in the views
+            self.viewer.clear()
+            self.viewer2d.clear()
         self._shown_key = None
         self._shown_res = None
         self.mol_info.setText("")
@@ -1725,9 +1733,9 @@ class MainWindow(QMainWindow):
             self.mol_info.setText(res.error if res and res.error else "Not built yet. Press Run.")
             self._clear_notes()
             self.props_view.setText("")
-        if self._surface_preview:
+        if self._surface_preview or self.kit_owns_view():
             self.resultChanged.emit(res if built else None)
-            return                       # the open Surface Builder owns the 3D view until it is closed
+            return                       # the open Surface Builder or Model Kit edit owns the 3D view until it ends
         key = (inp.id, res if built else None)
         if self._shown_key is None or self._shown_key[0] != key[0] or self._shown_key[1] is not key[1]:
             # Indices belong to the previous structure. The input preview (AddHs of the raw input) and the
@@ -1743,8 +1751,15 @@ class MainWindow(QMainWindow):
         self._update_molecule_status()
         self.resultChanged.emit(res if built else None)   # after the views: panels add to the 3D scene
 
+    def kit_owns_view(self) -> bool:
+        """A Model Kit edit is open (``gui.model_kit``): the views show its model, not the selected molecule."""
+        kit = getattr(self, "model_kit", None)
+        return kit is not None and kit.active
+
     def _show_conformer(self, res: MoleculeResult, row: int, reset_camera: bool) -> None:
         """Show conformer ``row`` of a built molecule in both views, with its charges when it has them."""
+        if self.kit_owns_view():
+            return
         c = res.conformers[row]
         self.viewer.show_rdkit(res.mol, c.conf_id, reset_camera=reset_camera, charges=c.charges)
         self.viewer2d.show_rdkit(res.mol, c.conf_id, reset_camera=reset_camera)
@@ -1752,6 +1767,8 @@ class MainWindow(QMainWindow):
 
     def _preview_input(self, inp) -> None:
         """Quick single-conformer preview so the user sees something right away."""
+        if self.kit_owns_view():
+            return
         try:
             from rdkit import Chem
             from rdkit.Chem import AllChem
@@ -2259,6 +2276,10 @@ class MainWindow(QMainWindow):
             self.surface_dialog.raise_()
             self.surface_dialog.activateWindow()
             return
+        if self.kit_owns_view():
+            QMessageBox.information(self, "Surface builder", "A Model Kit edit is open: add it to the list or close "
+                                    "it first (Model Kit dock).")
+            return
         atoms, name, _ = self._selected_atoms()
         dlg = SurfaceDialog(atoms, name, preview_cb=self._preview_surface, parent=self,
                             gpu=self.s.resources.gpu != "off")
@@ -2298,15 +2319,23 @@ class MainWindow(QMainWindow):
 
     # ================================================================== views
     def set_view_mode(self, mode: str) -> None:
-        """'rotate' | 'select' | 'move' for the 3D view (the toolbar group and the surface dialog follow)."""
+        """'rotate' | 'select' | 'move' | 'build' for the 3D view (the toolbar group and the surface dialog follow;
+        'build' opens a Model Kit edit, ``viewModeChanged``)."""
+        if mode == "build" and self._surface_preview:
+            self.mode_actions[self.viewer.mode].setChecked(True)
+            self.statusBar().showMessage("Close the Surface Builder before building with the Model Kit", 8000)
+            return
         self.viewer.set_mode(mode)
         self.mode_actions[mode].setChecked(True)
         if self.surface_dialog is not None:
             self.surface_dialog.set_move_checked(mode == "move")
         hint = {"rotate": "", "select": "Select mode: drag a box to select atoms",
-                "move": "Move mode: drag on a molecule rotates it, Shift+drag slides it"}[mode]
+                "move": "Move mode: drag on a molecule rotates it, Shift+drag slides it",
+                "build": "Build mode: click a free valence to attach the Model Kit's choice, an atom to replace it; "
+                         "Ctrl+click selects"}[mode]
         if hint:
             self.statusBar().showMessage(hint, 8000)
+        self.viewModeChanged.emit(mode)
 
     def _on_label_mode(self, _index=0) -> None:
         self.viewer.set_label_mode(self.label_box.currentData())

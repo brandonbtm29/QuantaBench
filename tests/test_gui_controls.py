@@ -165,8 +165,10 @@ def test_every_shortcut_is_a_named_registered_action(window):
     assert len(set(names)) == len(names), sorted(n for n in names if names.count(n) > 1)
     assert set(names) <= set(w.keymap.names())          # and the keymap keeps their keys
     assert w.keymap.conflicts() == {}
-    # actions of this build are all bound (the ones from other PRs are not here yet)
+    # every action of the registry is bound (the Methods guide's when its window opens)
     assert {s.name for s in km.SPECS if not s.note and s.scope != "guide"} <= set(w.keymap.names())
+    assert {"edit.undo", "edit.redo", "view.mode_build", "build.model_kit", "kit.minimize", "edit.copy_molecules",
+            "edit.copy_as.canonical"} <= set(w.keymap.names())
     # standard keys where the platform has them; the defaults otherwise
     from PySide6.QtGui import QKeySequence
 
@@ -277,7 +279,7 @@ def test_settings_dialog_without_a_window_lists_this_builds_actions():
     try:
         names = d.controls.names
         assert "file.open" in names and "view3d.along_x" in names
-        assert "edit.undo" not in names                        # the Model Kit's (another PR) is not in this build
+        assert "edit.undo" in names and "kit.minimize" in names and "edit.copy_molecules" in names
         assert d.controls.result_state().preset == km.DEFAULT_PRESET
     finally:
         d.deleteLater()

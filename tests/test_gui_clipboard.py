@@ -468,8 +468,9 @@ def test_molecule_list_context_menu_and_edit_menu(tmp_path, fake_clipboard):
     w.a_copy_as["canonical"].trigger()
     assert fake_clipboard.text().splitlines()[0] == "CCO ethanol"
     edit = next(a.menu() for a in w.menuBar().actions() if a.text().replace("&", "") == "Edit")
-    assert [a.text() for a in edit.actions() if not a.isSeparator()][-4:] == ["Paste", "Copy molecules", "Copy as",
-                                                                              "Find a molecule"]   # Find: UI-9
+    # the Model Kit's Undo / Redo (UI-7) come first, Find a molecule (UI-9) last
+    assert [a.text() for a in edit.actions() if not a.isSeparator()] == ["Undo", "Redo", "Paste", "Copy molecules",
+                                                                         "Copy as", "Find a molecule"]
     _close(app, w)
 
 
