@@ -217,13 +217,17 @@ def test_windows_shortcut_is_made_and_read_back(tmp_path):
     lnk = folder / "QuantaBench.lnk"
     assert out == [str(lnk)] and lnk.is_file()
     ps = launchers._powershell()
-    read = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($args[0]); "
-            "$s.TargetPath; $s.Arguments; $s.WorkingDirectory; $s.IconLocation; "
-            "$f = (New-Object -ComObject Shell.Application).NameSpace($args[1]).ParseName($args[2]); "
-            "$f.ExtendedProperty('System.AppUserModel.ID')")
-    cp = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", f"& {{ {read} }}", str(lnk), str(folder),
-                         lnk.name], capture_output=True, text=True, timeout=120)
+    reader = tmp_path / "read_lnk.ps1"                  # -File: the paths (with spaces) arrive as whole arguments
+    reader.write_text("param([string]$Lnk, [string]$Dir, [string]$Name)\n"
+                      "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($Lnk)\n"
+                      "$s.TargetPath; $s.Arguments; $s.WorkingDirectory; $s.IconLocation\n"
+                      "$f = (New-Object -ComObject Shell.Application).NameSpace($Dir).ParseName($Name)\n"
+                      "$f.ExtendedProperty('System.AppUserModel.ID')\n", encoding="utf-8-sig")
+    cp = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(reader),
+                         "-Lnk", str(lnk), "-Dir", str(folder), "-Name", lnk.name], capture_output=True, text=True,
+                        timeout=120)
     lines = cp.stdout.splitlines()
+    assert len(lines) >= 4, cp.stdout + cp.stderr
     assert lines[0].lower() == str(v.python("win32")).lower(), cp.stdout + cp.stderr
     assert lines[1] == "-m quantabench" and lines[2].lower() == str(repo).lower()
     assert lines[3].lower().startswith(str(launchers.icon_path("win32")).lower())

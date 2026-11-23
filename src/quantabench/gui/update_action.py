@@ -491,10 +491,16 @@ def create_shortcuts(win) -> None:
         return
 
     def done(paths):
-        QMessageBox.information(win, SHORTCUTS_TITLE, "Made:\n" + "\n".join(f"  {p}" for p in paths))
+        _info(win, SHORTCUTS_TITLE, "Made:\n" + "\n".join(f"  {p}" for p in paths))
 
     def failed(msg):
         QMessageBox.warning(win, SHORTCUTS_TITLE, f"Could not make the shortcuts:\n{msg}")
 
     workers.start(workers.FunctionWorker(launchers.create, repo, desktop=desktop.isChecked(), variants=variants),
                   win, on_done=done, on_failed=failed)
+
+
+def _info(win, title: str, text: str) -> None:
+    """An information box (a seam for tests: a monkeypatched ``QMessageBox.information`` is deleted on undo by
+    some PySide6 builds, which breaks every later test that uses it)."""
+    QMessageBox.information(win, title, text)

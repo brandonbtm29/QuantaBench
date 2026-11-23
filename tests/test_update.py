@@ -1177,7 +1177,6 @@ def _click(monkeypatch, button_text, tick=False, seen=None):
 
 
 def test_create_shortcuts_asks_then_makes_them(window, monkeypatch):
-    from PySide6.QtWidgets import QMessageBox
 
     from quantabench import launchers
     from quantabench.gui import update_action
@@ -1185,7 +1184,7 @@ def test_create_shortcuts_asks_then_makes_them(window, monkeypatch):
     made, shown = [], []
     monkeypatch.setattr(launchers, "create", lambda repo, desktop=False, variants=None: made.append(desktop)
                         or ["/apps/quantabench.desktop"])
-    monkeypatch.setattr(QMessageBox, "information", lambda *a: shown.append(a[2]))
+    monkeypatch.setattr(update_action, "_info", lambda win, title, text: shown.append(text))
     seen = {}
     _click(monkeypatch, "Create", tick=True, seen=seen)
     update_action.create_shortcuts(window)
