@@ -148,6 +148,8 @@ def test_exit_reason_names_the_signal():
         assert why.startswith("killed by SIGTERM (signal 15)") and "outside QuantaBench" in why, code
     assert "128 + 15" in bench.exit_reason(143) and "PyPI" in bench.exit_reason(241)
     assert "out of memory" in bench.exit_reason(137) and "crashed" in bench.exit_reason(-11)
+    assert bench.exit_reason(137).startswith("killed by SIGKILL (signal 9)")    # on Windows too (POSIX_SIGNALS)
+    assert bench.POSIX_SIGNALS[15] == "SIGTERM" and bench.exit_reason(-99).startswith("killed by signal 99")
 
 
 def test_prepare_system_keeps_a_failed_set_up_and_says_why(monkeypatch):

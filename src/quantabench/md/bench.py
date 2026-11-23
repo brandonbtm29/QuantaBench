@@ -476,6 +476,11 @@ def parse_breakdown(text: str) -> dict[str, float]:
     return out
 
 
+#: the signal numbers every POSIX system shares (for ``exit_reason`` where ``signal`` lacks them, on Windows)
+POSIX_SIGNALS = {1: "SIGHUP", 2: "SIGINT", 3: "SIGQUIT", 4: "SIGILL", 6: "SIGABRT", 8: "SIGFPE", 9: "SIGKILL",
+                 11: "SIGSEGV", 13: "SIGPIPE", 14: "SIGALRM", 15: "SIGTERM"}
+
+
 def exit_reason(code: int | None) -> str:
     """What an exit code says about how a program ended: "" for an ordinary exit status, else e.g. "killed by
     SIGTERM (signal 15) from outside QuantaBench ...". A signal shows as -N (Python), 128 + N (a shell between, the way
@@ -495,9 +500,9 @@ def exit_reason(code: int | None) -> str:
         return ""
     try:
         name = signal.Signals(n).name
-    except ValueError:
-        name = f"signal {n}"
-    head = f"killed by {name} (signal {n}){how}"
+    except ValueError:                   # Windows has no SIGKILL, SIGHUP, ...: the codes come from POSIX machines
+        name = POSIX_SIGNALS.get(n, "")
+    head = f"killed by {name} (signal {n}){how}" if name else f"killed by signal {n}{how}"
     if name in ("SIGTERM", "SIGINT", "SIGHUP"):
         return head + (": stopped from outside QuantaBench (QuantaBench itself stops LAMMPS only at its time limit "
                        "or on a cancel, and says so)")
