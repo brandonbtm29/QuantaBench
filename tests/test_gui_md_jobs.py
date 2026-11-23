@@ -144,6 +144,13 @@ def test_run_md_folder_runs_a_real_tiny_slab(tmp_path):
     w = _window(tmp_path)
     try:
         assert w.run_md_btn.isVisible() and w.jobs_dock.isVisible()        # the Simulate workspace shows the Jobs
+        from quantabench.gui import job_queue as JQ
+
+        def one_thread(job):                  # a tiny run on a shared machine: 1 thread (the default is the budget)
+            job.md_threads = 1
+            return JQ._start_md_supervisor(job)
+
+        w.job_queue.md_start = one_thread
         job = w.run_md_folder(str(folder))
         assert job is not None and job.is_md and job.status == "running"
         assert w.run_md_folder(str(folder)) is None                       # the same folder is not submitted twice
