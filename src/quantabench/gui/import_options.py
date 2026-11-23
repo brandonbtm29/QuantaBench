@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QRadioButton,
     QVBoxLayout,
@@ -30,6 +31,8 @@ from ..chem.import_options import ImportOptions, Survey, survey
 #: File > Open hands these to File > Import calculation output (cclib outputs, Spartan documents)
 CALCULATION_OUTPUTS = (".spartan", ".log", ".out")
 AUTOMATIC = "(automatic)"
+#: where the stored choices (and whether to ask) can be changed later: the menu path the dialog and the paste log name
+SETTINGS_PATH = "Tools > Settings > Import"
 
 
 def is_calculation_output(path: str | Path) -> bool:
@@ -177,8 +180,15 @@ class ImportOptionsDialog(QDialog):
         lay.addWidget(info)
         self.form = ImportOptionsWidget(options, s.fields, self)
         lay.addWidget(self.form)
-        self.dont_ask = QCheckBox("Don't ask again (Settings > Import keeps these choices and can ask again)")
-        lay.addWidget(self.dont_ask)
+        ask = QHBoxLayout()
+        self.dont_ask = QCheckBox("Don't ask again")
+        self.dont_ask.setToolTip(f"Use these choices from now on without asking; {SETTINGS_PATH} keeps them")
+        self.where = QLabel(f"You can change this later in {SETTINGS_PATH} (the choices, and whether to ask).")
+        self.where.setWordWrap(True)
+        self.where.setStyleSheet("color: gray;")
+        ask.addWidget(self.dont_ask)
+        ask.addWidget(self.where, 1)
+        lay.addLayout(ask)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)

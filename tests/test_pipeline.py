@@ -6,6 +6,11 @@ from conftest import PFOA
 from quantabench.chem import engines, pipeline
 from quantabench.chem.inputs import from_smiles
 
+#: for the tests whose gfn1-xtb is a stand-in calculator: the memory guard estimates real dxtb against this process's
+#: RSS and the machine's free memory, so late in a full run on a small CI runner it refused them (macOS, 2.4 GB in
+#: use against a 2.4 GB budget); they test other things, so the guard is off for them
+NO_GUARD = {"memory_budget_gb": -1.0}
+
 
 def cfg(tmp_path, **kw):
     # rank_method refine: these tests are not about the rank step, whose auto level depends on what is installed
@@ -84,7 +89,7 @@ def test_one_conformers_failure_drops_that_conformer(tmp_path, monkeypatch):
     monkeypatch.setattr(engines, "available", lambda key: (True, ""))
     monkeypatch.setattr(engines, "supports", lambda key, numbers: (True, ""))
     c = cfg(tmp_path, method="gfn1-xtb", batched="off", max_conformers=6, refine_top=4, energy_window_kcal=50,
-            rmsd_threshold=0.05)
+            rmsd_threshold=0.05, **NO_GUARD)
     monkeypatch.setattr(engines, "make_calculator", lambda key, numbers, q, m, dev, **_: Flaky(dev, fail=[1]))
     r = pipeline.run_molecule(from_smiles("CCCCO", id="butanol"), c, threads=1)
     assert r.status == "ok", r.error
@@ -109,7 +114,8 @@ def test_engine_gpu_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(engines, "make_calculator", lambda key, numbers, q, m, dev, **_: Harmonic(dev))
     inp = from_smiles(PFOA, id="PFOA")
     # sequential path: batched refinement is tested below with its own toy model
-    r = pipeline.run_molecule(inp, cfg(tmp_path, method="gfn1-xtb", batched="off"), device="cuda:0", threads=1)
+    r = pipeline.run_molecule(inp, cfg(tmp_path, method="gfn1-xtb", batched="off", **NO_GUARD), device="cuda:0",
+                              threads=1)
     assert r.status == "ok", r.error
     assert r.device == "cpu" and any("fell back to CPU" in n for n in r.notes)
     assert r.conformers[0].charges is not None and r.conformers[0].dipole_debye is not None
@@ -128,7 +134,8 @@ def test_dxtb_kept_on_cpu_is_recorded(tmp_path, monkeypatch):
                         lambda key, numbers, q, m, dev, **_: seen.append(dev) or Harmonic(dev))
     # rank "refine": the patched engines would make 'auto' rank with the stand-in AIMNet2 on cuda:0 (chem.rank)
     r = pipeline.run_molecule(from_smiles(PFOA, id="PFOA"), cfg(tmp_path, method="gfn1-xtb", batched="off",
-                                                               rank_method="refine"), device="cuda:0", threads=1)
+                                                               rank_method="refine", **NO_GUARD), device="cuda:0",
+                              threads=1)
     assert r.status == "ok", r.error
     assert r.device == "cpu" and set(seen) == {"cpu"} and r.notes.count(why) == 1
 
@@ -167,7 +174,7 @@ def test_batched_refine_on_gpu_with_cpu_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(engines, "make_calculator", lambda *a, **k: pytest.fail("sequential path used"))
     monkeypatch.setattr(batch_opt, "make_batched_model",
                         lambda key, numbers, q, m, dev: calls.append(dev) or GpuShy(dev, len(numbers)))
-    r = pipeline.run_molecule(from_smiles("OC(=O)C(F)(F)F", id="TFA"), cfg(tmp_path, method="gfn1-xtb"),
+    r = pipeline.run_molecule(from_smiles("OC(=O)C(F)(F)F", id="TFA"), cfg(tmp_path, method="gfn1-xtb", **NO_GUARD),
                               device="cuda:0", threads=1)
     assert r.status == "ok", r.error
     assert calls[0] == "cuda:0" and "cpu" in calls
