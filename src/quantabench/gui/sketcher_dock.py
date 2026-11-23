@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 
 from .. import sketcher_assets
 from ..chem import sketch
-from . import sketcher_web
+from . import keymap, sketcher_web
 
 TITLE = "Sketch"
 
@@ -470,7 +470,7 @@ def install(win) -> None:
     if view is not None:
         view.addAction(toggle)
     action = QAction("Sketch a molecule...", win)
-    action.setToolTip("Open the 2D sketcher (Schrödinger's Sketcher)")
+    keymap.bind(win, action, "build.sketch", "Open the 2D sketcher (Schrödinger's Sketcher)")
     action.triggered.connect(lambda _checked=False: open_dock(win))
     build = _menu(win, "Build")
     if build is not None:

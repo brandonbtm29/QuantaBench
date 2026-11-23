@@ -18,6 +18,8 @@ from __future__ import annotations
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QCheckBox, QMessageBox
 
+from . import keymap
+
 TITLE = "Check for updates"
 UPGRADE_TEXT = "Also upgrade the installed packages (pip; PyTorch and the fork packages are kept)"
 UPGRADE_TIP = ("pip upgrades every package QuantaBench uses to the newest version pyproject.toml allows "
@@ -37,7 +39,8 @@ def _help_menu(win):
 
 def install(win) -> None:
     action = QAction("Check for updates...", win)
-    action.setToolTip("Fetch the newest QuantaBench from GitHub (git checkout), update and restart")
+    keymap.bind(win, action, "help.check_updates",
+                "Fetch the newest QuantaBench from GitHub (git checkout), update and restart")
     action.triggered.connect(lambda _checked=False: check_for_updates(win))
     menu = _help_menu(win)
     actions = menu.actions()

@@ -375,6 +375,39 @@ Follow-up: when it shows up, fix the hanging test itself (a modal dialog at wind
   table read-only, which recreates `-wal` and cannot remove it. Fixed (#21): from the final counts on, `Job.finishing`
   makes polls report the stored counts without opening the table.
 
+## UI-9: Settings > Controls: key bindings with presets and rebinding · in-PR 2026-11-22 (branch `feat/ui-9-controls`)
+Brandon (2026-11-22): "Let's reconsider keyboard bindings for all. Like I said, I want to be careful about copying
+Spartan too closely for IP reasons. Second, maybe we could add Controls as a submenu in Settings? ... There are a
+couple of layouts (QuantaBench, others from other software, Spartan) with the option to reset to the default
+QuantaBench or rebind keys for the user."
+Done in the branch:
+- `gui/keymap.py`: the registry. Every user command with a key is a named `QAction` (`objectName` "file.open",
+  "view.mode_rotate", "view3d.along_x", ...; `SPECS`: title, category, default keys as `QKeySequence.StandardKey` or
+  portable text, scope). Scopes (window, views, 3D view, 2D view, Molecules dock, table, Methods guide) decide where a
+  key works and which keys conflict. `PRESETS`: QuantaBench (default), Avogadro 2, VMD, Spartan, each built from the
+  program's public documentation (URLs in docs/CONTROLS.md). `KeymapState` (preset + the user's overrides, JSON),
+  `Keymap` (the window's: binds, applies, keeps it per computer in the window settings), `local_action` and
+  `dispatch_key` for the views' own keys (the VTK view's keys are actions now; pyvista's and VTK's stay off).
+- Every module that set a key now binds a named action: main window, workspaces, project, review, jobs, clipboard,
+  pop-out, the 3D and 2D views, Analyze's table, the Methods guide. No `setShortcut`/`QShortcut` with a key is left
+  outside `keymap.py` (a test checks).
+- The default keymap was redesigned from platform conventions (see docs/CONTROLS.md): Open project Ctrl+Shift+O (no
+  Ctrl+Alt: AltGr), Open run folder Ctrl+Shift+R, Close project Ctrl+W, Help the platform's key, workspaces ⌥⌘1-5 on
+  macOS, ⌘. cancels on macOS; new keys in the structure views (arrows step conformers and molecules, Home/End, Space
+  plays, + - zoom and Ctrl+arrows turn the 3D view, Esc / Ctrl+A clear / select the atoms) and Edit > Find a molecule.
+- Settings > Controls (`gui/controls_page.py`, also Tools > Keyboard controls...): keymap chooser with its sources,
+  searchable table, key capture, conflict warning with Swap / Clear the other / Cancel, Clear, Reset this action,
+  Reset to QuantaBench defaults, Export... / Import... (JSON). Applied on OK.
+- Tests: `tests/test_gui_controls.py`; existing key tests moved to the actions. Screenshots: `docs/dev/screenshots/UI-9/`.
+- **With UI-4 (#39) and UI-7 (#44) merged** (same PR): UI-4's Paste, Copy molecules (Molecules dock scope) and Copy
+  as actions bind through `keymap.bind` (its `DEFAULT_KEYS` is gone); UI-7's `gui/action_ids.py` is replaced by the
+  keymap (Undo / Redo with Ctrl+Y, Build mode Ctrl+4, Build > Model kit) and Minimize became the action
+  `kit.minimize` (Build menu; Avogadro's Ctrl+Alt+O). Workspace switches now re-arrange the docks without Qt's dock
+  animations: with the Model Kit's dock the GUI tests crashed in Qt on a tab bar deleted mid-animation.
+Left for later:
+- Avogadro's Draw tool keys and Spartan's Insert/Delete clicks, if the Model Kit gets such commands.
+- The mouse (buttons and modifiers) is not rebindable yet.
+
 ## UI-8: Collapsible sections and pop-out panels · done 2026-11-15 (PR #12)
 Brandon (2026-11-14): "At the moment it's kind of crowded. I think more collapsible menus / pop outs would be helpful";
 he chose all four parts: the Pipeline dock, the molecule details, the Table toolbar, pop-out panels.
@@ -755,7 +788,8 @@ Depends on: none to start (the 3D view exists); UI-1 places it in Build.
     - A Move-mode drag is one undoable step (`set_positions`).
   - **Hand-off:** Add to list / Replace <id> send the structure with its 3D coordinates.
   - **Named actions:** `view.mode_*`, `edit.undo`, `edit.redo` and `build.model_kit` take their default keys from
-    `gui/action_ids.py` (for UI-9's rebinding page).
+    `gui/action_ids.py` (for UI-9's rebinding page;
+    UI-9 moved them into `gui/keymap.py`).
   - **Tests:** `tests/test_gui_model_kit.py`, `tests/test_edit.py`. Smoke script: `scripts/model_kit_smoke.py`.
     Screenshots: `docs/dev/screenshots/UI-7/`.
 - **Left:**

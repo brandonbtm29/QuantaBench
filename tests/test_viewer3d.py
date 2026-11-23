@@ -419,14 +419,24 @@ def test_double_click_recenters_and_keys(viewer):
     viewer._mouse_release(x, y)
     assert np.allclose(viewer.plotter.camera.focal_point, viewer.atoms.positions[2])
     cam = viewer.plotter.renderer.GetActiveCamera()
-    assert viewer._on_key("p") and cam.GetParallelProjection()
-    assert viewer._on_key("P") and not cam.GetParallelProjection()
-    viewer._on_key("z")
+    # the view's keys are named actions (gui.keymap): P projection, Z / Shift+X look down an axis
+    assert viewer.run_command("view3d.projection") and cam.GetParallelProjection()
+    assert viewer.run_command("view3d.projection") and not cam.GetParallelProjection()
+    viewer.run_command("view3d.along_z")
     assert np.allclose(cam.GetDirectionOfProjection(), (0, 0, -1), atol=1e-6)
-    viewer._on_key("X")
+    viewer.run_command("view3d.along_minus_x")
     assert np.allclose(cam.GetDirectionOfProjection(), (1, 0, 0), atol=1e-6)
-    assert viewer._on_key("r")
-    assert not viewer._on_key("w")                 # VTK's wireframe key is not ours
+    assert not viewer.run_command("view3d.wireframe")          # VTK's wireframe key is not ours
+    assert viewer.key_actions["view3d.along_minus_x"].shortcut().toString() == "Shift+X"
+    d0 = cam.GetDistance()
+    viewer.run_command("view3d.zoom_in")
+    assert cam.GetDistance() < d0
+    before = np.array(cam.GetDirectionOfProjection())
+    viewer.run_command("view3d.rotate_right")
+    assert not np.allclose(cam.GetDirectionOfProjection(), before)
+    up = np.array(cam.GetViewUp())
+    viewer.run_command("view3d.roll_ccw")
+    assert not np.allclose(cam.GetViewUp(), up)
 
 
 @needs_display

@@ -1,5 +1,6 @@
 """Task workspaces (UI-1): the activity bar on the left switches the window between Build, Calculate, Simulate,
-Analyze and Library (Alt+1 ... Alt+5; Control+1 ... Control+5 on macOS, ``SHORTCUT_MODIFIER``).
+Analyze and Library (Alt+1 ... Alt+5; Command+Option+1 ... on macOS: the keymap's "workspace.<key>" actions,
+``gui.keymap``).
 
 A workspace is a set of docks around the shared 2D/3D view and playback bar: which docks are shown, where, and
 which tab of a group is in front. The view, the molecule list, the selection and every panel are the same objects
@@ -19,12 +20,14 @@ in every workspace; only the arrangement changes, so nothing is rebuilt or reloa
 
 from __future__ import annotations
 
-import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from PySide6.QtCore import QByteArray, QObject, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QToolBar, QWidget
+
+from . import keymap
 
 #: bump when the default layouts change incompatibly: saved arrangements of an older version are dropped
 #: (2: Analyze gained the Table and Plot docks, UI-3; 3: Calculate gained the Jobs dock, UI-5; 4: Build gained the
@@ -36,7 +39,6 @@ STATE_VERSION = 4
 class Workspace:
     key: str
     label: str
-    shortcut: str
     tip: str
     left: tuple[str, ...] = ()
     right: tuple[str, ...] = ()
@@ -46,36 +48,31 @@ class Workspace:
     def docks(self) -> tuple[str, ...]:
         return self.left + self.right + self.bottom
 
-
-#: the workspace shortcuts' modifier: Alt+1 ... Alt+5 (Ctrl+1 ... Ctrl+4 are the mouse modes). On macOS Control+1 ...
-#: (Qt's "Meta"): Command+Shift+3/4/5 are the system's screenshots, and Option+digit types characters ([ on a German
-#: keyboard), which the SMILES box needs.
-SHORTCUT_MODIFIER = "Meta" if sys.platform == "darwin" else "Alt"
-
-
-def _key(n: int) -> str:
-    return f"{SHORTCUT_MODIFIER}+{n}"
+    @property
+    def action_name(self) -> str:
+        """The workspace's action in the keymap (``gui.keymap``: its keys, Settings > Controls)."""
+        return f"workspace.{self.key}"
 
 
 WORKSPACES: tuple[Workspace, ...] = (
-    Workspace("build", "Build", _key(1),
+    Workspace("build", "Build",
               "Build: add molecules (SMILES, names, CAS, files, the 2D sketcher, the 3D Model Kit) and set how they "
               "look",
               left=("molecules",), right=("modelkit", "appearance"), bottom=("results",)),
-    Workspace("calculate", "Calculate", _key(2),
+    Workspace("calculate", "Calculate",
               "Calculate: the pipeline (conformers, refinement, ranking, properties, QM), the review before a run, "
               "the job queue and the machines that run it",
               left=("molecules",), right=("pipeline", "machines", "appearance"), bottom=("results", "jobs")),
-    Workspace("simulate", "Simulate", _key(3),
+    Workspace("simulate", "Simulate",
               "Simulate: molecular dynamics set-up (the surface builder and LAMMPS export today)",
               left=("molecules",), right=("simulate", "appearance"), bottom=("results",)),
     # the table across the bottom (its plot on the right), with the selected molecule's conformers, spectra and
     # surfaces a tab away
-    Workspace("analyze", "Analyze", _key(4),
+    Workspace("analyze", "Analyze",
               "Analyze: the molecules x properties table with formula columns and fits, its plot, and the selected "
               "molecule's conformers, spectra and surfaces",
               left=("molecules",), right=("plot", "surfaces", "appearance"), bottom=("table", "results", "spectra")),
-    Workspace("library", "Library", _key(5),
+    Workspace("library", "Library",
               "Library: run folders on this computer and the synced ones; open or resume them",
               left=("molecules",), right=("library",), bottom=("results",)),
 )
@@ -161,8 +158,7 @@ class WorkspaceManager(QObject):
         for ws in WORKSPACES:
             a = QAction(icon(ws.key, color), ws.label, win)
             a.setCheckable(True)
-            a.setShortcut(QKeySequence(ws.shortcut))
-            a.setToolTip(f"{ws.tip} ({a.shortcut().toString(QKeySequence.SequenceFormat.NativeText)})")
+            keymap.bind(win, a, ws.action_name, ws.tip)       # its keys and the tooltip that shows them
             a.setStatusTip(ws.tip)
             a.triggered.connect(lambda _checked=False, k=ws.key: self.switch(k))
             self.group.addAction(a)
@@ -183,9 +179,25 @@ class WorkspaceManager(QObject):
         """Object names of the managed docks that are shown now (shown = not hidden, even if behind a tab)."""
         return {n for n in MANAGED if (d := self.dock(n)) is not None and not d.isHidden()}
 
+    @contextmanager
+    def _still(self):
+        """Re-arrange the docks without Qt's dock animations: a tab bar the layout retires (deleteLater) while its
+        move is still animating is destroyed under the animation, which crashes in Qt (seen on Linux in the GUI tests:
+        the animation's end shows the half-deleted widget)."""
+        was = self.win.isAnimated()
+        self.win.setAnimated(False)
+        try:
+            yield
+        finally:
+            self.win.setAnimated(was)
+
     def apply_default(self, key: str) -> None:
         """Arrange the docks as workspace ``key``'s default: its docks in their areas, a tab group per area with the
         first in front, every other managed dock hidden."""
+        with self._still():
+            self._apply_default(key)
+
+    def _apply_default(self, key: str) -> None:
         ws = BY_KEY[key]
         # Take every managed dock out of the layout first: re-tabifying docks that are still in other tab groups
         # leaves those groups' tab bars behind (empty strips over the view)
@@ -228,9 +240,10 @@ class WorkspaceManager(QObject):
             self.states[self.current] = self.win.saveState(STATE_VERSION)
         self.current = key
         state = self.states.get(key)
-        self.showing_default = state is None or not self.win.restoreState(state, STATE_VERSION)
-        if self.showing_default:
-            self.apply_default(key)
+        with self._still():
+            self.showing_default = state is None or not self.win.restoreState(state, STATE_VERSION)
+            if self.showing_default:
+                self._apply_default(key)
         self.actions[key].setChecked(True)
         self.changed.emit(key)
 

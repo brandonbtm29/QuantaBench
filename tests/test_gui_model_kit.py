@@ -127,13 +127,14 @@ def test_dock_mode_action_and_undo_menu(win):
     assert QKeySequence(QKeySequence.StandardKey.Undo) in win.a_undo.shortcuts()
     assert QKeySequence("Ctrl+Y") in win.a_redo.shortcuts()
     assert not win.a_undo.isEnabled() and not win.model_kit.active and not win.model_kit.b_add.isEnabled()
-    # named actions, with their default keys from one place (gui.action_ids), for a rebinding page
-    from quantabench.gui import action_ids
+    # named actions, with their default keys from one place (gui.keymap, UI-9's Settings > Controls)
+    from quantabench.gui import keymap
 
-    for name in action_ids.DEFAULTS:
+    for name in ("view.mode_build", "edit.undo", "edit.redo", "build.model_kit", "kit.minimize"):
         a = win.findChild(QAction, name)
         assert a is not None, name
-        assert a.shortcuts() == action_ids.shortcuts(name), name
+        assert a.shortcuts() == keymap.default_keys(name), name
+        assert name in win.keymap.names()
     assert win.mode_actions["build"].objectName() == "view.mode_build" and win.a_undo.objectName() == "edit.undo"
     kit = win.model_kit
     assert kit.element_buttons["C"].isChecked() and kit.choice.key == "C sp3"

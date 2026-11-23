@@ -23,7 +23,7 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
+from PySide6.QtGui import QActionGroup, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -59,6 +59,7 @@ from ..chem import engines, export, jobs, solvents
 from ..chem import inputs as inputs_mod
 from ..chem import method_guide as guide
 from ..chem.pipeline import BuildConfig, MoleculeResult, fallback_count
+from . import keymap as keymap_mod
 from . import molecule_list, workers
 from . import workspaces as workspaces_mod
 from .energy_widgets import EnergySpinBox
@@ -76,8 +77,8 @@ from .settings_dialog import SettingsDialog, method_keys, method_label
 from .viewer2d import MoleculeViewer2D
 from .viewer3d import COLOR_MODES, LABEL_MODES, STYLES, MoleculeViewer3D
 
-#: The 3D view's mouse modes: (mode, text, tip). Their actions are named ``view.mode_<mode>``; the default shortcuts
-#: are in ``gui.action_ids``.
+#: The 3D view's mouse modes: (mode, text, tip). Their actions are named ``view.mode_<mode>``; their keys are in
+#: ``gui.keymap`` (Settings > Controls).
 MODE_ACTIONS = (("rotate", "Rotate", "Drag rotates the view (click selects, Ctrl+click adds)"),
                 ("select", "Select", "Drag draws a selection box"),
                 ("move", "Move", "Drag on a molecule rotates it rigidly, Shift+drag slides it "
@@ -205,6 +206,8 @@ class MainWindow(QMainWindow):
         self._shown_key = None            # (molecule id, built result or None) in the views; see _views_key
         self._surface_preview = False     # the 3D view shows the Surface Builder's system, not the molecule
         self.selection = SelectionModel(self)
+        # Every action's keys (UI-9): the keymap kept per computer in the window settings (Settings > Controls)
+        self.keymap = keymap_mod.Keymap(self, _window_settings())
         self.viewer = MoleculeViewer3D(self, selection=self.selection)
         self.viewer2d = MoleculeViewer2D(self, selection=self.selection)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -273,6 +276,22 @@ class MainWindow(QMainWindow):
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting
                 self.log(f"{panel.__name__.rsplit('.', 1)[-1]} unavailable: {type(exc).__name__}: {exc}")
+        edit = next((a.menu() for a in self.menuBar().actions()
+                     if a.menu() is not None and a.text().replace("&", "") == "Edit"), None)
+        self.a_find = self.keymap.action("edit.find_molecule", "Find a molecule", self.find_molecule,
+                                         "Jump to the Molecules list's search box")
+        if edit is not None:
+            if edit.actions():
+                edit.addSeparator()
+            edit.addAction(self.a_find)
+
+    def find_molecule(self) -> None:
+        """Edit > Find a molecule: show the Molecules dock and put the cursor in its search box."""
+        if self.mol_dock.isHidden():
+            self.mol_dock.show()
+        self.mol_dock.raise_()
+        self.search.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.search.selectAll()
 
     def current_result(self) -> MoleculeResult | None:
         """Result of the selected molecule (None if nothing is selected, it is not built, or it is still being
@@ -759,36 +778,32 @@ class MainWindow(QMainWindow):
         self.displayChanged.emit(d)
 
     def _build_toolbar_and_menus(self) -> None:
+        """Toolbars and menus. Every action is named and gets its keys from the keymap (``gui.keymap``, UI-9): no
+        key is written here."""
         tb = QToolBar("Main")
         tb.setObjectName("main_toolbar")
         self.addToolBar(tb)
+        km = self.keymap
 
-        def act(text, slot, shortcut=None, tip=None):
-            a = QAction(text, self)
-            a.triggered.connect(slot)
-            if shortcut:
-                a.setShortcut(QKeySequence(shortcut))
-            if tip:
-                a.setToolTip(tip)
-            return a
+        def act(name, text, slot, tip=None, widget=None):
+            return km.action(name, text, slot, tip, widget)
 
-        self.a_open = act("Open...", self.open_files, "Ctrl+O",
+        self.a_open = act("file.open", "Open...", self.open_files,
                           "Open structure files (SDF, MOL2, PDB, XYZ, ChemDraw, Marvin, CML, CIF, Gaussian/ORCA "
                           "inputs, ...), SMILES or InChI lists, tables, or calculation outputs")
-        self.a_open_run = act("Open run folder...", self.open_run_folder, "Ctrl+Shift+O",
+        self.a_open_run = act("file.open_run_folder", "Open run folder...", self.open_run_folder,
                               "List the molecules of a run folder (finished or partial); results load when selected")
-        self.a_resume = act("Resume run folder", self.resume_run, None,
+        self.a_resume = act("build.resume", "Resume run folder", self.resume_run,
                             "Continue the unfinished molecules of the opened (or last) run folder with its stored "
                             "settings")
-        self.a_run = act("Run", lambda: self.request_run(False), "F5", "Build every molecule in the list")
+        self.a_run = act("build.run", "Run", lambda: self.request_run(False), "Build every molecule in the list")
         # Not Esc: the views use Esc to clear the selection, and a window-wide Esc would cancel the batch
-        self.a_cancel = act("Cancel", self.cancel_build, "Shift+Esc", "Stop the build after the current step "
-                            "(Shift+Esc)")
+        self.a_cancel = act("build.cancel", "Cancel", self.cancel_build, "Stop the build after the current step")
         self.a_cancel.setEnabled(False)
-        self.a_export = act("Export...", self.export_selected, "Ctrl+E", "Save the selected molecule")
-        self.a_surface = act("Surface builder...", self.open_surface_builder, None,
+        self.a_export = act("file.export", "Export...", self.export_selected, "Save the selected molecule")
+        self.a_surface = act("build.surface_builder", "Surface builder...", self.open_surface_builder,
                              "Graphite slab with the selected molecule on top")
-        self.a_settings = act("Settings...", self.open_settings, "Ctrl+,")
+        self.a_settings = act("tools.settings", "Settings...", lambda _checked=False: self.open_settings())
         for a in (self.a_open, self.a_run, self.a_cancel, self.a_export, self.a_surface, self.a_settings):
             tb.addAction(a)
         vt = QToolBar("View")
@@ -798,12 +813,8 @@ class MainWindow(QMainWindow):
         self.mode_group = QActionGroup(self)
         self.mode_group.setExclusive(True)
         self.mode_actions = {}
-        from .action_ids import bind
-
         for key, text, tip in MODE_ACTIONS:
-            a = bind(act(text, lambda _checked=False, k=key: self.set_view_mode(k)), f"view.mode_{key}")
-            keys = a.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
-            a.setToolTip(f"{tip} ({keys})" if keys else tip)
+            a = act(f"view.mode_{key}", text, lambda _checked=False, k=key: self.set_view_mode(k), tip)
             a.setCheckable(True)
             self.mode_group.addAction(a)
             self.mode_actions[key] = a
@@ -812,26 +823,33 @@ class MainWindow(QMainWindow):
         vt.addSeparator()
         # Style, labels, colours and hydrogens are in the Appearance dock (_build_appearance_dock); these two stay
         # actions so their shortcuts and View menu entries work in every workspace
-        self.a_show2d = act("Show 2D", self._set_2d_visible, "Ctrl+D", "Show the 2D structure next to the 3D view")
+        self.a_show2d = act("view.show_2d", "Show 2D", self._set_2d_visible,
+                            "Show the 2D structure next to the 3D view")
         self.a_show2d.setCheckable(True)
         self.a_show2d.setChecked(True)
-        vt.addAction(act("Reset view", self.reset_views, "R", "Default orientation, fit both views"))
-        vt.addAction(act("Screenshot...", self.save_screenshot))
+        # a plain key: it works in the structure views (the "views" scope), so the lists keep their type-ahead
+        self.a_reset_view = act("view.reset", "Reset view", self.reset_views, "Default orientation, fit both views",
+                                widget=self.splitter)
+        vt.addAction(self.a_reset_view)
+        self.a_screenshot = act("view.screenshot", "Screenshot...", self.save_screenshot)
+        vt.addAction(self.a_screenshot)
 
         m = self.menuBar()
         f = m.addMenu("&File")
         for a in (self.a_open, self.a_open_run, self.a_export):
             f.addAction(a)
-        f.addAction(act("Open output folder", self.open_output_folder))
+        f.addAction(act("file.open_output_folder", "Open output folder", self.open_output_folder))
         f.addSeparator()
-        f.addAction(act("Quit", self.close, "Ctrl+Q"))
+        self.a_quit = act("file.quit", "Quit", self.close)
+        f.addAction(self.a_quit)
+        m.addMenu("&Edit")           # filled by the clipboard and the Model Kit (_install_panels), then Find
         b = m.addMenu("&Build")
         for a in (self.a_run, self.a_cancel, self.a_resume):
             b.addAction(a)
         b.addAction(self.a_surface)
         v = m.addMenu("&View")
         v.addAction(self.a_show2d)
-        self.a_h2d = act("Hydrogens in 2D", lambda _on: None)     # toggled -> the 2D view (_build_appearance_dock)
+        self.a_h2d = act("view.hydrogens_2d", "Hydrogens in 2D", lambda _on: None)   # toggled -> the 2D view
         self.a_h2d.setCheckable(True)
         v.addAction(self.a_h2d)
         mm = v.addMenu("Mouse mode")
@@ -840,21 +858,77 @@ class MainWindow(QMainWindow):
         v.addSeparator()
         for d in (self.mol_dock, self.pipeline_dock, self.bottom_dock):
             v.addAction(d.toggleViewAction())
-        self.a_ovito = act("Open in OVITO viewport", self.open_in_ovito)
+        self.a_ovito = act("view.open_ovito", "Open in OVITO viewport", self.open_in_ovito)
         self.a_ovito.setEnabled(resources.has_package("ovito"))
         if not resources.has_package("ovito"):
             self.a_ovito.setText("Open in OVITO viewport (pip install ovito)")
         v.addAction(self.a_ovito)
         t = m.addMenu("&Tools")
         t.addAction(self.a_settings)
-        t.addAction(act("Hardware report", self.show_hardware_report))
+        self.a_controls = act("tools.controls", "Keyboard controls...",
+                              lambda _checked=False: self.open_settings(tab="Controls"),
+                              "Settings > Controls: the keymap (QuantaBench's, Avogadro's, VMD's or Spartan's keys) "
+                              "and your own key bindings")
+        t.addAction(self.a_controls)
+        t.addAction(act("tools.hardware_report", "Hardware report", self.show_hardware_report))
         h = m.addMenu("&Help")
-        self.a_methods_guide = act("Methods guide...", lambda _checked=False: self.show_methods_guide(), "F1",
+        self.a_methods_guide = act("help.methods_guide", "Methods guide...",
+                                   lambda _checked=False: self.show_methods_guide(),
                                    "What each method, basis set, solvent model and conformer search is, what it is "
                                    "good and bad at, and what it costs")
         h.addAction(self.a_methods_guide)
         h.addSeparator()
-        h.addAction(act("About QuantaBench", self.about))
+        h.addAction(act("help.about", "About QuantaBench", self.about))
+        self._build_view_keys()
+
+    def _build_view_keys(self) -> None:
+        """Keys of the structure views (UI-9): the selection, the playback bar and the molecule list, in the
+        "views" scope (the 2D/3D splitter), and the 3D and 2D views' own actions adopted by the keymap."""
+        km, views = self.keymap, self.splitter
+        self.a_select_all = km.action("selection.select_all", "Select all atoms", self.select_all_atoms,
+                                      widget=views)
+        self.a_clear_selection = km.action("selection.clear", "Clear the selection", self.selection.clear,
+                                           widget=views)
+        pb = self.playback
+        self.playback_actions = {
+            "previous": km.action("playback.previous", "Previous", lambda _c=False: pb.step(-1), widget=views),
+            "next": km.action("playback.next", "Next", lambda _c=False: pb.step(1), widget=views),
+            "first": km.action("playback.first", "First", lambda _c=False: pb.first(), widget=views),
+            "last": km.action("playback.last", "Last", lambda _c=False: pb.last(), widget=views),
+            "play": km.action("playback.play", "Play / pause", lambda _c=False: pb.toggle_play(), widget=views),
+        }
+        self.molecule_step_actions = {
+            "previous": km.action("molecules.previous", "Previous molecule",
+                                  lambda _c=False: self.step_molecule(-1), widget=views),
+            "next": km.action("molecules.next", "Next molecule", lambda _c=False: self.step_molecule(1),
+                              widget=views),
+            "first": km.action("molecules.first", "First molecule", lambda _c=False: self.step_molecule(-10 ** 9),
+                               widget=views),
+            "last": km.action("molecules.last", "Last molecule", lambda _c=False: self.step_molecule(10 ** 9),
+                              widget=views),
+        }
+        for a in [*self.viewer.key_actions.values(), *self.viewer2d.key_actions.values()]:
+            km.bind(a, a.objectName())
+        for btn, name, tip in ((pb.first_btn, "playback.first", "First"), (pb.prev_btn, "playback.previous", "Previous"),
+                               (pb.play_btn, "playback.play", "Play / pause"), (pb.next_btn, "playback.next", "Next"),
+                               (pb.last_btn, "playback.last", "Last")):
+            km.follow_tooltip(btn, name, tip)      # the bar's buttons show their keys (in the structure views)
+
+    def select_all_atoms(self) -> None:
+        """Selection > Select all atoms: every atom of the structure in the views."""
+        n = self.viewer.atom_count()
+        if n:
+            self.selection.select(range(n))
+
+    def step_molecule(self, d: int) -> None:
+        """Select the molecule ``d`` rows down the list as shown (clamped: a huge ``d`` goes to the last)."""
+        n = self.mol_list.count()
+        if not n:
+            return
+        row = self.mol_list.currentRow()
+        new = max(0, min(n - 1, (row if row >= 0 else -1 if d > 0 else n) + d))
+        if new != row:
+            self.mol_list.setCurrentRow(new)
 
     def _build_appearance_dock(self) -> None:
         """One place for how the molecule looks (UI-1): style, labels, colours, hydrogens and the 2D view. The
@@ -958,12 +1032,11 @@ class MainWindow(QMainWindow):
         sub = view.addMenu("Workspace")
         for ws in workspaces_mod.WORKSPACES:
             sub.addAction(self.workspaces.actions[ws.key])
-        reset = QAction("Reset layout", self)
-        reset.setToolTip("This workspace's default arrangement of the docks")
-        reset.triggered.connect(lambda _checked=False: self.workspaces.reset())
+        reset = self.keymap.action("view.reset_layout", "Reset layout", lambda _checked=False: self.workspaces.reset(),
+                                   "This workspace's default arrangement of the docks")
         view.addAction(reset)
-        reset_all = QAction("Reset all workspace layouts", self)
-        reset_all.triggered.connect(lambda _checked=False: self.workspaces.reset_all())
+        reset_all = self.keymap.action("view.reset_all_layouts", "Reset all workspace layouts",
+                                       lambda _checked=False: self.workspaces.reset_all())
         view.addAction(reset_all)
         if first is not None:
             view.insertMenu(first, sub)
@@ -2311,14 +2384,19 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "OVITO", f"Could not open the OVITO viewport:\n{exc}")
 
-    def open_settings(self) -> None:
+    def open_settings(self, tab: str = "") -> None:
+        """Tools > Settings... (``tab``: the page to show first, e.g. "Controls")."""
         before = settings_mod.settings_dir()
         self._store_stage_values()
         dlg = SettingsDialog(self.s, self.report, self)
+        if tab:
+            dlg.show_tab(tab)
         accepted = dlg.exec()
         dlg.deleteLater()
         if not accepted:
             return
+        if dlg.controls is not None:          # Settings > Controls: a display setting, kept on this computer
+            self.keymap.set_state(dlg.controls.result_state())
         s = dlg.result_settings()
         if settings_mod.settings_dir() != before:
             loaded = settings_mod.load()

@@ -77,6 +77,14 @@ panel pops out into a window of its own (View > Pop out panel; Dock all panels b
 - every dock's title bar has ⧉ (pop out and back) and ✕;
 - the Results dock shrinks to one row for a molecule with one conformer (View > Fold Results for one conformer).
 
+**Keyboard controls (UI-9, 2026-11-22):** every shortcut is a named action in one registry (`gui.keymap`), and
+**Settings > Controls** chooses a keymap and rebinds keys. Brandon (2026-11-22): "be careful about copying Spartan too
+closely for IP reasons... There are a couple of layouts (QuantaBench, others from other software, Spartan) with the
+option to reset to the default QuantaBench or rebind keys." The default keymap follows the platforms' standard keys
+and QuantaBench's own logic (Ctrl+digit mouse modes, Alt+digit workspaces, plain keys only in the structure views:
+arrows step conformers and molecules); the Avogadro 2, VMD and Spartan keymaps come from their public documentation.
+Keymaps are per computer (macOS and Windows modifiers differ), with export and import. docs/CONTROLS.md.
+
 **Shared chrome:**
 - A playback bar for conformers, molecules and trajectory frames.
 - A status bar with counts, point group, CPU threads, GPU and VRAM.

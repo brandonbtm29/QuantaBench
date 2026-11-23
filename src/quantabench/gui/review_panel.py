@@ -35,7 +35,7 @@ import html
 import threading
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -55,7 +55,7 @@ from PySide6.QtWidgets import (
 
 from ..chem import advisor
 from ..chem import method_guide as guide
-from . import workers
+from . import keymap, workers
 
 ID_ROLE = Qt.ItemDataRole.UserRole
 SETTING_KEY = "review/before_run"
@@ -571,8 +571,6 @@ def install(win) -> None:
 
     win.review_before_run = before_run
     btn = QPushButton("Review...")
-    btn.setToolTip("Review the molecules with the pipeline's settings: what is in the batch, which methods fit, what "
-                   "to change (F6)")
     btn.clicked.connect(lambda _c=False: show_review(win, selected_only=False))
     run_row = win.run_btn.parentWidget().layout() if win.run_btn.parentWidget() is not None else None
     # the Run buttons' row: insert the button before "Run all"
@@ -583,8 +581,13 @@ def install(win) -> None:
             break
     win.review_btn = btn
     act = QAction("Review molecules...", win)
-    act.setShortcut(QKeySequence("F6"))
-    act.setToolTip("The model advisor's review of the list with the pipeline's settings")
+    keymap.bind(win, act, "build.review", "The model advisor's review of the list with the pipeline's settings")
+    tip = ("Review the molecules with the pipeline's settings: what is in the batch, which methods fit, what to "
+           "change")
+    if isinstance(getattr(win, "keymap", None), keymap.Keymap):
+        win.keymap.follow_tooltip(btn, "build.review", tip)     # the button's tooltip shows the action's key
+    else:
+        btn.setToolTip(tip)
     act.triggered.connect(lambda _c=False: show_review(win, selected_only=False))
     before = QAction("Review before each run", win)
     before.setCheckable(True)
