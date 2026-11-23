@@ -336,7 +336,9 @@ It is never in the default list, so a worker starts as fast as before unless `md
     steps, then NVT at 1 fs. The timed run stops at 10,000 steps or after `--max-seconds` (default 60; LAMMPS'
     `timer timeout`), whichever comes first.
   - ns/day is LAMMPS' own `Performance:` line for the timed run.
-  - Variants are `<accelerator>-<dispersion>`, with the dispersion variants of `md liquid-slab`:
+  - Variants are `<accelerator>-<dispersion>`, with the dispersion variants of `md liquid-slab` and its default
+    long-range settings (since MD-LR, `ewald` with Coulomb 1e-6 and the slab-safe dispersion mesh; each record names
+    them in `long_range`, and a record without it timed the older, coarser settings):
     - `cpu-*`: `-sf omp -pk omp N`, N = `--md-threads`, by default this machine's one-lane thread budget, at most
       its physical cores.
     - `gpu-*`: `-sf gpu -pk gpu 1`, cutoff variants only (LAMMPS has no GPU version of the `ewald` styles).
