@@ -267,8 +267,11 @@ def prune(mol: Chem.Mol, conf_ids: list[int], energies: list[float], window_kcal
 #: "normal" = the rings ETKDG and the force field give (chairs, with ETKDG's small-ring torsions); "thorough" = also
 #: twist-boats of every saturated six-membered ring (``twist_boats``)
 RING_CONFORMERS = ("normal", "thorough")
-#: "thorough": twist-boats are made from this many of the lowest force-field conformers
-TWIST_BOAT_SEEDS = 5
+#: "thorough": twist-boats are made from this many of the lowest force-field conformers (``BuildConfig.
+#: twist_boat_seeds``). 20, not 5: on 45 QSAR molecules with saturated six-membered rings (gas, MMFF94s, then AIMNet2
+#: on the 20 lowest), 20 seeds found a lower refined conformer for 6 of them, all fused polycyclics (steroids, cinchona
+#: alkaloids), by 0.1-2.8 kcal/mol, and never a higher one; the force-field step took 2.6x as long (DEVLOG 2026-11-22)
+TWIST_BOAT_SEEDS = 20
 #: ring torsions (degrees, around the ring) of a twist-boat; ``twist_boats`` holds a ring at each of its three
 #: rotations and their mirror images, then lets the force field relax it (cyclohexane: MMFF94s +5.9 kcal/mol)
 TWIST_BOAT_TORSIONS = (30.0, -65.0, 30.0, 30.0, -65.0, 30.0)
@@ -298,7 +301,7 @@ def flexible_six_rings(mol: Chem.Mol) -> list[tuple[int, ...]]:
 
 
 def twist_boats(mol: Chem.Mol, conf_ids: list[int], energies: list[float], forcefield: str,
-                notes: list[str] | None = None) -> tuple[list[int], list[float]]:
+                notes: list[str] | None = None, n_seeds: int | None = None) -> tuple[list[int], list[float]]:
     """Twist-boat conformers ("thorough" ring conformers): for each saturated six-membered ring of each of the
     ``TWIST_BOAT_SEEDS`` lowest conformers, a copy with the ring held at a twist-boat (``TWIST_BOAT_TORSIONS``, its
     three rotations and their mirror images) is optimized with the force field, then optimized freely. Returns the
@@ -319,7 +322,8 @@ def twist_boats(mol: Chem.Mol, conf_ids: list[int], energies: list[float], force
     for shift in range(3):
         rot = TWIST_BOAT_TORSIONS[shift:] + TWIST_BOAT_TORSIONS[:shift]
         patterns += [rot, tuple(-t for t in rot)]
-    seeds = [conf_ids[i] for i in np.argsort(energies)[:TWIST_BOAT_SEEDS]]
+    n_seeds = TWIST_BOAT_SEEDS if n_seeds is None else max(1, int(n_seeds))
+    seeds = [conf_ids[i] for i in np.argsort(energies)[:n_seeds]]
     new_ids: list[int] = []
     new_e: list[float] = []
     with rdBase.BlockLogs():
@@ -347,12 +351,13 @@ def twist_boats(mol: Chem.Mol, conf_ids: list[int], energies: list[float], force
 
 def generate(mol: Chem.Mol, max_conformers: int = 50, window_kcal: float = 6.0, rmsd_threshold: float = 0.5,
              seed: int = 42, threads: int = 1, timeout_s: float | None = None, seeds=(),
-             ring_conformers: str = "normal") -> ConformerSet:
+             ring_conformers: str = "normal", twist_boat_seeds: int | None = None) -> ConformerSet:
     """Conformers of ``mol``: ETKDGv3 embedding (``embed``), force-field optimization, pruning.
     ``timeout_s``: time limit of the embedding (``embed``); None = ``embed_time_limit()`` (a share of the
     per-molecule limit this process's run recorded), 0 = none. ``ring_conformers`` (``RING_CONFORMERS``):
-    "thorough" adds twist-boats of saturated six-membered rings (``twist_boats``) before the pruning, which then keeps
-    at most ``max_conformers``; "normal" changes nothing.
+    "thorough" adds twist-boats of saturated six-membered rings (``twist_boats``, from the ``twist_boat_seeds`` lowest
+    conformers; None = ``TWIST_BOAT_SEEDS``) before the pruning, which then keeps at most ``max_conformers``; "normal"
+    changes nothing.
 
     ``seeds``: coordinate arrays (one per conformer, on ``mol``'s atoms with explicit H; ``seed_coordinates``) from
     the input file. They are the first conformers: optimized with the force field like the others, never pruned,
@@ -392,7 +397,7 @@ def generate(mol: Chem.Mol, max_conformers: int = 50, window_kcal: float = 6.0, 
     max_keep = None
     more_ids: list[int] = []
     if ring_conformers == "thorough":
-        more_ids, more_e = twist_boats(mol, all_ids, list(energies), ff, notes)
+        more_ids, more_e = twist_boats(mol, all_ids, list(energies), ff, notes, n_seeds=twist_boat_seeds)
         all_ids, energies = all_ids + more_ids, list(energies) + more_e
         max_keep = max_conformers
     kept, kept_e = prune(mol, all_ids, energies, window_kcal, rmsd_threshold, max_keep=max_keep)

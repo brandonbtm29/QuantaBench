@@ -490,6 +490,9 @@ def plan_auto(cfg=None, report=None, parallel_molecules: int = 0, profile=_THIS_
             if cfg.qm_method and n > 1:     # Psi4 scales with threads: the lanes that fit share the budget
                 per = max(per, budget // n)
                 reason += f" ({_qm_memory_gb(cfg):g} GB per QM job): {per} threads each"
+        if n + len(lanes) > cores:        # never more lanes than physical cores: hyperthreads add little here
+            n = max(0, cores - len(lanes))
+            reason += f", at most one lane per physical core ({cores})"
         if cap is not None and n + len(lanes) > cap:
             n = cap - len(lanes)
             reason += f", capped at {cap} lanes (Windows)"
@@ -631,6 +634,19 @@ def describe(lanes: list[Lane]) -> str:
     return " + ".join(parts) + f" = {threads(sum(x.threads for x in lanes))}"
 
 
+def smt_note(lanes: list[Lane], report=None) -> str:
+    """' More lanes than the 12 physical cores: ...' when a spec runs more CPU lanes than the machine has physical cores
+    (up to the logical count is allowed); '' otherwise."""
+    from .. import resources
+
+    physical = int(getattr(report, "physical_cores", 0) or resources.physical_cores())
+    n = sum(1 for x in lanes if x.device == "cpu")
+    if n <= physical:
+        return ""
+    return (f" More lanes than the {physical} physical cores: hyperthreads add little for these engines, so the "
+            "extra lanes mostly share cores.")
+
+
 def plan_text(spec: str | None, cfg=None, report=None, parallel_molecules: int | None = None) -> str:
     """Human-readable plan for a lane spec, never raises (for the settings dialog). ``report`` None uses
     ``cpu_report()``: no torch import, so GPU lanes show as unavailable until hardware detection has run."""
@@ -647,7 +663,7 @@ def plan_text(spec: str | None, cfg=None, report=None, parallel_molecules: int |
             out = f"{describe(lanes)} of {total}. {reason}."
         else:
             lanes = parse_lanes(text, cfg, hw)
-            out = f"{describe(lanes)} of {total}."
+            out = f"{describe(lanes)} of {total}." + smt_note(lanes, hw)
     except Exception as exc:     # noqa: BLE001 - shown to the user as text
         out = f"Not usable here: {exc}"
     if report is None and getattr(hw, "torch_backend", "") == "unknown":
