@@ -142,8 +142,8 @@ ACCELERATORS = ("cpu", "gpu", "kokkos")
 OPENMM_ACCELERATORS = ("openmm-gpu", "openmm-cpu")
 ALL_ACCELERATORS = ACCELERATORS + OPENMM_ACCELERATORS
 DEFAULT_VARIANTS = ("cpu-ewald", "cpu-cutoff12", "cpu-cutoff16", "gpu-cutoff12", "gpu-cutoff16")
-#: added to the default variants where OpenMM sees a GPU platform
-OPENMM_DEFAULT_VARIANTS = ("openmm-gpu-cutoff16",)
+#: ``--md-variants openmm`` (OPENMM-1): the OpenMM variant worth timing where OpenMM has a GPU; never a default
+OPENMM_VARIANTS = ("openmm-gpu-cutoff16",)
 MAX_STEPS = 10_000          # the timed run stops here or at max_seconds, whichever comes first
 WARMUP_STEPS = 100
 DEFAULT_MAX_SECONDS = 60.0
@@ -208,7 +208,8 @@ def parse_variant(name: str) -> Variant:
 
 
 def parse_variants(text: str | Sequence[str] | None) -> list[str] | None:
-    """``--md-variants``: a comma list (or a sequence) of variant names, "default" for ``DEFAULT_VARIANTS``;
+    """``--md-variants``: a comma list (or a sequence) of variant names, "default" for ``DEFAULT_VARIANTS``, "openmm"
+    for ``OPENMM_VARIANTS``;
     None or empty = the default (only the variants this LAMMPS can run). Raises ValueError on a bad name."""
     if text is None:
         return None
@@ -217,7 +218,8 @@ def parse_variants(text: str | Sequence[str] | None) -> list[str] | None:
         return None
     out: list[str] = []
     for item in items:
-        for name in (DEFAULT_VARIANTS if item.lower() == "default" else (item,)):
+        group = {"default": DEFAULT_VARIANTS, "openmm": OPENMM_VARIANTS}.get(item.lower(), (item,))
+        for name in group:
             v = parse_variant(name).name
             if v not in out:
                 out.append(v)
@@ -947,8 +949,6 @@ def plan_variants(lammps: LammpsInfo, requested: Sequence[str] | None
     """(variants to run, CPU first; {asked-for variant: why it cannot run}; notes on default variants left out)."""
     explicit = requested is not None
     names = list(requested) if explicit else list(DEFAULT_VARIANTS)
-    if not explicit and openmm_can_run(Variant("openmm-gpu", "cutoff16"))[0]:
-        names += list(OPENMM_DEFAULT_VARIANTS)
     run: list[Variant] = []
     errors: dict[str, str] = {}
     notes: list[str] = []

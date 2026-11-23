@@ -1010,8 +1010,9 @@ def register_cli(subparsers) -> None:
                         "vacuum, what surface-tension runs do; pilot-slab: MD-2's 9,780-atom pilot slab; small: a "
                         "3,000-atom bulk cube; pilot: the pilot's atoms as a bulk box")
     m.add_argument("--md-variants", metavar="LIST",
-                   help="with --bench md: <cpu|gpu|kokkos>-<ewald|cutoff12|cutoff16|cutoff18>, comma list (default: "
-                        "cpu-ewald, cpu-cutoff12, cpu-cutoff16 and, with the GPU package, gpu-cutoff12, gpu-cutoff16)")
+                   help="with --bench md: <cpu|gpu|kokkos|openmm-gpu|openmm-cpu>-<ewald|cutoff12|cutoff16|cutoff18>, "
+                        "comma list (default: cpu-ewald, cpu-cutoff12, cpu-cutoff16 and, with the GPU package, "
+                        "gpu-cutoff12, gpu-cutoff16); 'openmm' adds openmm-gpu-cutoff16, e.g. default,openmm")
     m.add_argument("--md-lammps", metavar="PATH",
                    help="with --bench md: time this LAMMPS executable (default: the one QuantaBench finds: this "
                         "computer's path in the settings, QUANTABENCH_LAMMPS, PATH, this environment, conda)")

@@ -318,6 +318,9 @@ def choose_openmm_platform(folder: Path, info: OpenMMInfo, requested: str | None
     if not plat:
         plat, best_prec = OE.best_platform(info.desc)
         why = "the fastest platform OpenMM has here"
+        if plat in ("CPU", "Reference"):
+            why += ("; no GPU platform, so OpenMM runs on the CPU, much slower than LAMMPS there (md run --engine "
+                    "lammps before the run starts)")
     else:
         best_prec = ""
         why = "as asked"

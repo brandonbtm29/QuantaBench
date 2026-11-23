@@ -19,7 +19,8 @@
 - **`md surface-tension` on an OpenMM run** first evaluates its saved frames in double precision (`--rerun auto`:
   LAMMPS where found, else OpenMM's CPU platform; `--threads`), checks the on-the-fly samples against them, and
   reports σ with the error bar of the series that passed (the other beside it), plus an optional test-area estimate.
-- `machines --bench md` times an `openmm-gpu-cutoff16` variant where OpenMM has a GPU; `md estimate` and the long-range
+- `machines --bench md --md-variants default,openmm` also times OpenMM (`openmm-gpu-cutoff16`; any
+  `openmm-gpu-<dispersion>` or `openmm-cpu-<dispersion>`); `md estimate` and the long-range
   recommendation use it (on OpenMM, full long-range dispersion runs on the GPU as LJ-PME).
 - Fixed: `md run --detach --priority P` started the supervisor at the settings' priority instead of P.
 

@@ -717,7 +717,9 @@ def platform_lines(desc: Mapping) -> list[str]:
             note = " (no mixed or double: this GPU has no FP64, as Apple GPUs)"
         L.append(f"  {p['name']}{dev}: precision {', '.join(p['precisions'])}{note}")
     name, prec = best_platform(desc)
-    L.append(f"  MD runs use {name} ({prec}) unless told otherwise")
+    L.append(f"  MD runs use {name} ({prec}) unless told otherwise"
+             + ("; without a GPU platform OpenMM is much slower than LAMMPS here (geometric mixing runs as a custom "
+                "force on the CPU): use LAMMPS" if name in ("CPU", "Reference") else ""))
     return L
 
 

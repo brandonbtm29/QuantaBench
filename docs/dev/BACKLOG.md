@@ -2525,7 +2525,7 @@ selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs m
   else OpenMM's CPU platform) and checks the on-the-fly samples against them.
 - The engine choice: `md liquid-slab --engine`, `md run --engine`, Settings > Engines > MD engine, Simulate > Run MD
   folder... asks for a folder that has not started, each with the note; the recommender and `machines --bench md`
-  (`openmm-gpu-cutoff16`, a default where OpenMM has a GPU) know it.
+  (`--md-variants default,openmm`: `openmm-gpu-cutoff16`) know it.
 - Validation: pilot B on the Mac's GPU, `Runs\openmm-validation-2026-11-23\`.
 - Follow-ups: OPENMM-2 (below).
 

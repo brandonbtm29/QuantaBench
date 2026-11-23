@@ -239,6 +239,7 @@ def test_benchmark_variants_and_recommendation_know_openmm():
     from quantabench.md import long_range as LR
 
     assert bench.parse_variant("openmm-gpu").name == "openmm-gpu-cutoff16"
+    assert bench.parse_variants("default,openmm")[-1] == "openmm-gpu-cutoff16"
     assert bench.parse_variant("OpenMM-CPU-ewald").name == "openmm-cpu-ewald"
     with pytest.raises(ValueError):
         bench.parse_variant("openmm-tpu-cutoff16")
@@ -354,7 +355,7 @@ def test_openmm_run_pauses_resumes_and_gives_sigma(omm_python, tmp_path):
     chk = r["sigma"].get("check") or (r.get("sigma_on_the_fly") or {}).get("check")
     assert chk and chk["n"] >= 20
     # LAMMPS' virial (Coulomb k-space at 1e-6) and OpenMM's strain derivative of the same frames agree closely
-    assert abs(chk["mean_diff_mN_m"]) < 0.3, chk
+    assert abs(chk["mean_diff_mN_m"]) <= 0.1 + 3 * chk["sem_diff_mN_m"], chk     # per-frame noise: the CPU platform
     assert "sigma_test_area" in r
 
 

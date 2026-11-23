@@ -1593,7 +1593,10 @@ Monte Carlo every 25 steps, isotropic; `CMMotionRemover` every 1000 steps. Check
 platform or OpenMM build reads, so a run can move between the Mac and the workstation; the supervisor cuts the outputs
 at the checkpoint's step before a resume, the frames (`slab.dcd`, kind "dcd") included. Platform and precision:
 `auto` is the fastest GPU platform at mixed precision where it has it, else single (Apple), else the CPU; or
-`--variant opencl-mixed`, `cuda`, `cpu`, ... per segment.
+`--variant opencl-mixed`, `cuda`, `cpu`, ... per segment. Without a GPU, use LAMMPS: OpenMM's CPU platform
+evaluates the geometric-mixing table (a `CustomNonbondedForce`) without SIMD and ran a 3,000-atom C6F14 box at
+0.3 ns/day on one thread where LAMMPS ran 8.4 (the cloud test machine; the MD benchmark's `openmm-cpu-*` variants
+measure it). Its CPU platform is still the fallback for the σ rerun where LAMMPS is missing.
 
 **σ in double precision.** The pressure tensor σ comes from is not taken from a single-precision GPU (one sample's σ
 was 19 mN/m off there: Runs/mac-gpu-2026-11-23). Two series are written instead:
@@ -1622,6 +1625,12 @@ error, σ is the on-the-fly series (its error bar), and the rerun's own value is
 rerun's and the check fails in the report. With `ta_every` the run also samples the test-area method (Gloor et al.
 2005; ΔU(±ε) of the nonbonded energy with molecules moved as wholes), a second estimate in the report. The LJ tail
 for a cutoff is added afterwards as for LAMMPS runs.
+
+**Benchmark and estimates.** `quantabench-cli machines --bench md --md-variants default,openmm` adds
+`openmm-gpu-cutoff16` (any `openmm-gpu-<dispersion>` or `openmm-cpu-<dispersion>` works): the same box timed by
+OpenMM, its run-0 energy checked against LAMMPS' CPU run. `md estimate`, the run-time line of `md liquid-slab` and the
+long-range recommendation use those records; on OpenMM with a GPU the recommendation runs full long-range dispersion
+on the GPU as LJ-PME (provisional until checked against A-fine, OPENMM-2).
 
 **Validation against pilot B** (C6F14, OPLS-AA, 16 Å cutoff, from pilot B's own packing, on the M3 Max's GPU in
 single precision): see `Runs\openmm-validation-2026-11-23\` and docs/PLATFORMS.md.
