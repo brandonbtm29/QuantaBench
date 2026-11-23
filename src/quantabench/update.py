@@ -671,7 +671,7 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
     pull = st.state not in ("up-to-date", "ahead")
     if not pull and not upgrade_packages:
         return UpdateResult(ok=True, old_head=st.head, new_head=st.head, message=st.summary(), worker=st.worker)
-    if pull and st.blocked_reason or st.state in ("error", "not-a-checkout"):
+    if (pull and st.blocked_reason) or st.state in ("error", "not-a-checkout"):
         return UpdateResult(ok=False, old_head=st.head, new_head=st.head,
                             message=st.blocked_reason or st.summary(), worker=st.worker)
     if st.busy_reason:                   # the worker here runs this checkout: no new code (or packages) under it

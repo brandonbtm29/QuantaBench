@@ -1066,7 +1066,8 @@ def test_busy_worker_update_waits_for_it(window, monkeypatch):
     monkeypatch.setattr(update_action, "WAIT_MS", 10)
     monkeypatch.setattr(update_action, "WORKER_EVERY", 2)
     monkeypatch.setattr(update_action, "_ask_update", lambda win, status: "update")
-    monkeypatch.setattr(update_action, "_ask_wait", lambda win, what: "worker" in what)
+    monkeypatch.setattr(update_action, "_ask_wait", lambda win, what: pytest.fail("the dialog's Update when idle "
+                                                                                  "was the answer"))
     ran = []
     monkeypatch.setattr(update_action, "run_update", lambda win, repo=None, upgrade_packages=False: ran.append(1))
     monkeypatch.setattr(update, "find_checkout", lambda start=None: Path("/repo"))
@@ -1075,6 +1076,19 @@ def test_busy_worker_update_waits_for_it(window, monkeypatch):
     update_action.show_status(window, _status("behind", behind=1, worker=FakeWorker(busy=True)))
     _wait(lambda: ran)
     assert window._update_wait is None
+
+
+def test_upgrade_with_a_busy_worker_asks_first(window, monkeypatch):
+    """With nothing to pull the dialog did not mention the worker: the wait question does."""
+    from quantabench.gui import update_action
+
+    monkeypatch.setattr(update_action, "_ask_update", lambda win, status: "upgrade")
+    asked = []
+    monkeypatch.setattr(update_action, "_ask_wait", lambda win, what: asked.append(what) or False)
+    monkeypatch.setattr(update_action, "run_update", lambda *a, **k: pytest.fail("refused: must not update"))
+    update_action.show_status(window, _status("up-to-date", worker=FakeWorker(busy=True)))
+    assert asked == ["the worker on this computer runs jobs from this checkout"]
+    assert getattr(window, "_update_wait", None) is None
 
 
 def test_result_lists_changes_and_offers_restart(window, monkeypatch):

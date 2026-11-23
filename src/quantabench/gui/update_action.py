@@ -325,11 +325,15 @@ def show_status(win, status, repo=None) -> None:
     upgrade = choice == "upgrade"
     here = window_busy(win)
     worker_busy = status.busy_reason
-    if here or worker_busy:
+    # the dialog already said the worker is busy (and offered "Update when idle") when there was something to pull
+    told = status.state in ("behind", "diverged")
+    if here or (worker_busy and not told):
         what = " and ".join(p for p in (here, "the worker on this computer runs jobs from this checkout"
                                         if worker_busy else "") if p)
-        if _ask_wait(win, what):
-            _Wait(win, repo, upgrade, worker_busy)
+        if not _ask_wait(win, what):
+            return
+    if here or worker_busy:
+        _Wait(win, repo, upgrade, worker_busy)
         return
     run_update(win, repo, upgrade_packages=upgrade)
 
