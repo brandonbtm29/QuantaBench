@@ -309,7 +309,7 @@ The LaunchAgent is for the user to install; QuantaBench does not install service
 was installed on 2026-11-12, at his request (`launchctl print gui/$(id -u)/io.github.brandonbtm29.quantabench-worker`
 shows it; a test `kill -KILL` of the worker was followed by a new one within a second).
 
-## The MD benchmark (MD-BENCH-1, MD-BENCH-2)
+## The MD benchmark (MD-BENCH-1, MD-BENCH-2, MD-BENCH-3)
 
 The throughput benchmark gives molecules/hour per engine. An MD job needs a different number: how many ns/day
 this machine's LAMMPS runs a molecular liquid. `md` in a benchmark list measures it:
@@ -422,9 +422,28 @@ variants at 30 s) it took 207 s with the build.
   An unverified GPU record is not used. With both GPU and CPU records it also notes their ratio on this machine.
 - **Without LAMMPS** the benchmark is skipped with the reason (`md: not measured (LAMMPS not found (...))`).
   Nothing else in the profile changes.
+- **When a release changes the benchmark** (MD-BENCH-3). Each record carries the benchmark version it was measured
+  with (`bench_version`; `md.bench.MD_BENCH_VERSION`, 2 since MD-BENCH-2, with a line per version in
+  `VERSION_CHANGES`). When this QuantaBench's version is newer than a machine's stored record, QuantaBench asks
+  whether to run it again. It never re-runs it by itself:
+  - `quantabench-cli machines` prints a note under that machine, for example `note: This computer's MD benchmark is
+    from benchmark version 1. This QuantaBench's is version 2: (what changed), so new numbers differ from the stored
+    ones. Run it again? quantabench-cli machines --bench md (a few minutes, best while the machine is otherwise
+    idle). Nothing re-runs it on its own.` For another machine it names that machine (`... --bench md on mac-test`). `--json` has the same text per machine in
+    `md_bench_rerun` ("" when the record is current).
+  - The Machines dock shows this computer's note at its top, with **Run MD benchmark** (the default slab box, off
+    the GUI thread; the engines' numbers stay) and **Not now** (hidden until QuantaBench starts again). Other
+    machines' MD numbers end in "older benchmark (version N)", with the command in the tooltip. At start the status
+    bar says once that the Machines dock asks.
+  - A worker logs the note at start and leaves the benchmark as it is, whatever its `--bench-methods` (in auto mode
+    it measures only what was never measured). `--bench always` measures again, because it was asked for.
+  - A re-run that measures nothing (no LAMMPS) keeps the older numbers and the question. A record without a version
+    (none was ever written that way) and a machine with nothing measured get no question.
+  - Raise `MD_BENCH_VERSION` and add its line to `VERSION_CHANGES` whenever a change makes new numbers differ from
+    stored ones (the box, the variants' settings, how ns/day is measured).
 - **Not yet.** MPI ranks (`mpirun -np N lmp`, often faster than OpenMP threads for LAMMPS on a CPU) are not
   benchmarked. The KOKKOS variants have not run on a KOKKOS build yet. A worker started with `--bench-methods
-  default,md` in auto mode does not re-measure a machine that has only bulk records.
+  default,md` in auto mode does not re-measure a machine that has only bulk records (it notes it, above).
 
 ## API (version 1)
 

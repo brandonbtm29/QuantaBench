@@ -17,6 +17,11 @@ Per machine (DIST-7, docs/WORKERS.md "Pausing a machine, a closing laptop"):
   battery and its time window (the hours it may work; its worker pauses outside them), saved for that machine only (``settings.update_machine``: a fresh read and write). Its worker reads them
   within about 15 s once the settings have synced (the priority is applied to running lanes at once).
 
+**A changed MD benchmark** (MD-BENCH-3): when this QuantaBench's MD benchmark is newer than the one this computer's
+numbers come from (``md.bench.outdated``), a notice at the top asks whether to run it again, with **Run MD benchmark**
+(``machines --bench md``'s default box, off the GUI thread) and **Not now** (hides it until the next start). Other
+machines' MD numbers are marked "older benchmark", with the command in the tooltip. Nothing re-runs it on its own.
+
 Splitting a batch across machines is ``quantabench-cli grid build``; a "Run on" choice for the Run buttons is the next
 step (backlog DIST-3).
 """
@@ -34,6 +39,7 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -70,8 +76,9 @@ def _throughput(p) -> str:
     return ", ".join(f"{k} {float(v):,.0f}" for k, v in items[:4]) + (" ..." if len(items) > 4 else "")
 
 
-def _md_text(p) -> tuple[str, str]:
-    """(cell, tooltip) of the MD column (MD-BENCH-1): 'cpu-ewald 6.5, gpu-cutoff16 10.6 (unverified)'."""
+def _md_text(p, here: bool = False) -> tuple[str, str]:
+    """(cell, tooltip) of the MD column (MD-BENCH-1): 'cpu-ewald 6.5, gpu-cutoff16 10.6 (unverified)', with
+    '; older benchmark' when a newer QuantaBench changed the benchmark (MD-BENCH-3; the tooltip says how to re-run)."""
     md = getattr(p, "md_throughput", None) or {}
     if not md:
         return "", "Not measured: quantabench-cli machines --bench md (LAMMPS ns/day, a few minutes)"
@@ -79,6 +86,10 @@ def _md_text(p) -> tuple[str, str]:
 
     lines = [x.strip() for x in bench.describe_lines(md)]
     text = bench.short_text(md) or ("not measured" if md.get("skipped") else "")
+    note = bench.rerun_note(md, getattr(p, "name", ""), here=here)
+    if note:
+        text += f"; older benchmark (version {bench.outdated(md)})"
+        lines.append(note)
     return text, "\n".join(lines)
 
 
@@ -120,8 +131,10 @@ class MachinesPanel(QWidget):
         self._bench_stop = threading.Event()
         self._names: list[str] = []          # machine keys of the table's rows, in order
         self._filling = False
+        self._md_later = False               # "Not now" on the re-run notice (until the next start)
         self.shares: dict[str, int] = {}     # machine key -> molecules of the current list in a grid split
         lay = QVBoxLayout(self)
+        lay.addWidget(self._md_notice_box())
         self.here = QLabel()
         self.here.setWordWrap(True)
         self.here.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -157,6 +170,111 @@ class MachinesPanel(QWidget):
         row.addStretch(1)
         lay.addLayout(row)
         self.refresh()
+
+    # ------------------------------------------------------------------ a changed MD benchmark (MD-BENCH-3)
+    def _md_notice_box(self) -> QFrame:
+        box = QFrame()
+        box.setObjectName("md_rerun_notice")
+        box.setFrameShape(QFrame.Shape.StyledPanel)
+        lay = QHBoxLayout(box)
+        self.md_notice_text = QLabel()
+        self.md_notice_text.setWordWrap(True)
+        self.md_notice_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lay.addWidget(self.md_notice_text, 1)
+        self.md_run_btn = QPushButton("Run MD benchmark")
+        self.md_run_btn.setToolTip("Run this computer's MD benchmark again (LAMMPS; the default slab box, a few "
+                                   "minutes plus a one-time box set-up, on the thread budget). Other work here slows "
+                                   "it down; the app stays usable.")
+        self.md_run_btn.clicked.connect(self.benchmark_md_here)
+        self.md_later_btn = QPushButton("Not now")
+        self.md_later_btn.setToolTip("Hide this until QuantaBench starts again (quantabench-cli machines still notes "
+                                     "it)")
+        self.md_later_btn.clicked.connect(self.md_not_now)
+        lay.addWidget(self.md_run_btn)
+        lay.addWidget(self.md_later_btn)
+        box.setVisible(False)
+        self.md_notice = box
+        return box
+
+    def md_rerun_note(self, profiles=None) -> str:
+        """This computer's re-run note ('' when its MD benchmark is current or not measured: ``md.bench.rerun_note``)."""
+        from ..dist import plan, profile
+        from ..md import bench
+
+        me = plan.norm_name(profile.machine_name())
+        try:
+            profiles = profile.load_profiles() if profiles is None else profiles
+        except Exception:
+            return ""
+        p = next((x for x in profiles if plan.norm_name(x.name) == me), None)
+        return bench.rerun_note(getattr(p, "md_throughput", None)) if p is not None else ""
+
+    def _update_md_notice(self, profiles) -> None:
+        note = "" if self._md_later else self.md_rerun_note(profiles)
+        if self._benching and not self.md_notice.isHidden():
+            return                                    # "running..." stays until it ends
+        self.md_notice_text.setText(note)
+        self.md_run_btn.setEnabled(not self._benching)
+        self.md_notice.setVisible(bool(note))
+
+    def md_not_now(self) -> None:
+        self._md_later = True
+        self.md_notice.setVisible(False)
+
+    def benchmark_md_here(self) -> None:
+        """Run this computer's MD benchmark again (``profile.local_profile(methods=["md"])``: the engines' numbers
+        stay) and save it to the registry, off the GUI thread; closing the window stops it, saving nothing."""
+        if self._benching:
+            return
+        from ..dist import profile
+        from . import workers
+
+        self._benching = True
+        self._bench_stop.clear()
+        self.bench_btn.setEnabled(False)
+        self.md_run_btn.setEnabled(False)
+        self.md_later_btn.setEnabled(False)
+        self.md_notice_text.setText("Running this computer's MD benchmark (LAMMPS: a few minutes, plus a one-time "
+                                    "box set-up). The app stays usable; other work here slows it down...")
+        stop = self._bench_stop
+
+        def run():
+            prof = profile.local_profile(bench=True, methods=[profile.MD_METHOD], should_stop=stop.is_set)
+            if stop.is_set():
+                return None
+            profile.save_profile(prof)
+            return prof
+
+        def finish(text: str) -> None:
+            self._benching = False
+            self.bench_btn.setEnabled(True)
+            self.md_later_btn.setEnabled(True)
+            self.md_run_btn.setEnabled(True)
+            self.refresh()
+            self.note.setText(text)
+
+        def done(prof):
+            if self._bench_stop.is_set():
+                self._benching = False
+                return                    # the window is closing
+            from ..md import bench
+
+            md = getattr(prof, "md_throughput", None) if prof is not None else None
+            if prof is None:
+                finish("MD benchmark stopped")
+            elif bench.outdated(md) is not None:
+                why = (md or {}).get("last_attempt", {}).get("skipped") or "nothing was measured"
+                finish(f"MD benchmark: {why}; the older numbers stay")
+            else:
+                finish("MD benchmark saved: " + (bench.short_text(md) or "nothing measured"))
+
+        def failed(msg):
+            if self._bench_stop.is_set():
+                self._benching = False
+                return
+            finish(f"MD benchmark failed: {msg.splitlines()[0]}")
+
+        workers.start(workers.FunctionWorker(run), self.win, done, failed)
 
     # ------------------------------------------------------------------ the budget box (selected machine)
     def _budget_box(self) -> QGroupBox:
@@ -427,7 +545,7 @@ class MachinesPanel(QWidget):
                     "Run": "",
                     "Hardware": _hardware(p) if p else "",
                     "Throughput (molecules/h)": _throughput(p) if p else ("not measured" if n == me else ""),
-                    "MD (ns/day)": _md_text(p)[0] if p else "",
+                    "MD (ns/day)": _md_text(p, n == me)[0] if p else "",
                     "Updated": _age(p) if p else "",
                 }
                 for c, name in enumerate(COLUMNS):
@@ -435,12 +553,13 @@ class MachinesPanel(QWidget):
                     if name == "Status" and ref is not None and ref.error:
                         item.setToolTip(ref.error)
                     if name == "MD (ns/day)" and p is not None:
-                        item.setToolTip(_md_text(p)[1])
+                        item.setToolTip(_md_text(p, n == me)[1])
                     self.table.setItem(r, c, item)
                 self.table.setCellWidget(r, COL["Split"], self._split_widget(n, s))
                 self.table.setCellWidget(r, COL["Run"], self._pause_widget(n, n == me, ref, status))
         finally:
             self._filling = False
+        self._update_md_notice(profiles)
         if selected in names:
             self.select(selected)
         if share_note:
@@ -449,7 +568,7 @@ class MachinesPanel(QWidget):
             self.note.setText("No machines in the registry yet. Click 'Benchmark this computer' here on each "
                               "computer, or start `quantabench-cli worker` (it measures a new machine once), with "
                               "the settings folder synced between them.")
-        elif not self.note.text().startswith(("Could not", "Saved", "Paused", "Resumed", "Lanes")):
+        elif not self.note.text().startswith(("Could not", "Saved", "Paused", "Resumed", "Lanes", "MD benchmark")):
             when = time.strftime("%H:%M", time.localtime(self._checked_at)) if self._checked_at else ""
             self.note.setText(f"Workers last checked at {when}." if when else
                               "Status shows the registry only; 'Check workers' asks each worker.")
@@ -714,3 +833,7 @@ def install(win) -> None:
     dock.visibilityChanged.connect(panel.on_visibility)
     win.machines_dock = dock
     win.machines_panel = panel
+    note = panel.md_rerun_note()
+    if note:                         # a release changed the MD benchmark: say so once, without a dialog (MD-BENCH-3)
+        win.statusBar().showMessage("This computer's MD benchmark is from an older benchmark version: View > "
+                                    "Machines asks whether to run it again", 20000)

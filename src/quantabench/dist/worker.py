@@ -2193,7 +2193,18 @@ class Worker:
             return engines if need_engines else []
         return ((engines if engines is not None else ["default"]) if need_engines else []) + [profile_mod.MD_METHOD]
 
+    def md_rerun_note(self) -> str:
+        """The note that this machine's MD benchmark is from an older benchmark version ('' when it is current or
+        not measured; ``md.bench.rerun_note``). The worker only logs it: it never re-runs a changed MD benchmark on
+        its own (MD-BENCH-3); ``--bench always`` does, because it was asked for."""
+        from ..md.bench import rerun_note
+
+        return rerun_note(getattr(self.profile, "md_throughput", None))
+
     def _start_benchmark(self) -> None:
+        note = self.md_rerun_note()
+        if note and self.bench != "always":
+            self.log(f"Note: {note} The worker leaves it as it is.")
         if not self.needs_benchmark():
             return
         self.manager.set_hold("benchmarking this machine")

@@ -810,8 +810,8 @@ physical cores; check whether Thorough ring conformers should seed from more tha
 - **Lanes:** `plan_auto` already gave one lane per physical core for most engines. The 2-thread lanes of external
   programs could exceed the physical cores on a machine with more than two threads per core; now every automatic plan
   stops at the physical cores. `parse_lanes` already refused more lanes than logical threads; `plan_text` now
-  adds a note when a typed spec runs more lanes than physical cores. The coordinator relayed NOVA's MD and CREST
-  measurements: flat scaling past ~6-8 threads per job.
+  adds a note when a typed spec runs more lanes than physical cores. The coordinator relayed the workstation's MD
+  and CREST measurements: flat scaling past ~6-8 threads per job.
 - **Twist-boat seeds**:
   - **What the sources say.** Spartan's manual: Thorough "considers twist-boat conformers of six-membered rings (in
     addition to chair conformers)". Wavefunction's conformer FAQ: twist-boats "are unlikely by default", and its
@@ -931,3 +931,23 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   wrapper is killed). Now a failed set-up keeps its inputs and logs, and the reason names the signal (`exit_reason`).
 - Nothing was run on the workstation or the Mac besides read-only checks (the Mac's run output, its `.venv/bin/lmp`
   launcher, `/bin/sh` → bash, its conda envs) and the Windows test suite.
+
+## 2026-11-23: ask before re-running a changed MD benchmark (MD-BENCH-3, branch `feat/md-bench-3-rerun-prompt`)
+- **Why:** Brandon, when #54 and #55 were released: "just ask the user if they would like to rerun the new benchmark
+  if a future release changes the benchmarking process." MD-BENCH-2 already raised `MD_BENCH_VERSION` to 2 (the slab
+  box), so every machine's stored MD numbers (version 1, bulk boxes) are now from an older benchmark.
+- **What decides "older":** a machine's `md_throughput["bench_version"]` (the last run's; `merge` keeps the previous
+  record, version included, when a re-run measured nothing), else the newest of its measured variants'. Only machines
+  with measured variants are asked; a record without any version (none was written that way) is not.
+  `VERSION_CHANGES` holds one line per version, shown in the question.
+- **Where it asks:** `quantabench-cli machines` (a `note:` under the machine, naming it when it is not this one;
+  `--json` `md_bench_rerun`), the Machines dock (a notice above the table with Run MD benchmark and Not now; other
+  machines' MD cells end in "older benchmark (version N)"; one status-bar line at start). Run MD benchmark calls
+  `profile.local_profile(bench=True, methods=["md"])` off the GUI thread, like "Benchmark this computer", so the
+  engines' numbers stay and closing the window stops it without saving.
+- **The worker** logs the note at start and leaves the benchmark alone: `md_measured` is unchanged, so auto mode with
+  `--bench-methods ...,md` still measures only a machine that has no MD numbers. `--bench always` re-runs it because
+  that was asked for.
+- **Also:** the two test paths with a real user name (FIX-9, #57) now use `me`, the same lines as #57 so either PR
+  merges cleanly after the other, and an older DEVLOG entry names "the workstation" instead of the machine.
+- Screenshots: `docs/dev/screenshots/MD-BENCH-3/` (the notice; after a run). Tests: `tests/test_md_bench_rerun.py`.

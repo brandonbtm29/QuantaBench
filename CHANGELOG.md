@@ -2,6 +2,14 @@
 
 ## Unreleased (after 0.3.0)
 
+### Ask before re-running a changed MD benchmark (MD-BENCH-3, 2026-11-23)
+- When a release changes the MD benchmark (`md.bench.MD_BENCH_VERSION`, now 2) and a machine's stored numbers come
+  from an older version, QuantaBench **asks** whether to run it again and never re-runs it by itself:
+  `quantabench-cli machines` prints a note under that machine with the command (`--json`: `md_bench_rerun`), the
+  Machines dock shows this computer's note with **Run MD benchmark** and **Not now** and marks other machines' MD
+  numbers "older benchmark (version N)", and a worker logs the note at start and leaves the benchmark alone.
+- Tests: two example paths with a real user name now use `me`.
+
 ### A small slab benchmark that matches the surface-tension runs (MD-BENCH-2, 2026-11-23)
 - `machines --bench md` now times a **3,800-atom C6F14 slab with vacuum** by default (`--md-size slab`): 40 x 40 Å,
   about 39 Å of liquid and half that of vacuum on each side, the slab stage's styles, pppm/disp's mesh of the slab box,

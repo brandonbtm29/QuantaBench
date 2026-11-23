@@ -578,7 +578,7 @@ def test_xtbout_with_a_windows_program_call_is_still_read(tmp_path):
     from the file, not from the charge-only fallback."""
     raw = ('{\n   "total energy":          -5.07022229,\n   "dipole / a.u.": [ -0.0, 0.0, -0.89954472],\n'
            '   "partial charges": [ -0.56105341, 0.28052671, 0.28052671],\n'
-           '   "program call": "C:\\Users\\Brand\\miniforge3\\envs\\qb-tools\\Library\\bin\\xtb.exe calc.xyz '
+           '   "program call": "C:\\Users\\me\\miniforge3\\envs\\qb-tools\\Library\\bin\\xtb.exe calc.xyz '
            '--gfn 2 --json",\n   "xtb version": "6.7.1 (edcfbbe)"\n}\n')
     path = tmp_path / "xtbout.json"
     path.write_text(raw, encoding="utf-8")
