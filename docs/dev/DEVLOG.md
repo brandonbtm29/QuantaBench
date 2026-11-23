@@ -808,3 +808,19 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   it shuts down when idle (`vmIdleTimeout`, 60 s). A GFN-FF CREST search through WSL took about 0.05 GB of WSL's
   available memory and under 100 MB of /dev/shm. Microsoft documents `autoMemoryReclaim` (`[experimental]`, default
   `dropCache`). /dev/shm is not cache: it is freed when QuantaBench removes the job folder.
+
+## 2026-11-22: FIX-8, a cancel reaches a paused job (branch `fix/fix-8-cancel-paused`)
+- **Found** when CREST-RUN-1's water phase was restarted on the workstation alone: `grid cancel` on the old grid
+  printed "job d348feda1d4b paused" for the MacBook's share and "cancelled" for the other one. `JobManager.cancel`
+  changed queued and interrupted jobs to cancelled and asked running ones to stop; a paused job (DIST-7: its batch
+  stopped by a pause with drain, molecules left) matched neither branch, so the call only logged "cancel requested".
+  `set_paused(False)` requeues every paused job, and the MacBook's pause was its time window's, which lifts itself at
+  02:00: the old share would have started again there.
+- **Fix:** `cancel` treats "paused" like "queued" (state, finish time, `cancel_requested`, inputs dropped, job list
+  saved), then, outside the lock, `_finish_run_folder`: the job's batch is not running, and its worker.json still said
+  "paused" from the end of that batch. That is the same step a job cancelled while the worker was down gets at start.
+- **Test:** `test_a_paused_job_can_be_cancelled` (stand-in molecules of 0.25 s, a real worker over HTTP): pause with
+  drain, the job becomes paused, cancel returns "cancelled" with a finish time, `paused_jobs` is empty, the run
+  folder's worker.json and the saved job list say "cancelled", and after a resume nothing starts in a second. Without
+  the fix it fails at the first check. `test_machine_control.py`, `test_worker.py` and `test_work_sharing.py`: 74
+  passed (Linux).

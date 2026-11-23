@@ -249,6 +249,36 @@ def test_worker_pause_now_stops_running_molecules(make_worker, monkeypatch):
     assert (Path(st["run_dir"]) / worker_mod.JOB_FILE).is_file()
 
 
+
+def test_a_paused_job_can_be_cancelled(make_worker, monkeypatch):
+    """FIX-8: a cancel reaches a job that a pause stopped with molecules left (a grid share on a paused machine,
+    whose batch is not running): it ends cancelled at once, with its run folder finished, and a resume does not start
+    it again. Before, cancel() left a paused job paused, and the machine's next resume (its time window) ran it."""
+    started = stoppable(monkeypatch, 0.25)
+    w = make_worker("w1")
+    c = WorkerClient(w.url, TOKEN)
+    job = c.submit(inputs(8), dict(CONFIG), "pc")
+    wait_for(lambda: len(started) >= 2, what="two molecules")
+    c.pause(True, "drain", by="test")
+    wait_for(lambda: c.status(job)["state"] == "paused", what="the paused state")
+    assert c.info()["queue"]["paused_jobs"] == [job]
+    st = c.cancel(job)
+    assert st["state"] == "cancelled" and st["cancel_requested"] is True and st["finished"]
+    assert c.info()["queue"]["paused_jobs"] == []
+    st = c.status(job)
+    assert st["state"] == "cancelled" and st["counts"]["ok"] >= 1 and st["counts"]["pending"] >= 1
+    run_dir = Path(st["run_dir"])
+    assert json.loads((run_dir / worker_mod.JOB_FILE).read_text(encoding="utf-8"))["job"]["state"] == "cancelled"
+    saved = json.loads((w.manager.state_dir / worker_mod.STATE_FILE).read_text(encoding="utf-8"))
+    assert [j["state"] for j in saved["jobs"] if j["id"] == job] == ["cancelled"]
+    n = len(started)
+    q = c.pause(False)
+    assert not q["paused"] and q["queued"] == [] and q["running"] == []
+    time.sleep(1.0)                                     # a requeued job would have started a molecule by now
+    assert len(started) == n and c.status(job)["state"] == "cancelled"
+    assert c.cancel(job)["state"] == "cancelled"        # a second cancel changes nothing
+
+
 def test_resume_just_after_a_drain_runs_the_rest(tmp_path, monkeypatch):
     """A resume that arrives while a drained batch is returning: the job is queued again, never 'done' with molecules
     left."""

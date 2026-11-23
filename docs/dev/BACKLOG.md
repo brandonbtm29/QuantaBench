@@ -138,6 +138,21 @@ with its deadline and resume, the budget setter, and the time window for one mac
   deadline lives in `batch run`, not `grid build`. Not ported: the QSAR-specific `analyze_tranche.py` step, and the
   budget setter (`machines set --max-cpu` covers it). Left: run CREST-RUN-1's water phase with it (acceptance).
 
+## FIX-8: Cancel reaches a paused job (a grid share on a paused machine) · in-PR 2026-11-22 (branch `fix/fix-8-cancel-paused`)
+Found at the CREST-RUN-1 restart (2026-11-22): `grid cancel` on the old water grid cancelled the MacBook's queued
+share, but its paused share (2 molecules done, 821 not started) stayed "paused". `JobManager.cancel` handled queued,
+interrupted and running jobs only. A paused job is in none of those states: its batch has stopped and it is requeued
+at the machine's next resume, so the MacBook would have gone on with the old share when its time window opened at
+02:00 (its pause was the window's).
+- **Fix:** a paused job is cancelled like a queued one (state "cancelled", inputs dropped, the job list saved), and its
+  run folder is finished as a job cancelled while the worker was down is (`_finish_run_folder`: final tables and a
+  worker.json that says "cancelled"), so a grid client that reads the synced folder sees the end too. A resume no
+  longer requeues it. A finished job is still left alone.
+- **Test:** `tests/test_machine_control.py::test_a_paused_job_can_be_cancelled` (the worker over HTTP: pause with
+  drain, cancel, resume; nothing starts again). It fails without the fix ("paused" where "cancelled" is expected).
+- **Left for after the merge** (needs-Brandon): deploy it to the MacBook, then cancel the old CREST water share
+  `d348feda1d4b` (`grid cancel 2026-11-22_075005_grid_crest-flex-lt20_water`) before the MacBook is resumed by hand.
+
 ## FIX-6: A flaky macOS test of run priority · in-PR 2026-11-22 (branch `fix/fix-6-macos-priority-test`)
 `tests/test_machine_control.py::test_priority_applied_to_running_processes` fails now and then on macOS CI (a
 process is left at nice -10); it passes on a rerun. Seen on #17 and #25. Find the race or make the test wait for

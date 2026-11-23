@@ -2,6 +2,12 @@
 
 ## Unreleased (after 0.3.0)
 
+### A cancel reaches a paused job (FIX-8, 2026-11-22)
+- Cancelling a job that a machine's pause had stopped with molecules left (a grid share on a paused machine:
+  `grid cancel`, the GUI's job monitor, `POST /v1/jobs/<id>/cancel`) left it paused, and the machine's next resume ran
+  it on. It now ends cancelled at once, with its run folder's tables and worker.json finished, and a resume leaves it
+  alone.
+
 ### Lane plans fit the memory that is free (MEM-1, 2026-11-22)
 - `auto` lanes are capped by the memory available when the run starts (less 2 GB), not only by three quarters of the
   RAM. On the workstation the desktop and other programs use about 20 of its 32 GB, and Psi4 lanes planned on the RAM

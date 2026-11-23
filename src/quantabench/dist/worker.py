@@ -15,7 +15,7 @@ API (version 1; every request needs ``Authorization: Bearer <settings.dist.worke
     POST /v1/jobs                    {inputs, config, label, chunk?, lanes?, client?, allow_version_mismatch?}
                                      -> 201 {id, job}; needs X-QuantaBench-Version equal to the worker's
     GET  /v1/jobs/<id>[?tail=N]      state, counts from the run folder's job table, run folder, log tail
-    POST /v1/jobs/<id>/cancel        stop a running job (it stays resumable) or drop a queued one
+    POST /v1/jobs/<id>/cancel        stop a running job (it stays resumable) or drop a queued or paused one
     GET  /v1/jobs/<id>/archive       zip stream of the run folder (finished jobs)
     GET  /v1/jobs/<id>/molecules     {"molecules": {id: status}}: which molecules this job has not started (DIST-7)
     POST /v1/jobs/<id>/sync          {"revoke": [ids], "following": bool}: the grid client takes back molecules it gave
@@ -84,6 +84,7 @@ ARCHIVE_MANIFEST = ".qb-archive.json"      # last member of an archive: every ot
 SYNC_TEMP_PREFIXES = ("~syncthing~", ".syncthing.")
 _ADDR_NOT_AVAILABLE = {errno.EADDRNOTAVAIL, 10049}   # 10049: WSAEADDRNOTAVAIL (address not on this machine yet)
 #: "paused": the machine was paused (DIST-7) and this job's batch stopped with molecules left; it runs on at resume
+#: (unless it is cancelled meanwhile: FIX-8)
 STATES = ("queued", "running", "done", "failed", "cancelled", "interrupted", "paused")
 FINAL_STATES = ("done", "failed", "cancelled")
 #: BuildConfig fields that only say how fast this machine runs a job. A client normally leaves them out and
@@ -1094,11 +1095,17 @@ class JobManager:
             return sorted(self._jobs.values(), key=lambda j: j.created, reverse=True)
 
     def cancel(self, job_id: str) -> Job | None:
+        """Cancel a job: a queued or interrupted one ends at once; a running one stops at its next checkpoint; a
+        paused one (its batch stopped by a pause with molecules left, DIST-7: a grid share on a paused machine) ends
+        at once too, with its run folder finished as a cancelled job's, so a resume does not start it again (FIX-8).
+        A finished job is left as it is."""
+        paused = False
         with self._cond:
             job = self._jobs.get(job_id)
             if job is None:
                 return None
-            if job.state in ("queued", "interrupted"):
+            if job.state in ("queued", "interrupted", "paused"):
+                paused = job.state == "paused"
                 with contextlib.suppress(ValueError):
                     self._queue.remove(job_id)
                 job.state, job.finished, job.cancel_requested = "cancelled", _now(), True
@@ -1108,7 +1115,10 @@ class JobManager:
                 job.cancel_requested = True
                 job.stop.set()
                 self._persist()
-        self._log(f"Job {job_id}: cancel requested")
+        if paused:
+            # its batch is not running (a resume requeues only "paused" jobs): its worker.json still says "paused"
+            self._finish_run_folder(job)
+        self._log(f"Job {job_id}: " + ("cancelled (it was paused)" if paused else "cancel requested"))
         return job
 
     def release(self, job_id: str, n: int, dest: str = "", timeout: float = 30.0,
@@ -1626,8 +1636,8 @@ class JobManager:
                 "written": _now()}
 
     def _finish_run_folder(self, job: Job) -> None:
-        """A job that ends without running (cancelled while the worker was down): give its run folder the
-        tables and final worker.json that a finished job has, and remove the dead process's run lock."""
+        """A job that ends without running (cancelled while the worker was down, or while paused): give its run folder
+        the tables and final worker.json that a finished job has, and remove the dead process's run lock."""
         from ..chem import jobs as jobs_mod
 
         run_dir = Path(job.run_dir)
