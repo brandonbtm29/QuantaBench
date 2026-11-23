@@ -376,3 +376,21 @@ def test_estimate_detachment_removes_langevin_drag(tmp_path):
     est = qlog.estimate_detachment(pull, drag_force_kcal_mol_A=f_drag)
     assert est.plateau_reached and abs(est.work_kcal_mol - exact) < 0.3
     assert est.raw_work_kcal_mol > est.work_kcal_mol + 3.0 and "Langevin drag" in est.summary()
+
+
+def test_smd_folder_runs_as_a_job(tfa_on_graphite, tmp_path):
+    """SIM-1: the rigid pull's folder runs under the MD run supervisor (one "rerun" part) with the lmp executable."""
+    from quantabench.md import bench, sim
+    from quantabench.md import supervisor as SV
+
+    info, why = bench.find_lammps()
+    if info is None:
+        pytest.skip(why)
+    setup = qlmp.write_smd_setup(tfa_on_graphite, tmp_path / "job", **SHORT, config=SHORT_CFG)
+    run = SV.Supervisor(setup.out_dir, lammps=info.path, threads=1, priority="low", echo=None).run()
+    seg = run.segments[-1]
+    assert run.state == "done" and (seg.part, seg.status, seg.first_step, seg.last_step) == ("smd", "done", 0, 600)
+    assert seg.command[2:4] == ["-log", "log.lammps"] and seg.ns_per_day
+    log = qlog.parse_log(setup.out_dir / "log.lammps")
+    assert log.ok and [len(b) for b in log.blocks] == [100 // 50 + 1, 200 // 50 + 1, 300 // 50 + 1]
+    assert (setup.out_dir / "final.data").is_file() and sim.Run.load(setup.out_dir).state == "done"

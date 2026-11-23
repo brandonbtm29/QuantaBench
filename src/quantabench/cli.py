@@ -21,6 +21,8 @@
                          [--dispersion ewald|cutoff12|cutoff16] [--size pilot|full] [--molecules N] [--run]
     quantabench-cli md surface-tension DIR                                      # sigma +- error, densities, checks
     quantabench-cli md estimate DIR | --atoms N --ns NS                         # hours per machine (MD-BENCH-1)
+    quantabench-cli md run DIR [--variant auto|cpu|gpu] [--detach]               # an MD folder as a job (SIM-1)
+    quantabench-cli md status DIR | md pause DIR [--now] | md resume DIR
     quantabench-cli settings [--set-dir ~/SyncThing/QuantaBench/Settings]
     quantabench-cli update [--check] [--upgrade-packages] [--reinstall] [--restart-worker]  # pull + reinstall
     quantabench-cli shortcuts [--desktop] [--remove]                            # launchers with the icon, no terminal
@@ -1312,7 +1314,7 @@ def build_parser() -> argparse.ArgumentParser:
     mp.set_defaults(func=_md_parse)
     from .cli_md import register as register_md
 
-    register_md(msub)           # md liquid-slab, md surface-tension, md estimate (quantabench.cli_md)
+    register_md(msub)           # md liquid-slab, surface-tension, estimate, run, status, pause, resume (cli_md)
 
     up = sub.add_parser("update", help="update this QuantaBench checkout (git pull --ff-only, reinstall if "
                                        "dependencies changed; --upgrade-packages also upgrades the packages)")

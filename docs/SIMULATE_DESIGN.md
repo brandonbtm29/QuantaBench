@@ -1,8 +1,11 @@
 # Simulate workspace design (RES-1)
 
-Status: **proposal, 2026-11-22. Waits for Brandon's approval** (BACKLOG DEC-1); SIM-1 starts after that. Brandon
-answered several of the open questions on 2026-11-22; his answers are marked "(Brandon, 2026-11-22)". No code
-here. Sources are numbered at the end ([Sources](#sources)); repository facts point at the module or file.
+Status: **approved, 2026-11-23** (Brandon: "Yes you can start building out the simulate workspace. For the MD, I would
+like to eventually have some default geometries and common set ups"). SIM-1 PR 1 (MD runs as jobs) is built: section
+12 says what it does and where it departs from this design. Brandon answered several of the open questions on
+2026-11-22; his answers are marked "(Brandon, 2026-11-22)". The default geometries and common setups he asked for,
+with the pre-flight checks that go with them, are section 15. Sources are numbered at the end
+([Sources](#sources)); repository facts point at the module or file.
 
 The Simulate workspace is where QuantaBench sets up, runs and analyzes molecular dynamics:
 system → force field → protocol → engine and resources → live telemetry → trajectory and analysis
@@ -39,6 +42,8 @@ data model, its engines and force fields, and the order to build it in.
      this computer, with a minimal force-field builder.
 
   Workers, splitting, OpenMM, mixtures and the extra analyses come in v2 and v3.
+- **Default geometries and common setups** (Brandon, 2026-11-23): six setup templates and ten pre-flight checks,
+  section 15 (SIM-2, SIM-3).
 
 ## 2. What QuantaBench has today
 
@@ -52,7 +57,8 @@ data model, its engines and force fields, and the order to build it in.
 | `md.liquid` | Liquid-slab folder: Packmol or lattice packing, `in.bulk` (minimize, warm-up, NPT), `in.slab` (open the box, NVT, pressure tensor, density profile), restart files every 1 ns, GPU switches, pair-energy guard | MD-2 |
 | `md.surface_tension` | σ by Kirkwood-Buff with block errors, density profiles and tanh fit, checks, LJ tail beyond the cutoff | MD-2, PR #37 |
 | `md.bench` | ns/day per accelerator and dispersion variant, the CPU/GPU `run 0` check, `md_throughput` in the machine profile, `md estimate` | MD-BENCH-1 (PR #35) |
-| `cli_md` | `md smd`, `md parse`, `md liquid-slab`, `md surface-tension`, `md estimate` | |
+| `cli_md` | `md smd`, `md parse`, `md liquid-slab`, `md surface-tension`, `md estimate`; `md run`, `md status`, `md pause`, `md resume` (SIM-1) | |
+| `md.sim`, `md.supervisor`, `md.telemetry` | MD runs as jobs: `run.json` (system, parameterization, protocol parts and stages, segments), the run supervisor (one LAMMPS process per segment, pause through a STOP file, resume from a checkpoint, `progress.json`), the live log reader | SIM-1 PR 1 (2026-11-23) |
 
 **GUI.** The Simulate dock is a stub. Its text, a Surface builder... button and Open in OVITO
 (`MainWindow._build_workspace_docks`) are all it has. Shared pieces it can reuse:
@@ -349,6 +355,20 @@ This automates what pilot B's resume did by hand. LAMMPS reads a binary restart 
 on the same platform, and fixes and computes must be given again ([50](#sources)). A run that moves to another
 machine continues from a `write_data` file instead, which continues statistically similar rather than exactly.
 
+**As built in SIM-1 PR 1** (docs/ENGINES.md, "MD runs as jobs"):
+- `fix halt` checks every `pause_every` steps, the least common multiple of the output periods (10 ps with the
+  defaults), so a pause never splits an averaging block. After every `run ... upto` the input checks whether the run
+  stopped short of its end step and, if so, writes `<part>.pause.restart` and `<part>.pause.data` and quits with
+  `QB_PAUSED <part> step N`: a halted run does not otherwise stop the input (with `error soft` the later runs are
+  skipped and the input would write its final data file early).
+- The periodic restart files stay `<part>.restart.a/b`, every 100 ps (was 1 ns); their step is read from the file's
+  header.
+- The supervisor picks the furthest checkpoint this machine and build may read (a binary restart only when the
+  part's last segment ran here with the same LAMMPS build, else the pause data file), cuts the part's outputs at its
+  step, and writes the segment's input from the protocol: the checkpoint read, the pair style, force field and
+  k-space given again, finished stages skipped with `jump`, outputs appended.
+- The rigid steered pull is a "rerun" part: a pause stops it and resume runs it again from the start.
+
 **How it fits the project document (UI-2).** A `.qbproj` gains:
 
 - `systems/`: one small JSON per System and Parameterization;
@@ -385,7 +405,7 @@ apart, so the Library dock and File > Open run folder... list both. Components r
 - Each finished segment's ns/day is recorded as a learned rate per machine, variant and size, next to the
   benchmark, as DIST-7 does for builds.
 
-### Where MD runs live (question 2, still open)
+### Where MD runs live (question 2: SIM-1 PR 1 takes the recommendation, A)
 
 Brandon asked how the conformer runs are set up today and whether both places are in SyncThing (2026-11-22).
 
@@ -436,6 +456,15 @@ frames
   them; the pilots' `slab.lammpstrj` would need `*.lammpstrj`.
 - The text outputs (pressure tensor, profiles, logs) stay synced, so σ can be analyzed on any machine.
 
+**What SIM-1 PR 1 does** (2026-11-23): MD runs live in the output folder (A). The SyncThing folder's shared ignore
+file (`.stglobalignore`, OPS-3, approved by Brandon) already keeps binary restart files (`*.restart`, `*.restart.a/b`,
+`*.restart.[0-9]*`) and trajectory dumps (`*.lammpstrj`, `*.dcd`, `*.xtc`, ...) on the machine that wrote them, so
+dumps stay named `slab.lammpstrj` rather than moving into `frames/`. `run.json`, `progress.json`, the logs, the text
+outputs and the data files (`bulk_final.data`, `*.pause.data`, the portable checkpoints) sync. Not in the ignore file
+yet: `STOP` and `supervisor.lock`. Both are small and harmless on another machine (a STOP only acts where the run
+runs; a lock from another machine counts only while that machine's heartbeat in `progress.json` is fresh), but
+adding `STOP` and `supervisor.lock` to `.stglobalignore` would keep them local, as this section proposed for STOP.
+
 ## 6. Splitting a calculation across machines
 
 Brandon (2026-11-22): "We would need to be clever about what can be shared calculations or split, and we may need to
@@ -471,6 +500,13 @@ Machine splitting goes into the v2 worker work only for the strategies the test 
 
 Brandon (2026-11-22): "Maybe we can include a job queue or scheduler? If one type of job is better suited for the CPU
 and another for a GPU, then we can tell the user that both jobs can run efficiently at the same time."
+
+Brandon (2026-11-23): "The point of the scheduler is to compare what each job needs, then optimize and make one job go
+faster by dedicating just GPU, CPU, or both." So the scheduler's first aim is **the fastest device assignment for a
+given job**: it compares what each job needs (from the run timings, MON-1's samples and the MD benchmark's ns/day per
+variant) and gives a job the GPU only, the CPU only, or both, whichever finishes it soonest (for GPU MD: the GPU plus
+the 4-6 threads its PPPM needs, below). Running jobs side by side is the second aim: it does so when that helps, and
+says so.
 
 **A resource profile per job.** Before a job starts, the queue estimates what it needs:
 - CPU threads, and how busy they really are;
@@ -676,6 +712,9 @@ Notes:
   machine's build has the COLVARS package (question 9).
 - **Annealing** is how CHARMM-GUI equilibrates polymer melts ([9](#sources)), and a Forcite task
   ([13](#sources)). It matters for the sorbent work later.
+- **The setups these templates make** (a liquid slab, a bulk liquid, a solvation box, a pull on a surface, a polymer
+  melt, a liquid-liquid interface), with their inputs, defaults and measurements, and the pre-flight checks that go
+  with them, are section 15.
 
 ## 11. Monitoring and analysis
 
@@ -708,7 +747,24 @@ Design points:
 
 ### SIM-1 v1: two PRs
 
-**PR 1, MD runs as jobs** (no new panel):
+**PR 1, MD runs as jobs** (no new panel). **Built, 2026-11-23** (branch `feat/sim-1-md-run-jobs`); what differs
+from the list below:
+- `md.sim` has the System, Parameterization, Protocol (parts of stages), Run and Segment dataclasses; System and
+  Parameterization carry what today's writers know (the full parameters stay in `liquid_setup.json`).
+- **The default dispersion is not changed here.** MD-LR (#52) made the long-range method and the LJ cutoff user
+  options with a recommendation from the setup (`md.recommend_long_range`): `md liquid-slab` without a choice already
+  writes 16 Å + tail where LAMMPS can use a GPU and converged pppm/disp on a CPU-only machine.
+- Beyond the list: MD jobs in the GUI's job queue (a kind-"md" job starts the supervisor as a process of its own, runs
+  beside builds, one MD job at a time on this computer; the Jobs dock shows ns, ns/day and the ETA; Pause and Resume;
+  Simulate > Run MD folder...), and `md run` on folders written before SIM-1. The job dialog stays the molecular one;
+  MD on workers is v2.
+- Tests run a 540-atom hexane slab with the `lmp` executable (skipped without one): a pause and a resume give one
+  continuous pressure-tensor and density-profile series with the same energy at the join; a stopped segment resumes
+  from its last restart file; a run that moved to another build resumes from the data file; a later segment uses
+  other engine settings. The CPU-then-GPU segment test runs where `QB_TEST_MD_GPU=1` is set and LAMMPS has the GPU
+  package; it passed on the workstation's RX 9060 XT (2026-11-23).
+
+The plan as written:
 - `md.sim`: System, Parameterization, Protocol/Stage, Run/Segment as JSON dataclasses, filled by today's writers.
   `write_liquid_slab` and `write_smd_setup` gain `run.json`, the STOP-file lines and segment-ready outputs.
 - The run supervisor and its commands:
@@ -818,10 +874,14 @@ editable inputs.
    **Answered (Brandon, 2026-11-22):** be clever about what can be shared or split, and test it with pilot A. v1 stays
    on this computer; splitting across machines is v2, gated on the consistency test (section 6).
 2. **Where MD runs live:** in the project's `runs/`, or in the output folder `Runs/` with the project pointing at
-   them? **Still open.** The facts, the two options and a recommendation (the output folder, with `.stignore` lines
-   for restarts, the STOP file and frames) are in section 5, "Where MD runs live".
+   them? The facts, the two options and a recommendation (the output folder, with `.stignore` lines
+   for restarts, the STOP file and frames) are in section 5, "Where MD runs live". **SIM-1 PR 1 takes the
+   recommendation** (the output folder; the approved `.stglobalignore` keeps restarts and dumps local); still to
+   confirm, and whether `STOP` and `supervisor.lock` join the ignore file.
 3. **Frames and big files:** the default frame interval, and should frames and restart files stay out of SyncThing
-   (an ignore pattern) and move only through the archive?
+   (an ignore pattern) and move only through the archive? **Answered in part:** the approved `.stglobalignore` keeps
+   restart files and dumps out of SyncThing. PR 1 keeps a frame every 100 ps (the pilots') and moves restart files from
+   every 1 ns to every 100 ps (local files, 2.9 MB each, two per part).
 4. **The default force field per class once pilots A and B are written up:** OPLS-AA for perfluoroalkanes, OpenFF
    Sage for the rest, GAFF2 only with the Träg & Zahn refit?
    **Answered in part (Brandon, 2026-11-22):** force-field selection becomes a composable builder, like physics in
@@ -830,23 +890,86 @@ editable inputs.
 5. **LigParGen:** may OPLS-AA charges for more PFAS groups come from the web service (the SMILES leave the machine),
    or local routes only? **Answered (Brandon, 2026-11-22): allowed.**
 6. **A run that meets the end of a machine's time window:** wait for the window to reopen on the same machine (an
-   exact continuation), or move to a free machine through a data file (statistically similar)?
+   exact continuation), or move to a free machine through a data file (statistically similar)? **PR 1 (this
+   computer only) waits:** a pause keeps both checkpoints, and a resume on the same machine and build continues from
+   the binary one; a resume elsewhere would use the data file. The choice for workers waits for the split test.
 7. **The σ default:** 16 Å on the GPU with the tail correction (pilot B: reproduced Tsige & Grest, 21 ns/day, slab 2 %
    below the bulk density), or Ewald dispersion on the CPU (pilot A: no correction, 7.6 ns/day, its mesh still to
    check)? And the C6F14 target: Freire 2006 (12.33), which OPLS-AA misses by 5-13 %, or Caço 2003 (11.36)?
    **Answered (Brandon, 2026-11-22):** 16 Å + tail on the GPU is the default ("that default is fine"). The target
    stays Freire 2006 (12.33) with no offsets; the OPLS-AA shortfall is documented, not corrected.
 8. **OpenMM's place:** in v2 next to the workers, or after the workers and sweeps? Is AIMNet2 MD (a PFAS molecule
-   in water or on graphite) worth a v2 spike?
+   in water or on graphite) worth a v2 spike? (Open; PR 1's Run and Segment model has an `engine` field for it.)
 9. **Steered MD:** move to Colvars (needs the COLVARS package in every machine's LAMMPS), or keep `fix smd` for the
-   rigid pull and use Colvars only for the flexible one?
+   rigid pull and use Colvars only for the flexible one? **PR 1 keeps `fix smd` for the rigid pull** (section 10's
+   recommendation), as a "rerun" part.
 10. **Sharing machines by default:** may an MD job start while a CREST or QSAR batch runs on the same machine, and at
     which priority and thread share?
     **Answered (Brandon, 2026-11-22):** a scheduler that knows which jobs suit the CPU and which the GPU, and tells the
     user when both can run efficiently at once (section 7, SCHED-3). The default thread shares come from the measured
     profiles.
 11. **The 17-liquid Phase 1:** run it from the CLI with the v1 supervisor as soon as PR 1 lands, before the panel?
+    (Possible once PR 1 is merged: `md liquid-slab` per liquid, then `md run --detach` one at a time.)
 12. **The Mac's GPU:** try a LAMMPS OpenCL build (FORK-8) or OpenMM Metal (FORK-9) first, or neither for now?
+    (Open; PR 1 runs the Mac's conda-forge LAMMPS on the CPU.)
+
+## 15. Setup templates and pre-flight checks
+
+Brandon (2026-11-23): "For the MD, I would like to eventually have some default geometries and common set ups." A
+**setup template** is a system kind (the geometry), a protocol template (section 10) and the analyses that turn the
+run into numbers, with defaults that a benchmark backs where one exists. A **pre-flight check** runs before a folder
+is written (and again before and during `md run`) and catches the usual reasons an MD setup fails or gives wrong
+numbers. They are BACKLOG SIM-2 (templates) and SIM-3 (checks); both build on SIM-1's run folders, so every template
+runs, pauses and resumes the same way.
+
+### 15.1 Setup templates
+
+| Template | Geometry and inputs | Defaults | Stages | What it measures | Status |
+|---|---|---|---|---|---|
+| Liquid slab (surface tension) | One liquid; lateral edge, slab thickness or molecules, vacuum | 40 × 40 Å lateral (50 × 50 "full"), 100 Å slab, 50 Å vacuum on each side, 298.15 K, 1 fs; long range from `recommend_long_range` (16 Å + tail on a GPU, converged pppm/disp on a CPU) | Minimize, NVT warm-up, bulk NPT 1 ns, open the box, NVT 2 ns settle + 10 ns production | σ by Kirkwood-Buff ± block error, with the LJ tail for a cutoff; plateau vs bulk density; vapour density; interface width; drift | Built (MD-2, MD-LR, SIM-1) |
+| Bulk liquid (density, heat of vaporization) | One liquid in a cube; plus the same molecule alone in the gas phase | At least 500 molecules and a box over 2 rc + 2 Å; 12 Å + LAMMPS' homogeneous tail (`recommend_long_range("bulk")`, valid in a uniform liquid ([40](#sources))); 298.15 K, 1 atm; NPT 1 ns + 5 ns production; the gas-phase molecule with Langevin dynamics and no cutoff | Bulk: minimize, warm-up, NPT, NPT production. Gas: NVT | Density ± error; ΔHvap = ⟨U_pot⟩gas − ⟨U_pot⟩liquid / N + RT; optionally the thermal expansion and compressibility from the volume and enthalpy fluctuations | The bulk stages exist (`in.bulk`); the gas phase and the analysis to build |
+| Solvation box | A solute (any charge) in a solvent box | 12 Å of solvent around the solute (and more than rc + 2 Å); TIP3P water with Joung-Cheatham ions (`md.params`), counter-ions to neutralize, optional salt; NPT 1 ns + 10 ns production | Minimize (solute restrained), NVT, NPT, production | Solute-solvent RDFs and coordination numbers, the first-shell water count, the solute's conformers; the start for hydration free energies (v3) | To build (v2: mixtures and solutions) |
+| Rigid pull or adsorption on a surface | An adsorbate on a slab (graphite layers, a metal), its height; vacuum (v1) or water (v2) | Graphite, 2-3 frozen layers; 3.5 Å start height; spring 10 kcal/mol/Å²; 1e-4 Å/fs over 15 Å; v2: 10 pulls from independent starts | Soft start, NVT 50 ps, the pull (`fix smd`; v2 Colvars) | Work and peak force per pull; v2: the Jarzynski PMF with a bootstrap error, the adsorption energy at contact | The rigid pull is built (0.2; a "rerun" part in SIM-1); flexible and solvated pulls v2 |
+| Polymer melt | N chains of a repeat unit: degree of polymerization, tacticity, end groups | About 20 chains of 40 repeat units (at least ~5,000 atoms); packed at a low density and compressed; annealed from well above Tg (CHARMM-GUI's melts: Tm + 50 K to 298 K ([9](#sources))) | Minimize, compression NPT, annealing cycles (section 10's template), NPT production 10 ns | Density; Tg from density against T on cooling; radius of gyration and end-to-end distance; cohesive energy density and the solubility parameter | v3 (builders; a typing route for polymers) |
+| Liquid-liquid interface | Two immiscible liquids stacked along z, periodic, no vacuum | 40 × 40 Å, 50 Å of each liquid; NPT with the barostat on z only (fixed area); one combining rule for both liquids or explicit cross terms (section 9.1) | Minimize, NVT warm-up, z-only NPT, production | Interfacial tension by Kirkwood-Buff (two interfaces, no vacuum); each component's density profile; interface width; mutual solubility; molecular orientation at the interface | v2 (mixtures) |
+
+Rules for every template:
+- **The same folder.** `run.json` with its parts and stages, inputs with the STOP lines, a README with every
+  parameter and its source, so `md run/pause/resume`, the Jobs dock and the analyses work for all of them.
+- **Easy and Advanced** (QwikMD's split, section 3.2): a template asks for a few inputs (the molecules, the size, the
+  temperature, the purpose); every other value has a default with its reason, shown under Advanced.
+- **No unbenchmarked default.** A template's defaults per force-field class come from benchmarks (section 9.1); where
+  none exists the review says so.
+- **Validation per template** (SIM-2's acceptance): the bulk liquid against the measured density and ΔHvap of hexane
+  and C6F14 and against the force field's own published values; the liquid slab against pilots A-C; the solvation box
+  against the water model's published density.
+
+### 15.2 Pre-flight checks
+
+| Check | What goes wrong | How it is checked | When | Severity and fix |
+|---|---|---|---|---|
+| Missing or guessed parameters, atom typing of unusual groups | A type, bond, angle or torsion without a parameter, or one filled by analogy (a generic SMIRKS, GAFF's parmchk2 placeholders, a zero torsion), most often for unusual groups (perfluoroalkyl ethers, sulfonyl, carboxylates). OPLS-AA typing covers only alkanes, perfluoroalkanes and (fluoro)benzenes (lesson 8) | Every parameter carries its source (`TypedMolecule`); a source that says analogy, generic or default is listed with its atoms; coverage per force field before anything is written | Before writing | Error for a missing parameter; warning for a guessed one, with the routes that type the group (section 9) |
+| Charges and net charge | A non-integer total; a liquid whose molecules are not neutral; charges from one method with another force field; a symmetry-broken AM1-BCC set | The sum per molecule equals its formal charge within 1e-4 e; counter-ions for a charged solute; the charge method named with the force field; symmetry-equivalent atoms within 0.01 e | Before writing | Error for the net charge, warnings otherwise; fixes: neutralize with ions, average equivalent atoms |
+| Cutoff against half the box | The minimum image breaks (a pair sees two images); LAMMPS warns "Bond/angle/dihedral extent > half of periodic box length" | rc + skin below half the smallest periodic width; a slab's lateral edge over 2 rc + 1 Å (`plan_box` today); under NPT also at the smallest box the barostat may reach | Before writing; again from the first NPT averages | Error |
+| Overlaps after packing | Atoms of different molecules too close: exploding first steps, "Lost atoms"; rings speared by chains in polymers | The closest intermolecular contact (`min_contact`; refused below 0.8 Å today); the largest force and the energy after the minimization; a ring-spearing test for polymers (Amorphous Cell has one ([14](#sources))) | After packing; after the minimization | Error below 0.8 Å, warning below the packing tolerance; fix: pack again with another seed or at a lower density |
+| k-space accuracy and mesh for slabs | LAMMPS' error estimate assumes a uniform density, so a slab's vacuum gets it too coarse a mesh (pilot A: 2 x 2 x 8, σ 1.36 mN/m low) | MD-LR's spacing rule and `check_settings` (G·rc, h·G, Coulomb accuracy); the grids LAMMPS printed are read back from the first segment's log and compared with the rule; the slab correction for `p p f` boxes | Before writing; after the first segment's setup | Warning (MD-LR's); error when the log's grid is coarser than the rule |
+| Time step against constraints | 2 fs with unconstrained X-H bonds or flexible water; a rigid body or a light atom at too long a step | The fastest bond's period from masses and force constants (at least ~10 steps per period); the constraints present (`fix shake`, rigid water, rigid bodies) | Before writing | Error for 2 fs with free X-H bonds; warning otherwise; fix: 1 fs, or SHAKE |
+| Vacuum and slab thickness | Images interact across too little vacuum; a slab too thin has no bulk-like plateau; a small lateral box shifts σ (capillary waves) | Vacuum at least max(3 rc, 40 Å) on each side; the slab at least twice the interface width plus ~30 Å of plateau; the lateral edge at least 40 Å for σ | Before writing; after the run (the plateau check `md.surface_tension` already makes) | Warning |
+| Thermostat and barostat damping | Too small: wild fluctuations; too large: slow equilibration; weak-coupling schemes give the wrong fluctuations | Tdamp about 100 time steps and Pdamp about 1000 (LAMMPS' advice for Nosé-Hoover ([51](#sources))); Langevin for a single rigid body (`md.lammps`); an isotropic barostat for a liquid, z-only at fixed area for a liquid-liquid interface, none for a liquid-vapour slab | Before writing | Warning; fix: the defaults |
+| Equilibration length and drift | Production that starts before the density, the energy or the slab has settled; a drifting slab | Bulk: the density's halves within their errors and its slope; slab: the plateau against the bulk density and the slab's drift (both in `md.surface_tension`); the equilibrated start found automatically (Chodera's method ([52](#sources))) as the skip time | After each part, from its outputs; live in the Jobs dock and the panel | Warning; fix: a longer equilibration or a later skip time |
+| Error bars from block averages | An error bar from correlated samples is too small; pilot A's blocking curve never levelled off | Block averages with at least 4 blocks longer than the correlation time, the statistical inefficiency and the Flyvbjerg-Petersen blocking curve (in `md.surface_tension`); a warning when the curve has not levelled off; independent replicas for an honest error (section 6) | After the run | Warning; fix: a longer production or replicas |
+
+The checks section 9.1 already lists (one combining rule and one 1-4 scaling, units, a cutoff without its tail) and the
+engine review of section 4 (every style in this build, the GPU switches, the pair-energy guard) join them, with two
+more: the disk space of the outputs (the pressure tensor every 10 fs is 48 MB per 10 ns) and the run time against the
+machine's time window (`md estimate`).
+
+**How they run** (SIM-3): `md.preflight`, pure Python where it can be, with `check(system, parameterization,
+protocol) -> [Finding(id, severity, message, fix)]`. The writers call it before writing and refuse on an error
+(`--force` for experts); the supervisor runs the after-the-fact checks on a part's outputs before the next part starts
+and puts them in `progress.json`; the Simulate panel shows them like the build review (ADV-1): it explains, Apply
+fixes a finding, and only an error blocks. Every finding is stored in `run.json` (`parameterization.checks`), so a
+result carries what was checked.
 
 ## Sources
 
@@ -907,3 +1030,5 @@ say.
 48. in 't Veld, P. J.; Ismail, A. E.; Grest, G. S. Application of Ewald summations to long-range dispersion forces. J. Chem. Phys. 2007, 127, 144711: https://doi.org/10.1063/1.2770730
 49. Jarzynski, C. Nonequilibrium equality for free energy differences. Phys. Rev. Lett. 1997, 78, 2690 (cited by [41](#sources)): https://doi.org/10.1103/PhysRevLett.78.2690
 50. LAMMPS `read_restart` (binary restart files: same executable and platform; fixes re-specified): https://docs.lammps.org/read_restart.html
+51. LAMMPS `fix nh` (Tdamp "around 100 timesteps", Pdamp "around 1000 timesteps"): https://docs.lammps.org/fix_nh.html
+52. Chodera, J. D. A simple method for automated equilibration detection in molecular simulations. J. Chem. Theory Comput. 2016, 12, 1799: https://pmc.ncbi.nlm.nih.gov/articles/PMC4945107
