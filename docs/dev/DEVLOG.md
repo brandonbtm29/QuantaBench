@@ -810,7 +810,7 @@ physical cores; check whether Thorough ring conformers should seed from more tha
 - **Lanes:** `plan_auto` already gave one lane per physical core for most engines. The 2-thread lanes of external
   programs could exceed the physical cores on a machine with more than two threads per core; now every automatic plan
   stops at the physical cores. `parse_lanes` already refused more lanes than logical threads; `plan_text` now
-  adds a note when a typed spec runs more lanes than physical cores. The coordinator relayed NOVA's MD and CREST
+  adds a note when a typed spec runs more lanes than physical cores. The coordinator relayed the workstation's MD and CREST
   measurements: flat scaling past ~6-8 threads per job.
 - **Twist-boat seeds**:
   - **What the sources say.** Spartan's manual: Thorough "considers twist-boat conformers of six-membered rings (in
@@ -978,3 +978,13 @@ physical cores; check whether Thorough ring conformers should seed from more tha
 - Nothing on the workstation or the Mac was started or stopped (A-fine, CREST's water phase and the GAFF2 slab kept
   running). The tests above ran 540-atom LAMMPS jobs there on 1-2 threads at below-normal priority, behind the
   pytest lock.
+
+## 2026-11-24: FIX-9, no user name in the tests' example paths (branch `fix/fix-9-test-user-paths`, PR #57)
+- **What:** `tests/test_eng_xtb.py` (the xtbout "program call" string) and `tests/test_project.py` (`from_stored` with an
+  absolute Windows path) held a real Windows user name. Both now use `me`, like `test_external.py` and
+  `test_priority.py`. The xtbout test still feeds invalid JSON (the raw `\U` escape) and still finds `Users` in the
+  program call.
+- **Held back until #54-#56 merged**, since they all edit BACKLOG, DEVLOG and CHANGELOG: the BACKLOG item, this entry, the
+  CHANGELOG line, and the 2026-11-22 SETTINGS-1 follow-ups entry, which named one of the maintainer's machines (now "the
+  workstation"). Merged with main (#54, #55) first.
+- **Tests:** the two changed tests; CI on all three OSes.

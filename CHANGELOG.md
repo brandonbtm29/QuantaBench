@@ -2,6 +2,10 @@
 
 ## Unreleased (after 0.3.0)
 
+### No user or machine names in the tests and the DEVLOG (FIX-9, 2026-11-24)
+- Two tests' example Windows paths use the placeholder user `me`; a DEVLOG line names "the workstation" instead of a
+  machine. Nothing else changes.
+
 ### MD runs as jobs: segments, pause and resume (SIM-1 PR 1, 2026-11-23)
 - **`quantabench-cli md run DIR`** runs a folder written by `md liquid-slab`, `md smd` or the Surface builder under a
   run supervisor: one LAMMPS process (segment) per part at the run priority, the GPU where LAMMPS has one and the
