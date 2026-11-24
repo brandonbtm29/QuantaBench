@@ -996,3 +996,34 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   `--bench-methods ...,md` still measures only a machine that has no MD numbers. `--bench always` re-runs it because
   that was asked for.
 - Screenshots: `docs/dev/screenshots/MD-BENCH-3/` (the notice; after a run). Tests: `tests/test_md_bench_rerun.py`.
+
+## 2026-11-24: MD-BENCH-3's two follow-ups, before the merge (PR #58)
+- **Brandon (2026-11-24):** "I agree with your PR56 suggestions. Go with your suggestions and merge #56-#58." For #58
+  that is both of its questions, yes.
+- **Not now is remembered** for that machine and benchmark version: `md_bench_not_now` joins `MACHINE_CONTROL_KEYS`
+  (an int, 0 = never), written with `settings.update_machine` like the dock's other per-machine values.
+  `md.bench.notice_due(md, not_now, version)` decides: an older record, and Not now not clicked for `version` (this
+  QuantaBench's, or another machine's worker's). A later release that raises `MD_BENCH_VERSION` brings it back. If the
+  settings cannot be written, it is hidden until the next start, as before. The status-bar line at start follows the
+  same rule. The CLI note and the "older benchmark" marks stay: they inform, they do not nag.
+- **Run it any time:** a "Run MD benchmark" button under the table, for the selected machine (this computer when
+  none is selected), so a machine whose notice was put off can still be measured.
+- **Workers report it:** `GET /v1/info` has `md_bench` (`md.bench.status` + `running` + `last`). `POST /v1/bench`
+  `{"methods": ["md"]}` runs `local_profile(bench=True, methods=["md"])` in the worker's benchmark thread with new
+  jobs held ("benchmarking" in the dock's Status), publishes the profile and records `last` (`done`, or `failed`
+  with the reason, e.g. "LAMMPS not found; the older numbers stay"). It refuses (409) while paused (a machine paused by
+  hand may be doing something else), while a job runs (the hold is taken first, then the running list checked, so
+  nothing starts in between) and while a benchmark runs. Only `["md"]` can be asked for. `WorkerClient.bench`.
+- **The dock:** after Check workers, one notice per other machine whose worker reports an older benchmark and is
+  not running it, with "Run on <machine>" and "Not now" (remembered for that machine and the worker's version). A
+  refusal shows its reason in the note and keeps the notice. A worker from before MD-BENCH-3 has no `md_bench`, so no
+  notice; the button under the table then names the command to run there.
+- Tests (`tests/test_md_bench_rerun.py`, 13): `notice_due` and `status`; the setting; a real worker over HTTP (info,
+  400 for other benchmarks, 409 paused / job running / already running, the hold, a failed and a done run, the
+  engines' numbers kept); the dock: Not now saved and kept at the next start until the version changes, the button
+  under the table, a remote notice with a refusal, a run, an older worker, Not now for a remote machine and a newer
+  worker version. Linux: these plus test_gui_machines, test_md_bench, test_settings, test_worker and test_gui_workers
+  pass.
+- Screenshots (a scripted offscreen run, placeholder names): `docs/dev/screenshots/MD-BENCH-3/machines_remote_notice.png`
+  (this computer's notice and another machine's), `machines_not_now.png` (after Run on the other machine, which then
+  shows "benchmarking", and Not now here).

@@ -96,7 +96,9 @@ A release that changes what the benchmark measures raises ``MD_BENCH_VERSION`` (
 never re-run: ``quantabench-cli machines`` prints a note under it (``rerun_note``), and the Machines dock shows this
 computer's note with a Run button and marks other machines' MD numbers as from an older benchmark. A worker logs the
 note at start and does not re-run it, whatever its ``--bench-methods``; only ``--bench always`` (asked for) measures
-again.
+again. A worker reports its state in ``GET /v1/info`` (``status``), so the dock offers the re-run for that machine
+too, run through its worker (``POST /v1/bench``). "Not now" is remembered per machine for one benchmark version
+(``notice_due``; ``settings`` ``md_bench_not_now``).
 
 Scaling to another system (``scaled_rate``)
 -------------------------------------------
@@ -1093,6 +1095,25 @@ def rerun_note(md: Mapping | None, machine: str = "", *, here: bool = True) -> s
             f"{VERSION_CHANGES.get(MD_BENCH_VERSION, 'a changed benchmark')}, so new numbers differ from the stored "
             f"ones. Run it again? `quantabench-cli machines --bench md`{where} (a few minutes, best while the machine "
             "is otherwise idle). Nothing re-runs it on its own.")
+
+
+def status(md: Mapping | None) -> dict:
+    """What a worker reports about its MD benchmark in ``GET /v1/info`` (``"md_bench"``): ``version`` (this
+    QuantaBench's ``MD_BENCH_VERSION``), ``stored`` (``stored_version``), ``outdated`` (``outdated``: the stored
+    version when it is older, else None) and ``note`` (``rerun_note``, '' when current). The Machines dock of another
+    machine offers the re-run from it, compared with the worker's own version, not the dock's (MD-BENCH-3)."""
+    return {"version": MD_BENCH_VERSION, "stored": stored_version(md), "outdated": outdated(md),
+            "note": rerun_note(md)}
+
+
+def notice_due(md: Mapping | None, not_now: int = 0, version: int | None = None) -> bool:
+    """Whether to show the re-run notice: the record is older than ``version`` (default this QuantaBench's
+    ``MD_BENCH_VERSION``) and "Not now" (``not_now``: the version it was clicked for, 0 = never) was not clicked for
+    that version. Not now is remembered per machine for one version, so the notice comes back when a later release
+    changes the benchmark again (MD-BENCH-3)."""
+    version = MD_BENCH_VERSION if version is None else int(version)
+    old = stored_version(md) if rated(md) else None
+    return old is not None and old < version and int(not_now or 0) < version
 
 
 # ------------------------------------------------------------------------------------------- display

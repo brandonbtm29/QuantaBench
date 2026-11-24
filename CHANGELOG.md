@@ -8,6 +8,13 @@
   `quantabench-cli machines` prints a note under that machine with the command (`--json`: `md_bench_rerun`), the
   Machines dock shows this computer's note with **Run MD benchmark** and **Not now** and marks other machines' MD
   numbers "older benchmark (version N)", and a worker logs the note at start and leaves the benchmark alone.
+- **Not now is remembered** per machine for that benchmark version (`md_bench_not_now` in the machine's settings
+  entry), so the notice comes back only when a later release changes the benchmark again. A **Run MD benchmark**
+  button under the Machines table runs it any time, on the selected machine.
+- **Other machines too:** a worker reports its MD benchmark in `GET /v1/info` (`md_bench`: version, stored version,
+  outdated, note, running, last), and runs it when asked with `POST /v1/bench` `{"methods": ["md"]}` (new jobs wait
+  meanwhile; refused while a job runs, the machine is paused or a benchmark runs). After Check workers, the Machines
+  dock shows a notice for each such machine with **Run on <machine>** and **Not now**.
 
 ### MD runs as jobs: segments, pause and resume (SIM-1 PR 1, 2026-11-23)
 - **`quantabench-cli md run DIR`** runs a folder written by `md liquid-slab`, `md smd` or the Surface builder under a

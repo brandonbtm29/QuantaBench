@@ -214,8 +214,16 @@ include a pause button on a machine and the work is redistributed?"
 - **A changed MD benchmark** (MD-BENCH-3, 2026-11-23; Brandon: "just ask the user if they would like to rerun the
   new benchmark if a future release changes the benchmarking process"): a notice above the table says that this
   computer's MD numbers come from an older benchmark version and asks whether to run it again, with **Run MD
-  benchmark** and **Not now** (until the next start). No dialog; the status bar mentions it once at start. Nothing
-  re-runs it on its own (docs/WORKERS.md, "The MD benchmark").
+  benchmark** and **Not now**. No dialog; the status bar mentions it once at start. Nothing re-runs it on its own
+  (docs/WORKERS.md, "The MD benchmark").
+  - Brandon (2026-11-24) on the two follow-ups: **Not now** is remembered per machine for that benchmark version
+    (`md_bench_not_now`), so the notice returns only when a later release changes the benchmark again; the **Run MD
+    benchmark** button under the table runs it any time, on the selected machine (this computer, or another through
+    its worker).
+  - Other machines: after Check workers, each worker that reports an older MD benchmark (`/v1/info` `md_bench`) gets
+    a notice of its own under this computer's, with **Run on <machine>** (`POST /v1/bench`; its worker refuses while it
+    runs a job or is paused, and the note says why) and **Not now**. A worker from before MD-BENCH-3 reports nothing;
+    its MD cell's tooltip has the command to run there.
 - **Processing budget** box under the table, for the selected machine: run priority (default, normal, low,
   background), free threads, a *Max CPU* percent that sets the free threads from its thread count, its lane spec,
   and *Pause its worker while it runs on battery* (on by default). "Save for this machine" writes only that
