@@ -302,7 +302,7 @@ def test_md_estimate_uses_the_folders_slab_box(tmp_path, capsys):
     out_dir = tmp_path / "c6f14"
     assert cli.main(["md", "liquid-slab", "--smiles", bench.SMILES, "--name", "c6f14", "-o", str(out_dir),
                      "--packing", "lattice", "--lateral", "40", "--molecules", "190", "--long-range", "ewald",
-                     "--gpu", "no"]) == 0
+                     "--gpu", "no", "--engine", "lammps"]) == 0
     capsys.readouterr()
     assert cli.main(["md", "estimate", str(out_dir), "--json"]) == 0
     got = json.loads(capsys.readouterr().out)

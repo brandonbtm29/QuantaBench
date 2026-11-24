@@ -317,7 +317,7 @@ def test_md_estimate_cli_and_the_liquid_slab_hook(tmp_path, capsys):
     out_dir = tmp_path / "c6f14"
     assert cli.main(["md", "liquid-slab", "--smiles", "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F", "--name",
                      "c6f14", "-o", str(out_dir), "--packing", "lattice", "--lateral", "26", "--thickness", "20",
-                     "--bulk-ns", "1", "--settle-ns", "2", "--production-ns", "10"]) == 0
+                     "--bulk-ns", "1", "--settle-ns", "2", "--production-ns", "10", "--engine", "lammps"]) == 0
     out = capsys.readouterr().out
     n_atoms = json.loads((out_dir / "liquid_setup.json").read_text(encoding="utf-8"))["n_atoms"]
     assert f"Run time, 13 ns of {n_atoms:,} atoms (ewald)" in out and "bench-pc" in out

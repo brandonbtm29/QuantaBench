@@ -464,7 +464,8 @@ def test_read_lj_types_refuses_what_it_cannot_correct(tmp_path):
 def test_cli_liquid_slab_and_surface_tension(tmp_path):
     out = tmp_path / "hex"
     assert cli.main(["md", "liquid-slab", "--smiles", HEXANE, "--name", "hexane", "-o", str(out), "--lateral", "26",
-                     "--thickness", "20", "--packing", "lattice", "--dispersion", "cutoff12", "--sigma-ref", "17.9"]) == 0
+                     "--thickness", "20", "--packing", "lattice", "--dispersion", "cutoff12", "--sigma-ref", "17.9",
+                     "--engine", "lammps"]) == 0
     meta = json.loads((out / "liquid_setup.json").read_text(encoding="utf-8"))
     assert (out / "in.slab").is_file() and meta["config"]["reference_sigma"] == 17.9
     lr = meta["long_range"]          # an explicit choice wins; the recommendation (whatever this machine) differs
@@ -481,8 +482,10 @@ def test_cli_liquid_slab_and_surface_tension(tmp_path):
 def test_cli_long_range_options(tmp_path, capsys):
     """MD-LR: without a choice the recommendation for the stated machine is used and printed; explicit options win
     and both are shown; contradictory options are refused."""
+    # LAMMPS' recommendations: the default engine depends on this computer's GPU since 2026-11-24 (OpenMM where
+    # OpenMM has one)
     base = ["md", "liquid-slab", "--smiles", HEXANE, "--name", "hexane", "--lateral", "34", "--thickness", "16",
-            "--packing", "lattice"]
+            "--packing", "lattice", "--engine", "lammps"]
 
     def setup(name):
         return json.loads((tmp_path / name / "liquid_setup.json").read_text(encoding="utf-8"))
