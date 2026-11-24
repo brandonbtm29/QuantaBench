@@ -2,6 +2,45 @@
 
 ## Unreleased (after 0.3.0)
 
+### MD runs as jobs: segments, pause and resume (SIM-1 PR 1, 2026-11-23)
+- **`quantabench-cli md run DIR`** runs a folder written by `md liquid-slab`, `md smd` or the Surface builder under a
+  run supervisor: one LAMMPS process (segment) per part at the run priority, the GPU where LAMMPS has one and the
+  folder's dispersion has GPU styles (`--variant`, `--threads`, `--priority`, `--detach`). `md status` shows the state,
+  ns done, ns/day, the ETA, alerts and every segment; `md pause` pauses at the next pause point with a checkpoint
+  (`--now` also stops LAMMPS after 30 s); `md resume` continues from the furthest checkpoint this machine and LAMMPS
+  build may read: a binary restart, else the portable data file. Outputs are cut at the checkpoint's step and
+  appended to, so they stay one series.
+- **The run folder** gains `run.json` (the system, the force field as applied, the protocol's parts and stages, and the
+  segments: machine, build, variant, threads, start and end steps, ns/day), `progress.json` while it runs, and
+  per-segment inputs and logs (`in.slab.seg3`, `log.slab.seg3`). The liquid slab's inputs pause on a file named
+  `STOP` (also without QuantaBench), run each stage `upto` its end step and write restart files every 100 ps (was
+  1 ns); the steered pull pauses too (and runs again from its start on resume). Folders written before run as well.
+- **In the GUI:** Simulate > **Run MD folder...** submits a folder as an MD job. It runs in a process of its own
+  beside the window's builds (one MD job at a time here) and keeps running when the window closes; the Jobs dock,
+  now also in the Simulate workspace, shows its ns, ns/day and ETA, Cancel becomes Pause, and Resume continues it.
+- `md surface-tension` reads outputs merged by step and lists each segment's speed.
+
+### A small slab benchmark that matches the surface-tension runs (MD-BENCH-2, 2026-11-23)
+- `machines --bench md` now times a **3,800-atom C6F14 slab with vacuum** by default (`--md-size slab`): 40 x 40 Å,
+  about 39 Å of liquid and half that of vacuum on each side, the slab stage's styles, pppm/disp's mesh of the slab box,
+  the pressure tensor every 10 steps and the density profile. Same box / liquid ratio as the `md liquid-slab` sizes,
+  so its ns/day scales to them by the atoms. `--md-size pilot-slab` times the 9,780-atom pilot slab itself; `small`
+  and `pilot` are the bulk boxes as before. Each variant stops after 60 s.
+- The variants are MD-LR's options with their defaults (`ewald` with the slab-safe mesh rule, `cutoff12`/`cutoff16`
+  with the tail in the bulk only, GPU variants where LAMMPS has the GPU package). Each record names its geometry, box,
+  threads, accelerator, LAMMPS build, long-range settings, the k-space grids LAMMPS used and its timing breakdown.
+  Slab records are keyed `<variant>@slab`, so a machine keeps bulk and slab numbers side by side.
+- **Measured speeds in the recommendation:** `md liquid-slab`'s "Recommended for this setup" takes its ns/day from
+  this computer's MD benchmark when it has a matching record (scaled by atoms, the k-space share by the box volume),
+  else from the pilot table, and says which. `md estimate` and the run-time estimate of `md liquid-slab` prefer slab
+  records (`--geometry slab|bulk`) and note a fallback to a bulk record.
+- **The MacBook's failed run (2026-11-21):** `QUANTABENCH_LAMMPS` had lost its backslashes on its way through
+  PowerShell and SSH, so it named no file, and the benchmark quietly timed the venv's PyPI wheel instead. Now a
+  settings path for this computer or a `QUANTABENCH_LAMMPS` that names no file stops the benchmark with the reason;
+  `--md-lammps PATH` gives the program directly. A LAMMPS whose OPENMP package has no threads (the macOS PyPI wheel)
+  runs on one thread and says so. A box set-up that fails keeps its inputs and logs (`md_bench/failed-<size>-<time>`)
+  and names how LAMMPS ended (exit 143 = SIGTERM from outside QuantaBench).
+
 ### Long-range settings for slabs: options and recommendations (MD-LR, 2026-11-23)
 - **Slab-safe pppm/disp defaults** for `md liquid-slab`'s full long-range dispersion (`ewald`): G = 2.77 / rc and a
   dispersion mesh no coarser than 0.52 / G, computed in the input from the box (again once the slab's box is open),

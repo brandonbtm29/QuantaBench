@@ -288,6 +288,30 @@ def _locate(spec: ProgramSpec) -> tuple[str, str] | None:
     return hit
 
 
+def configured_problems(name: str) -> list[str]:
+    """The explicit choices of ``name`` for this machine that point at nothing: its ``engines.machine_paths`` entry
+    and ``QUANTABENCH_<NAME>``, when set to a file that does not exist (["QUANTABENCH_LAMMPS is set to '...', which
+    does not exist"]). [] when they are unset or exist. ``find_program`` skips such a path and searches on (its
+    ``source`` notes it); a caller that must not quietly use another copy (the MD benchmark) refuses instead. The
+    shared ``engines.paths`` entry is not listed: synced from another computer, it may name that computer's file."""
+    spec = PROGRAMS[name]
+    out = []
+    configured, where = _configured_paths().get(spec.name, ("", "settings"))
+    env_name = f"QUANTABENCH_{spec.name.upper()}"
+    for value, label, explicit in ((configured, f"this computer's {spec.name} path in the settings",
+                                    where == "settings (this machine)"),
+                                   (os.environ.get(env_name, "").strip(), env_name, True)):
+        if not value or not explicit:
+            continue
+        if value.startswith(WSL_PREFIX):
+            if not IS_WINDOWS:
+                out.append(f"{label} is {value!r}, which only works on Windows")
+            continue
+        if not Path(os.path.expanduser(value)).is_file():
+            out.append(f"{label} is set to {value!r}, which does not exist")
+    return out
+
+
 def _in_env(prefix: Path, names: Sequence[str]) -> str | None:
     for d in _env_bin_dirs(prefix):
         for n in names:

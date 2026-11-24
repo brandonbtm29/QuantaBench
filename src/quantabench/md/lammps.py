@@ -72,11 +72,15 @@ from ase.neighborlist import natural_cutoffs, neighbor_list
 
 from .. import __version__
 from . import params as P
+from . import sim
 
 TAG_SURFACE = 0          # same convention as build.surfaces (kept local so md/ does not import build/)
 SURFACE_MOL_ID = 1
 FTM2V_REAL = 1.0 / 48.88821291 / 48.88821291   # LAMMPS real units: (kcal/mol/Å) -> g/mol * Å/fs^2
 KCAL_MOL_A_TO_PN = 69.4786                       # 1 kcal/mol/Å in pN (4184 J / N_A / 1e-10 m)
+
+
+SMD_PAUSE_EVERY = 1000      # steps between the STOP-file checks of in.smd (SIM-1)
 
 
 @dataclass
@@ -368,9 +372,48 @@ def write_smd_setup(system_atoms: Atoms, out_dir: str | Path, temperature: float
         "langevin_drag_force_kcal_mol_A": drag / cfg.pull_distance if cfg.pull_distance else None,
         "box": box, "z_tether": z_surface_top, "notes": notes,
     }, indent=2) + "\n", encoding="utf-8")
+    smd_run_record(cfg, n_smd, n, len(surface), molecules, net, box, title or "QuantaBench SMD system",
+                   [{"type": lab, "element": element_of[lab], "epsilon_kcal_mol": lj[lab].epsilon,
+                     "sigma_A": lj[lab].sigma, "source": lj[lab].source} for lab in labels],
+                   has_charge=bool(has_charge)).save(out)
     return SMDSetup(out_dir=out, data=data_path, input=in_path, readme=readme, metadata=meta, config=cfg,
                     type_labels=labels, lj=lj, n_surface=int(len(surface)), molecules=molecules, net_charge=net,
                     box=box, notes=notes)
+
+
+def smd_protocol(cfg: SMDConfig, n_smd: int) -> sim.Protocol:
+    """``in.smd`` as ``md.sim`` data: one part with three stages, resumed by running it again ("rerun": the rigid
+    pull takes minutes, and its rigid bodies and spring are not worth a checkpoint)."""
+    a, b = int(cfg.soft_steps), int(cfg.soft_steps) + int(cfg.equil_steps)
+    part = sim.Part("smd", "in.smd", "log.lammps", stages=[
+        sim.Stage("soft", "nvt", 0, a, cfg.soft_timestep, "soft start: rigid-body Langevin, short time step"),
+        sim.Stage("equil", "nvt", a, b, cfg.timestep, f"NVT equilibration, Langevin {cfg.equil_damp:g} fs"),
+        sim.Stage("pull", "smd", b, b + int(n_smd), cfg.timestep,
+                  f"constant-velocity pull, {cfg.pull_velocity:g} Å/fs over {cfg.pull_distance:g} Å")],
+        outputs=[sim.OutputFile("pull_force.txt", "print", cfg.pull_output_every),
+                 sim.OutputFile("smd.lammpstrj", "dump", cfg.dump_every)],
+        resume="rerun", done_tag="QB_SMD done", product="final.data", needs=["system.data"])
+    return sim.Protocol("smd", "Rigid steered pull", [part], restart_every=0, pause_every=SMD_PAUSE_EVERY)
+
+
+def smd_run_record(cfg: SMDConfig, n_smd: int, n_atoms: int, n_surface: int, molecules, net: float, box,
+                   title: str, types: list[dict], has_charge: bool = True) -> sim.Run:
+    system = sim.System(name=title, kind="surface",
+                        components=[{"name": f"adsorbate {m + 1}", "count": 1, "atoms": len(mol),
+                                     "role": "ion" if len(mol) == 1 else "adsorbate"} for m, mol in enumerate(molecules)],
+                        surface={"atoms": int(n_surface), "graphite": cfg.graphite, "frozen": True},
+                        box={"cell_A": [[float(lo), float(hi)] for lo, hi in box]}, n_atoms=int(n_atoms))
+    par = sim.Parameterization(
+        components=[{"component": "adsorbate", "forcefield": "uff-rigid", "resolution": "all-atom, rigid"},
+                    {"component": "surface", "forcefield": f"graphite LJ ({cfg.graphite})",
+                     "resolution": "all-atom, frozen"}],
+        physics={"vdw": {"form": "LJ 12-6", "cutoff_A": cfg.cutoff, "mixing": "geometric"},
+                 "coulomb": {"method": "pppm + slab correction" if has_charge else "none (no charges)",
+                             "accuracy": cfg.kspace_accuracy, "slab_factor": cfg.slab_factor},
+                 "types": types},
+        checks=[{"check": "net charge", "value": float(net)}])
+    return sim.Run("smd", name=title, system=system, parameterization=par, protocol=smd_protocol(cfg, n_smd),
+                   variant="gpu" if cfg.gpu else "cpu")
 
 
 def _write_data(path: Path, title: str, labels: list[str], masses: dict[str, float], box, mol_id, types, q,
@@ -412,6 +455,10 @@ def _input_script(c: dict) -> str:
     add(f"variable thermo_every index {cfg.thermo_every}")
     add(f"variable dump_every  index {cfg.dump_every}")
     add(f"variable pull_every  index {cfg.pull_output_every}")
+    add(f"variable pause_every index {SMD_PAUSE_EVERY}        # steps between the checks for a STOP file (SIM-1)")
+    add("variable qb_end_soft  equal v_soft_steps")
+    add("variable qb_end_equil equal v_soft_steps+v_equil_steps")
+    add("variable qb_end_pull  equal v_soft_steps+v_equil_steps+v_smd_steps")
     add("")
     if cfg.gpu:
         add("# GPU package (OpenCL/CUDA/HIP). Neighbor lists stay on the CPU because GPU-built lists")
@@ -487,12 +534,22 @@ def _input_script(c: dict) -> str:
             add("unfix           ionint")
             add("unfix           ionlgv")
 
+    add("# --- pause (SIM-1): a file named STOP here (quantabench-cli md pause) ends the run at the next multiple of")
+    add("# pause_every steps. The pull is short, so it has no checkpoint: md resume runs in.smd again from the start ---")
+    add("variable        qb_stop equal is_file(STOP)")
+    add("fix             qb_halt all halt ${pause_every} v_qb_stop != 0 error soft")
+    add("")
+
+    def pause_check(end_var: str) -> None:
+        add(f'if "$(step) < ${{{end_var}}}" then "print \'QB_PAUSED smd step $(step)\'" "quit 0"')
+
     add("# === Stage 1: soft start (short timestep, strong rigid-body Langevin damping) ===")
     add(f"timestep        {cfg.soft_timestep:g}")
     integrators("soft", cfg.soft_damp, 0, True)
     if cfg.viscous_gamma > 0:
         add(f"fix             visc adsorbate viscous {cfg.viscous_gamma:g}")
     add("run             ${soft_steps}")
+    pause_check("qb_end_soft")
     if cfg.viscous_gamma > 0:
         add("unfix           visc")
     unfix_integrators()
@@ -501,6 +558,7 @@ def _input_script(c: dict) -> str:
     add(f"timestep        {cfg.timestep:g}")
     integrators("equil", cfg.equil_damp, 1, False)
     add("run             ${equil_steps}")
+    pause_check("qb_end_equil")
     add("write_data      equilibrated.data")
     unfix_integrators()
     add("")
@@ -527,7 +585,9 @@ def _input_script(c: dict) -> str:
     add(f"thermo_style    custom {thermo_cols} f_pull[3] f_pull[7]")
     add("thermo_modify   temp tAds flush yes")
     add("run             ${smd_steps}")
+    pause_check("qb_end_pull")
     add("write_data      final.data")
+    add('print           "QB_SMD done"')
     add("")
     return "\n".join(L) + "\n"
 

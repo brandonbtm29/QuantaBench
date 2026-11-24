@@ -63,6 +63,7 @@ import numpy as np
 
 from .. import __version__
 from . import long_range as LR
+from . import sim
 from .forcefield import AVOGADRO, ForceFieldError, TypedMolecule
 
 SIZES: dict[str, tuple[float, float]] = {
@@ -127,7 +128,8 @@ class LiquidSlabConfig:
     profile_freq: int = 10_000               # ... and written every this many steps (10 ps)
     thermo_every: int = 1000
     dump_every: int = 100_000                # slab trajectory frames (0 = none)
-    restart_every: int = 1_000_000
+    restart_every: int = 100_000             # steps between binary restart files (crash recovery on this machine)
+    pause_every: int | None = None           # steps between STOP-file checks; None: the output blocks' period
     momentum_every: int = 1000
     seed: int = 20261120
     # what the analysis compares against (optional, any source)
@@ -148,7 +150,26 @@ class LiquidSlabConfig:
                         disp_real_accuracy=self.disp_real_accuracy, disp_kspace_accuracy=self.disp_kspace_accuracy)
         return replace(self, cutoff=s["cutoff"], kspace_accuracy=s["kspace_accuracy"],
                        disp_gewald=s.get("disp_gewald"), disp_spacing=s.get("disp_spacing"),
-                       lateral=self.lateral or lat, slab_thickness=self.slab_thickness or thick)
+                       lateral=self.lateral or lat, slab_thickness=self.slab_thickness or thick,
+                       pause_every=self._pause_every())
+
+    def _pause_every(self) -> int:
+        """Pauses land on output-block boundaries (SIM-1): ``pause_every`` is a multiple of every averaging period
+        (pressure tensor, density profile, the bulk's 1000-step density blocks), so a pause or a restart file never
+        splits a block, and ``restart_every`` is a multiple of it."""
+        periods = [int(self.pressure_every), int(self.profile_freq), 1000]
+        if min(periods) <= 0 or int(self.restart_every) <= 0:
+            raise ValueError("pressure_every, profile_freq and restart_every must be positive")
+        base = 1
+        for p in periods:
+            base = base * p // math.gcd(base, p)
+        every = int(self.pause_every) if self.pause_every else base
+        if every % base:
+            raise ValueError(f"pause_every {every}: must be a multiple of {base} (the pressure-tensor, density-profile "
+                             "and bulk-density periods), so a pause never splits an averaging block")
+        if int(self.restart_every) % every:
+            raise ValueError(f"restart_every {self.restart_every}: must be a multiple of pause_every ({every})")
+        return every
 
     @property
     def long_range(self) -> dict:
@@ -440,7 +461,100 @@ def _variables(cfg: LiquidSlabConfig) -> list[str]:
             f"variable seed           index {cfg.seed}",
             f"variable tdamp          index {cfg.tdamp:g}",
             f"variable pdamp          index {cfg.pdamp:g}",
-            f"variable thermo_every   index {cfg.thermo_every}"]
+            f"variable thermo_every   index {cfg.thermo_every}",
+            f"variable pause_every    index {cfg.pause_every}       # steps between the checks for a STOP file"]
+
+
+# ------------------------------------------------------------------------------------- pauses and segments (SIM-1)
+def pause_lines() -> list[str]:
+    """``fix halt`` on a file named STOP in the run folder (``quantabench-cli md pause``): the running ``run`` ends at
+    the next multiple of ``pause_every`` steps, and the check after it (``pause_check``) writes the checkpoint."""
+    return ["# --- pause (SIM-1): a file named STOP here (quantabench-cli md pause) ends the current run at the next",
+            "# multiple of pause_every steps; the input then writes a checkpoint and stops, and md resume continues ---",
+            "variable        qb_stop equal is_file(STOP)",
+            "fix             qb_halt all halt ${pause_every} v_qb_stop != 0 error soft", ""]
+
+
+def pause_check(part: str, end_var: str) -> str:
+    """After a ``run ... upto``: a run that stopped before its end step was halted (STOP, or a ``timer timeout``), so
+    write the pause checkpoint (a binary restart for this machine and build, a data file with velocities for any
+    other) and stop with ``QB_PAUSED <part> step N``; the supervisor resumes from it."""
+    return (f'if "$(step) < ${{{end_var}}}" then "write_restart {part}.pause.restart" '
+            f'"write_data {part}.pause.data nocoeff" "print \'QB_PAUSED {part} step $(step)\'" "quit 0"')
+
+
+def _steps(x: float) -> int:
+    """LAMMPS' round() (half away from zero) of a positive step count."""
+    return int(math.floor(float(x) + 0.5))
+
+
+def _bulk_stage_vars(compress: bool) -> list[str]:
+    L = ["variable warmup_steps   equal round(v_warmup_ps*1000/(0.5*v_dt))",
+         "variable compress_steps equal round(v_compress_ps*1000/v_dt)" if compress else None,
+         "variable bulk_steps     equal round(v_bulk_ns*1000000/v_dt)",
+         "# the end step of each stage (the step counter starts at 0 after the minimization; runs go 'upto' them)",
+         "variable warmup_end     equal v_warmup_steps",
+         "variable compress_end   equal v_warmup_end+v_compress_steps" if compress else None,
+         f"variable npt_end        equal {'v_compress_end' if compress else 'v_warmup_end'}+v_bulk_steps", ""]
+    return [x for x in L if x is not None]
+
+
+def _bulk_thermo() -> list[str]:
+    return ["variable        rho equal density",
+            "thermo_style    custom step time temp press pe ke etotal density lx ly lz",
+            "thermo          ${thermo_every}", "thermo_modify   flush yes", ""]
+
+
+def _bulk_stages(cfg: LiquidSlabConfig, compress_to: Sequence[float] | None, *, fresh: bool) -> list[str]:
+    """The bulk's stages after the minimization. ``fresh``: from step 0 (velocities created, outputs started);
+    else a resume input: each stage is skipped when the checkpoint's step is already past its end, and the outputs
+    are appended to."""
+    def skip(end_var: str, label: str) -> list[str]:
+        return [] if fresh else [f'if "$(step) >= ${{{end_var}}}" then "jump SELF {label}"']
+
+    L = ["# --- 2. warm-up: NVT at half the time step ---", *skip("warmup_end", "qb_after_warmup")]
+    if fresh:
+        L.append("velocity        all create ${T} ${seed} dist gaussian mom yes rot yes")
+    L += ["timestep        $(0.5*v_dt)",
+          "fix             warm all nvt temp ${T} ${T} 50.0",
+          "run             ${warmup_end} upto",
+          pause_check("bulk", "warmup_end"),
+          "unfix           warm"]
+    if not fresh:
+        L.append("label           qb_after_warmup")
+    L += ["timestep        ${dt}", ""]
+    if compress_to:
+        L += ["# --- 3. lattice start: NVT compression to the estimated liquid density (fix deform) ---",
+              *skip("compress_end", "qb_after_compress"),
+              "fix             nvt all nvt temp ${T} ${T} ${tdamp}",
+              f"fix             squeeze all deform 1 x final 0.0 {compress_to[0]:.6f} y final 0.0 "
+              f"{compress_to[1]:.6f} z final 0.0 {compress_to[2]:.6f} remap x",
+              "run             ${compress_end} upto",
+              pause_check("bulk", "compress_end"),
+              "unfix           squeeze", "unfix           nvt"]
+        if not fresh:
+            L.append("label           qb_after_compress")
+        L.append("")
+    L += ["# --- NPT: Nosé-Hoover thermostat and barostat, isotropic (the box keeps its shape) ---",
+          *skip("npt_end", "qb_after_npt"),
+          "fix             npt all npt temp ${T} ${T} ${tdamp} iso ${P} ${P} ${pdamp}",
+          "variable        vol equal vol",
+          "variable        lxv equal lx",
+          "variable        lyv equal ly",
+          "variable        lzv equal lz",
+          "variable        pev equal pe",
+          "# every 1 ps: averages of 10 samples 100 steps apart (density g/cm3, volume A3, box A, pe kcal/mol)",
+          "fix             rhoavg all ave/time 100 10 1000 v_rho v_vol v_lxv v_lyv v_lzv v_pev "
+          + ("file" if fresh else "append") + " bulk_density.txt",
+          f"restart         {cfg.restart_every} bulk.restart.a bulk.restart.b",
+          "run             ${npt_end} upto",
+          pause_check("bulk", "npt_end"),
+          "unfix           rhoavg"]
+    if not fresh:
+        L.append("label           qb_after_npt")
+    L += ["write_data      bulk_final.data nocoeff",
+          'print           "QB_BULK done: bulk_final.data written (box $(lx) $(ly) $(lz))"', ""]
+    return L
 
 
 def bulk_input(tm: TypedMolecule, cfg: LiquidSlabConfig, compress_to: Sequence[float] | None) -> str:
@@ -449,94 +563,81 @@ def bulk_input(tm: TypedMolecule, cfg: LiquidSlabConfig, compress_to: Sequence[f
     L += _variables(cfg)
     L += [f"variable warmup_ps      index {cfg.warmup_ps:g}",
           f"variable compress_ps    index {cfg.compress_ps:g}" if compress_to else "",
-          f"variable bulk_ns        index {cfg.bulk_ns:g}",
-          "variable warmup_steps   equal round(v_warmup_ps*1000/(0.5*v_dt))",
-          "variable compress_steps equal round(v_compress_ps*1000/v_dt)" if compress_to else "",
-          "variable bulk_steps     equal round(v_bulk_ns*1000000/v_dt)", ""]
+          f"variable bulk_ns        index {cfg.bulk_ns:g}"]
+    L += _bulk_stage_vars(bool(compress_to))
     L += _styles(tm, cfg, "bulk")
     L += ["read_data       system.data", "include         ff.params"]
     L += _kspace(tm, cfg)
     L += ["neighbor        2.0 bin", "neigh_modify    delay 0 every 1 check yes", ""]
     L += pair_energy_guard()
-    L += [
-          "variable        rho equal density",
-          "thermo_style    custom step time temp press pe ke etotal density lx ly lz",
-          "thermo          ${thermo_every}", "thermo_modify   flush yes", "",
-          "# --- 1. energy minimization: removes the close contacts of the packing ---",
+    L += pause_lines()
+    L += _bulk_thermo()
+    L += ["# --- 1. energy minimization: removes the close contacts of the packing ---",
           "min_style       cg",
           "minimize        1.0e-4 1.0e-6 2000 20000",
-          "reset_timestep  0", "",
-          "# --- 2. warm-up: NVT at half the time step ---",
-          "velocity        all create ${T} ${seed} dist gaussian mom yes rot yes",
-          "timestep        $(0.5*v_dt)",
-          "fix             warm all nvt temp ${T} ${T} 50.0",
-          "run             ${warmup_steps}",
-          "unfix           warm",
-          "timestep        ${dt}", ""]
-    if compress_to:
-        L += ["# --- 3. lattice start: NVT compression to the estimated liquid density (fix deform) ---",
-              "fix             nvt all nvt temp ${T} ${T} ${tdamp}",
-              f"fix             squeeze all deform 1 x final 0.0 {compress_to[0]:.6f} y final 0.0 "
-              f"{compress_to[1]:.6f} z final 0.0 {compress_to[2]:.6f} remap x",
-              "run             ${compress_steps}",
-              "unfix           squeeze", "unfix           nvt", ""]
-    L += ["# --- NPT: Nosé-Hoover thermostat and barostat, isotropic (the box keeps its shape) ---",
-          "fix             npt all npt temp ${T} ${T} ${tdamp} iso ${P} ${P} ${pdamp}",
-          "variable        vol equal vol",
-          "variable        lxv equal lx",
-          "variable        lyv equal ly",
-          "variable        lzv equal lz",
-          "variable        pev equal pe",
-          "# every 1 ps: averages of 10 samples 100 steps apart (density g/cm3, volume A3, box A, pe kcal/mol)",
-          "fix             rhoavg all ave/time 100 10 1000 v_rho v_vol v_lxv v_lyv v_lzv v_pev file bulk_density.txt",
-          f"restart         {cfg.restart_every} bulk.restart.a bulk.restart.b",
-          "run             ${bulk_steps}",
-          "unfix           rhoavg",
-          "write_data      bulk_final.data nocoeff",
-          'print           "QB_BULK done: bulk_final.data written (box $(lx) $(ly) $(lz))"', ""]
+          "reset_timestep  0", ""]
+    L += _bulk_stages(cfg, compress_to, fresh=True)
     return "\n".join(x for x in L if x is not None) + "\n"
+
+
+def _slab_variables(cfg: LiquidSlabConfig) -> list[str]:
+    return [f"variable vacuum         index {cfg.vacuum:g}         # Å on each side",
+            f"variable settle_ns      index {cfg.settle_ns:g}",
+            f"variable production_ns  index {cfg.production_ns:g}",
+            f"variable p_every        index {cfg.pressure_every}         # steps between pressure-tensor samples",
+            f"variable bin            index {cfg.profile_bin:g}        # Å, density-profile bins",
+            f"variable prof_every     index {cfg.profile_every}",
+            f"variable prof_repeat    index {cfg.profile_repeat}",
+            f"variable prof_freq      index {cfg.profile_freq}",
+            f"variable dump_every     index {cfg.dump_every}",
+            "variable settle_steps   equal round(v_settle_ns*1000000/v_dt)",
+            "variable production_steps equal round(v_production_ns*1000000/v_dt)",
+            "variable slab_steps     equal v_settle_steps+v_production_steps",
+            "variable slab_end       equal v_slab_steps       # the step counter starts at 0 once the box is open", ""]
+
+
+def _slab_nvt(cfg: LiquidSlabConfig, elements_by_type: Sequence[str], *, fresh: bool) -> list[str]:
+    how = "file" if fresh else "append"
+    L = ["# --- NVT (Nosé-Hoover); no drift of the slab's centre of mass ---",
+         "fix             nvt all nvt temp ${T} ${T} ${tdamp}",
+         f"fix             nodrift all momentum {cfg.momentum_every} linear 1 1 1",
+         "variable        comz equal xcm(all,z)",
+         "thermo_style    custom step time temp press pe ke etotal pxx pyy pzz v_comz cpuremain",
+         "thermo          ${thermo_every}", "thermo_modify   flush yes", "",
+         "# pressure tensor (atm) every p_every steps: sigma = (Lz/2) <Pzz - (Pxx+Pyy)/2>",
+         "fix             ptens all ave/time ${p_every} 1 ${p_every} c_thermo_press[1] c_thermo_press[2] "
+         f'c_thermo_press[3] {how} pressure_tensor.txt format " %.8g"',
+         "# mass density along z (g/cm3), bins fixed in the box: averages written every prof_freq steps",
+         "compute         zbins all chunk/atom bin/1d z lower ${bin} units box",
+         "fix             dprof all ave/chunk ${prof_every} ${prof_repeat} ${prof_freq} zbins density/mass "
+         f"{how} density_profile.txt",
+         f"restart         {cfg.restart_every} slab.restart.a slab.restart.b"]
+    if cfg.dump_every:
+        mods = [f'  "dump_modify traj sort id element {" ".join(elements_by_type)}"']
+        if not fresh:
+            mods.append('  "dump_modify traj append yes"')
+        L += ["if \"${dump_every} > 0\" then &",
+              '  "dump traj all custom ${dump_every} slab.lammpstrj id mol type element x y z ix iy iz" &',
+              *[m + " &" for m in mods[:-1]], mods[-1]]
+    L += ["run             ${slab_end} upto",
+          pause_check("slab", "slab_end"),
+          "write_data      slab_final.data nocoeff",
+          'print           "QB_SLAB done"', ""]
+    return L
 
 
 def slab_input(tm: TypedMolecule, cfg: LiquidSlabConfig, elements_by_type: Sequence[str]) -> str:
     L = _header(tm, cfg, "liquid-vapour slab, NVT, pressure tensor and density profile")
     L += ["log             log.slab", ""]
     L += _variables(cfg)
-    L += [f"variable vacuum         index {cfg.vacuum:g}         # Å on each side",
-          f"variable settle_ns      index {cfg.settle_ns:g}",
-          f"variable production_ns  index {cfg.production_ns:g}",
-          f"variable p_every        index {cfg.pressure_every}         # steps between pressure-tensor samples",
-          f"variable bin            index {cfg.profile_bin:g}        # Å, density-profile bins",
-          f"variable prof_every     index {cfg.profile_every}",
-          f"variable prof_repeat    index {cfg.profile_repeat}",
-          f"variable prof_freq      index {cfg.profile_freq}",
-          f"variable dump_every     index {cfg.dump_every}",
-          "variable settle_steps   equal round(v_settle_ns*1000000/v_dt)",
-          "variable production_steps equal round(v_production_ns*1000000/v_dt)",
-          "variable slab_steps     equal v_settle_steps+v_production_steps", ""]
+    L += _slab_variables(cfg)
     L += _styles(tm, cfg, "slab")
     L += ["read_data       bulk_final.data", "include         ff.params"]
     L += _kspace(tm, cfg)
     L += ["neighbor        2.0 bin", "neigh_modify    delay 0 every 1 check yes", ""]
     L += pair_energy_guard()
     L += [
-          "# --- open the box along z ---",
-          "# Store every atom's unwrapped z and its molecule's centre of mass, shift each molecule by whole box",
-          "# lengths so that its centre lies in the bulk box (molecules stay whole), then add the vacuum.",
-          "variable        zlo0 equal $(zlo)",
-          "variable        lz0 equal $(lz)",
-          "compute         molchunk all chunk/atom molecule",
-          "compute         molcom all com/chunk molchunk",
-          "compute         molcomz all chunk/spread/atom molchunk c_molcom[3]",
-          "fix             zsave all store/state 0 zu c_molcomz",
-          "thermo_style    custom step temp press pe",
-          "run             0 post no",
-          "variable        kshift atom floor((f_zsave[2]-v_zlo0)/v_lz0)",
-          "variable        znew atom f_zsave[1]-v_kshift*v_lz0",
-          "change_box      all z final $(v_zlo0-v_vacuum) $(v_zlo0+v_lz0+v_vacuum) units box",
-          "set             group all image NULL NULL 0",
-          "set             group all z v_znew",
-          "unfix           zsave",
-          "uncompute       molcomz", "uncompute       molcom", "uncompute       molchunk",
+          *open_box_lines(),
           *(["# the box is now longer along z: the dispersion mesh again from disp_h", *disp_mesh_lines()]
             if _uses_disp_mesh(cfg) else []),
           "reset_timestep  0",
@@ -544,29 +645,184 @@ def slab_input(tm: TypedMolecule, cfg: LiquidSlabConfig, elements_by_type: Seque
           'print           "QB_SLAB lx $(lx:%.6f) ly $(ly:%.6f) lz $(lz:%.6f) zlo $(zlo:%.6f) zhi $(zhi:%.6f) '
           'dt ${dt} p_every ${p_every} settle_steps ${settle_steps} production_steps ${production_steps} '
           'T ${T} rc ${rc} bulk_lz $(v_lz0:%.6f)" file slab_box.txt',
-          "",
-          "# --- NVT (Nosé-Hoover); no drift of the slab's centre of mass ---",
-          "fix             nvt all nvt temp ${T} ${T} ${tdamp}",
-          f"fix             nodrift all momentum {cfg.momentum_every} linear 1 1 1",
-          "variable        comz equal xcm(all,z)",
-          "thermo_style    custom step time temp press pe ke etotal pxx pyy pzz v_comz cpuremain",
-          "thermo          ${thermo_every}", "thermo_modify   flush yes", "",
-          "# pressure tensor (atm) every p_every steps: sigma = (Lz/2) <Pzz - (Pxx+Pyy)/2>",
-          "fix             ptens all ave/time ${p_every} 1 ${p_every} c_thermo_press[1] c_thermo_press[2] "
-          'c_thermo_press[3] file pressure_tensor.txt format " %.8g"',
-          "# mass density along z (g/cm3), bins fixed in the box: averages written every prof_freq steps",
-          "compute         zbins all chunk/atom bin/1d z lower ${bin} units box",
-          "fix             dprof all ave/chunk ${prof_every} ${prof_repeat} ${prof_freq} zbins density/mass "
-          "file density_profile.txt",
-          f"restart         {cfg.restart_every} slab.restart.a slab.restart.b"]
-    if cfg.dump_every:
-        L += ["if \"${dump_every} > 0\" then &",
-              '  "dump traj all custom ${dump_every} slab.lammpstrj id mol type element x y z ix iy iz" &',
-              f'  "dump_modify traj sort id element {" ".join(elements_by_type)}"']
-    L += ["run             ${slab_steps}",
-          "write_data      slab_final.data nocoeff",
-          'print           "QB_SLAB done"', ""]
+          ""]
+    L += pause_lines()
+    L += _slab_nvt(cfg, elements_by_type, fresh=True)
     return "\n".join(L) + "\n"
+
+
+def _pair_lines(tm: TypedMolecule, cfg: LiquidSlabConfig, stage: str) -> list[str]:
+    """The pair_style and pair_modify lines of ``_styles`` (re-given after read_restart: the GPU or OpenMP suffix of
+    the new segment applies to them, and the bulk's tail correction is set again)."""
+    return [x for x in _styles(tm, cfg, stage) if x.startswith(("pair_style", "pair_modify"))]
+
+
+def resume_input(tm: TypedMolecule, cfg: LiquidSlabConfig, part: str, checkpoint: str, *, kind: str = "restart",
+                 step: int | None = None, seg: int = 2, compress_to: Sequence[float] | None = None,
+                 elements_by_type: Sequence[str] = ()) -> str:
+    """The input of segment ``seg`` of ``part`` ("bulk" or "slab"): continue from ``checkpoint`` to the part's end.
+
+    ``kind`` "restart": a binary restart file (``read_restart``; the thermostat and barostat states come back; only the
+    same LAMMPS build on the same machine can read it). "data": a ``write_data`` file (``read_data`` and
+    ``reset_timestep step``; portable between machines and builds, the thermostat and barostat start again). The
+    stages that ended before the checkpoint's step are skipped (``jump``), the current one runs ``upto`` its end,
+    and every output is appended to (the supervisor cut them at the step first: ``md.sim.cut_outputs``)."""
+    if part not in ("bulk", "slab"):
+        raise ValueError(f"part {part!r}: bulk or slab")
+    if kind not in ("restart", "data"):
+        raise ValueError(f"checkpoint kind {kind!r}: restart or data")
+    if kind == "data" and step is None:
+        raise ValueError("a data-file checkpoint needs its step (write_data does not keep it)")
+    what = "bulk liquid, NPT" if part == "bulk" else "liquid-vapour slab, NVT"
+    L = _header(tm, cfg, f"{what}: segment {seg}, continued from {checkpoint}")
+    L += [f"# Written by the run supervisor (quantabench-cli md resume). Outputs are appended to; the {kind} file",
+          "# gives the step to continue from" + (f" ({step})" if step is not None else "") + ".",
+          f"log             log.{part}.seg{seg}", ""]
+    L += _variables(cfg)
+    if part == "bulk":
+        L += [f"variable warmup_ps      index {cfg.warmup_ps:g}",
+              f"variable compress_ps    index {cfg.compress_ps:g}" if compress_to else "",
+              f"variable bulk_ns        index {cfg.bulk_ns:g}"]
+        L += _bulk_stage_vars(bool(compress_to))
+    else:
+        L += _slab_variables(cfg)
+    if kind == "restart":
+        L += [f"read_restart    {checkpoint}", *_pair_lines(tm, cfg, part)]
+    else:
+        L += _styles(tm, cfg, part)
+        L += [f"read_data       {checkpoint}", f"reset_timestep  {int(step)}"]
+    L += ["include         ff.params"]
+    L += _kspace(tm, cfg)
+    L += ["neighbor        2.0 bin", "neigh_modify    delay 0 every 1 check yes", ""]
+    L += pair_energy_guard()
+    L += pause_lines()
+    if part == "bulk":
+        L += _bulk_thermo()
+        L += _bulk_stages(cfg, compress_to, fresh=False)
+    else:
+        L += ["timestep        ${dt}", ""]
+        L += _slab_nvt(cfg, elements_by_type, fresh=False)
+    return "\n".join(x for x in L if x is not None) + "\n"
+
+
+def protocol_for(cfg: LiquidSlabConfig, compress: bool) -> sim.Protocol:
+    """The liquid slab's protocol as ``md.sim`` data: the step ranges the inputs run (``bulk_input``,
+    ``slab_input``), the files they append to and how they resume."""
+    cfg = cfg.resolved()
+    dt = float(cfg.timestep)
+    w = _steps(cfg.warmup_ps * 1000.0 / (0.5 * dt))
+    c = _steps(cfg.compress_ps * 1000.0 / dt) if compress else 0
+    b = _steps(cfg.bulk_ns * 1e6 / dt)
+    bulk = sim.Part("bulk", "in.bulk", "log.bulk", stages=[
+        sim.Stage("minimize", "minimize", 0, 0, dt, "conjugate gradient"),
+        sim.Stage("warmup", "nvt", 0, w, dt / 2, f"NVT {cfg.warmup_ps:g} ps at {dt / 2:g} fs"),
+        *([sim.Stage("compress", "nvt", w, w + c, dt, f"NVT + fix deform to the density, {cfg.compress_ps:g} ps")]
+          if compress else []),
+        sim.Stage("npt", "npt", w + c, w + c + b, dt,
+                  f"NPT {cfg.bulk_ns:g} ns at {cfg.temperature:g} K, {cfg.pressure_atm:g} atm")],
+        outputs=[sim.OutputFile("bulk_density.txt", "ave/time", 1000, rewrites_start=False)],
+        restart_files=["bulk.restart.a", "bulk.restart.b"], done_tag="QB_BULK done", product="bulk_final.data",
+        needs=["system.data", "ff.params"])
+    s = _steps(cfg.settle_ns * 1e6 / dt) + _steps(cfg.production_ns * 1e6 / dt)
+    outs = [sim.OutputFile("pressure_tensor.txt", "ave/time", cfg.pressure_every, rewrites_start=True),
+            sim.OutputFile("density_profile.txt", "ave/chunk", cfg.profile_freq,
+                           rewrites_start=cfg.profile_repeat <= 1)]
+    if cfg.dump_every:
+        outs.append(sim.OutputFile("slab.lammpstrj", "dump", cfg.dump_every, rewrites_start=True))
+    slab = sim.Part("slab", "in.slab", "log.slab", stages=[
+        sim.Stage("open-box", "open-box", 0, 0, dt, f"{cfg.vacuum:g} Å of vacuum on each side"),
+        sim.Stage("nvt", "production", 0, s, dt,
+                  f"NVT {cfg.settle_ns:g} ns settle + {cfg.production_ns:g} ns production")],
+        outputs=outs, restart_files=["slab.restart.a", "slab.restart.b"], done_tag="QB_SLAB done",
+        product="slab_final.data", needs=["bulk_final.data", "ff.params"])
+    return sim.Protocol("liquid-slab", "Liquid slab (surface tension)", [bulk, slab], dispersion=cfg.dispersion,
+                        restart_every=int(cfg.restart_every), pause_every=int(cfg.pause_every))
+
+
+def run_record(tm: TypedMolecule, cfg: LiquidSlabConfig, meta: Mapping, *, legacy: bool = False) -> sim.Run:
+    """The ``md.sim.Run`` of a liquid-slab folder, from what ``write_liquid_slab`` knows (or a ``liquid_setup.json``
+    written before SIM-1: ``legacy``, whose inputs have no STOP lines)."""
+    lr = dict(meta.get("long_range") or {})
+    system = sim.System(
+        name=f"{tm.name} liquid slab", kind="liquid-slab",
+        components=[{"name": tm.name, "smiles": tm.smiles, "count": int(meta.get("n_molecules") or 0),
+                     "role": "liquid", "atoms_per_molecule": tm.n_atoms}],
+        box={"lateral_A": cfg.lateral, "slab_thickness_A": cfg.slab_thickness, "vacuum_A": cfg.vacuum,
+             "packed_A": meta.get("box_packed_A"), "target_A": meta.get("box_target_A")},
+        packing={"method": meta.get("packing"), "density_g_cm3": meta.get("density_pack_g_cm3"),
+                 "density_source": meta.get("density_source"), "tolerance_A": cfg.pack_tolerance,
+                 "seed": cfg.seed, "min_contact_A": meta.get("min_intermolecular_contact_A")},
+        n_atoms=int(meta.get("n_atoms") or 0))
+    physics = {"vdw": {"form": "LJ 12-6", "method": lr.get("method"), "cutoff_A": cfg.cutoff,
+                       "long_range": "Ewald (pppm/disp)" if lr.get("method") == "ewald"
+                       else "tail: homogeneous in the bulk NPT, planar in the analysis"},
+               "coulomb": {"method": "pppm/disp" if lr.get("method") == "ewald" else "pppm",
+                           "accuracy": cfg.kspace_accuracy},
+               "mixing": tm.mixing, "special_lj": list(tm.special_lj), "special_coul": list(tm.special_coul)}
+    par = sim.Parameterization(
+        components=[{"component": tm.name, "forcefield": tm.forcefield, "label": tm.label, "resolution": "all-atom",
+                     "charges": tm.forcefield, "overrides": list(tm.overrides)}],
+        physics=physics,
+        checks=[{"check": "neutral", "ok": abs(tm.net_charge) < 1e-6},
+                {"check": "lateral box > 2 x cutoff + 1 Å", "ok": float(cfg.lateral) > 2 * float(cfg.cutoff) + 1}])
+    compress = meta.get("packing") == "lattice"
+    proto = protocol_for(cfg, compress)
+    variant = "" if LR.method_of(cfg.dispersion) == "cutoff" else "cpu"
+    notes = []
+    if legacy:
+        notes.append("inputs written before SIM-1: no STOP lines, so 'md pause' can only stop the run now (the next "
+                     "segment resumes from the last periodic restart file); rewrite the folder for pauses")
+    return sim.Run("liquid-slab", name=tm.name, system=system, parameterization=par, protocol=proto,
+                   variant=variant, legacy=legacy, notes=notes)
+
+
+def load_folder(folder: str | Path) -> tuple[TypedMolecule, LiquidSlabConfig, dict]:
+    """(typed molecule, resolved config, liquid_setup.json) of a liquid-slab folder."""
+    from dataclasses import fields as dc_fields
+
+    meta = read_setup(folder)
+    known = {f.name for f in dc_fields(LiquidSlabConfig)}
+    raw = {k: v for k, v in (meta.get("config") or {}).items() if k in known}
+    if "pause_every" not in raw:          # written before SIM-1: its runs keep their own output intervals
+        raw["pause_every"] = None
+    cfg = LiquidSlabConfig(**raw).resolved()
+    return TypedMolecule.from_dict(meta["molecule"]), cfg, meta
+
+
+def write_segment_input(folder: str | Path, part: str, checkpoint: sim.Checkpoint, seg: int) -> str:
+    """Write ``in.<part>.seg<seg>`` in a liquid-slab folder (``resume_input``); returns its name."""
+    folder = Path(folder)
+    tm, cfg, meta = load_folder(folder)
+    compress_to = meta.get("box_target_A") if meta.get("packing") == "lattice" else None
+    text = resume_input(tm, cfg, part, checkpoint.file, kind=checkpoint.kind, step=checkpoint.step, seg=seg,
+                        compress_to=compress_to, elements_by_type=[t.element for t in tm.lj_types.values()])
+    name = f"in.{part}.seg{seg}"
+    (folder / name).write_text(text, encoding="utf-8")
+    return name
+
+
+def open_box_lines() -> list[str]:
+    """Input lines that turn the bulk box into a slab: every molecule made whole across the z boundary (its centre of
+    mass put back into the bulk box), then ``v_vacuum`` Å of empty space added on each side. Leaves ``v_zlo0`` and
+    ``v_lz0`` (the bulk box) defined. Shared by ``in.slab`` and the MD benchmark's slab box (``md.bench``)."""
+    return ["# --- open the box along z ---",
+            "# Store every atom's unwrapped z and its molecule's centre of mass, shift each molecule by whole box",
+            "# lengths so that its centre lies in the bulk box (molecules stay whole), then add the vacuum.",
+            "variable        zlo0 equal $(zlo)",
+            "variable        lz0 equal $(lz)",
+            "compute         molchunk all chunk/atom molecule",
+            "compute         molcom all com/chunk molchunk",
+            "compute         molcomz all chunk/spread/atom molchunk c_molcom[3]",
+            "fix             zsave all store/state 0 zu c_molcomz",
+            "thermo_style    custom step temp press pe",
+            "run             0 post no",
+            "variable        kshift atom floor((f_zsave[2]-v_zlo0)/v_lz0)",
+            "variable        znew atom f_zsave[1]-v_kshift*v_lz0",
+            "change_box      all z final $(v_zlo0-v_vacuum) $(v_zlo0+v_lz0+v_vacuum) units box",
+            "set             group all image NULL NULL 0",
+            "set             group all z v_znew",
+            "unfix           zsave",
+            "uncompute       molcomz", "uncompute       molcom", "uncompute       molchunk"]
 
 
 RUN_INPUT = """# QuantaBench: bulk NPT and then the slab, in one LAMMPS run (the same as in.bulk followed by in.slab)
@@ -632,6 +888,23 @@ def _commands(cfg: LiquidSlabConfig) -> list[str]:
           "  to in.slab. A smoke test: -var bulk_ns 0.02 (bulk), -var settle_ns 0.01 -var production_ns 0.01 (slab).",
           "  Python (the lammps module, for short checks): quantabench.md.liquid.run_liquid_slab(<this folder>)"]
     return L
+
+
+def _job_section(cfg: LiquidSlabConfig) -> list[str]:
+    return ["RUN AS A JOB (pause, resume, live progress; SIM-1)",
+            "  quantabench-cli md run <this folder> [--variant auto|cpu|gpu] [--threads N] [--detach]",
+            "      runs in.bulk, then in.slab, one LAMMPS process (segment) at a time at the run priority, and writes",
+            "      progress.json (step, ns, ns/day, ETA) every few seconds",
+            "  quantabench-cli md status <this folder>       where the run is, its segments and their speeds",
+            "  quantabench-cli md pause <this folder> [--now]",
+            f"      creates the file STOP here: the run ends at the next multiple of {cfg.pause_every:,} steps "
+            f"({cfg.pause_every * cfg.timestep / 1000:g} ps) with a",
+            "      checkpoint (<part>.pause.restart and .pause.data). --now also stops LAMMPS after 30 s; the next",
+            f"      segment then starts from the last restart file (every {cfg.restart_every:,} steps).",
+            "  quantabench-cli md resume <this folder> [--variant ...]   continues: from the binary checkpoint on the same",
+            "      machine and LAMMPS build, else from the data file (statistically, not bitwise, the same run). Outputs",
+            "      are cut at the checkpoint's step and appended to, so they stay one series.",
+            "  Without QuantaBench: create a file named STOP to pause; in.bulk and in.slab run as before."]
 
 
 def _long_range_section(cfg: LiquidSlabConfig, s: LiquidSetup) -> list[str]:
@@ -701,7 +974,7 @@ def _readme(tm: TypedMolecule, cfg: LiquidSlabConfig, s: LiquidSetup, counts: di
     L += ["  References:"] + [f"    - {r}" for r in tm.references]
     if tm.notes:
         L += ["  Notes:"] + [f"    - {n}" for n in tm.notes]
-    L += ["", *_commands(cfg), "",
+    L += ["", *_commands(cfg), "", *_job_section(cfg), "",
           "OUTPUTS",
           "  log.bulk, log.slab        LAMMPS logs (thermo every 1 ps; Performance: ns/day at the end of each run)",
           "  bulk_density.txt          1-ps averages over the NPT run: density (g/cm3), volume, box, pe",
@@ -711,8 +984,12 @@ def _readme(tm: TypedMolecule, cfg: LiquidSlabConfig, s: LiquidSetup, counts: di
           f"({cfg.pressure_every * cfg.timestep:g} fs)",
           f"  density_profile.txt       mass density (g/cm3) in {cfg.profile_bin:g} A bins along z, averaged over "
           f"{cfg.profile_freq * cfg.timestep / 1000:g} ps blocks",
-          "  slab.lammpstrj            trajectory for OVITO (every 100 ps)" if cfg.dump_every else "",
-          "  slab_final.data, *.restart.a/b   snapshots and restart files", "",
+          f"  slab.lammpstrj            trajectory for OVITO (every {cfg.dump_every * cfg.timestep / 1000:g} ps)"
+          if cfg.dump_every else "",
+          "  slab_final.data, *.restart.a/b   snapshots and binary restart files (this machine and LAMMPS build only)",
+          "  run.json, progress.json   the run as a job: protocol, segments, state; the supervisor's heartbeat",
+          "  *.pause.restart/.data, in.*.segN, log.*.segN   pause checkpoints and the inputs and logs of later segments",
+          "",
           "ANALYSIS",
           "  quantabench-cli md surface-tension <this folder>    (writes surface_tension.json and .md here)",
           "  sigma = (Lz/2) <Pzz - (Pxx+Pyy)/2>,  1 atm*A = 0.0101325 mN/m; error by 1-ns block averages.",
@@ -786,8 +1063,9 @@ def write_liquid_slab(tm: TypedMolecule, out_dir: str | Path, config: LiquidSlab
             "min_intermolecular_contact_A": contact, "notes": notes, "molecule": tm.to_dict(),
             "type_ids": _type_maps(tm), "commands": _commands(cfg)}
     (out / "liquid_setup.json").write_text(json.dumps(meta, indent=1) + "\n", encoding="utf-8")
+    run_record(tm, cfg, meta).save(out)
     setup.files = [out / f for f in ("system.data", "ff.params", "in.bulk", "in.slab", "in.run", "README.txt",
-                                     "liquid_setup.json")]
+                                     "liquid_setup.json", sim.RUN_FILE)]
     return setup
 
 
