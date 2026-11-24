@@ -128,12 +128,13 @@ from pathlib import Path
 
 from . import long_range as LR
 
-MD_BENCH_VERSION = 2       # 2: slab boxes (MD-BENCH-2); records name their geometry, k-space grids and timings
+MD_BENCH_VERSION = 3       # 3: cutoff variants at Coulomb 1e-6 (OPENMM-1); 2: slab boxes (MD-BENCH-2)
 #: What each version of the benchmark measures, for the note that asks whether to run it again (``rerun_note``).
 #: Raise ``MD_BENCH_VERSION`` and add a line here whenever a change makes new numbers differ from stored ones.
 VERSION_CHANGES = {
     1: "bulk C6F14 boxes (MD-BENCH-1)",
     2: "a 3,800-atom C6F14 slab with vacuum by default and the long-range settings of MD-LR (MD-BENCH-2)",
+    3: "the cutoff variants' Coulomb PPPM at 1e-6 instead of 1e-5, as the surface-tension runs now use (OPENMM-1)",
 }
 SMILES = "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"     # perfluorohexane, C6F14
 MOLECULE = "C6F14"

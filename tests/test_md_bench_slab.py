@@ -76,7 +76,7 @@ def md(**variants):
 
 # ------------------------------------------------------------------------------------------- sizes and keys
 def test_sizes_geometries_and_keys():
-    assert bench.DEFAULT_SIZE == "slab" and bench.MD_BENCH_VERSION == 2
+    assert bench.DEFAULT_SIZE == "slab" and bench.MD_BENCH_VERSION == 3     # 3: cutoff variants at Coulomb 1e-6
     assert {k: bench.geometry_of(k) for k in bench.SYSTEMS} == {"slab": "slab", "small": "bulk",
                                                                  "pilot-slab": "slab", "pilot": "bulk"}
     assert bench.SYSTEMS["slab"]["config"]["n_molecules"] * 20 == 3800

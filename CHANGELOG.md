@@ -36,8 +36,9 @@
     passed, `md surface-tension` keeps every 10th frame of `slab.dcd` (`frame_keep_every`, `--frame-keep-every`;
     `--keep-frames` keeps all) and deletes the rest; never before. `*.dcd` stays out of SyncThing.
   - **Coulomb 1e-6 for LAMMPS cutoff runs** (was 1e-5, pilot B's, which put σ +0.25 mN/m high on pilot B's system).
-    `md liquid-slab`'s `cutoffN` variants and the MD benchmark's cutoff variants use it; OpenMM's PME stays at 1e-5,
-    which already matches LAMMPS at 1e-7 there.
+    `md liquid-slab`'s `cutoffN` variants and the MD benchmark's cutoff variants use it (MD benchmark version 3, so
+    each machine is asked whether to run it again, MD-BENCH-3); OpenMM's PME stays at 1e-5, which already matches
+    LAMMPS at 1e-7 there.
 
 ### Ask before re-running a changed MD benchmark (MD-BENCH-3, 2026-11-23)
 - When a release changes the MD benchmark (`md.bench.MD_BENCH_VERSION`, now 2) and a machine's stored numbers come

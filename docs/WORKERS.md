@@ -423,11 +423,11 @@ variants at 30 s) it took 207 s with the build.
 - **Without LAMMPS** the benchmark is skipped with the reason (`md: not measured (LAMMPS not found (...))`).
   Nothing else in the profile changes.
 - **When a release changes the benchmark** (MD-BENCH-3). Each record carries the benchmark version it was measured
-  with (`bench_version`; `md.bench.MD_BENCH_VERSION`, 2 since MD-BENCH-2, with a line per version in
+  with (`bench_version`; `md.bench.MD_BENCH_VERSION`, 3 since OPENMM-1 (2 since MD-BENCH-2), with a line per version in
   `VERSION_CHANGES`). When this QuantaBench's version is newer than a machine's stored record, QuantaBench asks
   whether to run it again. It never re-runs it by itself:
   - `quantabench-cli machines` prints a note under that machine, for example `note: This computer's MD benchmark is
-    from benchmark version 1. This QuantaBench's is version 2: (what changed), so new numbers differ from the stored
+    from benchmark version 2. This QuantaBench's is version 3: (what changed), so new numbers differ from the stored
     ones. Run it again? quantabench-cli machines --bench md (a few minutes, best while the machine is otherwise
     idle). Nothing re-runs it on its own.` For another machine it names that machine (`... --bench md on mac-test`). `--json` has the same text per machine in
     `md_bench_rerun` ("" when the record is current).

@@ -1048,7 +1048,7 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
 - **Coulomb 1e-6 for LAMMPS cutoff runs** (`long_range.COULOMB_ACCURACY`; the check warns at 1e-5 with the +0.15 to
   +0.25 mN/m it costs). OpenMM's PME tolerance stays 1e-5 (`OPENMM_EWALD_TOLERANCE`: at 1e-5 OpenMM already equals
   LAMMPS at 1e-7 on pilot B's slab), so a folder asking LAMMPS for 1e-6 does not slow OpenMM down. The MD benchmark's
-  cutoff variants change with it.
+  cutoff variants change with it: `MD_BENCH_VERSION` 3, so MD-BENCH-3 asks each machine whether to run it again.
 - **The engine per computer.** `engines.md_engine` is now "auto" (the shared default) and Settings > Engines > MD
   engine writes `engines.machine_md_engine` for this computer only (merged entry by entry on save, like the other
   per-machine tables). Automatic is OpenMM where OpenMM finds CUDA, HIP or OpenCL with a device, else LAMMPS
