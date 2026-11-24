@@ -39,6 +39,20 @@
     `md liquid-slab`'s `cutoffN` variants and the MD benchmark's cutoff variants use it; OpenMM's PME stays at 1e-5,
     which already matches LAMMPS at 1e-7 there.
 
+### Ask before re-running a changed MD benchmark (MD-BENCH-3, 2026-11-23)
+- When a release changes the MD benchmark (`md.bench.MD_BENCH_VERSION`, now 2) and a machine's stored numbers come
+  from an older version, QuantaBench **asks** whether to run it again and never re-runs it by itself:
+  `quantabench-cli machines` prints a note under that machine with the command (`--json`: `md_bench_rerun`), the
+  Machines dock shows this computer's note with **Run MD benchmark** and **Not now** and marks other machines' MD
+  numbers "older benchmark (version N)", and a worker logs the note at start and leaves the benchmark alone.
+- **Not now is remembered** per machine for that benchmark version (`md_bench_not_now` in the machine's settings
+  entry), so the notice comes back only when a later release changes the benchmark again. A **Run MD benchmark**
+  button under the Machines table runs it any time, on the selected machine.
+- **Other machines too:** a worker reports its MD benchmark in `GET /v1/info` (`md_bench`: version, stored version,
+  outdated, note, running, last), and runs it when asked with `POST /v1/bench` `{"methods": ["md"]}` (new jobs wait
+  meanwhile; refused while a job runs, the machine is paused or a benchmark runs). After Check workers, the Machines
+  dock shows a notice for each such machine with **Run on <machine>** and **Not now**.
+
 ### No user or machine names in the tests and the DEVLOG (FIX-9, 2026-11-24)
 - Two tests' example Windows paths use the placeholder user `me`; a DEVLOG line names "the workstation" instead of a
   machine. Nothing else changes.

@@ -1211,6 +1211,19 @@ simulation?" Code: `md/bench.py`, `md/long_range.py`; docs: docs/WORKERS.md, "Th
   - A worker in auto mode with `--bench-methods ...,md` does not re-measure a machine that has only bulk records.
   - After A-fine: its numbers into `PILOT_TABLE` (MD-LR's follow-up); the benchmark then only replaces speeds.
 
+## MD-BENCH-3: Ask before re-running a changed MD benchmark · done 2026-11-24 (PR #58)
+Brandon (2026-11-23, on re-running MD benchmarks): "just ask the user if they would like to rerun the new benchmark
+if a future release changes the benchmarking process." Code: `md/bench.py` (`VERSION_CHANGES`, `stored_version`,
+`outdated`, `rerun_note`), `dist/profile.py` (`machines` note, `--json` `md_bench_rerun`), `dist/worker.py` (logs it,
+never re-runs it), `gui/machines_panel.py` (notice with Run MD benchmark / Not now, "older benchmark" marks); docs:
+docs/WORKERS.md, "The MD benchmark", docs/UI_PLAN.md (Machines dock).
+- Done (2026-11-23): the prompt in the CLI and the Machines dock, the worker's note, tests
+  (`tests/test_md_bench_rerun.py`).
+- Done (2026-11-24, Brandon: "Go with your suggestions"): Not now is remembered per machine for that benchmark
+  version (`settings` `md_bench_not_now`, `md.bench.notice_due`), and a Run MD benchmark button under the table runs it
+  any time; workers report their MD benchmark in `/v1/info` (`md_bench`) and run it on `POST /v1/bench`, so the
+  Machines dock offers the re-run for other machines too (Run on <machine> / Not now).
+
 ## MD-1: Counter-ions in vacuum SMD (Windows LAMMPS non-determinism + ion-pair heating) · ready
 - On the Windows workstation, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a
   TFA⁻ + Na⁺ on graphite setup with "Out of range atoms - cannot compute PPPM" (also with
