@@ -387,6 +387,47 @@ def test_apply_to_process_lowers_every_thread_and_never_raises(tmp_path):
     assert lines["after"].split() == ["19", "background"] and "already ran at background" in lines["again"]
 
 
+@pytest.mark.skipif(not LINUX, reason="per-thread nice values are Linux's")
+def test_apply_to_pids_lowers_every_thread_of_a_running_process():
+    """PRIO-2: a live priority change (DIST-7) lowers the threads a lane already runs (PyTorch's, OpenMP's), not only
+    its main thread; also when the main thread is lowered already and another thread is not."""
+    import psutil
+
+    base = P.current_nice()
+    if base >= P.NICE["low"]:                   # e.g. the suite itself runs under `nice -n 10`
+        pytest.skip("this process is already at or below the 'low' nice value")
+    code = textwrap.dedent("""
+        import os, sys, threading
+        ev = threading.Event(); tid = []
+        def wait():
+            tid.append(threading.get_native_id()); ev.wait()
+        t = threading.Thread(target=wait, daemon=True); t.start()
+        while not tid: pass
+        if sys.argv[1] == "main-lowered":
+            os.setpriority(os.PRIO_PROCESS, 0, 10)      # Linux: only the calling (main) thread
+        print(tid[0], flush=True)
+        sys.stdin.readline()
+    """)
+    for case in ("as-started", "main-lowered"):
+        proc = subprocess.Popen([sys.executable, "-c", code, case], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                text=True)
+        try:
+            worker = int(proc.stdout.readline())
+            assert nice_of(worker) == base
+            note = P.apply_to_pids([proc.pid], "low", children=False)
+            assert "1 process(es) changed" in note, (case, note)
+            assert nice_of(proc.pid) == 10 and nice_of(worker) == 10, case
+            if shutil.which("ionice"):
+                assert tuple(int(x) for x in psutil.Process(worker).ionice()) == P.LINUX_IO["low"], case
+            assert "already there" in P.apply_to_pids([proc.pid], "low", children=False)
+            assert nice_of(worker) == 10                            # never raised by a later change
+        finally:
+            proc.kill()
+            proc.wait(10)
+            proc.stdin.close()
+            proc.stdout.close()
+
+
 @posix_only
 def test_a_lane_process_lowers_itself(tmp_path):
     """dist.lanes: a lane process applies the run's priority at start (its programs inherit it)."""
