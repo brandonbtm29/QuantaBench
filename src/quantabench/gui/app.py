@@ -22,14 +22,20 @@ def main() -> int:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QMessageBox
 
+    from .. import launchers
     from . import sketcher_web
 
+    # Windows: the taskbar shows this window under QuantaBench's icon and groups it with its Start menu shortcut
+    # (``quantabench-cli shortcuts``), not under Python's; must happen before the first window
+    launchers.set_app_id()
     # The Sketch dock's URL scheme (Qt WebEngine, optional) can only be registered before the QApplication exists
     sketcher_web.prepare_before_app()
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("QuantaBench")
     app.setOrganizationName("QuantaBench")
+    app.setWindowIcon(launchers.window_icon())        # window, taskbar and macOS Dock icon
+    app.setDesktopFileName(launchers.desktop_file_name())   # Linux: the menu entry the window belongs to
     app.setStyle("Fusion")  # follows the system light/dark scheme on Windows 11, Linux and macOS
 
     def excepthook(exc_type, exc, tb):

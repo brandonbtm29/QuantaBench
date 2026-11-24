@@ -112,10 +112,9 @@ def test_dry_run_changes_nothing(tmp_path):
     if sys.platform == "linux":
         assert "pip install -e '.[all,dev]' 'tad-libcint<0.4'" in out          # from scripts/fork-packages.json
         assert "--index-url https://download.pytorch.org/whl/cpu" in out
-        assert "would write" in out and "quantabench.desktop" in out
-        assert 'Exec="' + str(repo / ".venv" / "bin" / "quantabench") + '"' in out
+        assert "/.venv/bin/python -m quantabench shortcuts" in out.replace("'", "")   # launchers.py makes it
     else:
-        assert "QuantaBench.app" in out
+        assert "QuantaBench.app" in out and "-m quantabench shortcuts" in out
 
 
 @pytest.mark.skipif(sys.platform != "linux" or BASH is None, reason="fakes macOS on Linux")
@@ -331,7 +330,8 @@ def test_windows_launcher_hides_the_console():
     assert 'start "" "%QB_VENV%\\Scripts\\pythonw.exe" -m quantabench' in bat
     assert "install_windows.ps1" in bat
     text = PS1.read_text(encoding="ascii")
-    assert 'Scripts\\quantabench.exe' in text            # pip's GUI launcher (pythonw), not quantabench-cli
+    # the Start Menu shortcuts come from `quantabench shortcuts` (launchers.py): pythonw.exe, the icon, the app id
+    assert '$scArgs = @("-m", "quantabench", "shortcuts")' in text and "Run $VPy $scArgs -AllowFail" in text
 
 
 def test_every_platform_pins_gxtb_by_url_and_sha256():

@@ -2,23 +2,36 @@
 
 A source checkout (how QuantaBench is installed today, docs/INSTALL.md) is updated with git:
 
-1. ``check()`` runs ``git fetch`` and reports how far the checkout is behind ``origin/main``.
+1. ``check()`` runs ``git fetch`` and reports how far the checkout is behind ``origin/main``: the new commits,
+   the CHANGELOG.md sections they add (``changelog_news``), the newest release tag, and the worker on this
+   computer (``local_worker.find``). **It follows main, not releases** (``FOLLOWS``): every merged pull request
+   lands on main and is tested there, releases are tags on main a few weeks apart, and machines that share a
+   batch should run the same commit (``grid build`` warns when they differ). Installed builds (0.5,
+   docs/DISTRIBUTION.md) will follow releases instead.
 2. ``update()`` runs ``git pull --ff-only``. It refuses when tracked files have local changes, when the
    checkout is on another branch, or when it has commits of its own that ``origin/main`` lacks, and says why.
+   It also waits (refuses for now) while the worker on this computer runs or is about to run a job from this
+   checkout, because the pull would change the code under it (``UpdateStatus.busy_reason``).
 3. If ``pyproject.toml``'s dependencies or entry points changed, or this platform's entry of
    ``scripts/fork-packages.json`` (the packages the installers add: forks from a git tag or a release page,
    platform pins), it runs ``pip install -e`` with the running interpreter (the venv), passing the extras that
    are already installed and the fork packages. PyTorch is pinned to the installed build with a constraints
    file, so a ROCm/CUDA/CPU build is never swapped for another. A fork package whose entry changed is then
    reinstalled (``--force-reinstall --no-deps``), because a new build often keeps its version number.
+   The checkout's other environments (``.venv-rocm`` next to ``.venv``) run the same code, so they get the same
+   reinstall, each with its own extras and its own PyTorch pinned. If pip fails in the running environment, the
+   checkout goes back to the commit it was on (``git reset --keep``): the app keeps working, and the message
+   says why.
 4. ``upgrade_packages=True`` (``--upgrade-packages``) also upgrades what is installed: ``pip install -e
    .[extras] <fork packages> --upgrade --upgrade-strategy eager`` (or ``only-if-needed``), with PyTorch pinned
    the same way, then reinstalls the fork packages that come from a git tag or a release page. It works with
    nothing to pull, too. The result lists what pip changed (``pip list`` before and after).
 5. The caller restarts the app (``relaunch()`` starts a new GUI process). A running ``quantabench-cli worker``
-   keeps the old code until it is restarted (docs/WORKERS.md).
+   keeps the old code until it is restarted: ``local_worker.restart`` does that for the LaunchAgent or the
+   scheduled task when it is idle (docs/WORKERS.md).
 
-An install that is not a git checkout gets instructions instead. Nothing here needs the GUI.
+Git and pip never wait for an answer nobody can see (no password prompt, no Git Credential Manager window). An
+install that is not a git checkout gets instructions instead. Nothing here needs the GUI.
 """
 
 from __future__ import annotations
@@ -51,6 +64,15 @@ _LOCKED = re.compile(r"WinError (5|32)\b|Access is denied|being used by another 
 _INSTALL_KEYS = ("dependencies", "optional-dependencies", "requires-python", "scripts", "gui-scripts",
                  "entry-points")
 
+#: why updates follow main (the dialog and docs/INSTALL.md say the same)
+FOLLOWS = ("QuantaBench updates from main, where every merged change lands after its tests pass. Releases are "
+           "tags on main a few weeks apart, and machines that share a batch should run the same commit.")
+CHANGELOG = "CHANGELOG.md"
+NEWS_LIMIT = 40                    # CHANGELOG sections listed at most (the rest are counted)
+# no window or prompt nobody can answer: git's own, Git Credential Manager's, pip's
+QUIET_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": "", "GCM_INTERACTIVE": "never",
+             "PIP_NO_INPUT": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
+
 HOW_TO_UPDATE_NO_GIT = (
     "This QuantaBench is not a git checkout, so it cannot update itself.\n"
     "  - Installed with pip from a wheel or PyPI: pip install --upgrade quantabench\n"
@@ -73,6 +95,17 @@ class UpdateStatus:
     dirty: list[str] = field(default_factory=list)      # tracked files with local changes
     fetched: bool | None = None      # None: not attempted; False: `git fetch` failed (offline?)
     message: str = ""                # extra detail (an error, a fetch failure)
+    news: list[ChangelogEntry] = field(default_factory=list)   # CHANGELOG.md sections the pull brings
+    news_more: int = 0               # sections beyond NEWS_LIMIT
+    release: str = ""                # the newest release tag on the upstream branch ("v0.3.0"), '' if none
+    since_release: int = 0           # commits on the upstream branch after that tag
+    worker: object = None            # local_worker.LocalWorker of this computer, or None
+
+    @property
+    def busy_reason(self) -> str:
+        """Why an update has to wait for now ('' when it need not): the worker on this computer runs jobs from
+        this checkout. Unlike ``blocked_reason`` this passes by itself."""
+        return self.worker.busy_reason() if self.worker is not None else ""
 
     @property
     def blocked_reason(self) -> str:
@@ -96,9 +129,23 @@ class UpdateStatus:
 
     @property
     def can_update(self) -> bool:
-        return self.state == "behind" and not self.blocked_reason
+        return self.state == "behind" and not self.blocked_reason and not self.busy_reason
 
-    def summary(self) -> str:
+    def release_line(self) -> str:
+        if not self.release:
+            return ""
+        if not self.since_release:
+            return f"{self.upstream} is release {self.release}."
+        return f"Newest release: {self.release}; {self.upstream} is {self.since_release} commit(s) past it."
+
+    def news_markdown(self) -> str:
+        """The new CHANGELOG sections as Markdown (the GUI shows it rendered)."""
+        parts = [e.markdown() for e in self.news]
+        if self.news_more:
+            parts.append(f"*... and {self.news_more} more section(s) in {CHANGELOG}.*")
+        return "\n\n".join(parts)
+
+    def summary(self, commits: int = 15) -> str:
         """A few lines for the CLI and the GUI."""
         if self.state == "not-a-checkout":
             return f"QuantaBench {__version__}\n{self.message}"
@@ -114,12 +161,23 @@ class UpdateStatus:
         elif self.state == "ahead":
             lines.append(f"Up to date: {self.ahead} local commit(s) not on {self.upstream} yet, nothing to pull.")
         else:
-            lines.append(f"{self.behind} new commit(s) on {self.upstream}:")
-            lines += [f"  {c}" for c in self.incoming[:15]]
-            if len(self.incoming) > 15:
-                lines.append(f"  ... and {len(self.incoming) - 15} more")
+            lines.append(f"{self.behind} new commit(s) on {self.upstream}" + (":" if commits else "."))
+            lines += [f"  {c}" for c in self.incoming[:commits]]
+            if commits and len(self.incoming) > commits:
+                lines.append(f"  ... and {len(self.incoming) - commits} more")
+            if self.news:
+                lines.append(f"What's new ({CHANGELOG}):")
+                lines += [f"  - {e.title()}" for e in self.news]
+                if self.news_more:
+                    lines.append(f"  ... and {self.news_more} more")
+        if self.release_line():
+            lines.append(self.release_line())
+        if self.worker is not None and self.worker.affected:
+            lines.append(self.worker.describe())
         if self.blocked_reason:
             lines.append(self.blocked_reason)
+        elif self.state in ("behind", "diverged") and self.busy_reason:
+            lines.append(self.busy_reason)
         return "\n".join(lines)
 
 
@@ -136,6 +194,9 @@ class UpdateResult:
     upgraded: bool = False           # the installed packages were upgraded (upgrade_packages=True)
     package_changes: list[str] = field(default_factory=list)   # "numpy 2.1.0 -> 2.3.4", "rich 14.1.0 (new)", ...
     reinstalled: list[str] = field(default_factory=list)       # fork packages reinstalled from their pinned source
+    rolled_back: bool = False        # pip failed after the pull, so the checkout went back (git reset --keep)
+    other_envs: list[tuple[str, bool, str]] = field(default_factory=list)   # (venv, ok, what happened)
+    worker: object = None            # local_worker.LocalWorker seen by the check, or None
     message: str = ""
     log: str = ""                    # git/pip output, for a details box
 
@@ -143,6 +204,11 @@ class UpdateResult:
     def restart_needed(self) -> bool:
         """The running process has old code or old packages loaded."""
         return self.updated or bool(self.package_changes) or bool(self.reinstalled)
+
+    @property
+    def worker_needs_restart(self) -> bool:
+        """The worker on this computer runs this checkout's old code now."""
+        return self.updated and self.worker is not None and self.worker.affected
 
 
 # ---------------------------------------------------------------------------------------------- git
@@ -152,7 +218,7 @@ def _git_exe() -> str | None:
 
 def _run(cmd: list[str], cwd: Path | None = None, timeout: float = 120) -> subprocess.CompletedProcess:
     """Run a command without a console window (the GUI runs under pythonw on Windows) and never prompt."""
-    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="", SSH_ASKPASS="")
+    env = dict(os.environ, **QUIET_ENV)
     env.pop("GIT_DIR", None)
     env.pop("GIT_WORK_TREE", None)
     return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8",  # noqa: S603
@@ -234,16 +300,91 @@ def _check(repo, fetch, remote, branch, upstream) -> UpdateStatus:
     st.ahead, st.behind = ahead, behind
     if behind:
         st.incoming = _out(_git(root, "log", "--oneline", "--no-decorate", f"HEAD..{upstream}", timeout=60)).splitlines()
+        old = _git(root, "show", f"HEAD:{CHANGELOG}", timeout=60)
+        new = _git(root, "show", f"{upstream}:{CHANGELOG}", timeout=60)
+        if new.returncode == 0:
+            news = changelog_news(old.stdout if old.returncode == 0 else "", new.stdout or "")
+            st.news, st.news_more = news[:NEWS_LIMIT], max(0, len(news) - NEWS_LIMIT)
+    cp = _git(root, "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", upstream, timeout=30)
+    if cp.returncode == 0 and _out(cp):
+        st.release = _out(cp)
+        cp = _git(root, "rev-list", "--count", f"{st.release}..{upstream}", timeout=30)
+        st.since_release = int(_out(cp)) if cp.returncode == 0 and _out(cp).isdigit() else 0
     cp = _git(root, "status", "--porcelain=v1", "--untracked-files=no", timeout=60)
     st.dirty = [line[3:] for line in (cp.stdout or "").splitlines() if line.strip()]
     st.state = ("diverged" if ahead and behind else "behind" if behind else "ahead" if ahead else "up-to-date")
+    st.worker = probe_worker(root)
     return st
+
+
+def probe_worker(root: Path):
+    """The worker on this computer (``local_worker.find``); None when none runs. Never raises."""
+    try:
+        from . import local_worker
+
+        return local_worker.find(root)
+    except Exception:
+        return None
 
 
 def _source_tree() -> Path | None:
     from .settings import repo_root
 
     return repo_root()
+
+
+# ------------------------------------------------------------------------------------------ CHANGELOG
+@dataclass(frozen=True)
+class ChangelogEntry:
+    """One ``### `` section of CHANGELOG.md that a pull brings (``changed``: it was there, now longer/different)."""
+    release: str                     # the ``## `` heading it is under ("Unreleased (after 0.3.0)", "0.4.0 (...)")
+    heading: str
+    body: str
+    changed: bool = False
+
+    def title(self) -> str:
+        return self.heading + (" (updated)" if self.changed else "")
+
+    def markdown(self) -> str:
+        return f"### {self.title()}\n{self.body}".rstrip()
+
+
+def _sections(text: str) -> list[tuple[str, str, str]]:
+    """(release heading, section heading, body) of each ``### `` section, in file order."""
+    out: list[tuple[str, str, str]] = []
+    release = heading = None
+    body: list[str] = []
+
+    def flush():
+        if heading is not None:
+            out.append((release or "", heading, "\n".join(body).strip("\n")))
+
+    for line in text.splitlines():
+        if line.startswith("## ") or line.startswith("### "):
+            flush()
+            heading, body = None, []
+            if line.startswith("## "):
+                release = line[3:].strip()
+            else:
+                heading = line[4:].strip()
+        elif heading is not None:
+            body.append(line)
+    flush()
+    return out
+
+
+def changelog_news(old_text: str, new_text: str) -> list[ChangelogEntry]:
+    """The CHANGELOG.md sections of ``new_text`` that ``old_text`` lacks (by heading), and those whose text
+    changed, in the new file's order (newest first). A section that only moved under a release heading (a release
+    was cut) is not news."""
+    old = {heading: body for _rel, heading, body in _sections(old_text)}
+    news = []
+    for release, heading, body in _sections(new_text):
+        if heading not in old:
+            news.append(ChangelogEntry(release, heading, body))
+        elif old[heading].strip() != body.strip():
+            news.append(ChangelogEntry(release, heading, body, changed=True))
+    return news
 
 
 # ----------------------------------------------------------------------------------- pyproject.toml
@@ -477,8 +618,8 @@ def reinstall_command(requirements: Sequence[str], constraints: Path | None, pyt
     return cmd
 
 
-def pip_list(python: str | None = None) -> dict[str, tuple[str, str]] | None:
-    """{normalized name: (name, version)} of the interpreter's installed packages, or None if pip cannot say."""
+def _pip_rows(python: str | None = None) -> list[dict] | None:
+    """``pip list --format=json`` of the interpreter (name, version, editable_project_location), or None."""
     cmd = [_console_python(python), "-m", "pip", "list", "--format=json", "--disable-pip-version-check"]
     try:
         cp = _run(cmd, timeout=300)
@@ -487,8 +628,15 @@ def pip_list(python: str | None = None) -> dict[str, tuple[str, str]] | None:
         return None
     if not isinstance(rows, list):
         return None
-    return {_norm(r["name"]): (r["name"], str(r.get("version", ""))) for r in rows
-            if isinstance(r, dict) and isinstance(r.get("name"), str)}
+    return [r for r in rows if isinstance(r, dict) and isinstance(r.get("name"), str)]
+
+
+def pip_list(python: str | None = None) -> dict[str, tuple[str, str]] | None:
+    """{normalized name: (name, version)} of the interpreter's installed packages, or None if pip cannot say."""
+    rows = _pip_rows(python)
+    if rows is None:
+        return None
+    return {_norm(r["name"]): (r["name"], str(r.get("version", ""))) for r in rows}
 
 
 def package_changes(before: dict[str, tuple[str, str]], after: dict[str, tuple[str, str]]) -> list[str]:
@@ -508,11 +656,15 @@ def package_changes(before: dict[str, tuple[str, str]], after: dict[str, tuple[s
 # ------------------------------------------------------------------------------------------- update
 def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE, branch: str = BRANCH,
            python: str | None = None, log=None, status: UpdateStatus | None = None,
-           upgrade_packages: bool = False, upgrade_strategy: str = "eager") -> UpdateResult:
+           upgrade_packages: bool = False, upgrade_strategy: str = "eager",
+           reinstall_deps: bool = False) -> UpdateResult:
     """Pull ``remote/branch`` (fast-forward only) and reinstall when the dependencies or this platform's fork
     packages changed. ``upgrade_packages`` also upgrades the installed packages (only that when there is
     nothing to pull); ``upgrade_strategy`` is pip's: ``eager`` upgrades every dependency to the newest version
     allowed, ``only-if-needed`` only QuantaBench and the fork packages (and dependencies that must move).
+    ``reinstall_deps`` (``--reinstall``) runs the reinstall in every environment of the checkout even when this
+    pull changed nothing: for a checkout that another tool fast-forwarded (the cross-machine update script), whose
+    dependency changes this function could not see.
 
     ``status`` is a fresh ``check()`` result to reuse (else this checks again). ``log`` gets one line per
     step (the CLI prints them). Never raises for git/pip failures."""
@@ -521,15 +673,18 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
     say = log or (lambda _msg: None)
     st = status if status is not None else check(repo, fetch=True, remote=remote, branch=branch)
     pull = st.state not in ("up-to-date", "ahead")
-    if not pull and not upgrade_packages:
-        return UpdateResult(ok=True, old_head=st.head, new_head=st.head, message=st.summary())
-    if pull and not st.can_update:
+    if not pull and not upgrade_packages and not reinstall_deps:
+        return UpdateResult(ok=True, old_head=st.head, new_head=st.head, message=st.summary(), worker=st.worker)
+    if (pull and st.blocked_reason) or st.state in ("error", "not-a-checkout"):
         return UpdateResult(ok=False, old_head=st.head, new_head=st.head,
-                            message=st.blocked_reason or st.summary())
+                            message=st.blocked_reason or st.summary(), worker=st.worker)
+    if st.busy_reason:                   # the worker here runs this checkout: no new code (or packages) under it
+        return UpdateResult(ok=False, old_head=st.head, new_head=st.head, message=st.busy_reason, worker=st.worker)
     root = st.repo
     pyproject, fork_file = root / "pyproject.toml", root / FORK_FILE
     old_text, old_forks = _read_text(pyproject), _read_text(fork_file)
     reinstall: list[str] = []
+    old_full = ""
     if pull:
         old_full = _out(_git(root, "rev-parse", "HEAD"))
         say(f"Pulling {st.behind} commit(s) from {st.upstream} (fast-forward only)...")
@@ -543,13 +698,14 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
         if cp.returncode != 0:
             return UpdateResult(ok=False, updated=new_full != old_full, old_head=st.head, new_head=new_head,
                                 message="git pull --ff-only failed; nothing was changed.\n" + log_text, log=log_text)
-        res = UpdateResult(ok=True, updated=new_full != old_full, old_head=st.head, new_head=new_head, log=log_text)
+        res = UpdateResult(ok=True, updated=new_full != old_full, old_head=st.head, new_head=new_head, log=log_text,
+                           worker=st.worker)
         new_text, new_forks = _read_text(pyproject) or old_text, _read_text(fork_file)
         res.changed = dependency_changes(old_text, new_text) if old_text else ["pyproject.toml"]
         res.forks_changed, reinstall = fork_changes(old_forks, new_forks)
         lines = [f"Updated {st.head} -> {new_head} ({st.behind} commit(s))."]
     else:
-        res = UpdateResult(ok=True, old_head=st.head, new_head=st.head)
+        res = UpdateResult(ok=True, old_head=st.head, new_head=st.head, worker=st.worker)
         new_text, new_forks = old_text, old_forks
         lines = [f"Nothing to pull from {st.upstream} ({st.head})."]
     try:
@@ -565,7 +721,8 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
         lines.append(f"{bad_forks}: reinstalling without the fork packages (the installed ones stay).")
     if upgrade_packages:
         reinstall = list(dict.fromkeys([*reinstall, *forks.pinned()]))
-    if (res.changed or res.forks_changed or upgrade_packages) and install:
+    asked = reinstall_deps and not (res.changed or res.forks_changed)      # a reinstall nothing in the pull called for
+    if (res.changed or res.forks_changed or upgrade_packages or asked) and install:
         extras = installed_extras(old_text) if old_text else []
         with_extras = f" with extras [{','.join(extras)}]" if extras else ""
         if upgrade_packages:
@@ -574,6 +731,7 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
         else:
             why = [f"pyproject.toml changed ({', '.join(res.changed)})"] if res.changed else []
             why += [f"{FORK_FILE} changed"] if res.forks_changed else []
+            why += ["a reinstall was asked for (--reinstall)"] if asked else []
             say(f"{'; '.join(why)}: reinstalling{with_extras}...")
         before = pip_list(python)
         res.pip_ran = True
@@ -586,28 +744,136 @@ def update(repo: Path | None = None, install: bool = True, remote: str = REMOTE,
         res.reinstalled = [requirement_name(r) for r in reinstall] if ok else []
         res.package_changes = package_changes(before, after) if before is not None and after is not None else []
         res.log = (res.log + "\n" + out).strip()
-        lines += _pip_report(res, ok, out, upgrade_packages, upgrade_strategy, listed=after is not None)
+        if not ok and res.updated and (res.changed or res.forks_changed):
+            _roll_back(root, old_full, res, say)       # the new code needs what pip could not install
+        lines += _pip_report(res, ok, out, upgrade_packages, upgrade_strategy, listed=after is not None, asked=asked)
         relinked = _relink_openmp(python)
         if relinked:
             lines.append(relinked)
+        if ok and (res.changed or res.forks_changed or asked):
+            res.other_envs = reinstall_other_envs(root, old_text, forks, python, reinstall, say)
+            lines += _other_envs_report(res.other_envs)
+            res.ok = res.ok and all(env_ok for _v, env_ok, _m in res.other_envs)
     elif res.changed or res.forks_changed:
         what = f"pyproject.toml changed ({', '.join(res.changed)})" if res.changed else f"{FORK_FILE} changed"
         lines.append(f"{what}: run `pip install -e .` before restarting.")
     if res.restart_needed:
         lines.append("Restart QuantaBench to use the new version.")
+    if res.worker_needs_restart:
+        lines.append(f"{res.worker.describe()} It still runs the old code: restart it when it is idle"
+                     + (" (the app offers to; `quantabench-cli update --restart-worker`)."
+                        if res.worker.manager in ("launchd", "task") else f": {res.worker.restart_hint()}."))
     res.message = "\n".join(lines)
     return res
 
 
-def _pip_report(res: UpdateResult, ok: bool, out: str, upgrade: bool, strategy: str, listed: bool) -> list[str]:
+def _roll_back(root: Path, old_full: str, res: UpdateResult, say) -> None:
+    """pip failed after a pull whose code needs it: put the checkout back on ``old_full`` (``git reset --keep``
+    moves the branch back and keeps any local change; the pull was a fast-forward, so nothing is lost)."""
+    say(f"pip failed: going back to {res.old_head} (git reset --keep)...")
+    try:
+        cp = _git(root, "reset", "--keep", "--quiet", old_full, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        res.log = (res.log + f"\ngit reset --keep failed: {exc}").strip()
+        return
+    if cp.returncode == 0:
+        res.rolled_back, res.updated, res.new_head = True, False, res.old_head
+    else:
+        res.log = (res.log + "\ngit reset --keep failed: " + _err(cp)).strip()
+
+
+# ----------------------------------------------------------------------- the checkout's other environments
+def _env_prefix(python: str | None) -> Path:
+    """The environment of ``python`` (default: the running one): the folder above its bin/ or Scripts/."""
+    if python is None:
+        return Path(sys.prefix)
+    return Path(python).parent.parent
+
+
+def other_envs(root: Path, python: str | None = None) -> list[Path]:
+    """The checkout's other environments (``.venv``, ``.venv-rocm``, ...) besides the running one."""
+    from . import launchers
+
+    try:
+        mine = _env_prefix(python).resolve()
+    except OSError:
+        mine = _env_prefix(python)
+    out = []
+    for v in launchers.find_variants(root):
+        try:
+            same = v.prefix.resolve() == mine
+        except OSError:
+            same = False
+        if not same and v.prefix.parent.resolve() == Path(root).resolve():
+            out.append(v.prefix)
+    return out
+
+
+def _env_python(prefix: Path) -> str:
+    from . import launchers
+
+    return str(launchers.Variant(prefix).python(windowed=False))
+
+
+def reinstall_other_envs(root: Path, old_text: str, forks: ForkPackages, python: str | None,
+                         reinstall: Sequence[str] = (), say=None) -> list[tuple[str, bool, str]]:
+    """Run the same reinstall in the checkout's other environments: they import the same code, which now needs
+    the new dependencies. Each keeps its own extras and its own PyTorch build. Returns (environment, ok, what)."""
+    say = say or (lambda _m: None)
+    out = []
+    for prefix in other_envs(root, python):
+        py = _env_python(prefix)
+        rows = _pip_rows(py)
+        if rows is None:
+            out.append((prefix.name, False, f"pip did not answer in {prefix.name}; rerun the install script there"))
+            continue
+        have = {_norm(r["name"]): r for r in rows}
+        mine = have.get("quantabench")
+        if mine is None:
+            continue                                    # not a QuantaBench environment
+        loc = mine.get("editable_project_location")
+        if loc and Path(loc).resolve() != Path(root).resolve():
+            continue                                    # another checkout's
+        extras = installed_extras(old_text, have=lambda name, have=have: _norm(name) in have) if old_text else []
+        torch = have.get("torch", {}).get("version") or None
+        say(f"Reinstalling in {prefix.name} too" + (f" (extras [{','.join(extras)}])" if extras else "") + "...")
+        ok, text = _pip_install(root, extras, py, forks=forks, reinstall=reinstall, torch=torch)
+        relinked = _relink_openmp(py) if ok else ""
+        if ok:
+            out.append((prefix.name, True, f"reinstalled in {prefix.name}" + (f" (PyTorch kept at {torch})" if torch
+                                                                                else "") + (f"; {relinked}" if relinked else "")))
+        else:
+            hint = (" Close the QuantaBench windows and workers that use it, then rerun the install script."
+                    if _LOCKED.search(text) else " Rerun the install script for it.")
+            out.append((prefix.name, False, f"pip failed in {prefix.name}.{hint}\n{text[-1500:]}"))
+    return out
+
+
+def _other_envs_report(envs: list[tuple[str, bool, str]]) -> list[str]:
+    if not envs:
+        return []
+    lines = ["The checkout's other environments use the same code:"]
+    lines += [f"  {'ok' if ok else 'FAILED'}: {what}" for _name, ok, what in envs]
+    return lines
+
+
+def _pip_report(res: UpdateResult, ok: bool, out: str, upgrade: bool, strategy: str, listed: bool,
+                asked: bool = False) -> list[str]:
     """The lines of ``update()``'s message about the pip run."""
     torch = _torch_version()
     kept = f"PyTorch kept at {torch}" if torch else "PyTorch left as it was"
     lines = []
     if ok and upgrade:
         lines.append(f"Upgraded the installed packages with pip (--upgrade-strategy {strategy}; {kept}).")
+    elif ok and asked:
+        lines.append(f"Reinstalled the dependencies the installers' way: installed extras, fork packages ({kept}).")
     elif ok:
         lines.append(f"{'Dependencies' if res.changed else 'The fork packages'} changed: reinstalled with pip ({kept}).")
+    elif res.rolled_back:
+        lines.append(f"The new code needs packages that `pip install -e` could not install (output below), so the "
+                     f"checkout went back to {res.old_head} (git reset --keep): QuantaBench stays as it was."
+                     + (" What pip changed before it stopped is listed." if res.package_changes else "")
+                     + " Fix the cause and update again, or rerun the install script for your OS in scripts/.")
     elif upgrade:
         lines.append("The package upgrade failed (pip's output below)."
                      + (" The code is updated." if res.updated else "")
@@ -633,11 +899,15 @@ def _pip_report(res: UpdateResult, ok: bool, out: str, upgrade: bool, strategy: 
     return lines
 
 
+_RUNNING = object()
+
+
 def _pip_install(repo: Path, extras: list[str], python: str | None, forks: ForkPackages | None = None,
-                 upgrade: str | None = None, reinstall: Sequence[str] = ()) -> tuple[bool, str]:
+                 upgrade: str | None = None, reinstall: Sequence[str] = (), torch=_RUNNING) -> tuple[bool, str]:
     """``pip install -e repo[extras] <fork packages>`` (``--upgrade`` with ``upgrade``), then ``reinstall``
-    from their pinned source, with torch pinned to the installed build in both."""
-    torch = _torch_version()
+    from their pinned source, with torch pinned to the installed build in both (``torch``: that version, None
+    for none; default: the running interpreter's)."""
+    torch = _torch_version() if torch is _RUNNING else torch
     tmp = None
     outputs = []
     try:

@@ -2,6 +2,36 @@
 
 ## Unreleased (after 0.3.0)
 
+### Update button and terminal-free launchers on all three OSes (DIST-1, 2026-11-23)
+- **Help > Check for updates... shows what is new**: the CHANGELOG.md sections the new commits bring, rendered, then
+  the commits, why updates follow main (not releases) and how far main is past the newest release.
+  `quantabench-cli update --check` prints the same headings. **Update** pulls, then shows what changed and offers
+  **Restart now** or **Later** (it no longer restarts without asking).
+- **Updates wait for running work.** A build in the window or local jobs in the queue: "Update when they finish"
+  (Help > Check for updates... cancels the wait). The worker on this computer running or about to run a job from
+  this checkout: "Update when idle" in the app; the command line refuses. A worker of another checkout does not
+  count.
+- **This computer's worker after an update**: when it runs this checkout, is idle and is kept by the macOS LaunchAgent
+  or the Windows scheduled task, "Restart this computer's worker too" (`launchctl kickstart -k`, or ending and
+  starting the task) and `quantabench-cli update --restart-worker`; a worker started by hand gets instructions.
+- **The checkout's other environments** (`.venv-rocm` next to `.venv`) get the same reinstall when the dependencies
+  change, each with its own extras and its own PyTorch build.
+- **`quantabench-cli update --reinstall`** runs that reinstall in every environment with nothing to pull, and
+  `--restart-worker` works with nothing to pull too: `update --reinstall --restart-worker` finishes a checkout that the
+  cross-machine update script fast-forwarded (docs/DISTRIBUTION.md, "In-app updates and the cross-machine update
+  script").
+- **pip fails: back to the old commit.** When the new code needs packages pip could not install, the checkout goes
+  back (`git reset --keep`) and QuantaBench keeps working, as Brandon's other apps do. Git and pip never wait for
+  an answer (no Git Credential Manager window either).
+- **Launchers with the QuantaBench icon that hide the terminal** (`quantabench-cli shortcuts [--desktop] [--remove]`,
+  Help > Create app shortcuts..., and the three installers): Start menu shortcuts to `pythonw.exe -m quantabench` with
+  the app's taskbar ID on Windows (the running window groups with a pinned shortcut, under the QuantaBench icon),
+  `~/Applications/QuantaBench.app` with an icon on macOS, `quantabench.desktop` with the icon on Linux. One per
+  environment: "QuantaBench", "QuantaBench (AMD GPU)". The app sets the same icon and taskbar ID itself.
+- **The app icon** (`src/quantabench/assets/quantabench.svg`, rendered to PNG/ICO/ICNS by `scripts/make_icons.py`).
+- **docs/DISTRIBUTION.md**: the 0.5 installer design (constructor, a frozen app, or a bootstrap installer; updates,
+  the GPU wizard, signing, where installs live), recommending a bootstrap installer that builds the environment.
+
 ### Ask before re-running a changed MD benchmark (MD-BENCH-3, 2026-11-23)
 - When a release changes the MD benchmark (`md.bench.MD_BENCH_VERSION`, now 2) and a machine's stored numbers come
   from an older version, QuantaBench **asks** whether to run it again and never re-runs it by itself:

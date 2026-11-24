@@ -219,6 +219,7 @@ Model Kit's actions (UI-7) and Paste, Copy molecules and Copy as (UI-4) are in t
 | Help | Methods guide... | F1\* | ⌘? | window | `help.methods_guide` |
 | Help | Find in the Methods guide | Ctrl+F\* | ⌘F | Methods guide | `help.guide_find` |
 | Help | Check for updates... | - | - | window | `help.check_updates` |
+| Help | Create app shortcuts... | - | - | window | `help.create_shortcuts` |
 | Help | About QuantaBench | - | - | window | `help.about` |
 
 ## Presets

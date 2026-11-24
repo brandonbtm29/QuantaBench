@@ -979,6 +979,53 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   running). The tests above ran 540-atom LAMMPS jobs there on 1-2 threads at below-normal priority, behind the
   pytest lock.
 
+## 2026-11-23: Update button and launchers on all three OSes; the installer design (DIST-1, branch `feat/dist-1-update-launchers`)
+- **The ask** (Brandon, 2026-11-23): installers and an Update button on every OS, plus his standing rule for his apps
+  (an update button, a launcher that hides the terminal). PR 1 finishes the Update button and the launchers for
+  today's git checkouts; the installers wait for his OK on docs/DISTRIBUTION.md.
+- **Looked at his other apps first.** The Porometry Analyzer and Kalends update to the newest release tag,
+  fast-forward only, and go back (`git reset --keep`) when pip fails. Kalends finishes in a helper process. The lab
+  apps make icons with an AppUserModelID through IShellLink + IPropertyStore, because WScript.Shell cannot set it.
+  - Taken over: the rollback, `GCM_INTERACTIVE=never` / `PIP_NO_INPUT`, the shortcut writer, and the
+    CHANGELOG-based notes.
+  - Not taken over: following releases. QuantaBench's machines run main, where fixes land daily and shared batches
+    need one commit. The dialog says so and shows how far main is past v0.3.0 (112 commits today). The helper
+    process is planned for the installed builds.
+- **What's new** comes from CHANGELOG.md itself: `###` sections of origin/main's file that HEAD's lacks, or whose text
+  changed, in file order. A release that is cut only moves sections, so it is not news. A throwaway clone 38 commits
+  behind main listed exactly the six sections those commits added (MD-LR ... ENG-3b).
+- **Waiting for work.** The window's build and queued local jobs, and this computer's worker (`local_worker.find`).
+  - Reading the worker: its lock, psutil (cwd, the venv launcher in `__PYVENV_LAUNCHER__`, the parent's exe, so a
+    venv's base-interpreter child on Windows still counts), `jobs.json` and `pause.json`.
+  - Queued jobs on a paused machine do not count.
+  - Restart: `launchctl kickstart -k`, or `schtasks /End` then `/Run` (Task Scheduler kills at once, so only when
+    idle). Then it waits for a new lock.
+- **Other environments.** `.venv-rocm` imports the same checkout, so a dependency change that only reached `.venv`
+  would break the GPU app and a worker restarted from it. Each other environment gets the same pip line, with its
+  own extras (from its `pip list`) and its own torch pin. `editable_project_location` skips another checkout's.
+- **Launchers** (`quantabench.launchers`), one per environment:
+  - Windows: a `.lnk` to `pythonw.exe -m quantabench` with the icon and AppUserModelID
+    `io.github.brandonbtm29.QuantaBench[.rocm]`, which the app sets too.
+  - macOS: the installer's `QuantaBench.app`, now made from Python, with the icon.
+  - Linux: a `.desktop` file with Desktop Entry quoting and `StartupWMClass`; the app sets `desktopFileName`.
+  - The installers call `python -m quantabench shortcuts` instead of writing their own launchers.
+- **Icon:** a benzene-like ring with one amber atom on a blue-to-teal rounded square, drawn by Qt's SVG renderer into
+  PNG/ICO/ICNS (`scripts/make_icons.py`; the macOS icon keeps Apple's margin).
+- **Tests:** tests/test_update.py 84, test_launchers.py 13 (the Windows .lnk round trip runs on Windows),
+  test_local_worker.py 14, test_install_scripts.py 26 (Linux: 2 PowerShell tests skipped). GUI smoke run on a
+  throwaway clone behind main, with screenshots of the dialog, the busy-worker state, the wait question and the
+  result with the worker restart offer.
+- **The cross-machine update script** (Brandon, 2026-11-23: some apps should update "across the board" from one list;
+  another worker builds that into his hub script). The script and the app share their rules (fast-forward only, skip
+  or refuse local changes, report or install dependency changes). One gap: a clone the script fast-forwarded has the
+  new code but the old dependencies, and the app's next check sees nothing to pull. `update --reinstall` (the
+  installers' pip line in every environment, with nothing to pull) and `--restart-worker` (also with nothing to
+  pull) close it: they are the command QuantaBench's entry in the script's list should run. DISTRIBUTION.md has the
+  comparison.
+- Nothing on the workstation, the MacBook or the lab PC was updated, restarted or installed into; the Update flow ran
+  only on throwaway clones. On the Mac, a read-only check built `QuantaBench.app` in /tmp and saw the real worker
+  as "LaunchAgent, idle, machine paused"; nothing was restarted.
+
 ## 2026-11-23: ask before re-running a changed MD benchmark (MD-BENCH-3, branch `feat/md-bench-3-rerun-prompt`)
 - **Why:** Brandon, when #54 and #55 were released: "just ask the user if they would like to rerun the new benchmark
   if a future release changes the benchmarking process." MD-BENCH-2 already raised `MD_BENCH_VERSION` to 2 (the slab
@@ -1037,3 +1084,12 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   CHANGELOG line, and the 2026-11-22 SETTINGS-1 follow-ups entry, which named one of the maintainer's machines (now "the
   workstation"). Merged with main (#54, #55) first.
 - **Tests:** the two changed tests; CI on all three OSes.
+
+## 2026-11-24: DIST-1's design decided, before the merge (PR #56)
+- Brandon: "I agree with your PR56 suggestions. Go with your suggestions and merge #56-#58." docs/DISTRIBUTION.md gets a
+  "Decided (Brandon, 2026-11-24)" section: option C (a bootstrap installer), per-user installs without admin rights,
+  the GPU wizard recommends ROCm on a supported Radeon on Windows but asks each time and keeps the CPU variant,
+  engines from an in-app "Install engines..." offered on first run, no code signing yet (the docs explain SmartScreen
+  and Gatekeeper), a release every 1-2 weeks once installers exist, a hidden tester option for installed builds to
+  follow main, and the maintainer's git checkouts keep following main. The design text and PR 2's plan now say the
+  same; BACKLOG DIST-1's PR 2 is ready. Main (#57, #58) merged in first.
