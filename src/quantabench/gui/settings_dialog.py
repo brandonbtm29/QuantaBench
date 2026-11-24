@@ -989,7 +989,8 @@ class SettingsDialog(QDialog):
                       ("openmm_python", "OpenMM Python", "Python with openmm (the qb-openmm environment of "
                                                          "envs/openmm.yml: QuantaBench's second MD engine)"))
     #: (label, engines.md_engine) of Engines > Molecular dynamics > MD engine (OPENMM-1)
-    MD_ENGINES = (("LAMMPS (the reference engine)", "lammps"), ("OpenMM (fast on GPUs, reduced precision)", "openmm"))
+    MD_ENGINES = (("Automatic: OpenMM where this computer has a usable GPU, else LAMMPS", "auto"),
+                  ("LAMMPS (the reference engine)", "lammps"), ("OpenMM (fast on GPUs, reduced precision)", "openmm"))
     #: (label, engines.crest_wsl_scratch) of Engines > Runs > CREST scratch through WSL (chem.wsl_scratch.MODES)
     CREST_WSL_SCRATCH = (("Automatic: /dev/shm if it has room, else WSL's disk", "auto"),
                          ("WSL's memory (/dev/shm)", "shm"), ("WSL's own disk", "disk"),
@@ -1091,13 +1092,17 @@ class SettingsDialog(QDialog):
         self.md_engine.setObjectName("md_engine")
         for label, key in self.MD_ENGINES:
             self.md_engine.addItem(label, key)
-        self.md_engine.setCurrentIndex(max(0, self.md_engine.findData(str(getattr(e, "md_engine", "lammps") or
-                                                                           "lammps").strip().lower())))
+        self._md_engine_was = self.s.md_engine_for()
+        self.md_engine.setCurrentIndex(max(0, self.md_engine.findData(self._md_engine_was)))
         from ..md.liquid import ENGINE_NOTE
 
-        self.md_engine.setToolTip("The engine new liquid-slab folders are written for (quantabench-cli md liquid-slab; "
-                                  "md run --engine switches a folder that has not started). " + ENGINE_NOTE)
+        self.md_engine.setToolTip("The engine new liquid-slab folders are written for on this computer (quantabench-cli "
+                                  "md liquid-slab; md run --engine switches a folder that has not started). Saved for "
+                                  f"{machine} only. " + ENGINE_NOTE)
         mf.addRow("MD engine", self.md_engine)
+        where = QLabel(f"Saved for <code>{machine}</code> only.")
+        where.setStyleSheet("color: gray;")
+        mf.addRow(where)
         note = QLabel(ENGINE_NOTE)
         note.setObjectName("md_engine_note")
         note.setWordWrap(True)
@@ -1313,5 +1318,8 @@ class SettingsDialog(QDialog):
         e.qm_memory_gb = self.qm_memory.value()
         e.timeout_s = self.ext_timeout.value()
         e.crest_wsl_scratch = self.crest_wsl_scratch.currentData() or "auto"
-        e.md_engine = self.md_engine.currentData() or "lammps"
+        chosen = self.md_engine.currentData() or "auto"
+        if chosen != self._md_engine_was:                  # this computer only (Brandon, 2026-11-24)
+            s.set_md_engine_for(chosen)
+            s.stamp_machine(None, ["engines.machine_md_engine"])
         return s

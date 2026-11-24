@@ -53,8 +53,8 @@ LAMMPS' own ``Performance:`` line of the timed run. Variants are ``<accelerator>
 
 The dispersion variants are MD-LR's options with their defaults (``md.long_range.settings``): ``ewald``
 (``lj/long/coul/long`` 12 Å + ``pppm/disp``: Coulomb 1e-6, G = 2.77 / rc and a dispersion mesh no coarser than
-0.52 / G, from the box it runs in) and ``cutoff12``/``cutoff16``/``cutoff18`` (``lj/cut/coul/long`` + ``pppm`` 1e-5;
-the bulk with LAMMPS' tail correction, the slab without). Each record names its settings (``long_range``,
+0.52 / G, from the box it runs in) and ``cutoff12``/``cutoff16``/``cutoff18`` (``lj/cut/coul/long`` + ``pppm``
+1e-6, 1e-5 before OPENMM-1; the bulk with LAMMPS' tail correction, the slab without). Each record names its settings (``long_range``,
 ``long_range_settings``) and the k-space grids LAMMPS used (``kspace``); a record without ``long_range`` timed the
 coarser settings of before MD-LR.
 

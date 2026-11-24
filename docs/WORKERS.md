@@ -365,8 +365,8 @@ variants at 30 s) it took 207 s with the build.
     (MD-LR, `md.long_range`):
     - `ewald`: `lj/long/coul/long` 12 Å + `pppm/disp`, Coulomb 1e-6, dispersion G = 2.77 / rc and a mesh no coarser
       than 0.52 / G, computed from the box it runs in (the slab's, vacuum and all).
-    - `cutoff12`, `cutoff16`, `cutoff18`: `lj/cut/coul/long` + `pppm` 1e-5 (the bulk box with LAMMPS' tail
-      correction, the slab without).
+    - `cutoff12`, `cutoff16`, `cutoff18`: `lj/cut/coul/long` + `pppm` 1e-6 (1e-5 until 2026-11-24; the bulk box
+      with LAMMPS' tail correction, the slab without).
     - `cpu-*`: `-sf omp -pk omp N`, N = `--md-threads`, by default this machine's one-lane thread budget, at most
       its physical cores.
     - `gpu-*`: `-sf hybrid gpu omp -pk gpu 1 [device_type generic] pair/only on -pk omp N` (the pair style on the

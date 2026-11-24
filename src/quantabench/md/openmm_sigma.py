@@ -9,8 +9,9 @@ again on the CPU in double precision and writes ``pressure_tensor.txt`` (step, P
 ``lammps`` (where QuantaBench finds an ``lmp``; the default)
     LAMMPS ``rerun`` of the frames with the run's own model (``in.rerun``: the slab's styles, ``slab_start.data``,
     ``ff.params``, its k-space), ``compute pressure NULL virial``: what ``in.slab`` averages, minus the kinetic part,
-    with the Coulomb k-space at least as accurate as ``RERUN_KSPACE_ACCURACY`` (1e-6; the cutoff variants' 1e-5 biases
-    σ by a few tenths of a mN/m). Frames go to LAMMPS as text dumps in chunks of ``CHUNK`` frames, deleted afterwards.
+    with the Coulomb k-space at least as accurate as ``RERUN_KSPACE_ACCURACY`` (1e-6, the default since
+    2026-11-24; pilot B's 1e-5 biases σ by a few tenths of a mN/m). Frames go to LAMMPS as text dumps in chunks of
+    ``CHUNK`` frames, deleted afterwards.
 ``openmm`` / ``openmm-reference``
     OpenMM's CPU platform (single-precision arithmetic with double accumulation; it agrees with the Reference
     platform's double precision to ~0.1 bar here) or its Reference platform (double, slow): each diagonal component
@@ -25,7 +26,12 @@ error bar shrinks with the number of frames. Pilot B's own 10-fs series, thinned
 mN/m from every 10 fs, 0.38 every 50 fs, 0.81 every 100 fs and 2.9 every 1 ps over 10 ns. Frames every 1 ps (117 KB
 each for 9,780 atoms) are cheap to keep but 10 times less precise than pilot B; the run's on-the-fly samples
 (``sigma_kb.txt``, every 20 fs by default, ``md.openmm_run``) carry the precision, and this rerun checks them for
-bias at the steps both have (``compare_series``).
+bias at the steps both have (``compare_series``). When they pass, σ is reported from them (Brandon, 2026-11-24).
+
+Once that check has passed, the frames have done their job: ``thin_frames`` keeps every ``frame_keep_every``-th
+(10 by default; Brandon, 2026-11-24) for viewing and later checks and deletes the rest. It never runs before the
+slab part has finished, every frame has its row in ``pressure_tensor.txt`` and the check has passed;
+``pressure_tensor.txt`` keeps all its rows, so the analysis gives the same numbers afterwards.
 """
 
 from __future__ import annotations
@@ -43,14 +49,17 @@ import numpy as np
 from . import dcd
 
 CHUNK = 200                                        # frames per LAMMPS rerun process
-#: the rerun's Coulomb k-space accuracy: never coarser than this. At the cutoff variants' 1e-5, LAMMPS' PPPM virial
-#: was off by +0.36 mN/m in σ on a frame of pilot B (C6F14, 16 Å) and +0.9 mN/m on a small hexane slab (8 Å), against
-#: 1e-6 / 1e-7 (within 0.01 of each other) and OpenMM's PME, which agree; 1e-6 is converged there.
+#: the rerun's Coulomb k-space accuracy: never coarser than this. At pilot B's 1e-5 (the cutoff default until
+#: 2026-11-24), LAMMPS' PPPM virial was off by +0.36 mN/m in σ on a frame of pilot B (C6F14, 16 Å) and +0.9 mN/m
+#: on a small hexane slab (8 Å), against 1e-6 / 1e-7 (within 0.01 of each other) and OpenMM's PME, which agree;
+#: 1e-6 is converged there (on 2,501 frames of pilot B: +0.252 ± 0.004 at 1e-5).
 RERUN_KSPACE_ACCURACY = 1e-6
 KCAL_MOL_A3_TO_ATM = 4184.0 / 6.02214076e23 / 1e-30 / 101325.0
 BOLTZ_KCAL = 0.0019872043
 PT_FILE = "pressure_tensor.txt"
 FRAMES = "slab.dcd"
+#: what ``thin_frames`` did (JSON): the rerun keeps the rows of the frames it deleted
+THINNED_FILE = "slab_frames_thinned.json"
 METHODS = ("auto", "lammps", "openmm", "openmm-reference", "none")
 
 
@@ -120,8 +129,8 @@ def rerun(folder: str | Path, method: str = "auto", *, threads: int | None = Non
     if not (folder / FRAMES).is_file():
         raise FileNotFoundError(f"{folder}: no {FRAMES} (the run saved no frames: frame_every 0?)")
     steps = dcd.frame_steps(folder / FRAMES)
-    if steps:
-        _cut_after(folder, steps[-1])
+    if steps:                         # rows past the last frame: a run cut back on resume (not frames thinned away)
+        _cut_after(folder, max(steps[-1], int(thinned(folder).get("last_step") or 0)))
     have = set(done_steps(folder))
     todo = [s for s in steps if s not in have]
     if not todo or method == "none":
@@ -139,6 +148,69 @@ def rerun(folder: str | Path, method: str = "auto", *, threads: int | None = Non
                               echo=echo)
     _sort_rows(folder)
     return {"method": method, "frames": len(todo), "done": len(done_steps(folder)), "seconds": time.time() - t0}
+
+
+def thinned(folder: str | Path) -> dict:
+    """``thin_frames``' record of ``folder`` ({} when its frames were not thinned)."""
+    import json
+
+    try:
+        out = json.loads((Path(folder) / THINNED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return out if isinstance(out, dict) else {}
+
+
+def thin_frames(folder: str | Path, check: dict | None, keep_every: int | None = None) -> dict:
+    """Keep every ``keep_every``-th frame of ``slab.dcd`` (default: the setup's ``frame_keep_every``, 10) and delete
+    the rest, but only when nothing still needs them: the slab part has finished, every frame has its row in
+    ``pressure_tensor.txt``, and ``check`` (``compare_series``' result, from ``surface_tension.analyze``) passed.
+    Returns {"thinned": bool, "why": ..., and when thinned "frames_before", "frames_after", "bytes_before",
+    "bytes_after", "every_steps"}."""
+    import json
+    from datetime import datetime
+
+    from . import sim
+
+    folder = Path(folder)
+    path = folder / FRAMES
+
+    def no(why: str) -> dict:
+        return {"thinned": False, "why": why}
+
+    if not path.is_file():
+        return no(f"no {FRAMES}")
+    try:
+        cfg = json.loads((folder / "liquid_setup.json").read_text(encoding="utf-8")).get("config") or {}
+    except (OSError, ValueError):
+        cfg = {}
+    keep = int(cfg.get("frame_keep_every", 10) if keep_every is None else keep_every)
+    if keep <= 1:
+        return no("frame_keep_every is off: every frame stays")
+    h = dcd.read_header(path)
+    every = int(cfg.get("frame_every") or h.every) * keep
+    if h.every >= every:
+        rec = thinned(folder)
+        return {"thinned": True, "why": "thinned earlier", **rec} if rec else \
+            no(f"frames every {h.every:,} steps already")
+    try:
+        if not sim.Run.load(folder).part_done("slab"):
+            return no("the slab part has not finished")
+    except sim.RunError as exc:
+        return no(f"no finished run record ({exc})")
+    if pending_frames(folder):
+        return no(f"{pending_frames(folder)} frames are not in {PT_FILE} yet")
+    if not check or not check.get("ok"):
+        return no("the on-the-fly σ has not passed its check against the double-precision rerun")
+    steps = dcd.frame_steps(path)
+    size = path.stat().st_size
+    before, after = dcd.thin(path, every)
+    rec = {"date": datetime.now().isoformat(timespec="seconds"), "frame_keep_every": keep, "every_steps": every,
+           "frames_before": before, "frames_after": after, "bytes_before": size, "bytes_after": path.stat().st_size,
+           "last_step": steps[-1] if steps else 0,
+           "check": {k: check.get(k) for k in ("n", "mean_diff_mN_m", "sem_diff_mN_m", "ok")}}
+    (folder / THINNED_FILE).write_text(json.dumps(rec, indent=1) + "\n", encoding="utf-8")
+    return {"thinned": True, "why": "the σ check passed", **rec}
 
 
 def _sort_rows(folder: Path) -> None:
@@ -211,7 +283,7 @@ def _rerun_lammps(folder: Path, todo: list[int], *, threads: int | None, echo, l
     cfg = OE.read_setup(folder).get("config") or {}
     T = float(cfg.get("temperature", 298.15))
     kacc = (float(kspace_accuracy) if kspace_accuracy else
-            min(float(cfg.get("kspace_accuracy") or 1e-5), RERUN_KSPACE_ACCURACY))
+            min(float(cfg.get("kspace_accuracy") or RERUN_KSPACE_ACCURACY), RERUN_KSPACE_ACCURACY))
     args += ["-var", "kacc", f"{kacc:g}"]
     _header(folder, f"LAMMPS rerun, Coulomb k-space accuracy {kacc:g}")
     want = set(todo)

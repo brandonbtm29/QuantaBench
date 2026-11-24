@@ -685,6 +685,11 @@ def format_report(r: dict) -> str:
         if chk:
             L.append(f"| on the fly − rerun, same frames | {chk['mean_diff_mN_m']:+.3f} ± {chk['sem_diff_mN_m']:.3f} mN/m "
                      f"({chk['n']} frames, rms {chk['rms_diff_mN_m']:.2f}) |")
+        fr = r.get("frames") or {}
+        if fr.get("thinned"):
+            L.append(f"| saved frames (slab.dcd) | every {fr['frame_keep_every']}th kept after the check passed: "
+                     f"{fr['frames_before']:,} → {fr['frames_after']:,} ({fr['bytes_before'] / 1e6:,.0f} → "
+                     f"{fr['bytes_after'] / 1e6:,.0f} MB) |")
     if "tail" in s:
         t = s["tail"]
         L.insert(L.index("|---|---|") + 2,

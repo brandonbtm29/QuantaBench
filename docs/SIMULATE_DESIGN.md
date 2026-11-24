@@ -201,7 +201,7 @@ Components
   C6F14 x 489            [OPLS-AA + Watkins-Jorgensen ▾]  [all-atom ▾]  charges [OPLS-AA ▾]  ✓ 20/20 typed
 Physics
   Van der Waals          LJ 12-6 · cutoff (screening length) [16 Å]  long range [tail correction, added to σ ▾]
-  Electrostatics         PPPM 1e-5
+  Electrostatics         PPPM 1e-6
   Combining, 1-4         geometric · 0.5 / 0.5 (from OPLS-AA)
 Checks                   ✓ one combining rule  ✓ real units  ✓ the cutoff has its tail  ✓ GPU styles exist
 Notes                    ⚠ GAFF2 gave 1.836 g/cm³ for C6F14 (measured ~1.68): for fluorocarbons only with a refit
@@ -615,7 +615,7 @@ Parameterization: PFOA on graphite in water                                     
 │  └─ Na⁺ x 1              [Joung-Cheatham (TIP3P set) ▾]
 ├─ Physics
 │  ├─ Van der Waals        LJ 12-6 · cutoff (screening length) [16 Å] · long range [tail correction ▾]
-│  ├─ Electrostatics       PPPM 1e-5 · slab correction [auto]
+│  ├─ Electrostatics       PPPM 1e-6 · slab correction [auto]
 │  └─ Combining rule       [Lorentz-Berthelot ▾] · cross terms graphite-water [table...]
 └─ Checks
    ✓ one combining rule and one 1-4 scaling for the molecules

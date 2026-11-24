@@ -23,7 +23,8 @@ What is translated (LAMMPS ``real`` units -> OpenMM's nm, kJ/mol, ps):
   (OPLS-AA), and any explicit ``pair_coeff i j`` off-diagonal entry, go through a ``CustomNonbondedForce`` with a
   table of A = 4εσ¹² and B = 4εσ⁶ per type pair; the ``NonbondedForce`` then carries the charges and the 1-4
   exceptions (with the mixed 1-4 σ and ε) only.
-* Long range: Coulomb is PME (LAMMPS' PPPM; OpenMM's tolerance takes ``kspace_accuracy``). The LJ is either cut
+* Long range: Coulomb is PME (LAMMPS' PPPM; OpenMM's tolerance is ``kspace_accuracy`` but never tighter than
+  ``OPENMM_EWALD_TOLERANCE``, 1e-5, which is already converged there). The LJ is either cut
   at rc (``lj="cutoff"``: LAMMPS ``lj/cut/coul/long``; ``tail`` adds the homogeneous tail correction, as the bulk
   NPT's ``pair_modify tail yes``), or LJ-PME (``lj="pme"``: LAMMPS ``lj/long/coul/long`` + ``pppm/disp``, the
   "ewald" variant). OpenMM's LJ-PME uses Lorentz-Berthelot within rc and geometric C6 in reciprocal space, which is
@@ -63,6 +64,9 @@ KE_UNIT = 1e7 / 4184.0
 BOLTZ_KCAL = 0.0019872043           # kcal/mol/K
 GROUPS = {"bond": 0, "angle": 1, "dihedral": 2, "improper": 3, "nonbonded": 4, "lj": 5}
 NONBONDED = {4, 5}
+#: OpenMM's Coulomb PME tolerance for runs (never tighter): at 1e-5 OpenMM's energy and σ on pilot B's slab already
+#: equal LAMMPS' at PPPM 1e-7 (497.80 vs 497.79 kcal/mol; σ within 0.05 mN/m), so LAMMPS' 1e-6 is not passed on
+OPENMM_EWALD_TOLERANCE = 1e-5
 #: ``add_cutoff_shift``'s group: never integrated, only added to the strained energies of σ samples
 SHIFT_GROUP = 6
 SUPPORTED_STYLES = {"bond": ("harmonic",), "angle": ("harmonic",),
@@ -265,7 +269,7 @@ def physics_from_setup(meta: Mapping, stage: str) -> Physics:
                    special_lj=tuple(mol.get("special_lj") or (0.0, 0.0, 0.5)),
                    special_coul=tuple(mol.get("special_coul") or (0.0, 0.0, 0.5)),
                    cutoff_A=rc, lj="pme" if ewald else "cutoff", tail=(not ewald and stage == "bulk"),
-                   ewald_tolerance=float(acc) if acc else (1e-6 if ewald else 1e-5),
+                   ewald_tolerance=max(float(acc) if acc else OPENMM_EWALD_TOLERANCE, OPENMM_EWALD_TOLERANCE),
                    disp_gewald=(float(cfg["disp_gewald"]) if ewald and cfg.get("disp_gewald") else None),
                    disp_spacing=(float(cfg["disp_spacing"]) if ewald and cfg.get("disp_spacing") else None))
 
@@ -602,6 +606,17 @@ def describe_platforms(timeout_note: bool = False) -> dict:
                     rec["error"] = str(exc).splitlines()[0][:200]
         out["platforms"].append(rec)
     return out
+
+
+def usable_gpu(desc: Mapping) -> str:
+    """"OpenCL on Apple M3 Max (single)" for the first GPU platform OpenMM can use here, "" when it has none (or no
+    OpenMM was found)."""
+    for name in ("CUDA", "HIP", "OpenCL"):
+        for p in desc.get("platforms", []) or []:
+            if p.get("name") == name and p.get("precisions"):
+                dev = f" on {', '.join(p['devices'])}" if p.get("devices") else ""
+                return f"{name}{dev} ({'/'.join(p['precisions'])})"
+    return ""
 
 
 def best_platform(desc: Mapping) -> tuple[str, str]:

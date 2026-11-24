@@ -1032,3 +1032,27 @@ MAC-GPU report's prototype converter (`Runs\mac-gpu-2026-11-23\scripts\bench_c6f
 - **Found:** the MacBook's LAMMPS for QuantaBench is the `.venv`'s PyPI wheel (MPICH), which exits −15 after every
   run ("OFI poll failed (default nic=en0)" at MPI_Finalize); the rerun now judges a chunk by its rows and "Total wall
   time". SIM-1's supervisor would mark finished LAMMPS segments failed on the Mac (BACKLOG OPENMM-2).
+
+### 2026-11-24: Brandon's decisions on OPENMM-1, in the same PR
+
+Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, as built:
+
+- **Frames thinned after the check.** `md surface-tension` keeps every `frame_keep_every`-th frame of `slab.dcd` (10,
+  on by default) once the slab part has finished, every frame has its row in `pressure_tensor.txt` and the on-the-fly
+  σ has passed its check (`md.openmm_sigma.thin_frames`, `md.dcd.thin`: the file is rewritten beside itself and then
+  replaces it). The rows stay, so the analysis is unchanged afterwards; `slab_frames_thinned.json` records it, and the
+  rerun no longer cuts rows past the last frame when that frame was thinned away. `--keep-frames` and
+  `--frame-keep-every 0` keep them all. `*.dcd` was already in the synced `.stglobalignore` (now with a comment), so
+  frames stay on the computer that ran them.
+- **σ** from the run's own 20-fs samples when they pass the check: as built; ENGINES.md says it is decided.
+- **Coulomb 1e-6 for LAMMPS cutoff runs** (`long_range.COULOMB_ACCURACY`; the check warns at 1e-5 with the +0.15 to
+  +0.25 mN/m it costs). OpenMM's PME tolerance stays 1e-5 (`OPENMM_EWALD_TOLERANCE`: at 1e-5 OpenMM already equals
+  LAMMPS at 1e-7 on pilot B's slab), so a folder asking LAMMPS for 1e-6 does not slow OpenMM down. The MD benchmark's
+  cutoff variants change with it.
+- **The engine per computer.** `engines.md_engine` is now "auto" (the shared default) and Settings > Engines > MD
+  engine writes `engines.machine_md_engine` for this computer only (merged entry by entry on save, like the other
+  per-machine tables). Automatic is OpenMM where OpenMM finds CUDA, HIP or OpenCL with a device, else LAMMPS
+  (`openmm_engine.usable_gpu`); `doctor` prints the engine and the reason, and `quantabench-cli settings --md-engine`
+  sets it for this computer or `--machine NAME`.
+- **The MacBook's LAMMPS** for QuantaBench is now its `qb-lammps` conda `lmp` (its own entry in the settings, set with
+  `quantabench-cli settings --engine-path lammps=...` on the MacBook), so SIM-1's supervisor no longer meets the PyPI wheel's exit −15 there.

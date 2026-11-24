@@ -26,6 +26,18 @@
 - Validated on pilot B (C6F14, 16 Å) on the MacBook's GPU in single precision: σ 11.09 mN/m with the tail against
   B's 11.71 ± 0.30 (−0.65 ± 0.61), bulk and plateau densities within 0.3 %; the GPU's on-the-fly σ minus a
   double-precision rerun of the same frames: −0.10 ± 0.09 mN/m (`Runs\openmm-validation-2026-11-23`).
+- Decided (Brandon, 2026-11-24):
+  - **The MD engine is set per computer.** Settings > Engines > MD engine saves this computer's choice only
+    (`engines.machine_md_engine`); the default, **Automatic**, is OpenMM where OpenMM finds a usable GPU (CUDA, HIP
+    or OpenCL), else LAMMPS. `doctor` prints which one this computer uses and why.
+  - **σ of an OpenMM run** is the run's own 20-fs on-the-fly samples when they pass the check against the
+    double-precision rerun of the frames, else the rerun's.
+  - **Frames are thinned after that check:** once the slab part has finished, every frame is rerun and the check has
+    passed, `md surface-tension` keeps every 10th frame of `slab.dcd` (`frame_keep_every`, `--frame-keep-every`;
+    `--keep-frames` keeps all) and deletes the rest; never before. `*.dcd` stays out of SyncThing.
+  - **Coulomb 1e-6 for LAMMPS cutoff runs** (was 1e-5, pilot B's, which put σ +0.25 mN/m high on pilot B's system).
+    `md liquid-slab`'s `cutoffN` variants and the MD benchmark's cutoff variants use it; OpenMM's PME stays at 1e-5,
+    which already matches LAMMPS at 1e-7 there.
 
 ### MD runs as jobs: segments, pause and resume (SIM-1 PR 1, 2026-11-23)
 - **`quantabench-cli md run DIR`** runs a folder written by `md liquid-slab`, `md smd` or the Surface builder under a

@@ -2528,23 +2528,32 @@ selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs m
   (`--md-variants default,openmm`: `openmm-gpu-cutoff16`) know it.
 - Validation (done): pilot B on the Mac's GPU, σ 11.09 vs 11.71 ± 0.30 mN/m with the tail (−0.65 ± 0.61), densities
   within 0.3 %, single precision unbiased against a double-precision rerun; `Runs\openmm-validation-2026-11-23\report.md`.
+- Decided (Brandon, 2026-11-24: "I agree with PR 59 to commit and your suggestions"), in this PR:
+  - frames: once the slab has finished, the frames are rerun and the check passed, `md surface-tension` keeps every
+    10th frame and deletes the rest (`frame_keep_every`, on by default; `--keep-frames`); `*.dcd` is in the synced
+    `.stglobalignore`;
+  - σ is the run's own 20-fs samples when they pass the check against the double-precision rerun (as built);
+  - LAMMPS cutoff runs default to Coulomb 1e-6 (the isotropic-mesh rule comes later);
+  - the engine default is per computer: Automatic (OpenMM where a usable GPU is detected, else LAMMPS), saved in
+    `engines.machine_md_engine`; Brandon's note stays;
+  - the Mac's own LAMMPS path points at the `qb-lammps` conda `lmp` (set with `quantabench-cli`, on the Mac).
 - Follow-ups: OPENMM-2 (below).
 
 ### OPENMM-2: OpenMM follow-ups · ready after OPENMM-1
 - GAFF2 with LJ-PME on OpenMM against the Mac's GAFF2 `pppm/disp` LAMMPS run; OpenMM's LJ-PME (OPLS-AA, geometric
   correction table) against A-fine. Until then the recommender marks LJ-PME on OpenMM provisional.
 - The upstream Metal platform (OpenMM PR #5488) when it ships: add it to the platform order and measure it.
-- Frames: `slab.dcd` every 1 ps is 117 KB per frame for 9,780 atoms (1.4 GB for 12 ns); consider saving them only
-  in the production part, or deleting them after a passing rerun check (Brandon's call).
-- Coulomb accuracy of LAMMPS' cutoff variants (MD-LR): at PPPM 1e-5 their virial σ is **+0.252 ± 0.004 mN/m** too
-  high on pilot B's system (2,501 frames of the OPENMM-1 validation run at 1e-5 vs 1e-6; +0.9 on a small hexane slab
-  at 8 Å), against 1e-6/1e-7 and OpenMM's PME, which agree. Pilots B and C carry it. Decide whether the cutoff
-  variants' default goes to 1e-6 (slower PPPM on the CPU threads of a GPU run) - Brandon's call.
-- The MacBook's LAMMPS for QuantaBench is the `.venv`'s PyPI wheel (MPICH): every run ends with SIGTERM after "OFI poll
-  failed (default nic=en0)" in MPI_Finalize (exit −15, even for a one-line input). SIM-1's supervisor marks a segment
-  done only on exit 0, so `md run` of a LAMMPS folder there would report finished segments as failed. Point Settings >
-  Engines > LAMMPS on the Mac at the `qb-lammps` conda `lmp`, or fix MPICH's netmod; and/or accept a complete log
-  (done tag + "Total wall time") with a signal exit, as `md.openmm_sigma`'s rerun does.
+- Frames (done in OPENMM-1, Brandon 2026-11-24): every 10th kept after a passing check. Left: save them only in the
+  production part (the settle part's frames are rerun too).
+- Coulomb accuracy (done in OPENMM-1, Brandon 2026-11-24: 1e-6 for cutoff runs). At PPPM 1e-5 the virial σ was
+  **+0.252 ± 0.004 mN/m** high on pilot B's system (2,501 frames of the OPENMM-1 validation run at 1e-5 vs 1e-6; +0.9
+  on a small hexane slab at 8 Å); pilots B and C carry it. Left: measure what 1e-6 costs on the GPU package (PPPM on
+  the CPU threads); the isotropic-mesh rule (MD-LR) comes later.
+- The MacBook's LAMMPS for QuantaBench was the `.venv`'s PyPI wheel (MPICH): every run ends with SIGTERM after "OFI
+  poll failed (default nic=en0)" in MPI_Finalize (exit −15, even for a one-line input), and SIM-1's supervisor marks a
+  segment done only on exit 0. Done 2026-11-24: the Mac's own LAMMPS path is the `qb-lammps` conda `lmp`. Left: fix
+  MPICH's netmod in the wheel, and/or let the supervisor accept a complete log (done tag + "Total wall time") with a
+  signal exit, as `md.openmm_sigma`'s rerun does.
 - The on-the-fly σ error bar of the validation run was 0.53 mN/m against pilot B's 0.30 for the same number of
   samples (white noise 0.45 in both): longer production or 10-fs samples if 0.3 is the target.
 

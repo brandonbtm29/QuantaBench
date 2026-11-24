@@ -32,7 +32,7 @@ The protocol, and why
   k-space is set explicitly (MD-LR): G = 2.77 / rc and a mesh no coarser than 0.52 / G per direction, computed in the
   input from the box (again after the slab's box is opened), with Coulomb PPPM at 1e-6. LAMMPS' own choice from the
   Howto_dispersion accuracies gave pilot A's slab a 2 x 2 x 8 mesh and a σ 1.36 mN/m too low (``md.long_range``).
-  ``cutoffN`` (``cutoff12``, ``cutoff16``, ...): ``lj/cut/coul/long N`` + ``pppm`` (1e-5): plain truncation of the LJ
+  ``cutoffN`` (``cutoff12``, ``cutoff16``, ...): ``lj/cut/coul/long N`` + ``pppm`` (1e-6): plain truncation of the LJ
   terms, which biases σ low (up to 20 % for alkanes at 12 Å, Ismail et al. 2007) until ``md surface-tension`` adds the
   tail; the GPU package runs it. The bulk NPT of the cutoff variants uses ``pair_modify tail yes`` (valid in a
   homogeneous liquid, so the bulk density is right); the slab never does (the tail correction assumes a uniform
@@ -100,7 +100,7 @@ class LiquidSlabConfig:
     # long range (md.long_range: the options, the slab-safe defaults and the recommendation)
     dispersion: str = "ewald"                # "ewald" (full long-range dispersion) | "cutoffN" (LJ cutoff N Å + tail)
     cutoff: float | None = None              # LJ cutoff (screening length), Å; None: ewald 12, cutoffN N
-    kspace_accuracy: float | None = None     # Coulomb PPPM relative accuracy; None: ewald 1e-6, cutoff 1e-5
+    kspace_accuracy: float | None = None     # Coulomb PPPM relative accuracy; None: 1e-6 (cutoff: 1e-5 before OPENMM-1)
     disp_grid: str = "spacing"               # ewald: "spacing" (G and mesh from rc and the box) | "accuracy"
     disp_gewald: float | None = None         # ewald, spacing: G in 1/Å; None: 2.77 / cutoff
     disp_spacing: float | None = None        # ewald, spacing: largest dispersion-mesh spacing, Å; None: 0.52 / G
@@ -144,6 +144,9 @@ class LiquidSlabConfig:
     friction: float = 1.0                    # 1/ps, OpenMM's Langevin thermostat (LAMMPS: Nosé-Hoover, tdamp)
     barostat_every: int = 25                 # steps between OpenMM's Monte Carlo barostat moves (bulk NPT)
     frame_every: int = 1000                  # OpenMM: steps between slab frames (slab.dcd) for the σ rerun; 0 = none
+    frame_keep_every: int = 10               # OpenMM: once md surface-tension's σ check has passed, keep every Nth
+                                             # frame of slab.dcd and delete the rest; 0 or 1 = keep all (Brandon,
+                                             # 2026-11-24: 12 ns of 9,780 atoms every 1 ps is 1.45 GB)
     kb_every: int = 20                       # OpenMM: steps between on-the-fly Kirkwood-Buff σ samples; 0 = off
     kb_strain: float = 1.0e-4                # ... the area strain of their central difference (bias ∝ strain: 0.16
                                              # mN/m at 1e-3 for hexane at 8 Å, from the LJ force jump at rc)
@@ -160,6 +163,8 @@ class LiquidSlabConfig:
             raise ValueError(f"engine {self.engine!r}: {' or '.join(ENGINES)}")
         if self.size not in SIZES:
             raise ValueError(f"size {self.size!r}: choose {', '.join(SIZES)}")
+        if int(self.frame_keep_every) < 0:
+            raise ValueError(f"frame_keep_every {self.frame_keep_every}: 0 (keep all frames) or more")
         if kind == "cutoff" and self.cutoff is not None and abs(float(self.cutoff) - rc) > 1e-9:
             raise ValueError(f"dispersion {self.dispersion!r} and cutoff {self.cutoff:g} Å disagree: give "
                              f"dispersion='cutoff{self.cutoff:g}'")
@@ -1007,6 +1012,7 @@ def _job_section(cfg: LiquidSlabConfig) -> list[str]:
 def openmm_section(cfg: LiquidSlabConfig) -> list[str]:
     """README lines of a folder written for the OpenMM engine (OPENMM-1)."""
     fe, ke, te = int(cfg.frame_every or 0), int(cfg.kb_every or 0), int(cfg.ta_every or 0)
+    keep = int(cfg.frame_keep_every or 0)
     return ["ENGINE: OpenMM (OPENMM-1)",
             f"  {ENGINE_NOTE}",
             "  quantabench-cli md run <this folder> runs the same stages with OpenMM (md.openmm_run) in the OpenMM",
@@ -1017,6 +1023,8 @@ def openmm_section(cfg: LiquidSlabConfig) -> list[str]:
             "cuda, cpu, ...).",
             "  Checkpoints: <part>.pause.xml and <part>.state.a/b.xml (OpenMM state XML: any machine, platform or build).",
             f"  slab.dcd: frames every {fe} steps ({fe * cfg.timestep / 1000:g} ps)" if fe else "  No frames are saved.",
+            (f"  Once md surface-tension's sigma check has passed, every {keep}th frame is kept and the rest deleted "
+             "(--keep-frames keeps them all; frame_keep_every in liquid_setup.json)" if fe and keep > 1 else ""),
             f"  sigma_kb.txt: Kirkwood-Buff sigma on the fly every {ke} steps (finite difference of the energy over the "
             "area)" if ke else "  No on-the-fly sigma samples.",
             f"  test_area.txt: test-area samples every {te} steps (a second sigma estimate)" if te else "",

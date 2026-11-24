@@ -77,6 +77,9 @@ def _doctor(args) -> int:
         from .md import openmm_engine as OE
 
         out["openmm"] = OE.probe_platforms()
+        from .cli_md import default_engine
+
+        out["md_engine"] = dict(zip(("engine", "why"), default_engine(with_reason=True)))
         out["run_priority"] = priority_info(settings_mod.load(), rep.logical_cores)
         from . import sensors
 
@@ -142,6 +145,10 @@ def _doctor(args) -> int:
     print(f"    {'-- ' if omm.get('error') else 'OK '} {'OpenMM (MD engine)':30s} {lines[0]}")
     for line in lines[1:]:
         print(f"        {'':30s} {line.strip()}")
+    from .cli_md import default_engine
+
+    engine, why = default_engine(with_reason=True)
+    print(f"    OK  {'MD engine for new folders':30s} {engine} ({why})")
     print("  Optional      " + ", ".join(f"{k}={'yes' if v else 'no'}" for k, v in rep.optional_packages.items()))
     from . import sketcher_assets
     from .gui import sketcher_web
@@ -804,6 +811,11 @@ def _settings(args) -> int:
             s.set_engine_path_for(name.strip(), value.strip(), machine)
             print(f"{name.strip()} on {machine}: {value.strip() or 'automatic'}")
         changed = True
+    if getattr(args, "md_engine", None) is not None:
+        s.set_md_engine_for("" if args.md_engine == "default" else args.md_engine, machine)
+        s.stamp_machine(machine, ["engines.machine_md_engine"])
+        print(f"MD engine on {machine}: {s.md_engine_for(machine)}")
+        changed = True
     if args.crest_wsl_scratch is not None:
         s.engines.crest_wsl_scratch = args.crest_wsl_scratch
         print(f"CREST scratch through WSL: {args.crest_wsl_scratch}")
@@ -1354,12 +1366,16 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--free-threads", metavar="N",
                     help="logical threads the automatic budgets leave free, this machine only or --machine NAME "
                          "(resources.machine_free_threads; default = back to the default of every machine, 1)")
+    se.add_argument("--md-engine", choices=["auto", "lammps", "openmm", "default"],
+                    help="the MD engine new liquid-slab folders are written for, this machine only or --machine NAME "
+                         "(engines.machine_md_engine): auto = OpenMM where it finds a usable GPU, else LAMMPS; "
+                         "default = back to the default of every machine (engines.md_engine, auto)")
     se.add_argument("--crest-wsl-scratch", choices=["auto", "shm", "disk", "off"],
                     help="where CREST through WSL (a wsl: path on Windows) runs (engines.crest_wsl_scratch, every "
                          "machine): auto = /dev/shm inside WSL when it has room, else WSL's own disk; shm; disk; off = "
                          "the Windows scratch folder through /mnt/c, as before 2026-11-20 (slow, heavy disk writes)")
     se.add_argument("--machine", nargs="?", const="", metavar="NAME",
-                    help="with --engine-path, --priority or --free-threads: the machine to set them for. Without "
+                    help="with --engine-path, --md-engine, --priority or --free-threads: the machine to set them for. Without "
                          "--machine, or with --machine and no name, it is this machine")
     se.set_defaults(func=_settings)
     return p

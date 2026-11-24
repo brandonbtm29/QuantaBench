@@ -15,8 +15,10 @@ light module (no numpy, no LAMMPS) that the CLI, ``md.liquid`` and the Simulate 
 ``cutoff`` (the "screening length")
     The LJ (and real-space Coulomb) cutoff rc in Å, 8-30. Defaults: 12 for ``ewald``, 16 for ``cutoff``.
 Coulomb accuracy (``kspace_accuracy``)
-    PPPM's relative force accuracy. Defaults: 1e-6 for ``ewald`` (converged), 1e-5 for ``cutoff`` (pilot B's, which
-    reproduced Tsige & Grest; PPPM runs on the CPU threads of a GPU run and sets its speed).
+    PPPM's relative force accuracy. Default 1e-6 for both (converged). Until 2026-11-24 ``cutoff`` used 1e-5 (pilot
+    B's): on 2,501 frames of pilot B's system that put σ +0.252 ± 0.004 mN/m above 1e-6 (OPENMM-1's validation;
+    1e-6 and 1e-7 agree within 0.01), so pilots B and C are ~0.25 high; Brandon chose 1e-6 (PPPM runs on the CPU
+    threads of a GPU run, so a cutoff run on the GPU package is somewhat slower).
 Dispersion k-space (``ewald`` only)
     ``disp_grid = "spacing"`` (default): ``kspace_modify gewald/disp G`` with G = ``DISP_G_RC`` / rc, and
     ``mesh/disp`` computed in the input from the box so that no spacing exceeds h = ``DISP_H_G`` / G (the inputs
@@ -67,7 +69,7 @@ CUTOFF_UNIT = "Å"
 CUTOFF_RANGE = (8.0, 30.0)
 DEFAULT_CUTOFF = {"ewald": 12.0, "cutoff": 16.0}
 #: Coulomb PPPM relative accuracy per method when none is given
-COULOMB_ACCURACY = {"ewald": 1.0e-6, "cutoff": 1.0e-5}
+COULOMB_ACCURACY = {"ewald": 1.0e-6, "cutoff": 1.0e-6}      # cutoff: 1e-5 until OPENMM-1 (+0.25 mN/m in σ)
 PURPOSES = {"screen": "Quick screen (σ to a few %, fastest on this machine)",
             "reference": "Reference value (numerically converged, no tail approximation)"}
 GEOMETRIES = ("slab", "bulk")
@@ -687,10 +689,10 @@ def check_settings(s: Mapping, geometry: str = "slab", box: Sequence[float] | No
                            "this G (converged: 0.52 at G 0.23, 0.57 at G 0.28; 1.17 lost 0.19 mN/m)")
     if float(s["kspace_accuracy"]) > 1.0e-5 * (1 + 1e-6):
         out.append(f"Coulomb PPPM {s['kspace_accuracy']:g} is looser than any pilot ran (1e-5 already shifts σ by "
-                   "+0.15 mN/m against 1e-6, mesh check)")
-    elif purpose == "reference" and float(s["kspace_accuracy"]) > 1.0e-6 * (1 + 1e-6):
-        out.append(f"Coulomb PPPM {s['kspace_accuracy']:g}: +0.15 mN/m against 1e-6 at 1e-5 (mesh check); a "
-                   "reference value uses 1e-6")
+                   "+0.15 to +0.25 mN/m against 1e-6: the mesh check, OPENMM-1's validation)")
+    elif float(s["kspace_accuracy"]) > 1.0e-6 * (1 + 1e-6):
+        out.append(f"Coulomb PPPM {s['kspace_accuracy']:g}: σ +0.15 to +0.25 mN/m against 1e-6 at 1e-5 (the mesh "
+                   "check; 2,501 frames of pilot B's system in OPENMM-1's validation); the default is 1e-6")
     return out
 
 

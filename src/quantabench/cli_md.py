@@ -57,7 +57,7 @@ def register(msub) -> None:
                     help="can LAMMPS use a GPU on the machine that runs the folder? auto (default): this computer's "
                          "LAMMPS (lmp -h: the GPU package and a GPU; the MD benchmark's CPU/GPU check)")
     lr.add_argument("--coulomb-accuracy", type=float, metavar="A",
-                    help="Coulomb PPPM relative accuracy (default: ewald 1e-6, cutoff 1e-5)")
+                    help="Coulomb PPPM relative accuracy (default 1e-6; the cutoff variants used 1e-5 before 2026-11-24)")
     lr.add_argument("--disp-grid", choices=["spacing", "accuracy"],
                     help="ewald's dispersion k-space: spacing (G from the cutoff and a mesh from the box; the "
                          "slab-safe default) or accuracy (LAMMPS picks both from --disp-accuracy)")
@@ -78,6 +78,9 @@ def register(msub) -> None:
     en.add_argument("--frame-every", type=int, metavar="STEPS",
                     help="openmm: steps between saved slab frames (slab.dcd) for the double-precision σ rerun "
                          "(default 1000; 0 = none)")
+    en.add_argument("--frame-keep-every", type=int, metavar="N",
+                    help="openmm: once md surface-tension's σ check has passed, keep every Nth saved frame and delete "
+                         "the rest (default 10; 0 = keep all)")
     en.add_argument("--kb-every", type=int, metavar="STEPS",
                     help="openmm: steps between on-the-fly Kirkwood-Buff σ samples (default 20; 0 = off)")
     en.add_argument("--ta-every", type=int, metavar="STEPS",
@@ -121,6 +124,10 @@ def register(msub) -> None:
     st.add_argument("--threads", type=int, help="threads of that rerun (default 2)")
     st.add_argument("--kspace-accuracy", type=float, metavar="A",
                     help="Coulomb k-space accuracy of a LAMMPS rerun (default: the run's, at most 1e-6)")
+    st.add_argument("--keep-frames", action="store_true",
+                    help="an OpenMM run: keep all its saved frames (by default, once the slab part has finished and "
+                         "the on-the-fly σ has passed its check against the rerun, every frame_keep_every-th frame, "
+                         "10, is kept and the rest deleted)")
     st.set_defaults(func=_surface_tension)
 
     es = msub.add_parser("estimate", help="run time of an MD job on each machine, from its MD benchmark "
@@ -328,20 +335,30 @@ def _liquid_slab(args) -> int:
     return 0
 
 
-def default_engine() -> str:
-    """Settings > Engines > MD engine (``engines.md_engine``): "lammps" unless set to "openmm"."""
+def default_engine(with_reason: bool = False):
+    """This computer's MD engine (Settings > Engines > MD engine; ``Settings.md_engine_for``): "lammps" or "openmm".
+    "auto" (the default) is OpenMM where OpenMM sees a usable GPU platform here (CUDA, HIP or OpenCL), else LAMMPS
+    (Brandon, 2026-11-24). ``with_reason``: (engine, why)."""
     try:
         from . import settings as settings_mod
 
-        e = str(getattr(settings_mod.load().engines, "md_engine", "") or "lammps").strip().lower()
-    except Exception:  # noqa: BLE001 - no settings: the reference engine
-        e = "lammps"
-    return e if e in ("lammps", "openmm") else "lammps"
+        value, where = settings_mod.load().md_engine_for(scope=True)
+    except Exception:  # noqa: BLE001 - no settings: automatic
+        value, where = "auto", "default"
+    if value in ("lammps", "openmm"):
+        out = (value, f"set for {where}")
+    else:
+        from .md import openmm_engine as OE
+
+        gpu = OE.usable_gpu(OE.probe_platforms())
+        out = ("openmm", f"automatic: OpenMM has a usable GPU here ({gpu})") if gpu else \
+            ("lammps", "automatic: OpenMM has no usable GPU here")
+    return out if with_reason else out[0]
 
 
 def _engine_kwargs(args) -> dict:
     out: dict = {"engine": getattr(args, "engine", None) or default_engine()}
-    for key in ("frame_every", "kb_every", "ta_every"):
+    for key in ("frame_every", "frame_keep_every", "kb_every", "ta_every"):
         v = getattr(args, key, None)
         if v is not None:
             if v < 0:
@@ -577,6 +594,19 @@ def _surface_tension(args) -> int:
     except (ValueError, OSError) as exc:
         print(f"{folder}: {exc}", file=sys.stderr)
         return 1
+    if OS.is_openmm_run(folder) and (folder / OS.FRAMES).is_file():
+        if getattr(args, "keep_frames", False):
+            r["frames"] = {"thinned": False, "why": "--keep-frames"}
+        else:
+            try:
+                r["frames"] = OS.thin_frames(folder, (r.get("sigma") or {}).get("check"))
+            except (OSError, ValueError) as exc:
+                r["frames"] = {"thinned": False, "why": f"thinning failed: {exc}"}
+            f = r["frames"]
+            if f.get("thinned") and f.get("why") != "thinned earlier":
+                print(f"Kept every {f['frame_keep_every']}th frame of {OS.FRAMES} ({f['frames_before']:,} -> "
+                      f"{f['frames_after']:,} frames, {f['bytes_before'] / 1e6:,.0f} -> {f['bytes_after'] / 1e6:,.0f} "
+                      "MB): the σ check passed", file=sys.stderr)
     js, md = S.write_report(folder, r)
     if args.json:
         print(json.dumps(r, indent=1))

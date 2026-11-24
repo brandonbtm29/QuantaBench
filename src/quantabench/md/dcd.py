@@ -3,7 +3,8 @@
 The OpenMM runs of ``md.openmm_run`` save their slab frames here (``slab.dcd``): positions in Å as float32 and an
 orthogonal unit cell per frame. Unlike OpenMM's own ``DCDFile`` this writer can append to a file that a resumed
 segment continues, and ``truncate`` cuts it at a step (``md.sim.cut_at``, kind "dcd"), so the frames stay one series
-across pauses. ``read_frames`` yields (step, positions, box) for the σ rerun (``md.openmm_sigma``).
+across pauses. ``read_frames`` yields (step, positions, box) for the σ rerun (``md.openmm_sigma``); ``thin`` keeps
+the frames at multiples of a longer interval once that rerun is done.
 
 Layout: a header record (``CORD``, 20 int32 control words: frames, first step, steps between frames, last step,
 ..., Δt as float32, the unit-cell flag 1, CHARMM version 24), a title record, the atom count, then per frame a
@@ -167,3 +168,27 @@ def truncate(path: str | Path, step: int, keep_step: bool) -> int:
         fh.seek(0)
         fh.write(_header(keep, h.first_step if keep else 0, h.every, h.dt_ps))
     return dropped
+
+
+def thin(path: str | Path, every: int) -> tuple[int, int]:
+    """Keep only the frames whose step is a multiple of ``every`` (a multiple of the file's interval) and delete the
+    rest: the file is rewritten beside itself and then replaces it, so a crash leaves the old one. Returns (frames
+    before, frames after); a file already at that interval is left alone."""
+    path = Path(path)
+    h = read_header(path)
+    every = int(every)
+    if every <= 0 or every % h.every:
+        raise ValueError(f"{path}: frames every {h.every} steps; {every} is not a multiple of that")
+    if not h.n_frames or every == h.every:
+        return h.n_frames, h.n_frames
+    keep = [k for k in range(h.n_frames) if h.step(k) % every == 0]
+    tmp = path.with_name(path.name + ".thinning")
+    with open(path, "rb") as src, open(tmp, "wb") as out:
+        src.seek(_HDR.size)
+        out.write(_header(len(keep), h.step(keep[0]) if keep else 0, every, h.dt_ps * every / h.every))
+        out.write(src.read(h.offset - _HDR.size))           # title and atom count as they were
+        for k in keep:
+            src.seek(h.offset + k * h.frame_bytes)
+            out.write(src.read(h.frame_bytes))
+    os.replace(tmp, path)
+    return h.n_frames, len(keep)

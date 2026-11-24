@@ -301,6 +301,86 @@ def test_analyze_takes_the_checked_on_the_fly_samples(tmp_path):
     assert any(not c["ok"] and "on-the-fly" in c["check"] for c in r["checks"])
 
 
+def _with_frames(folder: Path, frame_every: int = 1000, n_frames: int = 800, keep: int | None = None) -> None:
+    """slab.dcd (3 atoms) at the steps of ``_openmm_like_folder``'s rerun rows, and liquid_setup.json."""
+    import json
+
+    from quantabench.md import dcd
+
+    w = dcd.DCDWriter(folder / "slab.dcd", 3, frame_every, frame_every / 1000.0)
+    for k in range(n_frames):
+        w.write(k * frame_every, np.full((3, 3), float(k)), (40.0, 40.0, 200.0))
+    cfg = {"frame_every": frame_every, **({} if keep is None else {"frame_keep_every": keep})}
+    (folder / "liquid_setup.json").write_text(json.dumps({"config": cfg}), encoding="utf-8")
+
+
+def test_frames_are_thinned_only_after_the_check_passes(tmp_path, monkeypatch, capsys):
+    """Brandon, 2026-11-24: once the frames are rerun and the on-the-fly σ has passed its check, every 10th frame
+    is kept (frame_keep_every) and the rest deleted; never before (slab part running, frames not rerun, check
+    failed), and pressure_tensor.txt keeps every row, so the analysis is unchanged."""
+    from types import SimpleNamespace
+
+    from quantabench import cli
+    from quantabench.md import dcd, sim
+    from quantabench.md import openmm_sigma as OS
+    from quantabench.md import surface_tension as S
+
+    state = {"done": False}
+    monkeypatch.setattr(sim.Run, "load", staticmethod(lambda f: SimpleNamespace(part_done=lambda p: state["done"])))
+    ok = tmp_path / "ok"
+    _openmm_like_folder(ok)
+    _with_frames(ok)
+    r = S.analyze(ok, skip_ns=0.0, block_ns=0.1)
+    chk = r["sigma"]["check"]
+    assert chk["ok"] and L.LiquidSlabConfig().frame_keep_every == 10
+    size = (ok / "slab.dcd").stat().st_size
+    out = OS.thin_frames(ok, chk)                                       # the slab part is still running
+    assert not out["thinned"] and "not finished" in out["why"] and (ok / "slab.dcd").stat().st_size == size
+    state["done"] = True
+    assert "not passed" in OS.thin_frames(ok, None)["why"]
+    assert "not passed" in OS.thin_frames(ok, {**chk, "ok": False})["why"]
+    assert "every frame stays" in OS.thin_frames(ok, chk, keep_every=0)["why"]
+    w = dcd.DCDWriter(ok / "slab.dcd", 3, 1000, 1.0)                    # a frame without its rerun row
+    w.write(800_000, np.zeros((3, 3)), (40.0, 40.0, 200.0))
+    assert "1 frames are not in" in OS.thin_frames(ok, chk)["why"]
+    dcd.truncate(ok / "slab.dcd", 799_000, keep_step=True)
+    assert dcd.frame_steps(ok / "slab.dcd")[-1] == 799_000 and not (ok / OS.THINNED_FILE).exists()
+
+    args = ["md", "surface-tension", str(ok), "--skip-ns", "0", "--block-ns", "0.1", "--rerun", "none"]
+    assert cli.main([*args, "--keep-frames"]) == 0
+    assert len(dcd.frame_steps(ok / "slab.dcd")) == 800
+    assert cli.main(args) == 0
+    assert "Kept every 10th frame of slab.dcd (800 -> 80 frames" in capsys.readouterr().err
+    steps = dcd.frame_steps(ok / "slab.dcd")
+    assert steps == list(range(0, 800_000, 10_000)) and dcd.read_header(ok / "slab.dcd").every == 10_000
+    got = list(dcd.read_frames(ok / "slab.dcd"))
+    assert got[3][0] == 30_000 and np.all(got[3][1] == 30.0)          # the frames kept are the ones at those steps
+    rec = OS.thinned(ok)
+    assert (rec["frames_before"], rec["frames_after"], rec["last_step"]) == (800, 80, 799_000)
+    assert rec["bytes_after"] < rec["bytes_before"] / 9 and rec["check"]["ok"]
+    assert "every 10th kept after the check passed: 800 → 80" in (ok / "surface_tension.md").read_text(encoding="utf-8")
+    assert len(OS.done_steps(ok)) == 800 and OS.pending_frames(ok) == 0
+    assert OS.rerun(ok, "openmm")["method"] == "none" and len(OS.done_steps(ok)) == 800   # its rows stay
+    again = S.analyze(ok, skip_ns=0.0, block_ns=0.1)
+    assert again["sigma"]["mean_mN_m"] == r["sigma"]["mean_mN_m"] and again["sigma_rerun"]["n_samples"] == 800
+    assert OS.thin_frames(ok, chk)["why"] == "thinned earlier" and dcd.frame_steps(ok / "slab.dcd") == steps
+    with pytest.raises(ValueError, match="in the file"):
+        dcd.DCDWriter(ok / "slab.dcd", 3, 1000, 1.0)                    # a thinned file is not continued
+
+    biased = tmp_path / "biased"                                        # the check fails: every frame stays
+    _openmm_like_folder(biased, kb_bias=1.0)
+    _with_frames(biased)
+    assert cli.main(["md", "surface-tension", str(biased), "--skip-ns", "0", "--block-ns", "0.1", "--rerun",
+                     "none"]) == 0
+    assert len(dcd.frame_steps(biased / "slab.dcd")) == 800 and not (biased / OS.THINNED_FILE).exists()
+    off = tmp_path / "off"
+    _openmm_like_folder(off)
+    _with_frames(off, keep=0)
+    assert cli.main(["md", "surface-tension", str(off), "--skip-ns", "0", "--block-ns", "0.1", "--rerun",
+                     "none"]) == 0
+    assert len(dcd.frame_steps(off / "slab.dcd")) == 800
+
+
 # --------------------------------------------------------------------------------------- a real OpenMM run
 def _tiny(**kw):
     base = dict(lateral=18.0, slab_thickness=18.0, packing="lattice", dispersion="cutoff8", thermo_every=100,
@@ -357,11 +437,18 @@ def test_openmm_run_pauses_resumes_and_gives_sigma(omm_python, tmp_path):
     # LAMMPS' virial (Coulomb k-space at 1e-6) and OpenMM's strain derivative of the same frames agree closely
     assert abs(chk["mean_diff_mN_m"]) <= 0.1 + 3 * chk["sem_diff_mN_m"], chk     # per-frame noise: the CPU platform
     assert "sigma_test_area" in r
+    from quantabench.md import openmm_sigma as OS
+
+    if chk["ok"]:                     # every 10th frame kept once the check passed; the analysis is unchanged
+        assert dcd.frame_steps(folder / "slab.dcd") == list(range(0, end + 1, 1000)) and OS.thinned(folder)
+        assert OS.pending_frames(folder) == 0 and S.analyze(folder, skip_ns=0.0002)["sigma"] == r["sigma"]
+    else:
+        assert dcd.frame_steps(folder / "slab.dcd") == list(range(0, end + 1, 100))
 
 
 def test_settings_engines_tab_has_the_md_engine_and_its_note(tmp_path):
-    """Settings > Engines > Molecular dynamics: the MD engine (engines.md_engine) with the note on what OpenMM gives,
-    and the OpenMM Python path among the programs."""
+    """Settings > Engines > Molecular dynamics: the MD engine (Automatic by default) with the note on what OpenMM
+    gives, saved for this computer only (Brandon, 2026-11-24), and the OpenMM Python path among the programs."""
     from conftest import HAS_DISPLAY
 
     if not HAS_DISPLAY:
@@ -373,23 +460,56 @@ def test_settings_engines_tab_has_the_md_engine_and_its_note(tmp_path):
 
     app = QApplication.instance() or QApplication([])
     s = sm.Settings(output_dir=str(tmp_path))
+    s.engines.machine_md_engine = {"other-pc": "lammps"}
     d = SettingsDialog(s, None)
     try:
-        assert d.md_engine.currentData() == "lammps" and "openmm_python" in d.program_paths
+        assert d.md_engine.currentData() == "auto" and "openmm_python" in d.program_paths
         note = d.findChild(QLabel, "md_engine_note")
         assert note is not None and note.text() == L.ENGINE_NOTE and "single precision on Apple GPUs" in note.text()
         d.md_engine.setCurrentIndex(d.md_engine.findData("openmm"))
-        assert d.result_settings().engines.md_engine == "openmm"
+        out = d.result_settings()
+        assert out.engines.md_engine == "auto"                         # the shared default is not changed
+        assert out.md_engine_for() == "openmm" and out.md_engine_for("other-pc") == "lammps"
+        assert "engines.machine_md_engine" in sm._machine_entry(out.dist.machine_updated, None)
     finally:
         d.reject()
         d.deleteLater()
         app.processEvents()
-    s.engines.md_engine = "openmm"
+
+
+def test_md_engine_is_set_per_computer_and_automatic_by_default(tmp_path, monkeypatch):
+    """engines.machine_md_engine: one entry per computer, which wins over engines.md_engine ("auto" by default:
+    OpenMM where OpenMM sees a usable GPU, else LAMMPS); settings.save keeps the other computers' entries."""
     import quantabench.settings as settings_mod
     from quantabench import cli_md
-    old = settings_mod.load
-    settings_mod.load = lambda *a, **k: s
-    try:
-        assert cli_md.default_engine() == "openmm"
-    finally:
-        settings_mod.load = old
+    from quantabench.md import openmm_engine as OE
+
+    s = settings_mod.Settings(output_dir=str(tmp_path))
+    assert s.engines.md_engine == "auto" and s.md_engine_for(scope=True) == ("auto", "all machines")
+    s.set_md_engine_for("LAMMPS", "Lab PC")
+    assert s.engines.machine_md_engine == {"lab-pc": "lammps"}
+    assert s.md_engine_for("lab_pc", scope=True) == ("lammps", "this machine") and s.md_engine_for("mac") == "auto"
+    s.engines.md_engine = "openmm"
+    assert s.md_engine_for("mac", scope=True) == ("openmm", "all machines") and s.md_engine_for("lab-pc") == "lammps"
+    s.engines.machine_md_engine["mac"] = "fast"                       # not an engine: the shared one
+    assert s.md_engine_for("mac") == "openmm"
+    s.set_md_engine_for("", "lab-pc")
+    assert "lab-pc" not in s.engines.machine_md_engine
+    with pytest.raises(ValueError, match="MD engine"):
+        s.set_md_engine_for("gromacs")
+    assert ("engines", "machine_md_engine") in settings_mod.PER_MACHINE_TABLES      # merged entry by entry on save
+    back = settings_mod.Settings.from_dict(s.to_dict())
+    assert back.engines.machine_md_engine == s.engines.machine_md_engine
+
+    gpu = {"platforms": [{"name": "CPU", "precisions": ["mixed"], "devices": []},
+                         {"name": "OpenCL", "precisions": ["single"], "devices": ["Apple M3 Max"]}]}
+    cpu = {"platforms": [{"name": "Reference", "precisions": ["double"]}, {"name": "CPU", "precisions": ["mixed"]}]}
+    assert OE.usable_gpu(gpu) == "OpenCL on Apple M3 Max (single)" and OE.usable_gpu(cpu) == "" == OE.usable_gpu({})
+    s = settings_mod.Settings(output_dir=str(tmp_path))
+    monkeypatch.setattr(settings_mod, "load", lambda *a, **k: s)
+    for desc, engine in ((gpu, "openmm"), (cpu, "lammps")):
+        monkeypatch.setattr(OE, "probe_platforms", lambda *a, _d=desc, **k: _d)
+        got, why = cli_md.default_engine(with_reason=True)
+        assert got == engine and why.startswith("automatic") and cli_md.default_engine() == engine
+    s.set_md_engine_for("lammps")                                     # this computer's own choice wins
+    assert cli_md.default_engine(with_reason=True) == ("lammps", "set for this machine")

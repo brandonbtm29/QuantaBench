@@ -116,9 +116,12 @@ class EngineSettings:
     # /mnt/c (before 2026-11-20: every file CREST writes crosses to the Windows disk). Native CREST is not affected.
     crest_wsl_scratch: str = "auto"
     crest_wsl_shm_min_gb: float = 2.0  # "auto": /dev/shm and WSL's free memory keep this much, plus 2x the job's size
-    # the engine new MD folders are written for (OPENMM-1): "lammps" (the reference) or "openmm" (fast on GPUs at
-    # reduced arithmetic precision; σ is computed afterwards in double precision: md.openmm_sigma)
-    md_engine: str = "lammps"
+    # the engine new MD folders are written for (OPENMM-1): "auto" (OpenMM on a computer where OpenMM has a usable
+    # GPU, else LAMMPS), "lammps" (the reference) or "openmm" (fast on GPUs at reduced arithmetic precision; σ is
+    # computed afterwards in double precision: md.openmm_sigma). ``machine_md_engine``: each machine's own choice
+    # (Settings > Engines saves it there), which wins over ``md_engine`` (Brandon, 2026-11-24: per computer)
+    md_engine: str = "auto"
+    machine_md_engine: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -338,6 +341,29 @@ class Settings:
             table[key] = entry
         self.engines.machine_paths = table
 
+    def md_engine_for(self, machine: str | None = None, *, scope: bool = False):
+        """The MD engine setting of ``machine`` (default: this one): "auto", "lammps" or "openmm", from its
+        ``engines.machine_md_engine`` entry, else ``engines.md_engine``. ``scope=True`` returns (value, "this machine" |
+        "all machines"). "auto" is resolved by ``cli_md.default_engine`` (OpenMM where it has a usable GPU)."""
+        own = _machine_entry(self.engines.machine_md_engine, machine)
+        if isinstance(own, str) and own.strip().lower() in MD_ENGINES:
+            value, where = own.strip().lower(), "this machine"
+        else:
+            shared = str(self.engines.md_engine or "auto").strip().lower()
+            value, where = (shared if shared in MD_ENGINES else "auto"), "all machines"
+        return (value, where) if scope else value
+
+    def set_md_engine_for(self, engine: str | None, machine: str | None = None) -> None:
+        """Set ``machine``'s (default: this one) MD engine only; None or "" = back to the default of every machine."""
+        key = machine_key(machine if machine is not None else _this_machine())
+        table = {k: v for k, v in self.engines.machine_md_engine.items() if machine_key(k) != key}
+        text = str(engine or "").strip().lower()
+        if text:
+            if text not in MD_ENGINES:
+                raise ValueError(f"MD engine {engine!r}: {', '.join(MD_ENGINES)}")
+            table[key] = text
+        self.engines.machine_md_engine = table
+
     def priority_for(self, machine: str | None = None, *, scope: bool = False):
         """The run priority of ``machine`` (default: this one): its ``resources.machine_priority`` entry, else
         ``resources.priority`` (a value that is not a priority counts as unset). ``scope=True`` returns
@@ -544,6 +570,10 @@ def _machine_entry(table: dict, machine: str | None):
     return None
 
 
+#: the MD engine settings (OPENMM-1): "auto" = OpenMM where it has a usable GPU, else LAMMPS
+MD_ENGINES = ("auto", "lammps", "openmm")
+
+
 def machine_key(name: str) -> str:
     """Machine names compared like Tailscale MagicDNS names (lowercase, spaces and underscores as '-'): the
     same rule as ``dist.plan.norm_name``."""
@@ -666,7 +696,7 @@ def set_settings_dir(new_dir: str | Path | None, pointer_place: Path | None = No
 #: by every machine, so ``save`` writes only the entries this process changed and keeps the others' from disk.
 PER_MACHINE_TABLES = (("engines", "machine_paths"), ("dist", "machine_lanes"), ("resources", "machine_priority"),
                       ("resources", "machine_free_threads"), ("sensors", "machine"), ("dist", "machine_control"),
-                      ("dist", "machine_updated"))
+                      ("dist", "machine_updated"), ("engines", "machine_md_engine"))
 _AS_LOADED = "_per_machine_as_loaded"     # attribute (not a dataclass field: never written) set by load/save
 _ALL_AS_LOADED = "_all_as_loaded"         # the whole file as loaded (the base of the merge on save)
 #: per-machine values that ``update_machine`` sets, as "section.field" (``Settings.stamp_machine``)

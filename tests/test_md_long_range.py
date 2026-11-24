@@ -36,14 +36,14 @@ def test_settings_names_and_descriptions():
                  "disp_grid": "spacing", "disp_gewald": pytest.approx(0.230833, rel=1e-5),
                  "disp_spacing": pytest.approx(2.2527, rel=1e-4)}
     c = LR.settings("cutoff+tail")
-    assert c == {"method": "cutoff", "dispersion": "cutoff16", "cutoff": 16.0, "kspace_accuracy": 1e-5}
+    assert c == {"method": "cutoff", "dispersion": "cutoff16", "cutoff": 16.0, "kspace_accuracy": 1e-6}   # 1e-5 before OPENMM-1
     a = LR.settings("full", disp_grid="accuracy")
     assert (a["disp_real_accuracy"], a["disp_kspace_accuracy"]) == (1e-5, 2e-5) and "disp_gewald" not in a
     assert LR.dispersion_name("cutoff", 14) == "cutoff14" and LR.dispersion_name("ewald", 10) == "ewald"
     assert LR.method_of("cutoff12") == "cutoff" and LR.method_of("ewald") == "ewald"
     assert "18 x 18 x 90" in LR.describe(e, PILOT_SLAB) and "pppm/disp" in LR.describe(e)
-    assert "lj/cut/coul/long 16 + pppm, Coulomb 1e-05" in LR.describe(c)
-    assert LR.config_kwargs(c) == {"dispersion": "cutoff16", "cutoff": 16.0, "kspace_accuracy": 1e-5}
+    assert "lj/cut/coul/long 16 + pppm, Coulomb 1e-06" in LR.describe(c)
+    assert LR.config_kwargs(c) == {"dispersion": "cutoff16", "cutoff": 16.0, "kspace_accuracy": 1e-6}
     for bad in ("pme", ""):
         with pytest.raises(ValueError, match="long-range method"):
             LR.normalize_method(bad)
@@ -61,7 +61,7 @@ def test_recommendation_follows_the_pilots():
     assert gpu.summary().startswith("Recommended for this setup: 16 Å LJ cutoff + tail correction on the GPU because")
     assert gpu.provisional and gpu.summary().endswith("[provisional]")
     assert any("2.0 %" in n for n in gpu.notes) and not gpu.warnings
-    assert gpu.config_kwargs() == {"dispersion": "cutoff16", "cutoff": 16.0, "kspace_accuracy": 1e-5}
+    assert gpu.config_kwargs() == {"dispersion": "cutoff16", "cutoff": 16.0, "kspace_accuracy": 1e-6}
 
     cpu = recommend_long_range("slab", PILOT_SLAB, n_atoms=9780, machine=LR.MachineInfo(False, "test"))
     assert (cpu.method, cpu.cutoff, cpu.accelerator) == ("ewald", 12.0, "cpu")
@@ -100,14 +100,18 @@ def test_choice_against_recommendation_and_warnings():
     assert LR.differences(LR.settings("cutoff", 16), rec) == []
     assert LR.differences(LR.settings("ewald"), rec) == ["method: ewald (recommended: cutoff)",
                                                           "LJ cutoff (screening length): 12 Å (recommended: 16 Å)"]
-    assert LR.differences(LR.settings("cutoff", 16, kspace_accuracy=1e-6), rec) == [
-        "Coulomb PPPM accuracy: 1e-06 (recommended: 1e-05)"]
+    assert LR.differences(LR.settings("cutoff", 16, kspace_accuracy=1e-5), rec) == [
+        "Coulomb PPPM accuracy: 1e-05 (recommended: 1e-06)"]
+    # pilot B's 1e-5 (Brandon, 2026-11-24: cutoff runs use 1e-6; 1e-5 put σ +0.25 mN/m high)
+    w5 = LR.check_settings(LR.settings("cutoff", 16, kspace_accuracy=1e-5), "slab")
+    assert len(w5) == 1 and "+0.15 to +0.25" in w5[0] and "default is 1e-6" in w5[0]
     # a 12 Å cutoff in a slab: pilot C
     w = LR.check_settings(LR.settings("cutoff", 12), "slab", PILOT_SLAB)
     assert len(w) == 1 and "4.7 %" in w[0] and "7.96" in w[0]
     assert LR.check_settings(LR.settings("cutoff", 12), "bulk") == []
     assert LR.check_settings(LR.settings("cutoff", 16), "slab") == []
     assert any("residual low bias" in x for x in LR.check_settings(LR.settings("cutoff", 16), purpose="reference"))
+    assert any("looser than any pilot" in x for x in LR.check_settings(LR.settings("cutoff", 16, kspace_accuracy=1e-4)))
     # the old pppm/disp settings: LAMMPS' estimate in a slab
     old = LR.settings("ewald", disp_grid="accuracy", disp_real_accuracy=1e-4, disp_kspace_accuracy=2e-3)
     w = LR.check_settings(old, "slab")
