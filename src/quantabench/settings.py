@@ -134,7 +134,8 @@ class DistSettings:
     # DIST-7, machine control (docs/WORKERS.md, "Pausing a machine, a closing laptop"): each machine's own entry
     # (keys in MACHINE_CONTROL_KEYS): its part of a grid split ("auto" = measured speed, "manual" with "weight",
     # "off"), "pause_on_battery" (a laptop's worker pauses itself while it runs on battery; on by default) and "max_cpu" (the
-    # Machines dock's percent, kept as the free threads it set). Use ``Settings.machine_control_for`` and
+    # Machines dock's percent, kept as the free threads it set), "window" and "md_bench_not_now" (the MD benchmark
+    # version whose re-run notice "Not now" hid, MD-BENCH-3). Use ``Settings.machine_control_for`` and
     # ``update_machine``.
     machine_control: dict[str, dict] = field(default_factory=dict)
     # when each machine's per-machine values were last set (machine -> {"section.field": ISO time}): a SyncThing
@@ -234,7 +235,7 @@ class LookupSettings:
 SENSOR_KEYS: dict[str, type] = {"enabled": bool, "interval_s": float, "lhm_url": str}
 #: per-machine machine-control keys (``DistSettings.machine_control`` entries, DIST-7) and their types
 MACHINE_CONTROL_KEYS: dict[str, type] = {"split": str, "weight": float, "pause_on_battery": bool, "max_cpu": float,
-                                         "window": str}
+                                         "window": str, "md_bench_not_now": int}
 SPLIT_MODES = ("auto", "manual", "off")
 
 
@@ -452,16 +453,20 @@ class Settings:
         """``machine``'s (default: this one) DIST-7 controls: ``split`` ("auto" | "manual" | "off"), ``weight`` (the
         manual weight, 1 by default), ``pause_on_battery`` (True: a laptop's worker takes no work on battery; it
         never matters on a machine without one), ``max_cpu`` (percent, 0 = not set) and ``window`` (the hours it may
-        work, "HH:MM-HH:MM" in its local time, "" = any hour; ``dist.control.parse_window``); values of the wrong type
-        or form are ignored."""
+        work, "HH:MM-HH:MM" in its local time, "" = any hour; ``dist.control.parse_window``) and ``md_bench_not_now``
+        (the MD benchmark version for which the Machines dock's "Not now" hid the re-run notice, 0 = never; MD-BENCH-3);
+        values of the wrong type or form are ignored."""
         from .dist.control import parse_window, window_text
 
-        out = {"split": "auto", "weight": 1.0, "pause_on_battery": True, "max_cpu": 0.0, "window": ""}
+        out = {"split": "auto", "weight": 1.0, "pause_on_battery": True, "max_cpu": 0.0, "window": "",
+               "md_bench_not_now": 0}
         entry = _machine_entry(self.dist.machine_control, machine)
         if isinstance(entry, dict):
             for k, kind in MACHINE_CONTROL_KEYS.items():
                 v = entry.get(k)
                 if kind is bool and isinstance(v, bool):
+                    out[k] = v
+                elif kind is int and isinstance(v, int) and not isinstance(v, bool) and v >= 0:
                     out[k] = v
                 elif kind is float and isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v >= 0:
                     out[k] = float(v)
@@ -480,6 +485,8 @@ class Settings:
         if value is not None:
             if kind is bool and not isinstance(value, bool):
                 raise ValueError(f"{key} must be true or false")
+            if kind is int and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+                raise ValueError(f"{key} must be a whole number, 0 or more")
             if kind is float:
                 value = float(value)
                 if not value >= 0:

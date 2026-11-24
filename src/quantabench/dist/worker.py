@@ -23,6 +23,10 @@ API (version 1; every request needs ``Authorization: Bearer <settings.dist.worke
     POST /v1/pause                   {"paused": true|false, "mode": "drain"|"now"}: pause this machine (DIST-7): it
                                      takes no new molecules; "drain" lets the running ones finish, "now" stops them
                                      at their next checkpoint. Saved, so a restart stays paused until resumed.
+    POST /v1/bench                   {"methods": ["md"], "by"?: machine}: run this machine's MD benchmark again now
+                                     (MD-BENCH-3; the Machines dock's re-run for another machine). New jobs wait
+                                     meanwhile; refused (409) while a job runs, the machine is paused or a benchmark
+                                     runs. 202 {"md_bench": ...}; GET /v1/info's "md_bench" says how it went.
 
 Safety: binds the Tailscale address (or loopback) only and refuses 0.0.0.0 unless told otherwise; constant
 time token check; size-limited, strictly validated requests (known ``BuildConfig`` fields only, the output
@@ -1744,6 +1748,7 @@ _ROUTES = (
     ("GET", re.compile(r"/v1/jobs/([0-9a-f]{12})/molecules"), "molecules"),
     ("POST", re.compile(r"/v1/jobs/([0-9a-f]{12})/sync"), "sync"),
     ("POST", re.compile(r"/v1/pause"), "pause"),
+    ("POST", re.compile(r"/v1/bench"), "bench"),
 )
 
 
@@ -1963,6 +1968,18 @@ class _Handler(BaseHTTPRequestHandler):
         mgr.set_paused(body["paused"], mode, by=by or self.client_address[0])
         self._json(200, mgr.queue_state())
 
+    def _r_bench(self, query) -> None:
+        """{"methods": ["md"], "by"?: machine}: run this machine's MD benchmark again now (MD-BENCH-3). 202 with
+        "md_bench" (``Worker.md_bench_info``); 409 while a job or a benchmark runs or the machine is paused."""
+        body = self._body()
+        if set(body) - {"methods", "by"} or body.get("methods") != ["md"]:
+            raise RequestError(400, 'body must be {"methods": ["md"], "by": "machine"} (only the MD benchmark can be '
+                                    "asked for)")
+        by = _check_str("by", body.get("by", ""), 120)
+        if _CONTROL.search(by):
+            raise RequestError(400, "by contains control characters")
+        self._json(202, {"md_bench": self.server.worker.request_md_benchmark(by or self.client_address[0])})
+
     def _r_molecules(self, job_id: str, query) -> None:
         """{"molecules": {id: status}}: what the grid client needs to know which molecules have not started here."""
         self._job_or_404(job_id)
@@ -2047,6 +2064,8 @@ class Worker:
         self.bench_seconds = bench_seconds
         self._bench_stop = threading.Event()
         self._bench_thread: threading.Thread | None = None
+        self._bench_lock = threading.Lock()
+        self.bench_last: dict = {}       # the last benchmark asked for over HTTP (POST /v1/bench): state, by, times
         if not token or len(token) < 8:
             raise ValueError("a worker needs a token")
         self.token = token
@@ -2105,7 +2124,7 @@ class Worker:
                "commit": self.commit, "python": sys.version.split()[0], "platform": sys.platform,
                "output_dir": str(self.manager.output_dir), "lanes": self.lanes_spec(),
                "queue": self.manager.queue_state(), "profile": self.profile.to_dict(),
-               "battery": self.manager.battery or None}
+               "battery": self.manager.battery or None, "md_bench": self.md_bench_info()}
         with contextlib.suppress(Exception):      # DIST-7: what this worker's jobs run with now
             s = settings_mod.load()
             out["controls"] = {"priority": self.manager.priority or s.priority_for(self.name),
@@ -2193,27 +2212,90 @@ class Worker:
             return engines if need_engines else []
         return ((engines if engines is not None else ["default"]) if need_engines else []) + [profile_mod.MD_METHOD]
 
+    def md_rerun_note(self) -> str:
+        """The note that this machine's MD benchmark is from an older benchmark version ('' when it is current or
+        not measured; ``md.bench.rerun_note``). The worker only logs it: it never re-runs a changed MD benchmark on
+        its own (MD-BENCH-3); ``--bench always`` does, because it was asked for."""
+        from ..md.bench import rerun_note
+
+        return rerun_note(getattr(self.profile, "md_throughput", None))
+
+    def md_bench_info(self) -> dict:
+        """``GET /v1/info``'s "md_bench" (MD-BENCH-3): ``md.bench.status`` of this machine's record (``version``,
+        ``stored``, ``outdated``, ``note``), ``running`` (a benchmark runs now) and ``last`` (the last one asked for
+        over HTTP: state "running" | "done" | "failed" | "stopped", ``by``, ``started``, ``ended``, ``text``). Older
+        workers have no such key; the Machines dock then names the command to run there instead."""
+        from ..md import bench as md_bench
+
+        out = md_bench.status(getattr(self.profile, "md_throughput", None))
+        thread = self._bench_thread
+        out["running"] = thread is not None and thread.is_alive()
+        out["last"] = dict(self.bench_last) or None
+        return out
+
+    def request_md_benchmark(self, by: str = "") -> dict:
+        """``POST /v1/bench``: run this machine's MD benchmark again now (``profile.local_profile(methods=["md"])``: the
+        engines' numbers stay), with new jobs held meanwhile, then publish the profile. Asked for by a person (the
+        Machines dock's re-run for another machine, MD-BENCH-3), so it runs whatever the version; nothing starts it on
+        its own. Refused (``RequestError`` 409) while a benchmark runs, the machine is paused (the person may be using
+        it for something else) or a job runs (it would slow the job, and the numbers would be off)."""
+        from . import profile as profile_mod
+
+        with self._bench_lock:
+            if self._bench_thread is not None and self._bench_thread.is_alive():
+                raise RequestError(409, f"{self.name} is already running a benchmark")
+            if self.manager.queue_state()["paused"]:
+                raise RequestError(409, f"{self.name} is paused: resume it first, or run `quantabench-cli machines "
+                                        "--bench md` there")
+            self.manager.set_hold("benchmarking this machine (MD, asked for)")
+            running = self.manager.queue_state()["running"]   # held now: nothing new starts after this check
+            if running:
+                self.manager.set_hold("")
+                raise RequestError(409, f"{self.name} is running job(s) {', '.join(running)}: run the MD benchmark "
+                                        "when it is idle (or pause it with drain, wait, and resume it)")
+            self.bench_last = {"state": "running", "by": str(by)[:120], "started": _now(), "ended": None, "text": ""}
+            if self._bench_stop.is_set():                       # the worker is stopping
+                self.manager.set_hold("")
+                raise RequestError(409, f"{self.name}'s worker is stopping")
+            self._bench_thread = threading.Thread(target=self._run_benchmark, args=([profile_mod.MD_METHOD],),
+                                                  name="qb-worker-bench", daemon=True)
+            self._bench_thread.start()
+        self.log(f"MD benchmark asked for by {by or 'a client'}: running it now (new jobs wait meanwhile)")
+        return self.md_bench_info()
+
     def _start_benchmark(self) -> None:
+        note = self.md_rerun_note()
+        if note and self.bench != "always":
+            self.log(f"Note: {note} The worker leaves it as it is.")
         if not self.needs_benchmark():
             return
         self.manager.set_hold("benchmarking this machine")
         self._bench_thread = threading.Thread(target=self._run_benchmark, name="qb-worker-bench", daemon=True)
         self._bench_thread.start()
 
-    def _run_benchmark(self) -> None:
+    def _run_benchmark(self, methods: list[str] | None = None) -> None:
         """Measure molecules/hour once (``profile.local_profile(bench=True)``), with new jobs held meanwhile,
         then publish the profile. A stop (Ctrl+C, the service stopping) ends it after the current molecule
-        and saves nothing; it runs again on the next start."""
+        and saves nothing; it runs again on the next start. ``methods``: what ``POST /v1/bench`` asked for (["md"]);
+        None = the join-time benchmark's own list (``_methods_to_measure``)."""
         from . import profile as profile_mod
 
-        self.log("Measuring this machine's throughput once, so other machines can size its share of a split "
-                 "(a few minutes; jobs wait meanwhile; `worker --bench never` skips this)")
+        asked = methods is not None
+        if asked:
+            self.log("Running this machine's MD benchmark (LAMMPS; a few minutes plus a one-time box set-up; jobs "
+                     "wait meanwhile)")
+        else:
+            self.log("Measuring this machine's throughput once, so other machines can size its share of a split "
+                     "(a few minutes; jobs wait meanwhile; `worker --bench never` skips this)")
+        last = {"state": "failed", "text": ""}
         try:
             kw = {"max_seconds": self.bench_seconds} if self.bench_seconds else {}
-            prof = profile_mod.local_profile(bench=True, methods=self._methods_to_measure(), address=self.url,
-                                             should_stop=self._bench_stop.is_set, log=self.log, **kw)
+            prof = profile_mod.local_profile(bench=True, methods=methods if asked else self._methods_to_measure(),
+                                             address=self.url, should_stop=self._bench_stop.is_set, log=self.log,
+                                             **kw)
             if self._bench_stop.is_set():
-                self.log("Benchmark stopped; nothing saved (it runs again on the next start)")
+                self.log("Benchmark stopped; nothing saved" + ("" if asked else " (it runs again on the next start)"))
+                last = {"state": "stopped", "text": "stopped; nothing saved"}
                 return
             self.profile = dataclasses.replace(prof, name=self.name, address=self.url, updated=_now())
             self.manager.environment["profile"] = self.profile.to_dict()
@@ -2224,10 +2306,22 @@ class Worker:
                 measured += ("; " if measured else "") + "MD ns/day: " + short_text(self.profile.md_throughput)
             self.log(f"Benchmark done: {measured or 'nothing measured'}")
             self._publish_profile()
+            if asked:
+                from ..md import bench as md_bench
+
+                md = self.profile.md_throughput
+                if md_bench.outdated(md) is not None or not md_bench.rated(md):
+                    why = (md or {}).get("last_attempt", {}).get("skipped") or (md or {}).get("skipped")
+                    last = {"state": "failed", "text": f"{why or 'nothing was measured'}; the older numbers stay"}
+                else:
+                    last = {"state": "done", "text": md_bench.short_text(md) or "measured"}
         except Exception as exc:  # a failed benchmark must not keep jobs waiting
+            last = {"state": "failed", "text": f"{type(exc).__name__}: {exc}"}
             self.log(f"Benchmark failed ({type(exc).__name__}: {exc}); jobs run anyway, and `grid build` "
                      "estimates this machine's share from its core count")
         finally:
+            if asked:
+                self.bench_last = {**self.bench_last, **last, "ended": _now()}
             self.manager.set_hold("")
 
     def start(self) -> Worker:

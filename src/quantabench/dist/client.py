@@ -418,6 +418,19 @@ class WorkerClient:
             body["by"] = str(by)[:120]
         return self._json("POST", "/v1/pause", body)
 
+    def bench(self, methods: Sequence[str] = ("md",), by: str = "") -> dict:
+        """Ask the worker to run its machine's MD benchmark again now (MD-BENCH-3; only ``["md"]``). Returns its
+        "md_bench" state (``Worker.md_bench_info``). It refuses (``WorkerError`` 409) while a job or a benchmark runs
+        or the machine is paused; a worker from before MD-BENCH-3 answers 404."""
+        body: dict = {"methods": [str(m) for m in methods]}
+        if by:
+            body["by"] = str(by)[:120]
+        data = self._json("POST", "/v1/bench", body)
+        state = data.get("md_bench")
+        if not isinstance(state, dict):
+            raise WorkerError(f"{self.url}: unexpected reply to a benchmark request")
+        return state
+
     def wait(self, job_id: str, poll: float = 5.0, timeout: float | None = None,
              on_status: Callable[[dict], None] = _noop) -> dict:
         """Poll until the job is done, failed or cancelled; returns the last status. A worker that is briefly
