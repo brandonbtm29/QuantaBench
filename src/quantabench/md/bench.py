@@ -89,6 +89,17 @@ keeps both. A profile without ``md_throughput`` (an older QuantaBench) loads wit
 and not measured again are kept (``dist.profile.local_profile``); each carries its own atoms, threads, LAMMPS and
 date.
 
+A changed benchmark (MD-BENCH-3)
+--------------------------------
+A release that changes what the benchmark measures raises ``MD_BENCH_VERSION`` (and adds a line to
+``VERSION_CHANGES``). A machine whose stored record is older (``outdated``: its ``bench_version``) is then *asked*,
+never re-run: ``quantabench-cli machines`` prints a note under it (``rerun_note``), and the Machines dock shows this
+computer's note with a Run button and marks other machines' MD numbers as from an older benchmark. A worker logs the
+note at start and does not re-run it, whatever its ``--bench-methods``; only ``--bench always`` (asked for) measures
+again. A worker reports its state in ``GET /v1/info`` (``status``), so the dock offers the re-run for that machine
+too, run through its worker (``POST /v1/bench``). "Not now" is remembered per machine for one benchmark version
+(``notice_due``; ``settings`` ``md_bench_not_now``).
+
 Scaling to another system (``scaled_rate``)
 -------------------------------------------
 ns/day is scaled by the atom ratio: rate(N) = rate_measured x N_measured / N (the cost of PPPM MD grows about
@@ -118,6 +129,12 @@ from pathlib import Path
 from . import long_range as LR
 
 MD_BENCH_VERSION = 2       # 2: slab boxes (MD-BENCH-2); records name their geometry, k-space grids and timings
+#: What each version of the benchmark measures, for the note that asks whether to run it again (``rerun_note``).
+#: Raise ``MD_BENCH_VERSION`` and add a line here whenever a change makes new numbers differ from stored ones.
+VERSION_CHANGES = {
+    1: "bulk C6F14 boxes (MD-BENCH-1)",
+    2: "a 3,800-atom C6F14 slab with vacuum by default and the long-range settings of MD-LR (MD-BENCH-2)",
+}
 SMILES = "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"     # perfluorohexane, C6F14
 MOLECULE = "C6F14"
 FORCEFIELD = "oplsaa"
@@ -1037,6 +1054,66 @@ def rated(md: Mapping | None) -> dict[str, dict]:
     """{variant: record} of the variants with a measured ns/day."""
     variants = (md or {}).get("variants") or {}
     return {k: v for k, v in variants.items() if isinstance(v, dict) and (v.get("ns_per_day") or 0) > 0}
+
+
+# ------------------------------------------------------------------------------------------- a changed benchmark
+def _version(x) -> int | None:
+    return int(x) if isinstance(x, int) and not isinstance(x, bool) and x > 0 else None
+
+
+def stored_version(md: Mapping | None) -> int | None:
+    """The benchmark version a machine's ``md_throughput`` was measured with: its ``bench_version`` (the last run's;
+    ``merge`` keeps the previous record, version included, when a run measured nothing), else the newest of its
+    measured variants', else None (unknown: nothing measured, or a record without versions)."""
+    md = md or {}
+    top = _version(md.get("bench_version"))
+    if top is not None:
+        return top
+    found = [v for v in (_version(r.get("bench_version")) for r in rated(md).values()) if v is not None]
+    return max(found) if found else None
+
+
+def outdated(md: Mapping | None) -> int | None:
+    """The stored version when a machine has measured variants from a benchmark older than this QuantaBench's
+    (``MD_BENCH_VERSION``), else None. A release that changes the benchmark only asks whether to run it again
+    (``rerun_note``: ``quantabench-cli machines``, the Machines dock); nothing re-runs it on its own (MD-BENCH-3)."""
+    if not rated(md):
+        return None
+    v = stored_version(md)
+    return v if v is not None and v < MD_BENCH_VERSION else None
+
+
+def rerun_note(md: Mapping | None, machine: str = "", *, here: bool = True) -> str:
+    """'' when ``md`` is current (or holds nothing); otherwise one sentence that says the benchmark changed and asks
+    whether to run it again (``machine``: the machine it is about, when it is not this one)."""
+    old = outdated(md)
+    if old is None:
+        return ""
+    whose = "This computer's" if here or not machine else f"{machine}'s"
+    where = "" if here or not machine else f" on {machine}"
+    return (f"{whose} MD benchmark is from benchmark version {old}. This QuantaBench's is version {MD_BENCH_VERSION}: "
+            f"{VERSION_CHANGES.get(MD_BENCH_VERSION, 'a changed benchmark')}, so new numbers differ from the stored "
+            f"ones. Run it again? `quantabench-cli machines --bench md`{where} (a few minutes, best while the machine "
+            "is otherwise idle). Nothing re-runs it on its own.")
+
+
+def status(md: Mapping | None) -> dict:
+    """What a worker reports about its MD benchmark in ``GET /v1/info`` (``"md_bench"``): ``version`` (this
+    QuantaBench's ``MD_BENCH_VERSION``), ``stored`` (``stored_version``), ``outdated`` (``outdated``: the stored
+    version when it is older, else None) and ``note`` (``rerun_note``, '' when current). The Machines dock of another
+    machine offers the re-run from it, compared with the worker's own version, not the dock's (MD-BENCH-3)."""
+    return {"version": MD_BENCH_VERSION, "stored": stored_version(md), "outdated": outdated(md),
+            "note": rerun_note(md)}
+
+
+def notice_due(md: Mapping | None, not_now: int = 0, version: int | None = None) -> bool:
+    """Whether to show the re-run notice: the record is older than ``version`` (default this QuantaBench's
+    ``MD_BENCH_VERSION``) and "Not now" (``not_now``: the version it was clicked for, 0 = never) was not clicked for
+    that version. Not now is remembered per machine for one version, so the notice comes back when a later release
+    changes the benchmark again (MD-BENCH-3)."""
+    version = MD_BENCH_VERSION if version is None else int(version)
+    old = stored_version(md) if rated(md) else None
+    return old is not None and old < version and int(not_now or 0) < version
 
 
 # ------------------------------------------------------------------------------------------- display

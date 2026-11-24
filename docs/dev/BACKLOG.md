@@ -138,6 +138,15 @@ with its deadline and resume, the budget setter, and the time window for one mac
   deadline lives in `batch run`, not `grid build`. Not ported: the QSAR-specific `analyze_tranche.py` step, and the
   budget setter (`machines set --max-cpu` covers it). Left: run CREST-RUN-1's water phase with it (acceptance).
 
+## FIX-9: No user name in the tests' example paths · done 2026-11-24 (PR #57)
+Found 2026-11-23: two tests held a real Windows user name in example paths (`tests/test_eng_xtb.py`, the xtbout
+"program call" string; `tests/test_project.py`, `from_stored` with an absolute Windows path), against the public-repo
+rule (#24: no machine names, user names or personal paths in tracked files).
+- **Fix:** both use the placeholder `me`, as `tests/test_external.py` and `tests/test_priority.py` already do. The
+  xtbout test still feeds invalid JSON (the raw `\U` escape) and still finds `Users` in the program call.
+- Also: a DEVLOG entry (2026-11-22, SETTINGS-1 follow-ups) named one of the maintainer's machines; it now says "the
+  workstation". A search of the tracked files finds no other real user or machine name.
+
 ## FIX-8: Cancel reaches a paused job (a grid share on a paused machine) · in-PR 2026-11-22 (branch `fix/fix-8-cancel-paused`)
 Found at the CREST-RUN-1 restart (2026-11-22): `grid cancel` on the old water grid cancelled the MacBook's queued
 share, but its paused share (2 molecules done, 821 not started) stayed "paused". `JobManager.cancel` handled queued,
@@ -1201,6 +1210,19 @@ simulation?" Code: `md/bench.py`, `md/long_range.py`; docs: docs/WORKERS.md, "Th
     pilots; on the MacBook `--md-lammps ~/miniforge3/envs/qb-lammps/bin/lmp`.
   - A worker in auto mode with `--bench-methods ...,md` does not re-measure a machine that has only bulk records.
   - After A-fine: its numbers into `PILOT_TABLE` (MD-LR's follow-up); the benchmark then only replaces speeds.
+
+## MD-BENCH-3: Ask before re-running a changed MD benchmark · done 2026-11-24 (PR #58)
+Brandon (2026-11-23, on re-running MD benchmarks): "just ask the user if they would like to rerun the new benchmark
+if a future release changes the benchmarking process." Code: `md/bench.py` (`VERSION_CHANGES`, `stored_version`,
+`outdated`, `rerun_note`), `dist/profile.py` (`machines` note, `--json` `md_bench_rerun`), `dist/worker.py` (logs it,
+never re-runs it), `gui/machines_panel.py` (notice with Run MD benchmark / Not now, "older benchmark" marks); docs:
+docs/WORKERS.md, "The MD benchmark", docs/UI_PLAN.md (Machines dock).
+- Done (2026-11-23): the prompt in the CLI and the Machines dock, the worker's note, tests
+  (`tests/test_md_bench_rerun.py`).
+- Done (2026-11-24, Brandon: "Go with your suggestions"): Not now is remembered per machine for that benchmark
+  version (`settings` `md_bench_not_now`, `md.bench.notice_due`), and a Run MD benchmark button under the table runs it
+  any time; workers report their MD benchmark in `/v1/info` (`md_bench`) and run it on `POST /v1/bench`, so the
+  Machines dock offers the re-run for other machines too (Run on <machine> / Not now).
 
 ## MD-1: Counter-ions in vacuum SMD (Windows LAMMPS non-determinism + ion-pair heating) · ready
 - On the Windows workstation, PyPI's Windows LAMMPS wheel (2025.7.22.4) fails ~5-10% of *identical* runs of a

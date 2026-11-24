@@ -313,7 +313,7 @@ The LaunchAgent is for the user to install; QuantaBench does not install service
 was installed on 2026-11-12, at his request (`launchctl print gui/$(id -u)/io.github.brandonbtm29.quantabench-worker`
 shows it; a test `kill -KILL` of the worker was followed by a new one within a second).
 
-## The MD benchmark (MD-BENCH-1, MD-BENCH-2)
+## The MD benchmark (MD-BENCH-1, MD-BENCH-2, MD-BENCH-3)
 
 The throughput benchmark gives molecules/hour per engine. An MD job needs a different number: how many ns/day
 this machine's LAMMPS runs a molecular liquid. `md` in a benchmark list measures it:
@@ -426,9 +426,37 @@ variants at 30 s) it took 207 s with the build.
   An unverified GPU record is not used. With both GPU and CPU records it also notes their ratio on this machine.
 - **Without LAMMPS** the benchmark is skipped with the reason (`md: not measured (LAMMPS not found (...))`).
   Nothing else in the profile changes.
+- **When a release changes the benchmark** (MD-BENCH-3). Each record carries the benchmark version it was measured
+  with (`bench_version`; `md.bench.MD_BENCH_VERSION`, 2 since MD-BENCH-2, with a line per version in
+  `VERSION_CHANGES`). When this QuantaBench's version is newer than a machine's stored record, QuantaBench asks
+  whether to run it again. It never re-runs it by itself:
+  - `quantabench-cli machines` prints a note under that machine, for example `note: This computer's MD benchmark is
+    from benchmark version 1. This QuantaBench's is version 2: (what changed), so new numbers differ from the stored
+    ones. Run it again? quantabench-cli machines --bench md (a few minutes, best while the machine is otherwise
+    idle). Nothing re-runs it on its own.` For another machine it names that machine (`... --bench md on mac-test`). `--json` has the same text per machine in
+    `md_bench_rerun` ("" when the record is current).
+  - The Machines dock shows this computer's note at its top, with **Run MD benchmark** (the default slab box, off
+    the GUI thread; the engines' numbers stay) and **Not now**. Not now is remembered for that machine and benchmark
+    version (`md_bench_not_now` in its `dist.machine_control` entry), so the notice comes back only when a later
+    release raises `MD_BENCH_VERSION` again; the **Run MD benchmark** button under the table runs it any time, on the
+    selected machine. Other machines' MD numbers end in "older benchmark (version N)", with the command in the
+    tooltip. At start the status bar says once that the Machines dock asks (not after Not now).
+  - A worker reports its own state in `GET /v1/info` (`md_bench`: `version`, its QuantaBench's `MD_BENCH_VERSION`;
+    `stored`; `outdated`; `note`; `running`; `last`, the last run asked for over HTTP), so after Check workers the
+    Machines dock shows a notice for each other machine whose benchmark is older than *its worker's* version, with
+    **Run on <machine>** and **Not now**. Run asks that worker (`POST /v1/bench`): it runs the MD benchmark with new
+    jobs held, publishes the numbers to the registry and reports `last` (`done`, or `failed` with the reason when
+    nothing was measured). It refuses (409) while a job runs, while the machine is paused (it may be busy with
+    something else) and while a benchmark runs. Workers from before MD-BENCH-3 report nothing; run the command there.
+  - A worker logs the note at start and leaves the benchmark as it is, whatever its `--bench-methods` (in auto mode
+    it measures only what was never measured). `--bench always` measures again, because it was asked for.
+  - A re-run that measures nothing (no LAMMPS) keeps the older numbers and the question. A record without a version
+    (none was ever written that way) and a machine with nothing measured get no question.
+  - Raise `MD_BENCH_VERSION` and add its line to `VERSION_CHANGES` whenever a change makes new numbers differ from
+    stored ones (the box, the variants' settings, how ns/day is measured).
 - **Not yet.** MPI ranks (`mpirun -np N lmp`, often faster than OpenMP threads for LAMMPS on a CPU) are not
   benchmarked. The KOKKOS variants have not run on a KOKKOS build yet. A worker started with `--bench-methods
-  default,md` in auto mode does not re-measure a machine that has only bulk records.
+  default,md` in auto mode does not re-measure a machine that has only bulk records (it notes it, above).
 
 ## API (version 1)
 
@@ -436,7 +464,7 @@ Every request needs `Authorization: Bearer <settings.dist.worker_token>`.
 
 | Request | Answer |
 |---|---|
-| `GET /v1/info` | name, URL, QuantaBench version and commit, machine profile, queue (`running`, `queued`, `paused`), and since MON-1 the latest sensor sample (`sensors`, without the per-CPU lists; null before the first) |
+| `GET /v1/info` | name, URL, QuantaBench version and commit, machine profile, queue (`running`, `queued`, `paused`), since MON-1 the latest sensor sample (`sensors`, without the per-CPU lists; null before the first), and since MD-BENCH-3 `md_bench` (`version`, `stored`, `outdated`, `note`, `running`, `last`) |
 | `GET /v1/sensors` | since MON-1: live machine metrics `{sensors: a sensors.Sample dict or null, why, interval_s, machine}` (CPU and GPU load, effective clock, temperatures, power, VRAM, RAM; docs/ENGINES.md, Live machine metrics). The worker samples while requests keep coming and stops after 2 minutes without one; older workers answer 404 |
 | `GET /v1/jobs` | every job, newest first |
 | `POST /v1/jobs` | body `{inputs: [jobs.input_to_json(...)], config: {BuildConfig fields}, label, chunk?, lanes?, client?, allow_version_mismatch?}`; header `X-QuantaBench-Version`. 201 `{id, job}` |
@@ -447,6 +475,7 @@ Every request needs `Authorization: Bearer <settings.dist.worker_token>`.
 | `GET /v1/jobs/<id>/molecules` | DIST-7: `{"molecules": {id: status}}` (the job table, or the queued inputs of a job that has not run): which molecules it has not started |
 | `POST /v1/jobs/<id>/sync` `{"revoke": [ids], "following": bool}` | DIST-7: the grid client gave these molecules to another machine while this one was away: those not started here become `moved`; ends a wake-up hold. `following: false`: the client stopped following (no lost-contact hold). 200 `{moved, done, running, job}` |
 | `POST /v1/pause` `{"paused": bool, "mode": "drain"\|"now", "by"?}` | DIST-7: pause this machine (no new molecules; `drain`, the default, lets the running ones finish, `now` stops them at their next checkpoint) or resume it; saved, so a restart stays paused. 200 = the queue state (`paused`, `pause`, `paused_jobs`, `rejoin`, `last_wake`) |
+| `POST /v1/bench` `{"methods": ["md"], "by"?}` | MD-BENCH-3: run this machine's MD benchmark again now (only `["md"]`; the engines' numbers stay), with new jobs held, then publish the profile. 202 `{md_bench}` (as in `/v1/info`); 409 while a job runs, the machine is paused or a benchmark runs. Older workers answer 404 |
 
 `chunk` is `{"index": i}` for a share the client already split (recorded only), `{"index": i, "count": n}`
 for a `jobs.chunk_index` chunk, or `{"index": i, "weights": [...]}` for a `plan.weighted_index` share of a full

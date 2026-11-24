@@ -209,7 +209,21 @@ include a pause button on a machine and the work is redistributed?"
   - **Run:** a Pause / Resume button. Its arrow has *Pause now*, which stops the molecules in progress at their
     next checkpoint. This computer is paused through its pause file, which its worker, a grid build's local share
     and this window's own batch follow; a worker through its `POST /v1/pause`.
-  - Hardware, throughput (benchmark) and profile age, as before.
+  - Hardware, throughput (benchmark) and profile age, as before. The MD column (MD-BENCH-1) ends in "older
+    benchmark (version N)" when a newer QuantaBench changed the MD benchmark (MD-BENCH-3).
+- **A changed MD benchmark** (MD-BENCH-3, 2026-11-23; Brandon: "just ask the user if they would like to rerun the
+  new benchmark if a future release changes the benchmarking process"): a notice above the table says that this
+  computer's MD numbers come from an older benchmark version and asks whether to run it again, with **Run MD
+  benchmark** and **Not now**. No dialog; the status bar mentions it once at start. Nothing re-runs it on its own
+  (docs/WORKERS.md, "The MD benchmark").
+  - Brandon (2026-11-24) on the two follow-ups: **Not now** is remembered per machine for that benchmark version
+    (`md_bench_not_now`), so the notice returns only when a later release changes the benchmark again; the **Run MD
+    benchmark** button under the table runs it any time, on the selected machine (this computer, or another through
+    its worker).
+  - Other machines: after Check workers, each worker that reports an older MD benchmark (`/v1/info` `md_bench`) gets
+    a notice of its own under this computer's, with **Run on <machine>** (`POST /v1/bench`; its worker refuses while it
+    runs a job or is paused, and the note says why) and **Not now**. A worker from before MD-BENCH-3 reports nothing;
+    its MD cell's tooltip has the command to run there.
 - **Processing budget** box under the table, for the selected machine: run priority (default, normal, low,
   background), free threads, a *Max CPU* percent that sets the free threads from its thread count, its lane spec,
   and *Pause its worker while it runs on battery* (on by default). "Save for this machine" writes only that

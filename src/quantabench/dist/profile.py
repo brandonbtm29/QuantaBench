@@ -834,9 +834,12 @@ def describe(p: MachineProfile, this: bool = False, now: float | None = None,
     for k, err in failed.items():
         lines.append(f"  benchmark {k} failed: {err}")
     if p.md_throughput:
-        from ..md.bench import describe_lines
+        from ..md.bench import describe_lines, rerun_note
 
         lines += describe_lines(p.md_throughput)
+        note = rerun_note(p.md_throughput, p.name, here=this)     # a release changed the benchmark: ask (MD-BENCH-3)
+        if note:
+            lines.append(f"  note: {note}")
     if p.address:
         lines.append(f"  worker:     {p.address}")
     if age is not None and age > STALE_DAYS * 86400:
@@ -953,8 +956,12 @@ def _machines_cli(args) -> int:
     profiles = load_profiles()
     if args.json:
         now = time.time()
+        from ..md.bench import rerun_note
+
         print(json.dumps({"registry": str(registry_dir()), "this_machine": this,
-                          "machines": [{**p.to_dict(), "age_s": profile_age_s(p, now)} for p in profiles]}, indent=2))
+                          "machines": [{**p.to_dict(), "age_s": profile_age_s(p, now),
+                                        "md_bench_rerun": rerun_note(p.md_throughput, p.name, here=p.name == this)}
+                                       for p in profiles]}, indent=2))
         return 0
     print(f"Machine registry: {registry_dir()} ({len(profiles)} machine{'s' if len(profiles) != 1 else ''})")
     if not profiles:
