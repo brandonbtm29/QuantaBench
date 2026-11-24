@@ -76,7 +76,7 @@ def test_round_trip_relative_paths_and_a_moved_project(tmp_path):
 def test_windows_paths_versions_and_damage(tmp_path):
     root = tmp_path / "p.qbproj"
     assert proj.from_stored("runs\\b\\A", root) == str(root / "runs" / "b" / "A")     # saved on Windows
-    assert proj.from_stored("C:\\Users\\Brand\\run", root) == str(Path("C:\\Users\\Brand\\run"))
+    assert proj.from_stored("C:\\Users\\me\\run", root) == str(Path("C:\\Users\\me\\run"))
     assert proj.from_stored("", root) == "" and proj.from_stored(".", root) == str(root)
     proj.save(root, proj.ProjectData(name="p"))
     assert proj.load(root).molecules == []
