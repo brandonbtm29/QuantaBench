@@ -222,13 +222,32 @@ def test_dependency_change_reinstalls_with_installed_extras(repos, monkeypatch):
     assert "reinstalled" in res.message
 
 
-def test_pip_failure_is_reported(repos, monkeypatch):
+def test_pip_failure_goes_back_to_the_old_commit(repos, monkeypatch):
+    """The new code needs what pip could not install: the checkout goes back (git reset --keep), the app keeps
+    working on the old version, and the message says why (Brandon's other apps do the same)."""
     _, upstream, work = repos
+    before = git(work, "rev-parse", "HEAD")
+    (work / "notes.txt").write_text("untracked, kept\n", encoding="utf-8")
     monkeypatch.setattr(update, "_pip_install", FakePip(ok=False, out="ERROR: no matching dist"))
     commit(upstream, {"pyproject.toml": PYPROJECT.replace("pytest>=8", "pytest>=9")}, "bump dev")
     res = update.update(work)
-    assert not res.ok and res.updated and res.restart_needed and not res.pip_ok
-    assert "pip install -e` failed" in res.message and "no matching dist" in res.message
+    assert not res.ok and not res.pip_ok and res.rolled_back and not res.updated and not res.restart_needed
+    assert git(work, "rev-parse", "HEAD") == before and git(work, "status", "--porcelain", "--untracked-files=no") == ""
+    assert (work / "notes.txt").exists() and "pytest>=8" in (work / "pyproject.toml").read_text(encoding="utf-8")
+    assert "went back to" in res.message and "no matching dist" in res.message
+    # the next check offers the same update again
+    assert update.check(work).state == "behind"
+
+
+def test_failed_upgrade_without_a_dependency_change_keeps_the_new_code(repos, monkeypatch):
+    _, upstream, work = repos
+    commit(upstream, {update.FORK_FILE: forks_json()}, "fork pins")
+    git(work, "pull", "-q", "--ff-only")
+    monkeypatch.setattr(update, "_pip_install", FakePip(ok=False, out="ERROR: boom"))
+    commit(upstream, {"a.txt": "1\n"}, "code only")
+    res = update.update(work, upgrade_packages=True)
+    assert not res.ok and res.updated and not res.rolled_back and (work / "a.txt").exists()
+    assert "package upgrade failed" in res.message and "The code is updated" in res.message
 
 
 def test_dependency_changes():
@@ -609,6 +628,254 @@ def test_cli_update_on_real_checkout(repos, monkeypatch, capsys):
     assert (work / "a.txt").exists() and "Restart QuantaBench" in capsys.readouterr().out
 
 
+# ------------------------------------------------------------------- CHANGELOG, release, worker, envs (DIST-1)
+CHANGELOG_OLD = """# Changelog
+
+## Unreleased (after 0.3.0)
+
+### Old feature (A-1, 2026-11-20)
+- did a thing
+
+## 0.3.0 (2026-11-18)
+
+### Released thing (R-1)
+- shipped
+"""
+
+
+def test_changelog_news():
+    new = CHANGELOG_OLD.replace("## Unreleased (after 0.3.0)\n\n", "## Unreleased (after 0.3.0)\n\n"
+                                "### New feature (B-2, 2026-11-23)\n- **new** stuff\n  - nested\n\n")
+    new = new.replace("- did a thing", "- did a thing\n- and a follow-up")
+    news = update.changelog_news(CHANGELOG_OLD, new)
+    assert [(e.heading, e.changed) for e in news] == [("New feature (B-2, 2026-11-23)", False),
+                                                      ("Old feature (A-1, 2026-11-20)", True)]
+    assert news[0].release == "Unreleased (after 0.3.0)" and news[0].body == "- **new** stuff\n  - nested"
+    assert news[1].title() == "Old feature (A-1, 2026-11-20) (updated)" and news[0].markdown().startswith("### New")
+    # a release that is cut moves the sections under a new heading: not news
+    cut = CHANGELOG_OLD.replace("## Unreleased (after 0.3.0)", "## Unreleased (after 0.4.0)\n\n## 0.4.0 (2026-12-01)")
+    assert update.changelog_news(CHANGELOG_OLD, cut) == []
+    assert update.changelog_news(CHANGELOG_OLD, CHANGELOG_OLD) == []
+    assert [e.heading for e in update.changelog_news("", CHANGELOG_OLD)] == ["Old feature (A-1, 2026-11-20)",
+                                                                             "Released thing (R-1)"]
+
+
+def test_check_reports_changelog_news_and_the_release(repos):
+    _, upstream, work = repos
+    commit(upstream, {"CHANGELOG.md": CHANGELOG_OLD}, "changelog")
+    git(upstream, "tag", "v0.3.0")
+    git(upstream, "push", "-q", "origin", "v0.3.0")
+    git(work, "pull", "-q", "--ff-only")
+    st = update.check(work)
+    assert st.state == "up-to-date" and st.news == [] and (st.release, st.since_release) == ("v0.3.0", 0)
+    new = CHANGELOG_OLD.replace("## Unreleased (after 0.3.0)\n\n",
+                                "## Unreleased (after 0.3.0)\n\n### Update button (DIST-1)\n- pulls main\n\n")
+    commit(upstream, {"CHANGELOG.md": new}, "news")
+    commit(upstream, {"b.txt": "2\n"}, "more")
+    st = update.check(work)
+    assert st.state == "behind" and [e.heading for e in st.news] == ["Update button (DIST-1)"]
+    assert (st.release, st.since_release) == ("v0.3.0", 2)
+    text = st.summary()
+    assert "What's new (CHANGELOG.md):\n  - Update button (DIST-1)" in text
+    assert "Newest release: v0.3.0; origin/main is 2 commit(s) past it." in text
+    assert "### Update button (DIST-1)\n- pulls main" in st.news_markdown()
+
+
+def test_news_are_capped(repos, monkeypatch):
+    _, upstream, work = repos
+    monkeypatch.setattr(update, "NEWS_LIMIT", 3)
+    commit(upstream, {"CHANGELOG.md": "# Changelog\n\n## Unreleased\n\n" + "".join(
+        f"### Item {i}\n- x\n\n" for i in range(5))}, "five")
+    st = update.check(work)
+    assert len(st.news) == 3 and st.news_more == 2 and "... and 2 more" in st.summary()
+    assert "2 more section(s)" in st.news_markdown()
+
+
+class _Worker:
+    def __init__(self, busy, affected=True, manager="launchd"):
+        self.busy, self.affected, self.manager, self.pid = busy, affected, manager, 7
+
+    @property
+    def can_restart(self):
+        return self.affected and not self.busy and self.manager in ("launchd", "task")
+
+    def busy_reason(self):
+        return "worker busy with job-1" if self.busy and self.affected else ""
+
+    def describe(self):
+        return "The worker on this computer (pid 7) is idle."
+
+    def restart_hint(self):
+        return "by hand"
+
+
+def test_a_busy_worker_holds_the_update(repos, monkeypatch):
+    _, upstream, work = repos
+    monkeypatch.setattr(update, "probe_worker", lambda root: _Worker(busy=True))
+    commit(upstream, {"a.txt": "1\n"}, "remote work")
+    st = update.check(work)
+    assert st.state == "behind" and not st.can_update and st.blocked_reason == ""
+    assert "worker busy with job-1" in st.summary()
+    res = update.update(work, status=st)
+    assert not res.ok and not res.updated and res.message == "worker busy with job-1"
+    assert not (work / "a.txt").exists()
+    # pip under a running job is refused too
+    monkeypatch.setattr(update, "_pip_install", FakePip())
+    git(work, "pull", "-q", "--ff-only")
+    res = update.update(work, upgrade_packages=True)
+    assert not res.ok and not res.pip_ran and "worker busy" in res.message
+
+
+def test_an_idle_worker_is_told_to_restart(repos, monkeypatch):
+    _, upstream, work = repos
+    monkeypatch.setattr(update, "probe_worker", lambda root: _Worker(busy=False))
+    commit(upstream, {"a.txt": "1\n"}, "remote work")
+    res = update.update(work)
+    assert res.ok and res.updated and res.worker_needs_restart
+    assert "still runs the old code" in res.message and "--restart-worker" in res.message
+    monkeypatch.setattr(update, "probe_worker", lambda root: _Worker(busy=False, manager="manual"))
+    commit(upstream, {"b.txt": "1\n"}, "more")
+    res = update.update(work)
+    assert "by hand" in res.message
+
+
+def _fake_env(root: Path, name: str) -> Path:
+    from quantabench import launchers
+
+    venv = root / name
+    py = launchers.Variant(venv).python(windowed=False)
+    py.parent.mkdir(parents=True)
+    py.write_text("", encoding="utf-8")
+    if sys.platform == "win32":
+        (py.parent / "pythonw.exe").write_text("", encoding="utf-8")
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    return venv
+
+
+def test_dependency_change_reinstalls_the_other_environments(repos, monkeypatch):
+    from quantabench import launchers
+
+    _, upstream, work = repos
+    main_env, rocm = _fake_env(work, ".venv"), _fake_env(work, ".venv-rocm")
+    _fake_env(work, ".venv-other")                             # another checkout's: left alone
+    main_py = str(launchers.Variant(main_env).python(windowed=False))
+    rocm_py = str(launchers.Variant(rocm).python(windowed=False))
+    rows = {rocm_py: [{"name": "quantabench", "version": "0.3.0", "editable_project_location": str(work)},
+                      {"name": "torch", "version": "2.9.1+rocm7.2.1"}, {"name": "aimnet", "version": "0.2"}],
+            str(launchers.Variant(work / ".venv-other").python(windowed=False)):
+                [{"name": "quantabench", "version": "0.3.0", "editable_project_location": "/elsewhere"}]}
+    monkeypatch.setattr(update, "_pip_rows", lambda python=None: rows.get(python, []))
+    calls = []
+
+    def fake_pip(root, extras, python, forks=None, upgrade=None, reinstall=(), torch=update._RUNNING):
+        calls.append((python, extras, torch))
+        return True, "ok"
+
+    monkeypatch.setattr(update, "_pip_install", fake_pip)
+    monkeypatch.setattr(update, "installed_extras", lambda text, have=None: ["all"] if have is None else
+                        [e for e, pkg in (("ml", "aimnet"), ("dev", "pytest")) if have(pkg)])
+    commit(upstream, {"pyproject.toml": PYPROJECT.replace('["numpy>=1.26"]', '["numpy>=1.26", "rich"]')}, "dep")
+    assert update.other_envs(work, main_py) == [work / ".venv-other", rocm]   # pip tells them apart
+    res = update.update(work, python=main_py)
+    assert res.ok and res.updated
+    assert calls[0] == (main_py, ["all"], update._RUNNING)                 # this environment first
+    assert calls[1] == (rocm_py, ["ml"], "2.9.1+rocm7.2.1")                # then .venv-rocm with its own torch
+    assert len(calls) == 2 and res.other_envs == [(".venv-rocm", True,
+                                                   "reinstalled in .venv-rocm (PyTorch kept at 2.9.1+rocm7.2.1)")]
+    assert "other environments use the same code" in res.message
+
+
+def test_failed_reinstall_in_another_environment_is_reported(repos, monkeypatch):
+    from quantabench import launchers
+
+    _, upstream, work = repos
+    main_env, rocm = _fake_env(work, ".venv"), _fake_env(work, ".venv-rocm")
+    rocm_py = str(launchers.Variant(rocm).python(windowed=False))
+    monkeypatch.setattr(update, "_pip_rows", lambda python=None: [{"name": "QuantaBench", "version": "0.3.0"}]
+                        if python == rocm_py else [])
+    monkeypatch.setattr(update, "_pip_install", lambda root, extras, python, **kw: (
+        python != rocm_py, "ERROR: [WinError 32] being used by another process"))
+    commit(upstream, {"pyproject.toml": PYPROJECT.replace("pytest>=8", "pytest>=9")}, "bump dev")
+    res = update.update(work, python=str(launchers.Variant(main_env).python(windowed=False)))
+    assert not res.ok and res.updated and not res.rolled_back               # this environment is fine
+    assert res.other_envs[0][:2] == (".venv-rocm", False) and "Close the QuantaBench windows" in res.other_envs[0][2]
+    assert "FAILED: pip failed in .venv-rocm" in res.message
+
+
+def test_reinstall_with_nothing_to_pull(repos, monkeypatch):
+    """A checkout another tool fast-forwarded: --reinstall runs the installers' pip line in every environment."""
+    from quantabench import launchers
+
+    _, _, work = repos
+    main_env, rocm = _fake_env(work, ".venv"), _fake_env(work, ".venv-rocm")
+    rocm_py = str(launchers.Variant(rocm).python(windowed=False))
+    monkeypatch.setattr(update, "_pip_rows", lambda python=None: [{"name": "quantabench", "version": "0.3.0"}]
+                        if python == rocm_py else [])
+    calls = []
+    monkeypatch.setattr(update, "_pip_install", lambda root, extras, python, **kw: calls.append(
+        (python, kw.get("upgrade"), list(kw.get("reinstall", ())))) or (True, "ok"))
+    main_py = str(launchers.Variant(main_env).python(windowed=False))
+    res = update.update(work, python=main_py)
+    assert res.ok and not res.pip_ran and calls == []                     # nothing to pull: nothing to do
+    res = update.update(work, python=main_py, reinstall_deps=True)
+    assert res.ok and res.pip_ran and not res.updated and not res.upgraded and not res.rolled_back
+    assert calls == [(main_py, None, []), (rocm_py, None, [])]
+    assert "Reinstalled the dependencies the installers' way" in res.message and ".venv-rocm" in res.message
+    monkeypatch.setattr(update, "probe_worker", lambda root: _Worker(busy=True))
+    res = update.update(work, python=main_py, reinstall_deps=True)
+    assert not res.ok and "worker busy" in res.message and len(calls) == 2
+
+
+def test_cli_reinstall(monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("up-to-date"))
+    monkeypatch.setattr(update, "update", lambda *a, **k: seen.append(k) or update.UpdateResult(ok=True, message="ok"))
+    assert cli.main(["update"]) == 0 and seen == []
+    assert cli.main(["update", "--reinstall"]) == 0 and seen[0]["reinstall_deps"] is True
+    assert "upgrade_packages" not in seen[0]
+
+
+def test_cli_restart_worker(monkeypatch, capsys):
+    from quantabench import local_worker
+
+    worker = _Worker(busy=False)
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("behind", behind=1, worker=worker))
+    monkeypatch.setattr(update, "update", lambda *a, **k: update.UpdateResult(ok=True, updated=True, worker=worker,
+                                                                              message="Updated."))
+    restarted = []
+    monkeypatch.setattr(local_worker, "restart", lambda w: restarted.append(w) or (True, "Restarted the worker."))
+    assert cli.main(["update"]) == 0 and not restarted
+    assert cli.main(["update", "--restart-worker"]) == 0 and restarted == [worker]
+    assert "Restarted the worker." in capsys.readouterr().out
+    # nothing to pull (another tool fast-forwarded the checkout): the restart that was asked for still happens
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("up-to-date", worker=worker))
+    monkeypatch.setattr(update, "update", lambda *a, **k: pytest.fail("nothing to pull"))
+    assert cli.main(["update", "--restart-worker"]) == 0 and restarted == [worker, worker]
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("up-to-date"))
+    assert cli.main(["update", "--restart-worker"]) == 0 and len(restarted) == 2
+    assert "nothing to restart" in capsys.readouterr().out
+    monkeypatch.setattr(local_worker, "restart", lambda w: (False, "it is busy"))
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("up-to-date", worker=worker))
+    assert cli.main(["update", "--restart-worker"]) == 1
+
+
+def test_cli_refuses_while_the_worker_is_busy(monkeypatch, capsys):
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("up-to-date", worker=_Worker(busy=True)))
+    monkeypatch.setattr(update, "update", lambda *a, **k: pytest.fail("must not update"))
+    assert cli.main(["update", "--upgrade-packages"]) == 1
+    assert "worker busy" in capsys.readouterr().out
+    monkeypatch.setattr(update, "check", lambda *a, **k: _status("behind", behind=1, worker=_Worker(busy=True)))
+    assert cli.main(["update"]) == 1 and "worker busy" in capsys.readouterr().out
+
+
+def test_git_and_pip_never_prompt(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: seen.update(kw["env"]) or
+                        subprocess.CompletedProcess(cmd, 0, "", ""))
+    update._run(["git", "status"])
+    assert seen["GIT_TERMINAL_PROMPT"] == "0" and seen["GCM_INTERACTIVE"] == "never" and seen["PIP_NO_INPUT"] == "1"
+
+
 # ---------------------------------------------------------------------------------------------- GUI
 @pytest.fixture
 def window(request):
@@ -617,6 +884,7 @@ def window(request):
 
     class Window(QMainWindow):
         refuse_close = False
+        worker = None                         # MainWindow.worker: the running build
 
         def closeEvent(self, event):          # Qt override
             if self.refuse_close:             # "A build is running. Cancel it and quit?" -> No
@@ -631,6 +899,9 @@ def window(request):
     win.logged = []
     win.log = win.logged.append
     yield win
+    waiter = getattr(win, "_update_wait", None)
+    if waiter is not None:
+        waiter.timer.stop()
     win.refuse_close = False
     win.close()
     win.deleteLater()
@@ -647,14 +918,36 @@ def _wait(cond, timeout=10.0):
     assert cond()
 
 
-def test_help_menu_entry_before_about(window):
+class FakeWorker:
+    """Stands in for local_worker.LocalWorker."""
+
+    def __init__(self, busy=False, manager="launchd", affected=True):
+        self.busy, self.manager, self.affected = busy, manager, affected
+        self.pid = 4242
+
+    @property
+    def can_restart(self):
+        return self.affected and not self.busy and self.manager in ("launchd", "task")
+
+    def busy_reason(self):
+        busy = self.busy and self.affected               # as LocalWorker.busy_reason: another checkout's is no reason
+        return "The worker on this computer runs this checkout and has 1 job(s) running." if busy else ""
+
+    def describe(self):
+        return f"The worker on this computer (pid {self.pid}) is {'busy' if self.busy else 'idle'}."
+
+    def restart_hint(self):
+        return "restart it by hand"
+
+
+def test_help_menu_entries_before_about(window):
     from quantabench.gui import update_action
 
     update_action.install(window)
     help_menu = [a.menu() for a in window.menuBar().actions() if a.menu() is not None][0]
     texts = [a.text() for a in help_menu.actions()]
-    assert texts[0] == "Check for updates..." and texts[-1] == "About QuantaBench"
-    assert window.a_check_updates.isEnabled()
+    assert texts[:2] == ["Check for updates...", "Create app shortcuts..."] and texts[-1] == "About QuantaBench"
+    assert window.a_check_updates.isEnabled() and window.a_create_shortcuts.isEnabled()
 
 
 def test_check_runs_on_a_worker_and_offers_update(window, monkeypatch):
@@ -683,17 +976,230 @@ def test_check_runs_on_a_worker_and_offers_update(window, monkeypatch):
     assert window.a_check_updates.isEnabled()
 
 
-def test_update_and_restart(window, monkeypatch):
+@pytest.mark.parametrize(("choice", "restarts"), [((True, False), 1), ((False, False), 0)])
+def test_update_then_offers_restart(window, monkeypatch, choice, restarts):
     from quantabench.gui import update_action
 
     update_action.install(window)
-    restarted = []
+    restarted, shown = [], []
     monkeypatch.setattr(update, "update", lambda repo=None: update.UpdateResult(
         ok=True, updated=True, message="Updated abc -> def."))
+    monkeypatch.setattr(update_action, "_show_result", lambda win, res: shown.append(res) or choice)
     monkeypatch.setattr(update_action, "restart", lambda win: restarted.append(win))
     update_action.run_update(window)
-    _wait(lambda: restarted)
-    assert restarted == [window] and "Updated abc -> def." in window.logged
+    _wait(lambda: shown)
+    assert "Updated abc -> def." in window.logged and len(restarted) == restarts
+    if not restarts:
+        assert "restart it" in window.statusBar().currentMessage()
+
+
+def _click_dialog(monkeypatch, button_text, tick=False, seen=None):
+    """UpdateDialog.exec stand-in: optionally ticks "Also upgrade", then presses the button with this text."""
+    from quantabench.gui import update_action
+
+    def fake_exec(dlg):
+        if seen is not None:
+            seen.update(buttons=dlg.button_texts(), check=dlg.check.text() if dlg.check else None,
+                        headline=dlg.headline.text(), reason=dlg.reason.text() if dlg.reason.isVisibleTo(dlg) else "",
+                        news=dlg.news.toPlainText() if dlg.news is not None else None)
+        if tick:
+            dlg.check.setChecked(True)
+        dlg.click(button_text)
+        return 0
+
+    monkeypatch.setattr(update_action.UpdateDialog, "exec", fake_exec)
+
+
+@pytest.mark.parametrize(("state", "kw", "button", "tick", "choice"), [
+    ("behind", {"behind": 1}, "Update", False, "update"),
+    ("behind", {"behind": 1}, "Update", True, "upgrade"),
+    ("behind", {"behind": 1}, "Later", True, False),
+    ("up-to-date", {}, "Upgrade packages...", False, "upgrade"),
+    ("up-to-date", {}, "Close", False, False),
+    ("error", {"message": "boom"}, "Close", False, False),
+    ("diverged", {"behind": 1, "ahead": 1}, "Close", False, False),
+])
+def test_dialog_choices(window, monkeypatch, state, kw, button, tick, choice):
+    from quantabench.gui import update_action
+
+    seen = {}
+    _click_dialog(monkeypatch, button, tick=tick, seen=seen)
+    assert update_action._ask_update(window, _status(state, **kw)) == choice
+    assert (seen["check"] == update_action.UPGRADE_TEXT) == (state == "behind")
+    assert ("Upgrade packages..." in seen["buttons"]) == (state in ("up-to-date",))
+    assert ("Update" in seen["buttons"]) == (state == "behind")
+    if state == "diverged":
+        assert "fast-forward is impossible" in seen["reason"] and seen["buttons"] == ["Close"]
+
+
+def test_dialog_shows_the_changelog_news_and_why_main(window, monkeypatch):
+    from quantabench.gui import update_action
+
+    news = [update.ChangelogEntry("Unreleased", "Update button everywhere (DIST-1, 2026-11-23)", "- **Bold** item"),
+            update.ChangelogEntry("Unreleased", "Old entry (X-1)", "- longer now", changed=True)]
+    st = _status("behind", behind=2, incoming=["abc1234 Update button", "def5678 Fix"], news=news,
+                 release="v0.3.0", since_release=40)
+    seen = {}
+    _click_dialog(monkeypatch, "Later", seen=seen)
+    assert update_action._ask_update(window, st) is False
+    assert "What's new" in seen["news"] and "Update button everywhere" in seen["news"] and "Bold item" in seen["news"]
+    assert "Old entry (X-1) (updated)" in seen["news"] and "Commits (2)" in seen["news"] and "def5678" in seen["news"]
+    assert "2 new commit(s) on origin/main" in seen["headline"] and "v0.3.0" in seen["headline"]
+    assert "**" not in seen["news"]                                   # rendered, not raw Markdown
+
+
+def test_busy_worker_offers_update_when_idle(window, monkeypatch):
+    from quantabench.gui import update_action
+
+    st = _status("behind", behind=1, worker=FakeWorker(busy=True))
+    assert not st.can_update and "1 job(s) running" in st.busy_reason
+    seen = {}
+    _click_dialog(monkeypatch, "Update when idle", seen=seen)
+    assert update_action._ask_update(window, st) == "update"
+    assert "1 job(s) running" in seen["reason"]
+    # a worker of another checkout does not hold the update
+    other = _status("behind", behind=1, worker=FakeWorker(busy=True, affected=False))
+    assert other.can_update
+
+
+def test_running_build_makes_the_update_wait(window, monkeypatch):
+    from quantabench.gui import update_action
+
+    monkeypatch.setattr(update_action, "WAIT_MS", 20)
+    monkeypatch.setattr(update_action, "_ask_update", lambda win, status: "update")
+    asked, ran, probes = [], [], []
+    monkeypatch.setattr(update_action, "_ask_wait", lambda win, what: asked.append(what) or True)
+    monkeypatch.setattr(update_action, "run_update", lambda win, repo=None, upgrade_packages=False:
+                        ran.append(upgrade_packages))
+    monkeypatch.setattr(update, "find_checkout", lambda start=None: Path("/repo"))
+    monkeypatch.setattr(update, "probe_worker", lambda root: probes.append(root))
+    window.worker = object()                                        # a build runs
+    update_action.show_status(window, _status("behind", behind=1))
+    assert asked == ["a build is running in this window"] and window._update_wait is not None
+    _wait(lambda: "Update waiting until a build" in window.statusBar().currentMessage())
+    time.sleep(0.1)
+    assert not ran                                                   # still running
+    window.worker = None                                             # the build ended
+    _wait(lambda: ran)
+    assert ran == [False] and probes and window._update_wait is None
+
+
+def test_waiting_update_can_be_cancelled(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from quantabench.gui import update_action
+
+    update_action.install(window)
+    monkeypatch.setattr(update_action, "WAIT_MS", 20)
+    monkeypatch.setattr(update_action, "_ask_update", lambda win, status: "upgrade")
+    monkeypatch.setattr(update_action, "_ask_wait", lambda win, what: True)
+    monkeypatch.setattr(update_action, "run_update", lambda *a, **k: pytest.fail("cancelled: must not update"))
+    monkeypatch.setattr(update, "check", lambda *a, **k: pytest.fail("a waiting update offers to cancel instead"))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window.worker = object()
+    update_action.show_status(window, _status("up-to-date"))
+    assert window._update_wait is not None
+    window.a_check_updates.trigger()
+    assert window._update_wait is None and "cancelled" in window.statusBar().currentMessage()
+
+
+def test_busy_worker_update_waits_for_it(window, monkeypatch):
+    from quantabench.gui import update_action
+
+    monkeypatch.setattr(update_action, "WAIT_MS", 10)
+    monkeypatch.setattr(update_action, "WORKER_EVERY", 2)
+    monkeypatch.setattr(update_action, "_ask_update", lambda win, status: "update")
+    monkeypatch.setattr(update_action, "_ask_wait", lambda win, what: pytest.fail("the dialog's Update when idle "
+                                                                                  "was the answer"))
+    ran = []
+    monkeypatch.setattr(update_action, "run_update", lambda win, repo=None, upgrade_packages=False: ran.append(1))
+    monkeypatch.setattr(update, "find_checkout", lambda start=None: Path("/repo"))
+    answers = [FakeWorker(busy=True), FakeWorker(busy=True), FakeWorker(busy=False)]
+    monkeypatch.setattr(update, "probe_worker", lambda root: answers.pop(0) if len(answers) > 1 else answers[0])
+    update_action.show_status(window, _status("behind", behind=1, worker=FakeWorker(busy=True)))
+    _wait(lambda: ran)
+    assert window._update_wait is None
+
+
+def test_upgrade_with_a_busy_worker_asks_first(window, monkeypatch):
+    """With nothing to pull the dialog did not mention the worker: the wait question does."""
+    from quantabench.gui import update_action
+
+    monkeypatch.setattr(update_action, "_ask_update", lambda win, status: "upgrade")
+    asked = []
+    monkeypatch.setattr(update_action, "_ask_wait", lambda win, what: asked.append(what) or False)
+    monkeypatch.setattr(update_action, "run_update", lambda *a, **k: pytest.fail("refused: must not update"))
+    update_action.show_status(window, _status("up-to-date", worker=FakeWorker(busy=True)))
+    assert asked == ["the worker on this computer runs jobs from this checkout"]
+    assert getattr(window, "_update_wait", None) is None
+
+
+def test_result_lists_changes_and_offers_restart(window, monkeypatch):
+    from quantabench.gui import update_action
+
+    changes = [f"pkg{i:02d} 1.0 -> 2.0" for i in range(30)]
+    res = update.UpdateResult(ok=True, upgraded=True, package_changes=changes, log="$ pip install ...",
+                              message="\n".join(["Upgraded the installed packages with pip.", "Package changes (30):",
+                                                 *[f"  {c}" for c in changes], "Restart QuantaBench to use the new version."]))
+    seen = {}
+    _click(monkeypatch, "Restart now", seen=seen)
+    assert update_action._show_result(window, res) == (True, False)
+    assert "pkg19" in seen["text"] and "pkg20" not in seen["text"] and "... and 10 more" in seen["text"]
+    assert "pkg29 1.0 -> 2.0" in seen["details"] and "$ pip install" in seen["details"]
+    assert seen["check"] is None                                     # no worker here
+    # nothing changed: no restart offered
+    _click(monkeypatch, "Close", seen=seen)
+    assert update_action._show_result(window, update.UpdateResult(ok=True, message="No change.")) == (False, False)
+    assert "Restart now" not in seen["buttons"]
+
+
+@pytest.mark.parametrize(("worker", "check_shown"), [
+    (FakeWorker(), True), (FakeWorker(manager="task"), True), (FakeWorker(manager="manual"), False),
+    (FakeWorker(busy=True), False), (FakeWorker(affected=False), False)])
+def test_result_offers_to_restart_an_idle_service_worker(window, monkeypatch, worker, check_shown):
+    from quantabench.gui import update_action
+
+    res = update.UpdateResult(ok=True, updated=True, worker=worker, message="Updated abc -> def.")
+    seen = {}
+    _click(monkeypatch, "Later", seen=seen)
+    assert update_action._show_result(window, res) == (False, check_shown)
+    assert (seen["check"] is not None) == check_shown
+    if check_shown:
+        assert ("LaunchAgent" if worker.manager == "launchd" else "scheduled task") in seen["check"]
+
+
+def test_restart_worker_then_the_app(window, monkeypatch):
+    from quantabench import local_worker
+    from quantabench.gui import update_action
+
+    events = []
+    worker = FakeWorker()
+    monkeypatch.setattr(update, "update", lambda repo=None: update.UpdateResult(
+        ok=True, updated=True, worker=worker, message="Updated abc -> def."))
+    monkeypatch.setattr(update_action, "_show_result", lambda win, res: (True, True))
+    monkeypatch.setattr(local_worker, "restart", lambda w: events.append(("worker", w)) or (True, "Restarted it."))
+    monkeypatch.setattr(update_action, "restart", lambda win: events.append(("app", win)))
+    update_action.run_update(window)
+    _wait(lambda: len(events) == 2)
+    assert events == [("worker", worker), ("app", window)] and "Restarted it." in window.logged
+
+
+def test_upgrade_choice_reaches_update(window, monkeypatch):
+    from quantabench.gui import update_action
+
+    update_action.install(window)
+    calls, results = [], []
+    monkeypatch.setattr(update_action, "_ask_update", lambda win, status: "upgrade")
+    monkeypatch.setattr(update, "update", lambda repo=None, **kw: calls.append(kw) or update.UpdateResult(
+        ok=True, upgraded=True, package_changes=["numpy 2.1.0 -> 2.3.4"],
+        message="Nothing to pull.\nUpgraded the installed packages with pip.\nPackage changes (1):\n"
+                "  numpy 2.1.0 -> 2.3.4\nRestart QuantaBench to use the new version."))
+    monkeypatch.setattr(update_action, "_show_result", lambda win, res: results.append(res) or (False, False))
+    update_action.show_status(window, _status("up-to-date"))
+    _wait(lambda: results)
+    assert calls == [{"upgrade_packages": True}]
+    assert results[0].restart_needed and "  numpy 2.1.0 -> 2.3.4" in window.logged
+    assert "restart it" in window.statusBar().currentMessage()     # "Later": no restart
 
 
 def _click(monkeypatch, button_text, tick=False, seen=None):
@@ -713,65 +1219,24 @@ def _click(monkeypatch, button_text, tick=False, seen=None):
     monkeypatch.setattr(QMessageBox, "exec", fake_exec)
 
 
-@pytest.mark.parametrize(("state", "kw", "button", "tick", "choice"), [
-    ("behind", {"behind": 1}, "Update and restart", False, "update"),
-    ("behind", {"behind": 1}, "Update and restart", True, "upgrade"),
-    ("behind", {"behind": 1}, "Later", True, False),
-    ("up-to-date", {}, "Upgrade packages...", False, "upgrade"),
-    ("up-to-date", {}, "Close", False, False),
-    ("error", {"message": "boom"}, "Close", False, False),
-])
-def test_result_box_choices(window, monkeypatch, state, kw, button, tick, choice):
+def test_create_shortcuts_asks_then_makes_them(window, monkeypatch):
+
+    from quantabench import launchers
     from quantabench.gui import update_action
 
+    made, shown = [], []
+    monkeypatch.setattr(launchers, "create", lambda repo, desktop=False, variants=None: made.append(desktop)
+                        or ["/apps/quantabench.desktop"])
+    monkeypatch.setattr(update_action, "_info", lambda win, title, text: shown.append(text))
     seen = {}
-    _click(monkeypatch, button, tick=tick, seen=seen)
-    assert update_action._ask_update(window, _status(state, **kw)) == choice
-    assert (seen["check"] == update_action.UPGRADE_TEXT) == (state == "behind")
-    assert ("Upgrade packages..." in seen["buttons"]) == (state == "up-to-date")
-
-
-def test_upgrade_choice_reaches_update(window, monkeypatch):
-    from quantabench.gui import update_action
-
-    update_action.install(window)
-    calls, results = [], []
-    monkeypatch.setattr(update_action, "_ask_update", lambda win, status: "upgrade")
-    monkeypatch.setattr(update, "update", lambda repo=None, **kw: calls.append(kw) or update.UpdateResult(
-        ok=True, upgraded=True, package_changes=["numpy 2.1.0 -> 2.3.4"],
-        message="Nothing to pull.\nUpgraded the installed packages with pip.\nPackage changes (1):\n"
-                "  numpy 2.1.0 -> 2.3.4\nRestart QuantaBench to use the new version."))
-    monkeypatch.setattr(update_action, "_show_upgrade_result", lambda win, res: results.append(res) or False)
-    update_action.show_status(window, _status("up-to-date"))
-    _wait(lambda: results)
-    assert calls == [{"upgrade_packages": True}]
-    assert results[0].restart_needed and "  numpy 2.1.0 -> 2.3.4" in window.logged
-    assert "restart it" in window.statusBar().currentMessage()     # "Later": no restart
-
-
-def test_upgrade_result_lists_changes_and_restarts(window, monkeypatch):
-    from quantabench.gui import update_action
-
-    changes = [f"pkg{i:02d} 1.0 -> 2.0" for i in range(30)]
-    res = update.UpdateResult(ok=True, upgraded=True, package_changes=changes, log="$ pip install ...",
-                              message="\n".join(["Upgraded the installed packages with pip.", "Package changes (30):",
-                                                 *[f"  {c}" for c in changes], "Restart QuantaBench to use the new version."]))
-    seen = {}
-    _click(monkeypatch, "Restart now", seen=seen)
-    assert update_action._show_upgrade_result(window, res) is True
-    assert "pkg19" in seen["text"] and "pkg20" not in seen["text"] and "... and 10 more" in seen["text"]
-    assert "pkg29 1.0 -> 2.0" in seen["details"] and "$ pip install" in seen["details"]
-    # nothing changed: no restart offered
-    _click(monkeypatch, "Close", seen=seen)
-    assert update_action._show_upgrade_result(window, update.UpdateResult(ok=True, message="No change.")) is False
-    assert "Restart now" not in seen["buttons"]
-
-    restarted = []
-    monkeypatch.setattr(update, "update", lambda repo=None, **kw: res)
-    monkeypatch.setattr(update_action, "_show_upgrade_result", lambda win, r: True)
-    monkeypatch.setattr(update_action, "restart", lambda win: restarted.append(win))
-    update_action.run_update(window, upgrade_packages=True)
-    _wait(lambda: restarted)
+    _click(monkeypatch, "Create", tick=True, seen=seen)
+    update_action.create_shortcuts(window)
+    _wait(lambda: shown)
+    assert made == [True] and "/apps/quantabench.desktop" in shown[0]
+    assert "without a terminal window" in seen["text"] and seen["check"] == "Also on the Desktop"
+    _click(monkeypatch, "Cancel")
+    update_action.create_shortcuts(window)
+    assert made == [True]
 
 
 def test_restart_relaunches_once_the_window_closes(window, monkeypatch):

@@ -434,33 +434,9 @@ step "Launchers (no Terminal window)"
 make_executable "$REPO/QuantaBench.command"
 info "QuantaBench.command in the repository: double-click it in Finder"
 if [ "$MAKE_APP" = 1 ]; then
-  write_file "$APP/Contents/Info.plist" '<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key><string>QuantaBench</string>
-  <key>CFBundleDisplayName</key><string>QuantaBench</string>
-  <key>CFBundleIdentifier</key><string>io.github.brandonbtm29.quantabench</string>
-  <key>CFBundleExecutable</key><string>QuantaBench</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <key>NSHighResolutionCapable</key><true/>
-</dict>
-</plist>'
-  write_file "$APP/Contents/MacOS/QuantaBench" "#!/bin/bash
-# Made by scripts/install_macos.sh: starts QuantaBench from the checkout's .venv without a Terminal window.
-# Rerun the installer if the checkout moves.
-REPO=$(quote "$REPO")
-export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$PATH\"   # git for Help > Check for updates...
-if [ ! -x \"\$REPO/.venv/bin/quantabench\" ]; then
-  /usr/bin/osascript -e 'display alert \"QuantaBench is not installed\" message \"Run scripts/install_macos.sh in the QuantaBench folder.\"'
-  exit 1
-fi
-cd \"\$REPO\" || exit 1
-exec \"\$REPO/.venv/bin/quantabench\""
-  make_executable "$APP/Contents/MacOS/QuantaBench"
+  # quantabench-cli shortcuts (src/quantabench/launchers.py): $APP with the QuantaBench icon, whose executable runs
+  # the checkout's .venv/bin/python -m quantabench (PATH with Homebrew, for git and the tools)
+  run "$VPY" -m quantabench shortcuts || warn "$APP was not made (above); make it later with: \"$VENV/bin/quantabench-cli\" shortcuts"
   info "$APP: open it from Launchpad, Spotlight or ~/Applications (drag it to the Dock to keep it there)"
 fi
 

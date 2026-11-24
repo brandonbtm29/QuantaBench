@@ -96,11 +96,17 @@ top of the Windows checkout's `.venv`.
    environments: `envs/tools.yml` (xtb, CREST, MOPAC), or `envs/tools-windows.yml` (xtb, MOPAC) on Windows,
    plus `envs/psi4.yml`. Each environment is updated only when its file changed. `--conda PATH` picks the
    tool.
-7. **A launcher that hides the terminal window**:
-   - Windows: Start Menu shortcut to `.venv\Scripts\quantabench.exe`, pip's GUI launcher, which runs
-     `pythonw`. `-DesktopShortcut` adds one on the Desktop.
+7. **Launchers that hide the terminal window, with the QuantaBench icon** (`quantabench-cli shortcuts`, one per
+   environment of the checkout: `.venv` is "QuantaBench", `.venv-rocm` "QuantaBench (AMD GPU)"):
+   - Windows: Start Menu shortcuts to the environment's `pythonw.exe -m quantabench`, with the icon and the app's
+     taskbar ID, so the running window groups with a pinned shortcut. `-DesktopShortcut` adds them on the
+     Desktop, `-NoShortcut` skips them.
    - macOS: `~/Applications/QuantaBench.app` (`--no-app` skips it), plus `QuantaBench.command`.
-   - Linux: `~/.local/share/applications/quantabench.desktop`.
+   - Linux: `~/.local/share/applications/quantabench.desktop` (`--no-launcher` skips it).
+
+   For a checkout installed before these existed, run `quantabench-cli shortcuts` once (`--desktop` adds Desktop
+   icons, `--remove` takes them away), or use Help > Create app shortcuts... in the app. Run it again when the
+   checkout moves. `QuantaBench.bat` and `QuantaBench.command` still work, but flash a console or Terminal window.
 8. **`quantabench-cli doctor`** at the end, which shows what QuantaBench can use.
 
 Windows also checks for **Smart App Control**, which blocks new DLLs ([below](#smart-app-control)), and
@@ -109,12 +115,21 @@ AMD's ROCm PyTorch, and Miniforge must not be installed in a folder with spaces.
 
 ## Updating
 
-- **In the app:** Help > Check for updates... It shows the new commits and offers **Update and restart**.
-  Tick **Also upgrade the installed packages** to upgrade the packages too. With nothing to pull, the same
-  window offers **Upgrade packages...**.
+- **In the app:** Help > Check for updates... It shows what is new: the CHANGELOG.md sections the new commits
+  bring (rendered), then the commits, and how far main is past the newest release. **Update** pulls and installs;
+  then the app shows what changed and offers **Restart now** or **Later**. Tick **Also upgrade the installed
+  packages** to upgrade the packages too. With nothing to pull, the same window offers **Upgrade packages...**.
 - **On the command line:** `quantabench-cli update --check` reports how far the checkout is behind
-  `origin/main`, and `quantabench-cli update` updates it. `quantabench-cli update --upgrade-packages` also
-  upgrades the packages, with or without new commits.
+  `origin/main` and what is new, and `quantabench-cli update` updates it. `quantabench-cli update
+  --upgrade-packages` also upgrades the packages, with or without new commits. `--reinstall` reinstalls the
+  dependencies into every environment of the checkout without upgrading (for a checkout another tool
+  fast-forwarded, [DISTRIBUTION.md](DISTRIBUTION.md#in-app-updates-and-the-cross-machine-update-script)).
+  `--restart-worker` restarts this computer's worker afterwards (below), also with nothing to pull.
+
+**Updates follow main, not releases.** Every merged pull request lands on main after its tests pass, several a
+day, while releases are tags on main a few weeks apart; machines that share a batch should run the same commit
+(`grid build` warns when they differ). Installed builds (0.5, [DISTRIBUTION.md](DISTRIBUTION.md)) will follow
+releases.
 
 Both run `git pull --ff-only`. Then they reinstall with `pip install -e` when one of these changed:
 
@@ -122,13 +137,31 @@ Both run `git pull --ff-only`. Then they reinstall with `pip install -e` when on
 - this platform's entry in `scripts/fork-packages.json` (below)
 
 The reinstall uses the extras that are already installed, adds the fork packages and keeps the installed
-PyTorch.
+PyTorch. **The checkout's other environments get the same reinstall** (`.venv-rocm` next to `.venv`: both run the
+same code), each with its own extras and its own PyTorch build. **If pip fails** in the running environment, the
+checkout goes back to the commit it was on (`git reset --keep`), so QuantaBench keeps working; the message says
+why. Git and pip never wait for a password or a question (no Git Credential Manager window either).
 
 They refuse, and say why, in three cases:
 
 - tracked files have local changes (commit or `git stash` them first)
 - the checkout is on another branch
 - it has commits of its own that `origin/main` does not have
+
+**They wait while work runs.** An update changes the code under running work, so:
+
+- In the app, a build in the window or local jobs in the queue: **Update when they finish** waits for them
+  (Help > Check for updates... again offers to cancel the wait). Jobs on other machines go on there and do not
+  hold it.
+- The worker on this computer (`quantabench-cli worker`) running or about to run a job from this checkout: the
+  update waits (the app's **Update when idle**) or is refused (the command line). Pause the machine to let it
+  drain. A worker from another checkout does not count.
+
+**After an update the worker on this computer still runs the old code.** When it runs this checkout, is idle and
+is kept by the macOS LaunchAgent or the Windows scheduled task ([WORKERS.md](WORKERS.md)), the app offers
+**Restart this computer's worker too** (`launchctl kickstart -k`, or ending and starting the task), and
+`quantabench-cli update --restart-worker` does the same. A worker started by hand is not touched: the message
+says how to restart it.
 
 An install that is not a git checkout gets instructions instead. Running the install script again also
 updates, except for the `git pull`.
@@ -159,7 +192,7 @@ pip install -e ".[<installed extras>]" <fork packages> --upgrade --upgrade-strat
   ([below](#macos-apple-silicon-being-brought-up-plat-1)).
 
 **Workers.** A running `quantabench-cli worker` keeps the code it started with. Restart it after an update
-([WORKERS.md](WORKERS.md#commands)).
+(above, and [WORKERS.md](WORKERS.md#commands)).
 
 ### Fork packages: `scripts/fork-packages.json`
 
