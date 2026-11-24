@@ -1025,3 +1025,12 @@ physical cores; check whether Thorough ring conformers should seed from more tha
 - Nothing on the workstation, the MacBook or the lab PC was updated, restarted or installed into; the Update flow ran
   only on throwaway clones. On the Mac, a read-only check built `QuantaBench.app` in /tmp and saw the real worker
   as "LaunchAgent, idle, machine paused"; nothing was restarted.
+
+## 2026-11-24: DIST-1's design decided, before the merge (PR #56)
+- Brandon: "I agree with your PR56 suggestions. Go with your suggestions and merge #56-#58." docs/DISTRIBUTION.md gets a
+  "Decided (Brandon, 2026-11-24)" section: option C (a bootstrap installer), per-user installs without admin rights,
+  the GPU wizard recommends ROCm on a supported Radeon on Windows but asks each time and keeps the CPU variant,
+  engines from an in-app "Install engines..." offered on first run, no code signing yet (the docs explain SmartScreen
+  and Gatekeeper), a release every 1-2 weeks once installers exist, a hidden tester option for installed builds to
+  follow main, and the maintainer's git checkouts keep following main. The design text and PR 2's plan now say the
+  same; BACKLOG DIST-1's PR 2 is ready. Main (#57, #58) merged in first.

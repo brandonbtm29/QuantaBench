@@ -1,8 +1,8 @@
 # Distribution: installers, updates and launchers (0.5 design, DIST-1)
 
-Status 2026-11-23: a design for Brandon's OK. **PR 1** (DIST-1, built) gives today's git checkouts an Update button
-and terminal-free launchers on all three OSes. **PR 2**, the installers built in CI on tags, waits for the OK on the
-recommendation below. ROADMAP.md, "0.5: Distribution", lists the goals.
+Status 2026-11-24: **decided** (Brandon; see "Decided" below). **PR 1** (DIST-1, built) gives today's git checkouts an
+Update button and terminal-free launchers on all three OSes. **PR 2**, the installers built in CI on tags, follows the
+decisions. ROADMAP.md, "0.5: Distribution", lists the goals.
 
 ## What has to be installed
 
@@ -93,8 +93,9 @@ A light installer per OS, built in CI on each `v*` tag, does what the install sc
    release), the fork packages from `scripts/fork-packages.json`, and the PyTorch build the GPU wizard chose.
 3. Make the launchers with the same code as PR 1 (`quantabench.launchers`): Start menu shortcut, `.app`,
    `.desktop`.
-4. Optional components, as check boxes: the engines (micromamba, a single binary, creates `qb-tools` and
-   `qb-psi4` from `envs/*.yml` in the install folder) and a ROCm or CUDA environment.
+4. Optional components, later and from the app: the engines through **Install engines...** (micromamba, a single
+   binary, creates `qb-tools` and `qb-psi4` from `envs/*.yml` in the install folder; offered on first run), and a ROCm
+   or CUDA environment through the GPU wizard.
 
 Per OS:
 
@@ -132,7 +133,8 @@ without internet), option A remains: the wheel built for C is what a conda recip
   version and rolls back if it does not come up). This also closes UPD-1's open item for in-app upgrades on
   Windows.
 - **A checkout keeps following main.** The "release" channel applies to installs without `.git`; `update.check`
-  already tells them apart ("not-a-checkout"). A setting can switch a tester's install to "main" (git) later.
+  already tells them apart ("not-a-checkout"). A hidden tester option switches an installed build to follow main
+  (decided 2026-11-24).
 - **Workers:** the same restart as PR 1 (LaunchAgent, scheduled task). `grid build` compares versions instead of
   commits between installed machines.
 
@@ -249,6 +251,25 @@ Each tool covers a different case:
     needs no signing.
 - **Linux.** No signing needed. Publish SHA-256 sums with each release.
 
+## Decided (Brandon, 2026-11-24)
+
+Brandon: "I agree with your PR56 suggestions. Go with your suggestions and merge #56-#58." So the open questions below
+are answered as recommended:
+
+1. **Option C, a bootstrap installer**: a small installer per OS that puts a private Python in the install folder
+   and builds the environment from the release's wheel (not constructor, not a frozen app).
+2. **Per-user installs, no admin rights**: Windows `%LOCALAPPDATA%\Programs\QuantaBench`, macOS
+   `~/Library/Application Support/QuantaBench`, Linux `~/.local/share/quantabench`.
+3. **The GPU wizard on Windows with a supported Radeon recommends ROCm but asks each time**; the CPU variant is always
+   kept (a second environment and a second launcher, as `.venv-rocm` today).
+4. **Engines come from an in-app "Install engines..."**, offered on first run (not check boxes in the installer).
+5. **No code signing yet.** The docs explain the SmartScreen ("Windows protected your PC") and Gatekeeper (allow it
+   in System Settings > Privacy & Security) warnings; signing comes later (the CI steps stay no-ops without the
+   secrets).
+6. **A release every 1-2 weeks** once installers exist, so installed builds are never far behind main.
+7. **Installed builds get a hidden tester option to follow main** (git), off by default.
+8. **Brandon's own git checkouts keep following main** (Help > Check for updates, PR 1).
+
 ## PR 2: the installers, built in CI on tags (plan)
 
 1. `.github/workflows/release.yml`, on `push: tags: ["v*"]` and by hand (`workflow_dispatch`, a dry run without
@@ -258,11 +279,13 @@ Each tool covers a different case:
 3. Smoke-install each in CI: CPU PyTorch, no engines, then `quantabench-cli doctor` and an offscreen GUI start.
 4. A draft GitHub release with the installers, the wheel, `SHA256SUMS` and the CHANGELOG section. Brandon
    publishes it.
-5. Updater for installed builds (the release channel above), the GPU wizard and the helper-process upgrade on
-   Windows.
-6. Signing and notarization once the accounts exist (the steps are no-ops without the secrets).
+5. Updater for installed builds (the release channel above, with the hidden tester option to follow main), the GPU
+   wizard (ROCm recommended on a supported Radeon, asked each time, CPU kept), "Install engines..." offered on first
+   run, and the helper-process upgrade on Windows.
+6. Signing and notarization once the accounts exist (the steps are no-ops without the secrets). Until then
+   INSTALL.md gets a section on the SmartScreen and Gatekeeper warnings and how to get past them.
 
-### Open questions for Brandon
+### Open questions for Brandon (answered 2026-11-24: see "Decided" above)
 
 1. Is C right: a bootstrap installer with a wheel and a private Python, not constructor or a frozen app?
 2. Per-user installs (no admin rights, `%LOCALAPPDATA%\Programs`, `~/Library/Application Support`): OK?
