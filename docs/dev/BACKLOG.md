@@ -138,6 +138,15 @@ with its deadline and resume, the budget setter, and the time window for one mac
   deadline lives in `batch run`, not `grid build`. Not ported: the QSAR-specific `analyze_tranche.py` step, and the
   budget setter (`machines set --max-cpu` covers it). Left: run CREST-RUN-1's water phase with it (acceptance).
 
+## FIX-9: No user name in the tests' example paths · done 2026-11-24 (PR #57)
+Found 2026-11-23: two tests held a real Windows user name in example paths (`tests/test_eng_xtb.py`, the xtbout
+"program call" string; `tests/test_project.py`, `from_stored` with an absolute Windows path), against the public-repo
+rule (#24: no machine names, user names or personal paths in tracked files).
+- **Fix:** both use the placeholder `me`, as `tests/test_external.py` and `tests/test_priority.py` already do. The
+  xtbout test still feeds invalid JSON (the raw `\U` escape) and still finds `Users` in the program call.
+- Also: a DEVLOG entry (2026-11-22, SETTINGS-1 follow-ups) named one of the maintainer's machines; it now says "the
+  workstation". A search of the tracked files finds no other real user or machine name.
+
 ## FIX-8: Cancel reaches a paused job (a grid share on a paused machine) · in-PR 2026-11-22 (branch `fix/fix-8-cancel-paused`)
 Found at the CREST-RUN-1 restart (2026-11-22): `grid cancel` on the old water grid cancelled the MacBook's queued
 share, but its paused share (2 molecules done, 821 not started) stayed "paused". `JobManager.cancel` handled queued,
