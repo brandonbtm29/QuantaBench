@@ -23,6 +23,9 @@
   `openmm-gpu-<dispersion>` or `openmm-cpu-<dispersion>`); `md estimate` and the long-range
   recommendation use it (on OpenMM, full long-range dispersion runs on the GPU as LJ-PME).
 - Fixed: `md run --detach --priority P` started the supervisor at the settings' priority instead of P.
+- Validated on pilot B (C6F14, 16 Å) on the MacBook's GPU in single precision: σ 11.09 mN/m with the tail against
+  B's 11.71 ± 0.30 (−0.65 ± 0.61), bulk and plateau densities within 0.3 %; the GPU's on-the-fly σ minus a
+  double-precision rerun of the same frames: −0.10 ± 0.09 mN/m (`Runs\openmm-validation-2026-11-23`).
 
 ### MD runs as jobs: segments, pause and resume (SIM-1 PR 1, 2026-11-23)
 - **`quantabench-cli md run DIR`** runs a folder written by `md liquid-slab`, `md smd` or the Surface builder under a

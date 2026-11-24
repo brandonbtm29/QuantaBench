@@ -1018,3 +1018,17 @@ MAC-GPU report's prototype converter (`Runs\mac-gpu-2026-11-23\scripts\bench_c6f
 - **The workstation** (RX 9060 XT, OpenCL, below normal, beside A-fine and CREST): OpenMM sees single, mixed and double; pilot B's
   slab 135 (single), 137 (mixed), 121 (LJ-PME 12 Å, mixed) ns/day; with σ samples every 20 fs 97 / 90. The
   `qb-openmm` environment was created there from `envs/openmm.yml` (and on the MacBook).
+- **Validation: pilot B on the MacBook's GPU** (`Runs\openmm-validation-2026-11-23\report.md`): pilot B's own files,
+  bulk 1 ns + slab 2 + 10 ns, OpenCL single precision, σ samples every 20 fs, test-area every 200 fs, frames every
+  1 ps; `md run --detach` with this branch's code from a scratch copy, 4.6 h (bulk 77.6, slab 67.8 ns/day), ~35 % of
+  one core at nice 19 beside the GAFF2 LAMMPS slab. σ raw 8.95 ± 0.53 mN/m (B 9.60 ± 0.30), with the 16 Å tail 11.09
+  (B 11.71): −0.65 ± 0.61. Test-area 9.39 ± 0.49, the 1-ps frames' rerun 9.52 ± 2.05. On the fly minus the
+  double-precision rerun, same 10,001 frames: −0.10 ± 0.09 (rms 9.1 per frame: the GPU's single-precision noise).
+  Every 4th production frame rerun at B's PPPM 1e-5: +0.252 ± 0.004 mN/m above 1e-6, so B itself is ~0.25 high
+  (−0.40 ± 0.61 against B corrected). Bulk 1.6693 ± 0.0014 (B 1.6719 ± 0.0016), plateau 1.6431 (B 1.6386),
+  10-90 width 9.9 Å (B 10.2). The error bar is 0.53, not 0.30, for the same sample count (white noise 0.45 in both).
+  The frames' rerun ran 3,237 frames on the MacBook (2 threads, nice 19) and 8,764 on the workstation (4 threads,
+  below normal, ~18 min) after the frames were copied there (outside SyncThing).
+- **Found:** the MacBook's LAMMPS for QuantaBench is the `.venv`'s PyPI wheel (MPICH), which exits −15 after every
+  run ("OFI poll failed (default nic=en0)" at MPI_Finalize); the rerun now judges a chunk by its rows and "Total wall
+  time". SIM-1's supervisor would mark finished LAMMPS segments failed on the Mac (BACKLOG OPENMM-2).

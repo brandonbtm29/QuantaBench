@@ -2526,7 +2526,8 @@ selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs m
 - The engine choice: `md liquid-slab --engine`, `md run --engine`, Settings > Engines > MD engine, Simulate > Run MD
   folder... asks for a folder that has not started, each with the note; the recommender and `machines --bench md`
   (`--md-variants default,openmm`: `openmm-gpu-cutoff16`) know it.
-- Validation: pilot B on the Mac's GPU, `Runs\openmm-validation-2026-11-23\`.
+- Validation (done): pilot B on the Mac's GPU, σ 11.09 vs 11.71 ± 0.30 mN/m with the tail (−0.65 ± 0.61), densities
+  within 0.3 %, single precision unbiased against a double-precision rerun; `Runs\openmm-validation-2026-11-23\report.md`.
 - Follow-ups: OPENMM-2 (below).
 
 ### OPENMM-2: OpenMM follow-ups · ready after OPENMM-1
@@ -2535,9 +2536,17 @@ selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs m
 - The upstream Metal platform (OpenMM PR #5488) when it ships: add it to the platform order and measure it.
 - Frames: `slab.dcd` every 1 ps is 117 KB per frame for 9,780 atoms (1.4 GB for 12 ns); consider saving them only
   in the production part, or deleting them after a passing rerun check (Brandon's call).
-- Coulomb accuracy of LAMMPS' cutoff variants (MD-LR): at PPPM 1e-5 their virial σ was +0.36 mN/m on a frame of pilot
-  B and +0.9 on a small hexane slab, against 1e-6/1e-7 and OpenMM's PME (OPENMM-1's DEVLOG); decide whether the
-  cutoff variants' default goes to 1e-6 (slower PPPM on the CPU threads of a GPU run).
+- Coulomb accuracy of LAMMPS' cutoff variants (MD-LR): at PPPM 1e-5 their virial σ is **+0.252 ± 0.004 mN/m** too
+  high on pilot B's system (2,501 frames of the OPENMM-1 validation run at 1e-5 vs 1e-6; +0.9 on a small hexane slab
+  at 8 Å), against 1e-6/1e-7 and OpenMM's PME, which agree. Pilots B and C carry it. Decide whether the cutoff
+  variants' default goes to 1e-6 (slower PPPM on the CPU threads of a GPU run) - Brandon's call.
+- The MacBook's LAMMPS for QuantaBench is the `.venv`'s PyPI wheel (MPICH): every run ends with SIGTERM after "OFI poll
+  failed (default nic=en0)" in MPI_Finalize (exit −15, even for a one-line input). SIM-1's supervisor marks a segment
+  done only on exit 0, so `md run` of a LAMMPS folder there would report finished segments as failed. Point Settings >
+  Engines > LAMMPS on the Mac at the `qb-lammps` conda `lmp`, or fix MPICH's netmod; and/or accept a complete log
+  (done tag + "Total wall time") with a signal exit, as `md.openmm_sigma`'s rerun does.
+- The on-the-fly σ error bar of the validation run was 0.53 mN/m against pilot B's 0.30 for the same number of
+  samples (white noise 0.45 in both): longer production or 10-fs samples if 0.3 is the target.
 
 ## Needs Brandon (hardware / Windows / decisions)
 
