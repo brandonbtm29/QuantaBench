@@ -230,8 +230,11 @@ def _rerun_lammps(folder: Path, todo: list[int], *, threads: int | None, echo, l
                                         "in.rerun"], work, threads=n, log_name="screen.rerun.txt", check=False,
                                        timeout=24 * 3600.0)
             rows = _thermo_rows(work / "log.rerun")
-            if res.returncode != 0 or len(rows) < len(part):
-                tail = (work / "log.rerun").read_text(encoding="utf-8", errors="replace").splitlines()[-5:]
+            text = (work / "log.rerun").read_text(encoding="utf-8", errors="replace")
+            # the rows decide, not the exit code alone: an MPI build of LAMMPS can end with a signal after it has
+            # finished and written everything (seen on macOS: exit -15 after "Total wall time")
+            if len(rows) < len(part) or (res.returncode != 0 and "Total wall time" not in text):
+                tail = text.splitlines()[-5:]
                 raise RuntimeError(f"LAMMPS rerun failed (exit {res.returncode}): {' | '.join(tail)}")
             with open(folder / PT_FILE, "a", encoding="utf-8") as fh:
                 for r in rows:
