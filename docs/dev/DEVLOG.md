@@ -1171,3 +1171,35 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
   and Gatekeeper), a release every 1-2 weeks once installers exist, a hidden tester option for installed builds to
   follow main, and the maintainer's git checkouts keep following main. The design text and PR 2's plan now say the
   same; BACKLOG DIST-1's PR 2 is ready. Main (#57, #58) merged in first.
+
+## 2026-11-24: MD-LR-2, A-fine in the pilot table and an isotropic Coulomb mesh for plain pppm (branch `feat/md-lr-2-a-fine-coulomb-mesh`)
+- **A-fine** (pilot A's C6F14 slab with converged `pppm/disp` from the start: Coulomb 1e-6, `force/disp/real 1e-5`,
+  `force/disp/kspace 2e-5`; 1 ns NPT + 2 + 10 ns on 8 CPU threads, 53.5 h) finished 2026-11-24 19:44 EST. `md
+  surface-tension`: **σ 12.62 ± 0.40 mN/m** (10 blocks of 1 ns; the halves 13.68 / 11.55, a step at 7 ns in the
+  tangential pressures only, so ± 0.65 allowing for the blocks' correlation), bulk 1.6716 g/cm³ (+0.43 % on A's, as the
+  mesh check predicted; equal to B's and C's tail-corrected bulks), plateau −0.44 % vs its bulk, 10-90 width 9.8 Å.
+  It confirms the mesh check's estimate on A's frames (10.70 + 1.36 = 12.06 ± 0.70) within 0.7 σ and sits on Freire
+  2006 (12.33 fit, 12.23 ± 0.14 point: +2.3 % / +3.1 %, under 1 σ). Report: `Runs\md-pilot-2026-11-20\pilot_A_fine_report.md`.
+- **`PILOT_TABLE`**: A-fine measured (σ, plateau, bulk, production 5.85 ns/day), B and C Coulomb-corrected (OPS-5's
+  frame reruns: 9.30 / 11.41 and 5.60 / 8.76; the runs' own numbers kept in `source`), `PROVISIONAL = False`, Freire's
+  measured point in `REFERENCES`, `pilot_gap()`. Reasons and warnings now say what A-fine shows: 16 Å + tail reads
+  9.6 % low, 12 Å + tail 31 %. The rules (who gets what) are unchanged.
+- **The Coulomb mesh rule (`coul_grid`, `--coulomb-mesh`)**: plain `pppm` estimates its error per direction for a
+  uniform density and lets a slab box's long z edge have a ~1.5 times coarser spacing (C at 1e-5: 18 x 18 x 60, h·G
+  0.47 / 0.71), which put C's σ 2.37 high and B's 0.30. The cutoff inputs now pin G at LAMMPS' own first estimate for
+  the accuracy, sqrt(−ln(acc·√(N rc V)/(2Σq²)))/rc, computed in the input from the box (`vol`, `atoms` and the
+  molecule's mean q²), and set `kspace_modify mesh` with one spacing h = 0.47 / G, after `read_data` and again after
+  the slab's box opens (`md.liquid.coul_mesh_vars`/`coul_mesh_lines`; `md.long_range.coulomb_gewald`/`coulomb_mesh`
+  do the same in Python for the README and the tests). `pppm/disp` already picks isotropic Coulomb meshes. Old folders
+  (no `coul_grid` in their config) keep LAMMPS' mesh when resumed.
+- **Validation** (`Runs\md-pilot-2026-11-20\coulomb_mesh_rule_check_2026-11-24\`): the pilots' 101 production frames
+  rerun in the cloud (PyPI LAMMPS 22 Jul 2025; its C5/B5 equal the workstation's to 1e-8 mN/m per frame) with the
+  generated lines, against the workstation's converged reruns: C (12 Å) at 1e-6 24 x 24 x 108, **+0.013 ± 0.004** mN/m
+  from converged (LAMMPS' own 1e-6 mesh 27 x 27 x 90: +0.32); at 1e-5 18 x 18 x 90, +0.02 ± 0.03 (LAMMPS': +2.37). B
+  (16 Å) at 1e-6 16 x 16 x 80, +0.002 ± 0.004 (LAMMPS' 20 x 20 x 72: +0.025). Fewer mesh points than LAMMPS' in both.
+- **#59 (OPENMM-1)**: written to merge after it. It changes the cutoff default to Coulomb 1e-6 and edits nearby lines;
+  this branch keeps clear of them (`settings()` adds `coul_grid` only when it is not the default, so #59's exact-dict
+  tests hold). After both: #59's OpenMM reason quotes B's 11.71 (now 11.41), and `MD_BENCH_VERSION` (3 in #59) may go
+  to 4 since the cutoff benchmark inputs get the rule.
+- Tests: `tests/test_md_long_range.py`, `tests/test_md_liquid.py` (incl. the LAMMPS smoke run: the slab's G and grid in
+  the log equal `coulomb_gewald` / `coulomb_mesh`).

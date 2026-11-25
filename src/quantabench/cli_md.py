@@ -3,7 +3,8 @@ LAMMPS and their surface tension.
 
     quantabench-cli md liquid-slab --smiles "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --name c6f14 -o DIR
         [--ff oplsaa|openff|gaff2] [--long-range auto|ewald|cutoff] [--cutoff RC] [--purpose screen|reference]
-        [--gpu auto|yes|no] [--coulomb-accuracy A] [--disp-grid spacing|accuracy] [--disp-gewald G]
+        [--gpu auto|yes|no] [--coulomb-accuracy A] [--coulomb-mesh spacing|accuracy] [--disp-grid spacing|accuracy]
+        [--disp-gewald G]
         [--disp-spacing H] [--disp-accuracy REAL KSPACE] [--dispersion ewald|cutoff12|cutoff16|...]
         [--size pilot|full] [--molecules N] [--sigma-ref 12.33 --density-ref 1.67] [--run]
         [--engine lammps|openmm] [--frame-every N] [--kb-every N] [--ta-every N] (OPENMM-1)
@@ -67,6 +68,10 @@ def register(msub) -> None:
     lr.add_argument("--disp-accuracy", type=float, nargs=2, metavar=("REAL", "KSPACE"),
                     help="ewald, accuracy: force/disp/real and force/disp/kspace, kcal/mol/Å (default 1e-5 2e-5; "
                          "implies --disp-grid accuracy)")
+    lr.add_argument("--coulomb-mesh", choices=["spacing", "accuracy"],
+                    help="cutoff (plain pppm): spacing (G from the Coulomb accuracy and one mesh spacing h <= 0.47/G "
+                         "in every direction; the slab-safe default) or accuracy (LAMMPS picks the mesh: about 1.5x "
+                         "coarser along a slab box's z; implies --long-range cutoff)")
     lr.add_argument("--dispersion", default=None,
                     help="the method and cutoff in one word, as before: ewald, cutoff12, cutoff16, cutoff18, ... "
                          "(= --long-range cutoff --cutoff 16)")
@@ -418,6 +423,12 @@ def _long_range_choice(args) -> dict:
             out[k] = v
     if any(k.startswith("disp_") for k in out):
         out.setdefault("method", "ewald")           # the --disp-* options choose full long-range dispersion
+    if getattr(args, "coulomb_mesh", None):
+        out["coul_grid"] = args.coulomb_mesh
+        out.setdefault("method", "cutoff")          # the Coulomb mesh rule is plain pppm's (the cutoff runs)
+        if out["method"] != "cutoff":
+            raise ValueError("--coulomb-mesh is for --long-range cutoff (plain pppm); pppm/disp picks an isotropic "
+                             "Coulomb mesh itself")
     if out.get("disp_grid") == "accuracy" and ("disp_gewald" in out or "disp_spacing" in out):
         raise ValueError("--disp-gewald and --disp-spacing go with --disp-grid spacing")
     if out.get("method") == "cutoff" and any(k.startswith("disp_") for k in out):

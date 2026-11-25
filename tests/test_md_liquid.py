@@ -228,6 +228,43 @@ def test_cutoff_variant_has_tail_in_bulk_only(c6f14, tmp_path):
     assert "-sf hybrid gpu omp -pk gpu 1 device_type generic pair/only on -pk omp 4 -in in.slab" in readme
     for text in (bulk, slab):                     # the guard against a GPU run without nonbonded forces
         assert "variable        qb_epair equal abs(ecoul)+abs(evdwl-etail)" in text and '"quit 3"' in text
+    # MD-LR-2: an isotropic Coulomb mesh, G from the accuracy, again once the slab's box is open
+    mesh = ("kspace_modify   gewald $(v_coul_g:%.8f) mesh $(ceil(lx/v_coul_h):%.0f) $(ceil(ly/v_coul_h):%.0f) "
+            "$(ceil(lz/v_coul_h):%.0f)")
+    for text in (bulk, slab):
+        assert "variable coul_q2        index 0.03456 " in text and "variable coul_hg        index 0.47 " in text
+        assert "variable coul_g         equal sqrt(-ln(${kacc}*sqrt(${rc}*vol/atoms)/(2.0*v_coul_q2)))/${rc}" in text
+    assert bulk.count(mesh) == 1 and slab.count(mesh) == 2
+    assert slab.index(mesh, slab.index(mesh) + 1) > slab.index("change_box      all z final")
+    assert "isotropic mesh h·G ≤ 0.47 (G from the accuracy: " in readme
+    meta = json.loads((tmp_path / "liquid_setup.json").read_text(encoding="utf-8"))
+    assert meta["config"]["coul_grid"] == "spacing"
+
+
+def test_coulomb_mesh_lines_and_old_folders(c6f14, tmp_path):
+    """MD-LR-2: the rule's lines only for plain pppm with charges; coul_grid="accuracy" keeps LAMMPS' mesh; a folder
+    written before MD-LR-2 (no coul_grid in its config) resumes with LAMMPS' mesh, as its in.slab ran."""
+    cut = L.LiquidSlabConfig(dispersion="cutoff12").resolved()
+    lines = L._kspace(c6f14, cut)
+    assert lines[0] == "kspace_style    pppm ${kacc}" and lines[-1] == L.coul_mesh_lines()[0]
+    assert L.mean_q2(c6f14) == pytest.approx((14 * 0.12 ** 2 + 2 * 0.36 ** 2 + 4 * 0.24 ** 2) / 20)
+    acc = L.LiquidSlabConfig(dispersion="cutoff12", coul_grid="accuracy").resolved()
+    assert L._kspace(c6f14, acc) == ["kspace_style    pppm ${kacc}"]
+    assert acc.long_range["coul_grid"] == "accuracy" and "coul_grid" not in cut.long_range
+    assert not any("coul" in x for x in L._kspace(c6f14, L.LiquidSlabConfig().resolved()))      # pppm/disp: none
+    loose = L.LiquidSlabConfig(dispersion="cutoff12", kspace_accuracy=2e-3).resolved()
+    assert L._kspace(c6f14, loose) == ["kspace_style    pppm ${kacc}"]                         # outside the rule
+    with pytest.raises(ValueError, match="coul_grid"):
+        L.LiquidSlabConfig(dispersion="cutoff12", coul_grid="iso").resolved()
+    L.write_liquid_slab(c6f14, tmp_path, L.LiquidSlabConfig(lateral=34.0, slab_thickness=20.0, packing="lattice",
+                                                            dispersion="cutoff16"), density_estimate=1.67)
+    assert L.load_folder(tmp_path)[1].coul_grid == "spacing"
+    p = tmp_path / "liquid_setup.json"
+    meta = json.loads(p.read_text(encoding="utf-8"))
+    del meta["config"]["coul_grid"]                                  # as written before MD-LR-2
+    p.write_text(json.dumps(meta), encoding="utf-8")
+    _tm, cfg, _meta = L.load_folder(tmp_path)
+    assert cfg.coul_grid == "accuracy" and L._kspace(c6f14, cfg) == ["kspace_style    pppm ${kacc}"]
 
 
 def test_long_range_config_resolution():
@@ -498,7 +535,7 @@ def test_cli_long_range_options(tmp_path, capsys):
     assert m["config"]["dispersion"] == "cutoff16" and m["config"]["kspace_accuracy"] == 1e-6
     assert m["long_range"]["chosen_by"] == "recommendation" and not m["long_range"]["differences"]
     readme = (tmp_path / "gpu" / "README.txt").read_text(encoding="utf-8")
-    assert "LONG-RANGE SETTINGS" in readme and "Chosen (recommendation)" in readme and "provisional" in readme
+    assert "LONG-RANGE SETTINGS" in readme and "Chosen (recommendation)" in readme and "provisional" not in readme
 
     assert cli.main([*base, "-o", str(tmp_path / "cpu"), "--gpu", "no"]) == 0
     out = capsys.readouterr().out
@@ -520,8 +557,17 @@ def test_cli_long_range_options(tmp_path, capsys):
 
     for bad in (["--dispersion", "cutoff16", "--cutoff", "14"], ["--long-range", "cutoff", "--disp-spacing", "2"],
                 ["--long-range", "pme"], ["--cutoff", "40"], ["--dispersion", "cutoff16", "--long-range", "ewald"],
-                ["--disp-grid", "spacing", "--disp-accuracy", "1e-5", "2e-5"]):
+                ["--disp-grid", "spacing", "--disp-accuracy", "1e-5", "2e-5"],
+                ["--long-range", "ewald", "--coulomb-mesh", "accuracy"], ["--disp-spacing", "2", "--coulomb-mesh", "spacing"]):
         assert cli.main([*base, "-o", str(tmp_path / "bad"), "--gpu", "no", *bad]) == 2, bad
+    # MD-LR-2: LAMMPS' own Coulomb mesh on request (it implies the cutoff method), with the warning
+    assert cli.main([*base, "-o", str(tmp_path / "lmesh"), "--gpu", "yes", "--coulomb-mesh", "accuracy"]) == 0
+    out = capsys.readouterr().out
+    assert "It differs from the recommendation in: Coulomb mesh: accuracy (recommended: spacing)" in out
+    assert "1.5 times coarser along z" in (tmp_path / "lmesh" / "README.txt").read_text(encoding="utf-8")
+    c = setup("lmesh")["config"]
+    assert (c["dispersion"], c["coul_grid"]) == ("cutoff16", "accuracy")
+    assert "coul_g" not in (tmp_path / "lmesh" / "in.slab").read_text(encoding="utf-8")
 
 
 def test_md_modules_import_without_heavy_dependencies():
@@ -571,6 +617,18 @@ def test_lammps_smoke_run(hexane, tmp_path, dispersion):
         assert g and all(x == pytest.approx(2.77 / 12, rel=1e-5) for x in g)
         assert grids[-1] == LR.disp_mesh((box["lx"], box["ly"], box["lz"]), s.config.disp_spacing)
         assert grids[-1][2] > 4 * grids[0][2]                      # the bulk box's mesh before the box opened
+    else:                             # MD-LR-2: G from the accuracy, pinned; an isotropic Coulomb mesh for the slab box
+        from quantabench.md import long_range as LR
+
+        log = (tmp_path / "log.slab").read_text(encoding="utf-8")
+        g = [float(x) for x in re.findall(r"G vector \(1/distance\)\s*=\s*(\S+)", log)]
+        grids = [tuple(int(v) for v in m) for m in re.findall(r"grid = (\d+) (\d+) (\d+)", log)]
+        lbox = (box["lx"], box["ly"], box["lz"])
+        want = LR.coulomb_gewald(s.config.kspace_accuracy, s.config.cutoff, s.n_atoms, math.prod(lbox),
+                                 L.mean_q2(hexane) * s.n_atoms)
+        assert g[-1] == pytest.approx(want, rel=1e-6) and grids[-1] == LR.coulomb_mesh(lbox, want)
+        hg = [x / n * g[-1] for x, n in zip(lbox, grids[-1])]
+        assert max(hg) <= LR.COUL_H_G and grids[-1][2] > 4 * grids[0][2]
 
 
 @pytest.mark.external
