@@ -34,9 +34,9 @@ Why the cutoff runs' Coulomb mesh is set (2026-11-24, MD-LR-2)
 Plain ``pppm`` estimates its error per direction for a uniform density, and an edge five times longer tolerates a
 coarser spacing: for the pilots' 40 x 40 x 200 Å slab boxes LAMMPS chose meshes about 1.5 times coarser along z than
 along x and y (pilot C at 1e-5: 18 x 18 x 60, h·G 0.47 / 0.71; pilot B: 12 x 12 x 45). In a slab, half the box is
-vacuum and that error goes into Pzz. Re-evaluating the pilots' 101 production frames (``Runs\\md-pilot-2026-11-20\\
-followup_checks_2026-11-23``) showed C's σ 2.37 ± 0.03 mN/m too high and B's 0.30 ± 0.02, and Coulomb 1e-6 left C
-0.32 high (h·G 0.54 along z). At C's own G an isotropic mesh at its x/y spacing (18 x 18 x 90, h·G 0.475) gave the
+vacuum and that error goes into Pzz. Re-evaluating the pilots' 101 production frames
+(``Runs\\md-pilot-2026-11-20\\followup_checks_2026-11-23``) showed C's σ 2.37 ± 0.03 mN/m too high and B's
+0.30 ± 0.02, and Coulomb 1e-6 left C 0.32 high (h·G 0.54 along z). At C's own G an isotropic mesh at its x/y spacing (18 x 18 x 90, h·G 0.475) gave the
 converged value within 0.003 mN/m, B's at h·G 0.52 within 0.004, at no extra cost. ``COUL_H_G`` = 0.47 is that bound.
 The rule itself on the same frames (G from the accuracy, ``coulomb_gewald``; ``coulomb_mesh``): at 1e-6, C's
 24 x 24 x 108 is within 0.013 ± 0.004 mN/m of converged and B's 16 x 16 x 80 within 0.002 ± 0.004 (LAMMPS' own 1e-6
