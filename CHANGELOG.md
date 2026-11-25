@@ -2,6 +2,15 @@
 
 ## Unreleased (after 0.3.0)
 
+### After #59 and #61: pilot B's corrected σ in the OpenMM reason, MD benchmark version 4 (MD-LR-2 follow-up, 2026-11-25)
+- **MD benchmark version 4:** the benchmark's cutoff variants now use MD-LR-2's Coulomb mesh rule, as the
+  surface-tension runs do, so their ns/day can differ from version 3's. Each machine is asked whether to run it
+  again (MD-BENCH-3); nothing re-runs it by itself.
+- The long-range recommendation for OpenMM with a GPU quotes pilot B's Coulomb-corrected σ (11.41 ± 0.30 mN/m, was
+  11.71 as run) and, like LAMMPS' reason, that 16 Å + tail reads 9.6 % below A-fine as a screen. The OpenMM
+  validation's comparison with pilot B (docs/ENGINES.md, docs/PLATFORMS.md) gives B's corrected value beside the
+  value as run: −0.35 ± 0.61 mN/m.
+
 ### OpenMM as a second MD engine, with the Apple GPU (OPENMM-1, 2026-11-23)
 - **The MD engine is a choice:** LAMMPS (the reference) or OpenMM, which runs much faster on GPUs at reduced
   arithmetic precision (single on Apple GPUs, mixed on most others); σ itself is computed afterwards in double
@@ -24,8 +33,9 @@
   recommendation use it (on OpenMM, full long-range dispersion runs on the GPU as LJ-PME).
 - Fixed: `md run --detach --priority P` started the supervisor at the settings' priority instead of P.
 - Validated on pilot B (C6F14, 16 Å) on the MacBook's GPU in single precision: σ 11.09 mN/m with the tail against
-  B's 11.71 ± 0.30 (−0.65 ± 0.61), bulk and plateau densities within 0.3 %; the GPU's on-the-fly σ minus a
-  double-precision rerun of the same frames: −0.10 ± 0.09 mN/m (`Runs\openmm-validation-2026-11-23`).
+  B's 11.41 ± 0.30 as MD-LR-2 corrected it for its Coulomb mesh (−0.35 ± 0.61; 11.71 and −0.65 as run), bulk and
+  plateau densities within 0.3 %; the GPU's on-the-fly σ minus a double-precision rerun of the same frames:
+  −0.10 ± 0.09 mN/m (`Runs\openmm-validation-2026-11-23`).
 - Decided (Brandon, 2026-11-24):
   - **The MD engine is set per computer.** Settings > Engines > MD engine saves this computer's choice only
     (`engines.machine_md_engine`); the default, **Automatic**, is OpenMM where OpenMM finds a usable GPU (CUDA, HIP
@@ -71,7 +81,7 @@
   the GPU wizard, signing, where installs live), recommending a bootstrap installer that builds the environment.
 
 ### Ask before re-running a changed MD benchmark (MD-BENCH-3, 2026-11-23)
-- When a release changes the MD benchmark (`md.bench.MD_BENCH_VERSION`, now 2) and a machine's stored numbers come
+- When a release changes the MD benchmark (`md.bench.MD_BENCH_VERSION`, 4 since MD-LR-2) and a machine's stored numbers come
   from an older version, QuantaBench **asks** whether to run it again and never re-runs it by itself:
   `quantabench-cli machines` prints a note under that machine with the command (`--json`: `md_bench_rerun`), the
   Machines dock shows this computer's note with **Run MD benchmark** and **Not now** and marks other machines' MD

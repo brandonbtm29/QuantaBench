@@ -76,7 +76,8 @@ def md(**variants):
 
 # ------------------------------------------------------------------------------------------- sizes and keys
 def test_sizes_geometries_and_keys():
-    assert bench.DEFAULT_SIZE == "slab" and bench.MD_BENCH_VERSION == 3     # 3: cutoff variants at Coulomb 1e-6
+    assert bench.DEFAULT_SIZE == "slab" and bench.MD_BENCH_VERSION == 4     # 4: cutoff variants' Coulomb mesh rule
+    assert "MD-LR-2" in bench.VERSION_CHANGES[4] and "OPENMM-1" in bench.VERSION_CHANGES[3]
     assert {k: bench.geometry_of(k) for k in bench.SYSTEMS} == {"slab": "slab", "small": "bulk",
                                                                  "pilot-slab": "slab", "pilot": "bulk"}
     assert bench.SYSTEMS["slab"]["config"]["n_molecules"] * 20 == 3800
@@ -108,6 +109,12 @@ def test_slab_inputs_time_what_a_surface_tension_run_does(c6f14):
         assert line in slab and line not in bulk
     assert "fix             ptens all ave/time 10 1 10 c_thermo_press[1]" in slab
     assert slab.index("run             0 post no") < slab.index('print           "QB_TIMED"')
+    # MD-LR-2's Coulomb mesh rule, as in md liquid-slab's inputs (benchmark version 4): the cutoff variants set
+    # G and one mesh spacing from the box; pppm/disp (ewald) picks its own
+    for text in (slab, bulk):
+        assert "variable coul_g         equal" in text and text.count("kspace_modify   gewald $(v_coul_g") == 1
+    ewald = bench.bench_input(c6f14, "ewald", steps=1000, geometry="slab", label="cpu-ewald")
+    assert "coul_g" not in ewald and "pppm/disp" in ewald
     ewald = bench.bench_input(c6f14, "ewald", steps=10, geometry="slab")
     assert "kspace_style    pppm/disp ${kacc}" in ewald and "mesh/disp $(ceil(lx/v_disp_h)" in ewald
     assert "variable kacc           index 1e-06" in ewald and "G 0.2308 1/A" in ewald

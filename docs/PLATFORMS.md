@@ -50,7 +50,8 @@ OpenMM keeps the CPU almost free (~30 % of one core). The Mac's numbers were tak
 CPU threads; the workstation's beside A-fine and CREST on its CPU, below-normal priority. Precision: Apple GPUs have
 no FP64, so OpenMM runs there in single precision; the pressure tensor such a GPU gives by finite differences is not
 precise enough for σ (one sample 19 mN/m off), so σ is computed afterwards in double precision (docs/ENGINES.md,
-"OpenMM, the second MD engine"). Validation against pilot B (σ 11.09 vs 11.71 ± 0.30 mN/m with the tail, densities within 0.3 %, the GPU's single precision unbiased against a double-precision rerun): `Runs\openmm-validation-2026-11-23\`.
+"OpenMM, the second MD engine"). Validation against pilot B (σ 11.09 vs 11.41 ± 0.30 mN/m with the tail, B's value corrected for its Coulomb mesh by
+MD-LR-2 (11.71 as run), densities within 0.3 %, the GPU's single precision unbiased against a double-precision rerun): `Runs\openmm-validation-2026-11-23\`.
 
 The conda environments in `envs/` solve for linux-64, win-64 and osx-arm64; CREST is the only program
 with no Windows build. (An earlier note said xtb 6.7.1 and CREST were missing for osx-arm64. That was

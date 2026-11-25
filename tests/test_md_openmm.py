@@ -255,6 +255,9 @@ def test_benchmark_variants_and_recommendation_know_openmm():
     m = LR.MachineInfo(True, "test", engine="openmm", benchmark=recs)
     rec = LR.recommend_long_range("slab", (40.3, 40.3, 200.9), n_atoms=9780, machine=m)
     assert (rec.method, rec.cutoff, rec.accelerator) == ("cutoff", 16.0, "gpu") and "OpenMM" in rec.reason
+    # pilot B's σ as MD-LR-2 corrected it (11.71 as run), and what A-fine shows, as in LAMMPS' reason
+    assert "11.41 ± 0.30 vs 11.25" in rec.reason and "11.71" not in rec.reason
+    assert "9.6 % below" in rec.reason and "12.62" in rec.reason
     assert rec.ns_per_day == pytest.approx(90.0) and rec.speed_source == "benchmark"
     ref = LR.recommend_long_range("slab", (40.3, 40.3, 200.9), n_atoms=9780, machine=m, purpose="reference")
     assert (ref.method, ref.accelerator) == ("ewald", "gpu") and "LJ-PME" in ref.reason

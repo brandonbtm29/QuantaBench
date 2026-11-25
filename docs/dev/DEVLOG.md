@@ -1203,3 +1203,20 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
   to 4 since the cutoff benchmark inputs get the rule.
 - Tests: `tests/test_md_long_range.py`, `tests/test_md_liquid.py` (incl. the LAMMPS smoke run: the slab's G and grid in
   the log equal `coulomb_gewald` / `coulomb_mesh`).
+
+## 2026-11-25: MD-LR-2 follow-up after #59 and #61 merged (branch `fix/md-lr-2-followup-bench-v4`)
+- **`MD_BENCH_VERSION` 4** (`VERSION_CHANGES[4]`): `md.bench.bench_input` builds its k-space lines with
+  `md.liquid._kspace`, so since #61 the benchmark's cutoff variants carry MD-LR-2's Coulomb mesh rule (G pinned, one
+  spacing h ≤ 0.47 / G from the box) instead of LAMMPS' own mesh, and their timings are not comparable with version
+  3's (#58's rule: raise the version when the benchmark changes). MD-BENCH-3 asks each machine whether to run it again.
+  The benchmark's docstring and docs/WORKERS.md say so; the MD-BENCH-3 CHANGELOG line no longer says "now 2".
+- **The OpenMM reason** (`recommend_long_range` with `engine="openmm"` and a GPU) quoted pilot B's σ as run (11.71): it
+  now takes B's Coulomb-corrected 11.41 ± 0.30 from `PILOT_TABLE` and, like LAMMPS' reason since #61, adds that 16 Å +
+  tail reads 9.6 % below A-fine (12.62) as a screen. The OpenMM validation's comparison with B (docs/ENGINES.md table
+  and text, docs/PLATFORMS.md, OPENMM-1's CHANGELOG line) gives B's corrected value beside the as-run one: 8.95 − 9.30
+  = −0.35 ± 0.61 mN/m (0.6 σ; −0.65 as run, −0.40 with OPENMM-1's 1e-5 → 1e-6 estimate alone). Left as they are, being
+  records of the time: DEVLOG entries, OPENMM-1's done list in the BACKLOG, `PILOT_TABLE['B'].source` and the
+  dispersion row (4) of docs/SIMULATE_DESIGN.md, which already carries MD-LR-2's correction.
+- Tests: `tests/test_md_bench_slab.py` (version 4 and its line; the cutoff variants' slab and bulk inputs have the
+  mesh rule, `ewald` does not), `tests/test_md_openmm.py` (the OpenMM reason quotes 11.41, not 11.71, and the screen
+  gap).
