@@ -1125,7 +1125,7 @@ and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecula
 - Open: the C6F14 reference. Freire et al. 2006 measured 12.33 mN/m at 298.15 K; Jasper's compilation (Stiles &
   Cady 1952) gives 11.44. The plan uses 12.33; both are recorded in the pilot READMEs.
 
-## MD-LR: Long-range settings for slabs: options and recommendations · in-PR 2026-11-23 (branch `feat/md-lr-slab-defaults`)
+## MD-LR: Long-range settings for slabs: options and recommendations · done 2026-11-23 (PR #52); follow-up MD-LR-2 in-PR
 Brandon (2026-11-22): "I like giving the users options to decide on the grid method and screening length, but I like
 the idea of giving them recommendations based on their setup." Earlier: the screening length (the LJ cutoff) as an
 option when a force field is set up. Code: `md/long_range.py`; docs: docs/ENGINES.md, "Liquid-slab MD and surface
@@ -1145,6 +1145,7 @@ tension".
 - Next:
   - When A-fine finishes (`Runs\md-pilot-2026-11-20\c6f14_oplsaa_ewald_finemesh`): put its σ, plateau and production
     ns/day in `PILOT_TABLE["A-fine"]`, check that the recommendations still hold, and set `PROVISIONAL = False`.
+    Done in MD-LR-2 (below).
   - Measure `cpu-cutoff16` and `cpu-ewald` at the same thread count on the workstation (`machines --bench md
     --md-size pilot --md-threads 8`): the CPU comparison behind "CPU only → pppm/disp" is 3.9 ns/day on 4 threads
     against 6.6 on 8.
@@ -1153,6 +1154,30 @@ tension".
   - SIM-1: the Simulate panel's Van der Waals node calls `md.long_range.options()`, `recommend_long_range()` and
     `check_settings()`.
   - Old `cpu-ewald` benchmark records (without `long_range`) timed the coarse settings; rerun `machines --bench md`.
+
+## MD-LR-2: A-fine in the pilot table, B and C corrected, an isotropic Coulomb mesh for plain pppm · in-PR 2026-11-24 (branch `feat/md-lr-2-a-fine-coulomb-mesh`)
+Brandon approved this follow-up of MD-LR (relayed 2026-11-24). Reports: `Runs\md-pilot-2026-11-20\pilot_A_fine_report.md`,
+`pilots_summary.md`, `followup_checks_2026-11-23\`, `coulomb_mesh_rule_check_2026-11-24\`. Meant to merge after #59 (OPENMM-1).
+- Done (2026-11-24):
+  - `PILOT_TABLE`: A-fine's measured σ 12.62 ± 0.40 mN/m (10 blocks of 1 ns; ± 0.65 allowing for their correlation),
+    plateau −0.44 % vs its bulk, bulk 1.6716 g/cm³, production 5.85 ns/day on 8 threads; B and C with their Coulomb
+    PPPM correction (B 9.30 / 11.41, C 5.60 / 8.76; the runs' own values in `source`); `PROVISIONAL = False`;
+    `REFERENCES` gets Freire's measured point (12.23); `pilot_gap()`. Reasons and warnings quote the new numbers (16 Å +
+    tail −9.6 %, 12 Å + tail −31 % against A-fine); the rules are unchanged.
+  - The Coulomb mesh rule for the cutoff variants (plain `pppm`): `coul_grid` "spacing" (default) pins G at LAMMPS' own
+    first estimate for the accuracy (`coulomb_gewald`) and sets one mesh spacing h ≤ 0.47 / G in every direction, in the
+    input from the box (after `read_data` and again after the slab's box opens: `md.liquid.coul_mesh_lines`);
+    "accuracy" keeps LAMMPS' mesh (`--coulomb-mesh accuracy`), with a `check_settings` warning for a slab. Folders
+    written before MD-LR-2 (no `coul_grid` in their config) keep LAMMPS' mesh when resumed. Validated on pilot C's and
+    B's 101 production frames: within 0.013 ± 0.004 and 0.002 ± 0.004 mN/m of converged at 1e-6.
+  - Tests: `tests/test_md_long_range.py` (the table, the rule's G and meshes for the pilots' boxes, warnings,
+    differences), `tests/test_md_liquid.py` (inputs, old folders, the CLI option, the LAMMPS smoke run's G and mesh).
+- Next:
+  - `md.bench`: the cutoff variants' inputs get the rule too, so their timings change by a few %. #59 raises
+    `MD_BENCH_VERSION` to 3 for its Coulomb 1e-6; whether to make it 4 for this is a merge-time choice.
+  - #59's OpenMM recommendation text still quotes B's 11.71 (as run): 11.41 after both merge.
+  - The recommendation for GPU screens stays 16 Å + tail (Brandon's 2026-11-22 default); it reads 9.6 % low for
+    C6F14. Whether screens should say so in the GUI or move to another default is Brandon's call.
 
 ## MD-BENCH-1: An MD benchmark of each machine (ns/day) · in-PR 2026-11-20 (branch `feat/md-bench`, after PR #33; the workstation run needs-Brandon)
 Brandon (2026-11-20): "Maybe the worker benchmarking could include a short MD run?" Docs: docs/WORKERS.md, "The MD

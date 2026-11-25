@@ -2,6 +2,18 @@
 
 ## Unreleased (after 0.3.0)
 
+### A-fine in the pilot table, and an isotropic Coulomb mesh for the cutoff runs (MD-LR-2, 2026-11-24)
+- **The cutoff variants (plain `pppm`) set their Coulomb mesh themselves**: G is LAMMPS' own first estimate for the
+  Coulomb accuracy, pinned, and the mesh has one spacing h ≤ 0.47 / G along x, y and z, computed in the input from the
+  box (again after the slab's box opens). LAMMPS' own choice was about 1.5 times coarser along a slab box's z and put
+  pilot C's σ 2.37 mN/m high (B's 0.30); on the same frames the rule is within 0.013 ± 0.004 (C) and 0.002 ± 0.004 (B)
+  of converged at 1e-6, with fewer mesh points. `--coulomb-mesh accuracy` (`coul_grid`) keeps LAMMPS' mesh, with a
+  warning for a slab; folders written before keep it, also when resumed.
+- **The pilot table is no longer provisional**: A-fine (pilot A with converged `pppm/disp`) measured σ 12.62 ± 0.40
+  mN/m for C6F14, on Freire 2006's 12.33; B and C carry their Coulomb-corrected values (B 9.30 raw / 11.41 + tail, C
+  5.60 / 8.76). The recommendation's reasons and warnings quote them (16 Å + tail reads 9.6 % below A-fine, 12 Å +
+  tail 31 %) and A-fine's production speed (5.85 ns/day on 8 threads). The rules are unchanged.
+
 ### Update button and terminal-free launchers on all three OSes (DIST-1, 2026-11-23)
 - **Help > Check for updates... shows what is new**: the CHANGELOG.md sections the new commits bring, rendered, then
   the commits, why updates follow main (not releases) and how far main is past the newest release.

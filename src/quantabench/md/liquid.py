@@ -37,6 +37,10 @@ The protocol, and why
   tail; the GPU package runs it. The bulk NPT of the cutoff variants uses ``pair_modify tail yes`` (valid in a
   homogeneous liquid, so the bulk density is right); the slab never does (the tail correction assumes a uniform
   density).
+  Their Coulomb mesh is set explicitly (MD-LR-2): G is LAMMPS' own first estimate for the accuracy, and the mesh has
+  one spacing h ≤ 0.47 / G in all three directions, computed in the input from the box (again after the slab's box is
+  opened). LAMMPS' own choice was about 1.5 times coarser along a slab box's z and put pilot C's σ 2.37 mN/m high
+  (``md.long_range``; ``coul_grid="accuracy"`` keeps it).
 * **Outputs for σ** (Kirkwood & Buff 1949): σ = (Lz/2)·⟨Pzz − (Pxx + Pyy)/2⟩ over the production run, the pressure
   tensor written every ``pressure_every`` steps; the mass density along z in ``profile_bin_A`` bins, averaged
   every 10 ps, for the plateau density, the vapour density, the interface width and the slab's drift.
@@ -102,6 +106,7 @@ class LiquidSlabConfig:
     disp_spacing: float | None = None        # ewald, spacing: largest dispersion-mesh spacing, Å; None: 0.52 / G
     disp_real_accuracy: float = LR.DISP_REAL_ACCURACY      # ewald, accuracy: force/disp/real (kcal/mol/Å)
     disp_kspace_accuracy: float = LR.DISP_KSPACE_ACCURACY  # ewald, accuracy: force/disp/kspace
+    coul_grid: str = "spacing"               # cutoff (plain pppm): "spacing" (isotropic mesh, h·G <= 0.47) | "accuracy"
     # box
     size: str = "pilot"
     lateral: float | None = None             # Å; None: from ``size``
@@ -147,7 +152,8 @@ class LiquidSlabConfig:
         lat, thick = SIZES[self.size]
         s = LR.settings(kind, self.cutoff or rc, kspace_accuracy=self.kspace_accuracy, disp_grid=self.disp_grid,
                         disp_gewald=self.disp_gewald, disp_spacing=self.disp_spacing,
-                        disp_real_accuracy=self.disp_real_accuracy, disp_kspace_accuracy=self.disp_kspace_accuracy)
+                        disp_real_accuracy=self.disp_real_accuracy, disp_kspace_accuracy=self.disp_kspace_accuracy,
+                        coul_grid=self.coul_grid)
         return replace(self, cutoff=s["cutoff"], kspace_accuracy=s["kspace_accuracy"],
                        disp_gewald=s.get("disp_gewald"), disp_spacing=s.get("disp_spacing"),
                        lateral=self.lateral or lat, slab_thickness=self.slab_thickness or thick,
@@ -407,7 +413,10 @@ def _kspace(tm: TypedMolecule, cfg: LiquidSlabConfig) -> list[str]:
     """kspace_style and kspace_modify lines; after read_data (the dispersion mesh is computed from the box)."""
     kind, _rc = parse_dispersion(cfg.dispersion)
     if kind != "ewald":
-        return ["kspace_style    pppm ${kacc}"]
+        L = ["kspace_style    pppm ${kacc}"]
+        if _uses_coul_mesh(tm, cfg):
+            L += coul_mesh_vars(tm) + coul_mesh_lines()
+        return L
     L = ["kspace_style    pppm/disp ${kacc}"]
     if cfg.disp_grid == "accuracy":
         L += ["# dispersion: LAMMPS picks G and the mesh from these two accuracies (kcal/mol/A). Its error estimate",
@@ -435,6 +444,42 @@ def disp_mesh_lines() -> list[str]:
 
 def _uses_disp_mesh(cfg: LiquidSlabConfig) -> bool:
     return parse_dispersion(cfg.dispersion)[0] == "ewald" and cfg.disp_grid != "accuracy"
+
+
+def mean_q2(tm) -> float:
+    """The molecule's mean squared atomic charge (e²): Σq² / atoms, the same for the whole liquid."""
+    q = getattr(tm, "charges", None)
+    if q is None or not len(q):
+        return 0.0
+    return float(sum(float(x) * float(x) for x in q)) / len(q)
+
+
+def _uses_coul_mesh(tm, cfg: LiquidSlabConfig) -> bool:
+    """Plain pppm (a cutoff variant) with the isotropic Coulomb mesh rule (MD-LR-2): not for ``coul_grid="accuracy"``
+    nor an uncharged molecule (LAMMPS needs no rule there)."""
+    acc = getattr(cfg, "kspace_accuracy", None)
+    return (parse_dispersion(cfg.dispersion)[0] != "ewald" and getattr(cfg, "coul_grid", "spacing") != "accuracy"
+            and mean_q2(tm) > 0.0 and (acc is None or float(acc) < 1.0e-3))
+
+
+def coul_mesh_vars(tm) -> list[str]:
+    """The variables of the Coulomb mesh rule: the molecule's mean squared charge, the bound on h·G, and G as LAMMPS'
+    own first estimate for the accuracy ``kacc`` at ``rc`` in the current box (``md.long_range.coulomb_gewald``, evaluated where it
+    is used)."""
+    return [f"variable coul_q2        index {mean_q2(tm):.8g}      # e^2, mean squared atomic charge (sum q^2 / atoms)",
+            f"variable coul_hg        index {LR.COUL_H_G:g}         # largest Coulomb-mesh spacing x G, every direction",
+            "# Coulomb mesh set explicitly (MD-LR-2): plain pppm's own choice is about 1.5x coarser along a slab box's z",
+            "# (its error estimate assumes a uniform density; pilot C's sigma read 2.37 mN/m high). G: LAMMPS' first",
+            "# estimate for the Coulomb accuracy kacc (real-space error at rc), pinned; mesh: one spacing h <= coul_hg / G,",
+            "# from the box.",
+            "variable coul_g         equal sqrt(-ln(${kacc}*sqrt(${rc}*vol/atoms)/(2.0*v_coul_q2)))/${rc}",
+            "variable coul_h         equal v_coul_hg/v_coul_g"]
+
+
+def coul_mesh_lines() -> list[str]:
+    """G and the Coulomb mesh from the current box (LAMMPS immediate variables): again after the slab's box opens."""
+    return ["kspace_modify   gewald $(v_coul_g:%.8f) mesh $(ceil(lx/v_coul_h):%.0f) $(ceil(ly/v_coul_h):%.0f) "
+            "$(ceil(lz/v_coul_h):%.0f)"]
 
 
 def _ascii(text: str) -> str:
@@ -640,6 +685,8 @@ def slab_input(tm: TypedMolecule, cfg: LiquidSlabConfig, elements_by_type: Seque
           *open_box_lines(),
           *(["# the box is now longer along z: the dispersion mesh again from disp_h", *disp_mesh_lines()]
             if _uses_disp_mesh(cfg) else []),
+          *(["# the box is now longer along z: G and the Coulomb mesh again for it", *coul_mesh_lines()]
+            if _uses_coul_mesh(tm, cfg) else []),
           "reset_timestep  0",
           "timestep        ${dt}",
           'print           "QB_SLAB lx $(lx:%.6f) ly $(ly:%.6f) lz $(lz:%.6f) zlo $(zlo:%.6f) zhi $(zhi:%.6f) '
@@ -757,7 +804,10 @@ def run_record(tm: TypedMolecule, cfg: LiquidSlabConfig, meta: Mapping, *, legac
                        "long_range": "Ewald (pppm/disp)" if lr.get("method") == "ewald"
                        else "tail: homogeneous in the bulk NPT, planar in the analysis"},
                "coulomb": {"method": "pppm/disp" if lr.get("method") == "ewald" else "pppm",
-                           "accuracy": cfg.kspace_accuracy},
+                           "accuracy": cfg.kspace_accuracy,
+                           "mesh": ("LAMMPS' choice (pppm/disp: isotropic)" if lr.get("method") == "ewald" else
+                                    f"isotropic, h·G <= {LR.COUL_H_G:g} (MD-LR-2)" if _uses_coul_mesh(tm, cfg) else
+                                    "LAMMPS' choice")},
                "mixing": tm.mixing, "special_lj": list(tm.special_lj), "special_coul": list(tm.special_coul)}
     par = sim.Parameterization(
         components=[{"component": tm.name, "forcefield": tm.forcefield, "label": tm.label, "resolution": "all-atom",
@@ -785,6 +835,8 @@ def load_folder(folder: str | Path) -> tuple[TypedMolecule, LiquidSlabConfig, di
     raw = {k: v for k, v in (meta.get("config") or {}).items() if k in known}
     if "pause_every" not in raw:          # written before SIM-1: its runs keep their own output intervals
         raw["pause_every"] = None
+    if "coul_grid" not in raw:            # written before MD-LR-2: its in.slab lets LAMMPS pick the Coulomb mesh, and
+        raw["coul_grid"] = "accuracy"     # a resumed segment must keep it (one model per run)
     cfg = LiquidSlabConfig(**raw).resolved()
     return TypedMolecule.from_dict(meta["molecule"]), cfg, meta
 
@@ -930,7 +982,14 @@ def _readme(tm: TypedMolecule, cfg: LiquidSlabConfig, s: LiquidSetup, counts: di
     lx, ly, lz = s.target_box
     slab_box = (lx, ly, lz + 2.0 * cfg.vacuum)
     lr = cfg.long_range
-    disp = LR.describe(lr, slab_box if _uses_disp_mesh(cfg) else None)
+    coul_g = None
+    if _uses_coul_mesh(tm, cfg):          # the Coulomb mesh in the planned slab box (the inputs redo it in the real one)
+        try:
+            coul_g = LR.coulomb_gewald(cfg.kspace_accuracy, cfg.cutoff, s.n_atoms,
+                                       slab_box[0] * slab_box[1] * slab_box[2], mean_q2(tm) * s.n_atoms)
+        except ValueError:
+            coul_g = None
+    disp = LR.describe(lr, slab_box if (_uses_disp_mesh(cfg) or coul_g) else None, coul_g)
     if kind == "cutoff":
         disp += "; sigma without the tail is biased low"
     L = [f"QuantaBench {__version__}: liquid-vapour slab of {tm.name}", "=" * 60, "",

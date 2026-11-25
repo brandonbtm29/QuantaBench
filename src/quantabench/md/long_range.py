@@ -22,6 +22,25 @@ Dispersion k-space (``ewald`` only)
     ``mesh/disp`` computed in the input from the box so that no spacing exceeds h = ``DISP_H_G`` / G (the inputs
     redo it after the slab's box is opened). ``disp_grid = "accuracy"``: LAMMPS picks G and the mesh from
     ``force/disp/real`` and ``force/disp/kspace`` (defaults 1e-5 and 2e-5, A-fine's).
+Coulomb mesh (``cutoff`` only: plain ``pppm``)
+    ``coul_grid = "spacing"`` (default): G is LAMMPS' own first estimate for the Coulomb accuracy (``coulomb_gewald``),
+    pinned with ``kspace_modify gewald``, and the mesh has one spacing h ≤ ``COUL_H_G`` / G in all three directions,
+    computed in the input from the box (again after the slab's box is opened). ``coul_grid = "accuracy"``: LAMMPS
+    picks the mesh (the folders written before MD-LR-2). ``pppm/disp`` (``ewald``) already picks an isotropic
+    Coulomb mesh.
+
+Why the cutoff runs' Coulomb mesh is set (2026-11-24, MD-LR-2)
+--------------------------------------------------------------
+Plain ``pppm`` estimates its error per direction for a uniform density, and an edge five times longer tolerates a
+coarser spacing: for the pilots' 40 x 40 x 200 Å slab boxes LAMMPS chose meshes about 1.5 times coarser along z than
+along x and y (pilot C at 1e-5: 18 x 18 x 60, h·G 0.47 / 0.71; pilot B: 12 x 12 x 45). In a slab, half the box is
+vacuum and that error goes into Pzz. Re-evaluating the pilots' 101 production frames (``Runs\\md-pilot-2026-11-20\\
+followup_checks_2026-11-23``) showed C's σ 2.37 ± 0.03 mN/m too high and B's 0.30 ± 0.02, and Coulomb 1e-6 left C
+0.32 high (h·G 0.54 along z). At C's own G an isotropic mesh at its x/y spacing (18 x 18 x 90, h·G 0.475) gave the
+converged value within 0.003 mN/m, B's at h·G 0.52 within 0.004, at no extra cost. ``COUL_H_G`` = 0.47 is that bound.
+The rule itself on the same frames (G from the accuracy, ``coulomb_gewald``; ``coulomb_mesh``): at 1e-6, C's
+24 x 24 x 108 is within 0.013 ± 0.004 mN/m of converged and B's 16 x 16 x 80 within 0.002 ± 0.004 (LAMMPS' own 1e-6
+meshes: 0.32 and 0.025), with fewer mesh points than LAMMPS' 27 x 27 x 90 and 20 x 20 x 72.
 
 Why the defaults changed (2026-11-23)
 -------------------------------------
@@ -46,7 +65,9 @@ The recommendation
 ``recommend_long_range(geometry, box, n_molecules, n_atoms, machine, purpose)`` returns a method, cutoff, accelerator
 and accuracies with a one-line reason and a speed from the pilots (``PILOT_TABLE``). A choice the user makes always
 wins; ``differences(...)`` says where it departs from the recommendation, and ``check_settings(...)`` warns about a
-choice the pilots showed to be biased. The table's numbers are **provisional until A-fine has run** (``PROVISIONAL``).
+choice the pilots showed to be biased. The table was provisional until A-fine had run; since 2026-11-24 it holds
+A-fine's measured σ (12.62 ± 0.40 mN/m for C6F14, on Freire 2006's 12.33) and B's and C's Coulomb-corrected values,
+and ``PROVISIONAL`` is False.
 """
 
 from __future__ import annotations
@@ -85,11 +106,14 @@ HOWTO_DISP_ACCURACY = (1.0e-4, 2.0e-3)
 #: what the mesh check validated (above these the warnings start)
 VALIDATED_HG = 0.6
 VALIDATED_GRC = 2.7
+#: plain pppm's Coulomb mesh (MD-LR-2): one spacing h <= COUL_H_G / G in every direction, G from the accuracy
+COUL_H_G = 0.47             # pilot C's 18 x 18 x 90 at its G (h·G 0.475) was converged; LAMMPS' 18 x 18 x 60 was not
+COUL_GRIDS = {"spacing": "an isotropic mesh, h·G ≤ 0.47 in every direction (G from the accuracy; slab-safe)",
+              "accuracy": "LAMMPS picks the mesh from the accuracy (about 1.5 times coarser along a slab box's z)"}
 
-PROVISIONAL = True
-PROVISIONAL_NOTE = ("provisional until the A-fine run (pilot A with converged pppm/disp, due 2026-11-24/25) gives "
-                    "its σ: the converged σ the table uses until then (12.06 mN/m) is the mesh check's estimate on "
-                    "pilot A's frames")
+PROVISIONAL = False         # True until A-fine had run (2026-11-24)
+PROVISIONAL_NOTE = ("no longer provisional: A-fine (pilot A with converged pppm/disp) measured σ 12.62 ± 0.40 mN/m "
+                    "on 2026-11-24, confirming the mesh check's estimate on pilot A's frames (12.06 ± 0.70)")
 
 
 # ------------------------------------------------------------------------------------------- the pilot table
@@ -113,39 +137,57 @@ class PilotRow:
     source: str = ""
 
 
-#: The pilots of 2026-11-20/22 (C6F14, OPLS-AA with the Watkins-Jorgensen types, 489 molecules = 9,780 atoms, 40 x 40 Å
+#: The pilots of 2026-11-20/24 (C6F14, OPLS-AA with the Watkins-Jorgensen types, 489 molecules = 9,780 atoms, 40 x 40 Å
 #: slab with 5 nm of vacuum on each side, 298.15 K, 1 fs, 2 ns settle + 10 ns production; the workstation's LAMMPS
-#: 4 Jul 2026, Ryzen 9 7900X, RX 9060 XT on OpenCL). Reports: Runs\md-pilot-2026-11-20\pilot_{A,B,C}_report.md,
-#: pilots_summary.md, mesh_check_2026-11-22\mesh_check.md. PROVISIONAL: A-fine's measured σ, plateau and production
-#: speed replace the "A-fine" row's estimates when it has run.
+#: 4 Jul 2026, Ryzen 9 7900X, RX 9060 XT on OpenCL). Reports: Runs\md-pilot-2026-11-20\pilot_{A,B,C,A_fine}_report.md,
+#: pilots_summary.md, mesh_check_2026-11-22\mesh_check.md, followup_checks_2026-11-23\. Speeds are the production
+#: runs'. B's and C's σ are corrected for their Coulomb PPPM mesh (MD-LR-2; the runs as analysed in each ``source``).
 PILOT_TABLE: dict[str, PilotRow] = {
     "A": PilotRow("pilot A: ewald, LAMMPS Howto_dispersion accuracies (the old default), 2 x 2 x 8 dispersion mesh",
                   "ewald", 12.0, "cpu", 8, 7.6, sigma_raw=10.70, sigma_err=0.70, plateau_vs_bulk=+0.0005,
                   bulk_density=1.6645,
-                  source="pilot_A_report.md (production speed); 1.36 ± 0.03 mN/m low numerically (mesh_check.md)"),
+                  source="pilot_A_report.md (production speed); 1.36 ± 0.03 mN/m low numerically (mesh_check.md); "
+                         "superseded by A-fine"),
     "A-fine": PilotRow("A-fine: ewald, converged (pppm/disp 1e-6, force/disp/real 1e-5, force/disp/kspace 2e-5; "
-                       "= the spacing rule)", "ewald", 12.0, "cpu", 8, 6.6, sigma_raw=12.06, sigma_err=0.70,
-                       bulk_density=1.6720,
-                       source="σ: mesh-check estimate on A's frames (10.70 + 1.36), provisional; speed: 2,000-step "
-                              "benchmark on the idle workstation (A's production ran ~18 % below its benchmark); "
-                              "bulk density: A-fine's 1 ns NPT, ± 0.0013"),
+                       "= the spacing rule)", "ewald", 12.0, "cpu", 8, 5.85, sigma_raw=12.62, sigma_err=0.40,
+                       plateau_vs_bulk=-0.0044, bulk_density=1.6716,
+                       source="pilot_A_fine_report.md (2026-11-24): σ from 10 blocks of 1 ns (± 0.65 allowing for "
+                              "their correlation: a step at 7 ns in the tangential pressures); it confirms pilot A + "
+                              "the mesh check's offset (12.06 ± 0.70) within 0.7 σ; production speed on the shared "
+                              "workstation (its idle 2,000-step benchmark: 6.6 ns/day)"),
     "B": PilotRow("pilot B: 16 Å cutoff + tail (Tsige & Grest's setup), GPU + CPU", "cutoff", 16.0, "gpu", 6, 21.0,
-                  sigma_raw=9.60, sigma_tail=11.71, sigma_err=0.30, plateau_vs_bulk=-0.020, bulk_density=1.6719,
-                  source="pilot_B_report.md: slab 3-12 ns on the GPU (pair style) + 6 OpenMP threads (PPPM, bonds)"),
+                  sigma_raw=9.30, sigma_tail=11.41, sigma_err=0.30, plateau_vs_bulk=-0.020, bulk_density=1.6719,
+                  source="pilot_B_report.md: slab 3-12 ns on the GPU (pair style) + 6 OpenMP threads (PPPM, bonds); "
+                         "σ as run 9.60 raw, 11.71 + tail, 0.30 too high from its Coulomb PPPM mesh "
+                         "(followup_checks_2026-11-23)"),
     "B-cpu": PilotRow("pilot B's first 3 ns: 16 Å cutoff on the CPU", "cutoff", 16.0, "cpu", 4, 3.9,
                       source="pilot_B_report.md: slab 0-3 ns, -sf omp -pk omp 4"),
-    "C": PilotRow("pilot C: 12 Å cutoff + tail, GPU + CPU", "cutoff", 12.0, "gpu", 4, 16.1, sigma_raw=7.96,
-                  sigma_tail=11.12, sigma_err=0.32, plateau_vs_bulk=-0.047, bulk_density=1.6714,
-                  source="pilot_C_report.md (tail from PR #37's analysis, pilots_summary.md)"),
+    "C": PilotRow("pilot C: 12 Å cutoff + tail, GPU + CPU", "cutoff", 12.0, "gpu", 4, 16.1, sigma_raw=5.60,
+                  sigma_tail=8.76, sigma_err=0.32, plateau_vs_bulk=-0.047, bulk_density=1.6714,
+                  source="pilot_C_report.md (tail from PR #37's analysis); σ as run 7.96 raw, 11.12 + tail, 2.37 too "
+                         "high from its Coulomb PPPM mesh (followup_checks_2026-11-23)"),
     "C-bulk": PilotRow("pilot C's bulk NPT: 12 Å cutoff + homogeneous tail, GPU + CPU", "cutoff", 12.0, "gpu", 4,
                        13.4, stage="bulk", bulk_density=1.6714, source="pilot_C_report.md"),
-    "A-fine-bulk": PilotRow("A-fine's bulk NPT: ewald, converged", "ewald", 12.0, "cpu", 8, 5.6, stage="bulk",
-                            bulk_density=1.6720,
-                            source="A-fine's log.bulk (the workstation was shared with test runs at the time)"),
+    "A-fine-bulk": PilotRow("A-fine's bulk NPT: ewald, converged", "ewald", 12.0, "cpu", 8, 5.58, stage="bulk",
+                            bulk_density=1.6716,
+                            source="A-fine's log.bulk: 1 ns NPT, density over its last 0.5 ns ± 0.0022 (as the "
+                                   "analysis reports it); the workstation was shared with test runs at the time"),
 }
 #: published and measured σ of C6F14 at 298 K the table is read against (mN/m)
 REFERENCES = {"Tsige & Grest 2008 (OPLS-AA W&J, 16 Å + tail)": 11.25,
-              "Freire et al. 2006 (experiment; the target)": 12.33}
+              "Freire et al. 2006 (experiment; the target)": 12.33,
+              "Freire et al. 2006 (the measured point at 298.15 K, ± 0.14)": 12.23}
+
+
+def pilot_gap(row_id: str, ref_id: str = "A-fine") -> float:
+    """σ of a pilot (with the tail for a cutoff run) relative to another's, e.g. pilot B + tail against A-fine:
+    −0.096 (16 Å + tail reads 9.6 % low for C6F14)."""
+    a, b = PILOT_TABLE[row_id], PILOT_TABLE[ref_id]
+    sa = a.sigma_tail if a.sigma_tail is not None else a.sigma_raw
+    sb = b.sigma_tail if b.sigma_tail is not None else b.sigma_raw
+    if sa is None or sb is None:
+        raise ValueError(f"pilot {row_id!r} or {ref_id!r} has no σ")
+    return sa / sb - 1.0
 
 
 # ------------------------------------------------------------------------------------------- names and rules
@@ -217,16 +259,51 @@ def real_space_left(g_rc: float) -> float:
     return math.exp(-x2) * (1.0 + x2 + 0.5 * x2 * x2)
 
 
+def coulomb_gewald(accuracy: float, cutoff: float, n_atoms: int, volume: float, sum_q2: float) -> float:
+    """Plain pppm's G (1/Å) for a relative Coulomb ``accuracy``: LAMMPS' own first estimate (``PPPM::set_grid_global``,
+    the real-space error at rc equal to the accuracy), G = sqrt(−ln(acc·√(N·rc·V) / (2 Σq²))) / rc, with ``sum_q2``
+    the sum of the squared charges (e²) and ``volume`` the box's (Å³). LAMMPS then adjusts G a little for its own mesh
+    (pilot C's slab, 1e-5: 0.2014 here, 0.2115 in its log); the inputs pin this one so that h·G is what the rule says.
+    The inputs compute it from the box they run in (``md.liquid.coul_mesh_lines``); this is the same in Python."""
+    rc = check_cutoff(cutoff)
+    if not (0.0 < float(accuracy) < 1.0e-3):
+        raise ValueError(f"Coulomb accuracy {accuracy:g}: the mesh rule needs a relative accuracy below 1e-3")
+    if sum_q2 <= 0 or n_atoms <= 0 or volume <= 0:
+        raise ValueError("coulomb_gewald needs charges, atoms and a box")
+    x = float(accuracy) * math.sqrt(n_atoms * rc * volume) / (2.0 * float(sum_q2))
+    if x >= 1.0:
+        raise ValueError(f"Coulomb accuracy {accuracy:g} is too loose for this system (LAMMPS' estimate breaks down)")
+    return math.sqrt(-math.log(x)) / rc
+
+
+def coulomb_spacing(gewald: float) -> float:
+    """The rule's largest Coulomb-mesh spacing (Å) for G (1/Å): ``COUL_H_G`` / G (2.33 Å at pilot C's 1e-5 G)."""
+    if not gewald or gewald <= 0:
+        raise ValueError("gewald must be positive")
+    return COUL_H_G / float(gewald)
+
+
+def coulomb_mesh(box: Sequence[float], gewald: float) -> tuple[int, int, int]:
+    """The isotropic Coulomb mesh the inputs give LAMMPS for a box (Å) and G: ceil(L / h) per direction with
+    h = ``COUL_H_G`` / G, rounded up to products of 2, 3 and 5 as PPPM does (pilot C's slab at 1e-6: 24 x 24 x 108)."""
+    return disp_mesh(box, coulomb_spacing(gewald))
+
+
 def settings(method: str, cutoff: float | None = None, *, kspace_accuracy: float | None = None,
              disp_grid: str = "spacing", disp_gewald: float | None = None, disp_spacing: float | None = None,
-             disp_real_accuracy: float = DISP_REAL_ACCURACY, disp_kspace_accuracy: float = DISP_KSPACE_ACCURACY
-             ) -> dict:
+             disp_real_accuracy: float = DISP_REAL_ACCURACY, disp_kspace_accuracy: float = DISP_KSPACE_ACCURACY,
+             coul_grid: str = "spacing") -> dict:
     """Every long-range setting resolved, as ``md.liquid.LiquidSlabConfig`` fields (``config_kwargs``) plus the
-    derived ones: what the panel shows and what the inputs get."""
+    derived ones: what the panel shows and what the inputs get. ``coul_grid`` (``cutoff`` only) appears only when it
+    is not the default "spacing"."""
     m = normalize_method(method)
     rc = check_cutoff(cutoff if cutoff is not None else DEFAULT_CUTOFF[m])
     out = {"method": m, "dispersion": dispersion_name(m, rc), "cutoff": rc,
            "kspace_accuracy": float(kspace_accuracy or COULOMB_ACCURACY[m])}
+    if coul_grid not in COUL_GRIDS:
+        raise ValueError(f"coul_grid {coul_grid!r}: choose {', '.join(COUL_GRIDS)}")
+    if m == "cutoff" and coul_grid != "spacing":
+        out["coul_grid"] = coul_grid
     if m == "ewald":
         if disp_grid not in DISP_GRIDS:
             raise ValueError(f"disp_grid {disp_grid!r}: choose {', '.join(DISP_GRIDS)}")
@@ -242,7 +319,7 @@ def settings(method: str, cutoff: float | None = None, *, kspace_accuracy: float
 def config_kwargs(s: Mapping) -> dict:
     """``LiquidSlabConfig`` keyword arguments from ``settings(...)`` or a recommendation's ``settings``."""
     keys = ("dispersion", "cutoff", "kspace_accuracy", "disp_grid", "disp_gewald", "disp_spacing",
-            "disp_real_accuracy", "disp_kspace_accuracy")
+            "disp_real_accuracy", "disp_kspace_accuracy", "coul_grid")
     return {k: s[k] for k in keys if k in s}
 
 
@@ -257,15 +334,26 @@ def settings_of(cfg) -> dict:
                     disp_grid=getattr(cfg, "disp_grid", "spacing") or "spacing",
                     disp_gewald=getattr(cfg, "disp_gewald", None), disp_spacing=getattr(cfg, "disp_spacing", None),
                     disp_real_accuracy=getattr(cfg, "disp_real_accuracy", DISP_REAL_ACCURACY),
-                    disp_kspace_accuracy=getattr(cfg, "disp_kspace_accuracy", DISP_KSPACE_ACCURACY))
+                    disp_kspace_accuracy=getattr(cfg, "disp_kspace_accuracy", DISP_KSPACE_ACCURACY),
+                    coul_grid=getattr(cfg, "coul_grid", "spacing") or "spacing")
 
 
-def describe(s: Mapping, box: Sequence[float] | None = None) -> str:
+def describe(s: Mapping, box: Sequence[float] | None = None, coul_gewald: float | None = None) -> str:
     """One line: 'full long-range dispersion: lj/long/coul/long 12 Å + pppm/disp, Coulomb 1e-06, dispersion G 0.2308
-    1/Å, mesh spacing ≤ 2.25 Å (18 x 18 x 90 for this box)'."""
+    1/Å, mesh spacing ≤ 2.25 Å (18 x 18 x 90 for this box)'. For a cutoff run with ``box`` and ``coul_gewald``
+    (``coulomb_gewald``) the Coulomb mesh for that box too."""
     rc = float(s["cutoff"])
     if s["method"] == "cutoff":
-        return (f"{rc:g} Å LJ cutoff + tail: lj/cut/coul/long {rc:g} + pppm, Coulomb {s['kspace_accuracy']:g} "
+        if s.get("coul_grid", "spacing") == "spacing":
+            mesh = f", isotropic mesh h·G ≤ {COUL_H_G:g} (G from the accuracy"
+            if box and coul_gewald:
+                n = coulomb_mesh(box, coul_gewald)
+                mesh += (f": {coul_gewald:.4g} 1/Å, {' x '.join(str(k) for k in n)} for a "
+                         f"{' x '.join(f'{x:.1f}' for x in box)} Å box")
+            mesh += ")"
+        else:
+            mesh = ", mesh chosen by LAMMPS (coarser along a slab box's z)"
+        return (f"{rc:g} Å LJ cutoff + tail: lj/cut/coul/long {rc:g} + pppm, Coulomb {s['kspace_accuracy']:g}{mesh} "
                 "(bulk NPT with LAMMPS' homogeneous tail; the planar tail is added to σ in the analysis)")
     head = f"full long-range dispersion: lj/long/coul/long {rc:g} Å + pppm/disp, Coulomb {s['kspace_accuracy']:g}"
     if s.get("disp_grid") == "accuracy":
@@ -494,11 +582,12 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
     ``md.bench.scaled_rate``: ns/day x measured atoms / atoms, the k-space share by the box volume when ``box`` is
     given), preferring the setup's geometry; else the pilot table's. The summary line names the source.
 
-    Rules (``PILOT_TABLE``; provisional until A-fine):
+    Rules (``PILOT_TABLE``):
 
     * reference → full long-range dispersion, converged settings, on the CPU (no tail approximation, the slab at the
       bulk density);
-    * slab, GPU usable, lateral box > 33 Å → 16 Å cutoff + tail on the GPU (pilot B reproduced Tsige & Grest);
+    * slab, GPU usable, lateral box > 33 Å → 16 Å cutoff + tail on the GPU (pilot B reproduced Tsige & Grest; for C6F14
+      it reads 9.6 % below A-fine's converged σ);
     * slab, CPU only (or a box too narrow for 16 Å) → full long-range dispersion (a cutoff's speed comes from the GPU);
     * bulk → 12 Å cutoff with LAMMPS' homogeneous tail (valid in a uniform liquid), on the GPU when there is one.
     """
@@ -531,8 +620,9 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
 
     if purpose == "reference":
         rec = ewald("a reference value needs converged full long-range dispersion: no tail approximation, the slab "
-                    "stays at the bulk density (pilot A: +0.05 %), and these settings are converged to ~0.03 mN/m "
-                    "(mesh check)", "A-fine-bulk" if geo == "bulk" else "A-fine")
+                    "stays within 0.5 % of the bulk density (A-fine: −0.44 %; 16 Å + tail: −2.0 %), and these "
+                    "settings are converged to ~0.03 mN/m (mesh check; A-fine gave C6F14 12.62 ± 0.40 mN/m, on "
+                    "Freire 2006's 12.33)", "A-fine-bulk" if geo == "bulk" else "A-fine")
         return rec
     if geo == "bulk":
         rc = 12.0 if max_rc >= 12.0 else max(CUTOFF_RANGE[0], math.floor(max_rc))
@@ -546,7 +636,7 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
         return LongRangeRecommendation(
             "cutoff", rc, accel, s,
             "a uniform liquid needs no interface treatment: a 12 Å cutoff with LAMMPS' homogeneous tail gave the same "
-            "bulk density as converged pppm/disp (pilots C and B 1.6714 and 1.6719, A-fine 1.6720 g/cm³)"
+            "bulk density as converged pppm/disp (pilots C and B 1.6714 and 1.6719, A-fine 1.6716 g/cm³)"
             + (", and the GPU runs it" if gpu else ""), v, basis or "", warnings, notes, inputs, speed_source=src)
     if gpu and max_rc >= 16.0:
         s = settings("cutoff", 16.0)
@@ -561,24 +651,28 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
         a_fine = PILOT_TABLE["A-fine"]
         return LongRangeRecommendation(
             "cutoff", 16.0, "gpu", s,
-            "LAMMPS can use a GPU here, and 16 Å + tail reproduced Tsige & Grest's C6F14 value (pilot B: 11.71 ± 0.30 "
-            f"vs 11.25 mN/m) at about 3 times the speed of full long-range dispersion on the CPU ({a_fine.ns_per_day:g} "
-            f"ns/day on {a_fine.threads} threads)", v, basis, warnings, notes, inputs, speed_source=src)
+            "LAMMPS can use a GPU here, and 16 Å + tail reproduced Tsige & Grest's C6F14 value (pilot B: "
+            f"{PILOT_TABLE['B'].sigma_tail:.2f} ± 0.30 vs 11.25 mN/m) at about "
+            f"{PILOT_TABLE['B'].ns_per_day / a_fine.ns_per_day:.1f} times the speed of full long-range dispersion on "
+            f"the CPU ({a_fine.ns_per_day:g} ns/day on {a_fine.threads} threads); as a screen it reads "
+            f"{-100 * pilot_gap('B'):.1f} % below converged full long-range dispersion (A-fine "
+            f"{a_fine.sigma_raw:.2f} mN/m)", v, basis, warnings, notes, inputs, speed_source=src)
     if gpu:
         return ewald(f"the lateral box ({lateral:.1f} Å) is too narrow for a 16 Å cutoff (needs more than 33 Å), and a "
-                     "shorter cutoff biases a slab (pilot C at 12 Å: plateau 4.7 % below the bulk), so full long-range "
-                     "dispersion on the CPU")
+                     "shorter cutoff biases a slab (pilot C at 12 Å: plateau 4.7 % below the bulk, σ + tail 31 % "
+                     "low), so full long-range dispersion on the CPU")
     b_cpu, a_fine = PILOT_TABLE["B-cpu"], PILOT_TABLE["A-fine"]
     return ewald("LAMMPS has no GPU to use here and a cutoff's speed comes from the GPU (16 Å: "
                  f"{b_cpu.ns_per_day:g} ns/day on {b_cpu.threads} CPU threads; converged pppm/disp: "
                  f"{a_fine.ns_per_day:g} on {a_fine.threads}), while pppm/disp needs no tail correction and keeps the "
-                 "slab at the bulk density")
+                 "slab within 0.5 % of the bulk density")
 
 
 # ------------------------------------------------------------------------------------------- choice vs recommendation
 FIELD_LABELS = {"kspace_accuracy": "Coulomb PPPM accuracy", "disp_grid": "dispersion k-space",
                 "disp_gewald": "dispersion G (1/Å)", "disp_spacing": "dispersion mesh spacing (Å)",
-                "disp_real_accuracy": "force/disp/real", "disp_kspace_accuracy": "force/disp/kspace"}
+                "disp_real_accuracy": "force/disp/real", "disp_kspace_accuracy": "force/disp/kspace",
+                "coul_grid": "Coulomb mesh"}
 
 
 def _fmt(x) -> str:
@@ -600,6 +694,10 @@ def differences(chosen: Mapping, rec: LongRangeRecommendation) -> list[str]:
             if a == b or (isinstance(a, float) and isinstance(b, float) and math.isclose(a, b, rel_tol=1e-6)):
                 continue
             out.append(f"{FIELD_LABELS[k]}: {_fmt(a)} (recommended: {_fmt(b)})")
+        if chosen["method"] == "cutoff":
+            a, b = chosen.get("coul_grid", "spacing"), r.get("coul_grid", "spacing")
+            if a != b:
+                out.append(f"{FIELD_LABELS['coul_grid']}: {a} (recommended: {b})")
     return out
 
 
@@ -615,13 +713,20 @@ def check_settings(s: Mapping, geometry: str = "slab", box: Sequence[float] | No
                    f"than {2 * rc + 1:g} Å)")
     if s["method"] == "cutoff":
         if geo == "slab" and rc < 16.0 - 1e-9:
-            out.append(f"a {rc:g} Å cutoff in a slab: pilot C (12 Å) settled 4.7 % below its bulk density and its raw σ "
-                       "29 % below Tsige & Grest's (7.96 vs 11.25 mN/m); the tail restores σ (11.12), not the density. "
-                       "16 Å or full long-range dispersion is safer")
+            out.append(f"a {rc:g} Å cutoff in a slab: pilot C (12 Å) settled 4.7 % below its bulk density, and its σ "
+                       "with the tail, 8.76 mN/m (Coulomb-corrected), was 31 % below converged full long-range "
+                       "dispersion (A-fine 12.62): the tail does not restore the density. 16 Å (pilot B: −9.6 %) or "
+                       "full long-range dispersion is safer")
+        if geo == "slab" and s.get("coul_grid", "spacing") == "accuracy":
+            out.append("plain pppm with the mesh LAMMPS picks: for a slab box it chooses a spacing about 1.5 times "
+                       "coarser along z than along x and y, and the error goes into Pzz (pilot C, 12 Å, 1e-5: σ 2.37 "
+                       "mN/m high, still 0.32 at 1e-6; pilot B, 16 Å: 0.30). The default isotropic mesh (h·G ≤ "
+                       f"{COUL_H_G:g}) removes it at no extra cost")
         if purpose == "reference":
-            out.append("a cutoff + tail σ keeps a residual low bias of a few % (pilot B 11.71 against ≈ 12.06 mN/m for "
-                       "converged pppm/disp on A's frames, provisional; −5 % for hexane at 16 Å, Isele-Holder et al. "
-                       "2012): for a reference value use full long-range dispersion")
+            out.append("a cutoff + tail σ keeps a residual low bias (pilot B, 16 Å + tail, Coulomb-corrected: 11.41 "
+                       "against A-fine's 12.62 mN/m for converged pppm/disp, −9.6 %, from the slab's 2.0 % lower "
+                       "density; −5 % for hexane at 16 Å, Isele-Holder et al. 2012): for a reference value use full "
+                       "long-range dispersion")
     else:
         if s.get("disp_grid") == "accuracy":
             loose = []
@@ -659,7 +764,7 @@ def notes_for(s: Mapping, geometry: str = "slab", machine: MachineInfo | bool | 
         out.append("the GPU stays idle: LAMMPS' GPU package has no lj/long/coul/long or pppm/disp")
     if s["method"] == "cutoff" and str(geometry).lower() != "bulk":
         out.append("the tail correction is added to σ by `md surface-tension`; it does not restore the slab's density "
-                   "(pilot B: plateau 2.0 % below the bulk)")
+                   "(pilot B: plateau 2.0 % below the bulk, σ + tail 9.6 % below converged full long-range dispersion)")
     return out
 
 
@@ -681,6 +786,8 @@ def options() -> dict:
                                "applies": "accuracy"},
         "disp_kspace_accuracy": {"label": "force/disp/kspace (kcal/mol/Å)", "default": DISP_KSPACE_ACCURACY,
                                  "applies": "accuracy"},
+        "coul_grid": {"label": "Coulomb mesh (LJ cutoff only; plain pppm)", "choices": dict(COUL_GRIDS),
+                      "default": "spacing", "applies": "cutoff"},
         "purpose": {"label": "Purpose", "choices": dict(PURPOSES), "default": "screen"},
         "provisional": PROVISIONAL, "provisional_note": PROVISIONAL_NOTE,
     }

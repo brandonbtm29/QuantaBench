@@ -1332,6 +1332,7 @@ recommendation is printed and written to README.txt and `liquid_setup.json` (`lo
 | `--disp-grid` | `ewald`'s dispersion k-space: `spacing` (the rule) or `accuracy` (LAMMPS picks G and the mesh) | `spacing` |
 | `--disp-gewald G`, `--disp-spacing H` | the rule's G (1/Å) and largest mesh spacing (Å) | 2.77/rc, 0.52/G |
 | `--disp-accuracy REAL KSPACE` | `force/disp/real`, `force/disp/kspace` (kcal/mol/Å) for `accuracy` | 1e-5 2e-5 |
+| `--coulomb-mesh` | `cutoff`'s Coulomb k-space (plain `pppm`): `spacing` (G from `--coulomb-accuracy`, one mesh spacing h ≤ 0.47/G in all three directions, from the box; the rule below) or `accuracy` (LAMMPS picks the mesh, about 1.5 times coarser along a slab box's z) | `spacing` |
 | `--dispersion` | the method and cutoff in one word, as before MD-LR: `ewald`, `cutoff12`, `cutoff16`, ... | |
 
 The bulk NPT of the cutoff variants uses `pair_modify tail yes` (valid in a homogeneous liquid, so the bulk density
@@ -1376,6 +1377,37 @@ accuracies by default. The literature's explicit surface set (Isele-Holder et al
 came out about 0.2 mN/m low for this slab with its 4.2 Å mesh and converged with a 2 Å one (mesh check). Folders
 written before MD-LR keep their settings: nothing reads the defaults at run time.
 
+**Why the `cutoff` runs' Coulomb mesh is set (MD-LR-2, 2026-11-24).** Plain `pppm` estimates its error separately
+along x, y and z for a uniform density, and lets a five times longer edge have a coarser spacing: for the pilots'
+40 x 40 x 200 Å slab boxes it chose meshes about 1.5 times coarser along z than along x and y. In a slab, half of the
+box is vacuum and that error goes into Pzz. Re-evaluating pilot C's 101 production frames (C6F14, 12 Å; the
+workstation's runs in `Runs\md-pilot-2026-11-20\followup_checks_2026-11-23\`, the rule's in the cloud with the
+same frames; LAMMPS builds that agree to 1e-8 mN/m per frame):
+
+| Coulomb settings | G (1/Å), grid | h·G x / z | Δσ against C's run (mN/m) | against converged |
+|---|---|---|---|---|
+| C's run: PPPM 1e-5, LAMMPS' mesh | 0.2115, 18 x 18 x 60 | 0.47 / 0.71 | 0 | +2.37 |
+| PPPM 1e-6, LAMMPS' mesh | 0.2399, 27 x 27 x 90 | 0.36 / 0.54 | −2.04 ± 0.03 | +0.32 |
+| PPPM 1e-7 / 1e-8, LAMMPS' mesh (converged) | 0.2712 / 0.2998, 45 x 45 x 150 / 80 x 80 x 240 | ≤ 0.36 | −2.37 ± 0.03 | 0 |
+| C's G, isotropic 18 x 18 x 90 | 0.2115 | 0.475 | −2.36 ± 0.03 | +0.007 |
+| **the rule at 1e-5** | 0.2014, 18 x 18 x 90 | 0.45 | −2.35 ± 0.03 | +0.02 ± 0.03 |
+| **the rule at 1e-6** | 0.2378, 24 x 24 x 108 | 0.40 / 0.44 | −2.35 ± 0.03 | **+0.013 ± 0.004** |
+
+Pilot B (16 Å, where most of the Coulomb sum stays in real space) read 0.30 ± 0.02 high the same way, 0.025 at 1e-6
+with LAMMPS' 20 x 20 x 72; the rule at 1e-6 (G 0.1768, 16 x 16 x 80) is within 0.002 ± 0.004 of converged. So the
+inputs of the `cutoff` variants set the mesh themselves (`--coulomb-mesh spacing`, the default):
+
+- `kspace_modify gewald G` with **G LAMMPS' own first estimate for the accuracy**, sqrt(−ln(acc·√(N·rc·V) / (2 Σq²)))
+  / rc (the real-space error at rc equal to the accuracy; LAMMPS then shifts G a little for its own mesh), computed
+  in the input from the box it runs in and pinned, so h·G is what the rule says (`md.long_range.coulomb_gewald`);
+- `kspace_modify mesh $(ceil(lx/v_coul_h)) ...` with **h = 0.47 / G** in all three directions, after `read_data`
+  and again after the slab's box is opened; PPPM rounds each count up to a product of 2, 3 and 5.
+
+It costs nothing: 24 x 24 x 108 has fewer points than LAMMPS' 27 x 27 x 90 for pilot C at 1e-6, and pilot B's box at
+1e-6 gets 16 x 16 x 80 against LAMMPS' 20 x 20 x 72. `pppm/disp` (`ewald`) is not affected: it already picks an
+isotropic Coulomb mesh (A-fine's 24 x 24 x 120). `--coulomb-mesh accuracy` keeps LAMMPS' choice, with a warning for a
+slab. Folders written before MD-LR-2 keep LAMMPS' mesh, also when a segment is resumed.
+
 **The recommendation** (`md.long_range.recommend_long_range`). From the setup (slab or bulk, the box, the molecules
 and atoms, whether LAMMPS can use a GPU on the machine, the purpose) it picks the method, cutoff, accelerator and
 accuracies, says why in one line, and gives a speed. The speed is this computer's own MD benchmark when it has a
@@ -1388,19 +1420,21 @@ record never is:
 
 | setup | recommended | because | pilot speed |
 |---|---|---|---|
-| slab, GPU usable, lateral box > 33 Å, screen | 16 Å cutoff + tail, on the GPU | pilot B reproduced Tsige & Grest: 11.71 ± 0.30 against 11.25 mN/m | 21.0 ns/day (GPU + 6 threads) |
-| slab, CPU only | `ewald`, the defaults above | a cutoff's speed comes from the GPU (16 Å: 3.9 ns/day on 4 threads); no tail, and the slab keeps the bulk density (A: +0.05 %) | 6.6 (8 threads) |
-| slab, GPU, lateral box ≤ 33 Å | `ewald` | 16 Å does not fit (`plan_box` needs > 2 rc + 1), and shorter cutoffs bias a slab | 6.6 (8 threads) |
-| a reference value | `ewald`, the defaults above | converged to ~0.03 mN/m, no tail approximation | 6.6 (8 threads) |
-| bulk liquid | 12 Å cutoff + LAMMPS' homogeneous tail | valid in a uniform liquid: C 1.6714, B 1.6719 and A-fine 1.6720 g/cm³ | 13.4 (GPU + 4 threads) |
+| slab, GPU usable, lateral box > 33 Å, screen | 16 Å cutoff + tail, on the GPU | pilot B reproduced Tsige & Grest: 11.41 ± 0.30 (Coulomb-corrected) against 11.25 mN/m; as a screen it reads 9.6 % below A-fine's 12.62 | 21.0 ns/day (GPU + 6 threads) |
+| slab, CPU only | `ewald`, the defaults above | a cutoff's speed comes from the GPU (16 Å: 3.9 ns/day on 4 threads); no tail, and the slab stays within 0.5 % of the bulk density (A-fine: −0.44 %) | 5.85 (8 threads) |
+| slab, GPU, lateral box ≤ 33 Å | `ewald` | 16 Å does not fit (`plan_box` needs > 2 rc + 1), and shorter cutoffs bias a slab | 5.85 (8 threads) |
+| a reference value | `ewald`, the defaults above | converged to ~0.03 mN/m, no tail approximation; A-fine: 12.62 ± 0.40 mN/m for C6F14 | 5.85 (8 threads) |
+| bulk liquid | 12 Å cutoff + LAMMPS' homogeneous tail | valid in a uniform liquid: C 1.6714, B 1.6719 and A-fine 1.6716 g/cm³ | 13.4 (GPU + 4 threads) |
 
-Warnings (never blocking): a cutoff under 16 Å in a slab (pilot C at 12 Å: plateau 4.7 % below its bulk, raw σ 29 %
-below Tsige & Grest; the tail restores σ to 11.12, not the density), a cutoff + tail for a reference value (a residual
-low bias of a few %: B's 11.71 against ≈ 12.06 for converged settings on A's frames; −5 % for hexane at 16 Å,
+Warnings (never blocking): a cutoff under 16 Å in a slab (pilot C at 12 Å: plateau 4.7 % below its bulk, σ + tail
+8.76 mN/m, Coulomb-corrected, 31 % below A-fine's 12.62: the tail does not restore the density), LAMMPS' own Coulomb
+mesh for a cutoff run in a slab (`--coulomb-mesh accuracy`: pilot C read 2.37 mN/m high), a cutoff + tail for a
+reference value (a residual low bias: B's 11.41 against A-fine's 12.62, −9.6 %; −5 % for hexane at 16 Å,
 Isele-Holder et al. 2012), pppm/disp looser than the converged settings, a mesh or G outside what the mesh check
 validated, Coulomb looser than 1e-5, a box too narrow for the cutoff. The user's choice always wins; when it differs,
 both are printed and recorded. The numbers live in one table, `md.long_range.PILOT_TABLE` (with each row's
-source), and are **provisional until the A-fine run** (pilot A with these settings, due 2026-11-24/25) gives its σ.
+source). They were provisional until the A-fine run (pilot A with these settings): it measured 12.62 ± 0.40 mN/m on
+2026-11-24, on Freire 2006's 12.33 within its error bar (`Runs\md-pilot-2026-11-20\pilot_A_fine_report.md`).
 Caveat: the CPU speeds compare 4 threads (16 Å) with 8 (pppm/disp); `machines --bench md` measures both on one machine,
 and its numbers then replace the pilots' speeds on that machine.
 
@@ -1457,15 +1491,15 @@ density, Gibbs dividing surface, 10-90 % width. Checks: production ≥ 7 ns (Tsi
 each stage (ns/day) comes from the logs.
 
 **Cutoff variants: the LJ tail.** A plain LJ cutoff misses the dispersion beyond rc, and LAMMPS' tail correction
-assumes a uniform density, so `in.slab` runs without it and σ comes out low (pilot C6F14 at 12 Å: 7.96 against
-11.25 for Tsige & Grest's 16 Å + tail). For `cutoff*` folders the analysis adds the mean-field tail for a tanh
+assumes a uniform density, so `in.slab` runs without it and σ comes out low (pilot C, C6F14 at 12 Å: 5.60 with its
+Coulomb mesh corrected, 7.96 as run, against 12.62 for converged full long-range dispersion). For `cutoff*` folders the analysis adds the mean-field tail for a tanh
 profile, as Tsige & Grest (2008) did (Blokhuis et al. 1995; Chapela et al. 1977):
 σ_tail = 12π Σᵢⱼ εᵢⱼσᵢⱼ⁶ ΔρᵢΔρⱼ ∫₀¹ds ∫_rc^∞ dr coth(rs/w)(3s³ − s) r⁻³. The site types, ε and σ come from `ff.params`,
 the mixing rule from `in.slab` and the counts and masses from `bulk_final.data`; Δρ and w (half the fitted d) come
-from the slab's own profile. The report shows the raw σ, σ + tail (C6F14 at 12 Å: 7.96 + 3.16 = 11.12) and the
+from the slab's own profile. The report shows the raw σ, σ + tail (C6F14 at 12 Å, corrected: 5.60 + 3.16 = 8.76) and the
 sharp-interface upper bound of the tail. The tail does not undo the slab's lower density (a truncated slab liquid
 is less cohesive than the bulk run, which had the uniform tail: −4.7 % for C6F14 at 12 Å), so treat a corrected cutoff
-σ as a check against the `ewald` variant. Other pair styles (exp-6, Buckingham) and the sixthpower mixing rule get
+σ as a check against the `ewald` variant (for C6F14 it reads 9.6 % low at 16 Å and 31 % low at 12 Å, against A-fine). Other pair styles (exp-6, Buckingham) and the sixthpower mixing rule get
 no correction, only the note.
 
 **Windows.** Prefer the LAMMPS installer's `lmp.exe` over PyPI's wheel for these runs (MD-1: the Windows wheel
