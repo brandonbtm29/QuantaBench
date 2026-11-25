@@ -1692,13 +1692,14 @@ slab 2 + 10 ns on the M3 Max's GPU in single precision, 4.6 h; `Runs\openmm-vali
 | | OpenMM (Mac GPU, single) | pilot B (LAMMPS) |
 |---|---:|---:|
 | σ raw, on the fly every 20 fs (mN/m) | 8.95 ± 0.53 | 9.60 ± 0.30 |
-| σ + LJ tail beyond 16 Å | 11.09 | 11.71 |
+| σ + LJ tail beyond 16 Å | 11.09 | 11.71 as run; 11.41 Coulomb-corrected (MD-LR-2) |
 | σ by test-area / by the 1-ps frames' rerun | 9.39 ± 0.49 / 9.52 ± 2.05 | |
 | bulk NPT density (g/cm³) | 1.6693 ± 0.0014 | 1.6719 ± 0.0016 |
 | slab plateau (g/cm³) | 1.6431 | 1.6386 |
 
 The difference in σ is −0.65 ± 0.61 mN/m (1.1 σ); B's own Coulomb PPPM at 1e-5 puts it 0.252 ± 0.004 mN/m too high
-(2,501 of the run's frames at 1e-5 and 1e-6), which leaves −0.40 ± 0.61. The on-the-fly samples of the Apple GPU minus
+(2,501 of the run's frames at 1e-5 and 1e-6), which leaves −0.40 ± 0.61; MD-LR-2's full correction of B's Coulomb
+mesh (0.30 mN/m: 9.30 raw, 11.41 with the tail) leaves −0.35 ± 0.61 (0.6 σ). The on-the-fly samples of the Apple GPU minus
 the double-precision rerun of the same 10,001 frames: −0.10 ± 0.09 mN/m, so single precision does not bias σ. The
 error bar (0.53) is above B's 0.30 for the same number of samples (white noise 0.45 in both): B's ten 1-ns blocks
 scattered less than this run's; a run ~2.5 times longer, or samples every 10 fs, would make sure of 0.30.

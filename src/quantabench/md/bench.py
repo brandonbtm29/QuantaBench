@@ -54,7 +54,8 @@ LAMMPS' own ``Performance:`` line of the timed run. Variants are ``<accelerator>
 The dispersion variants are MD-LR's options with their defaults (``md.long_range.settings``): ``ewald``
 (``lj/long/coul/long`` 12 Å + ``pppm/disp``: Coulomb 1e-6, G = 2.77 / rc and a dispersion mesh no coarser than
 0.52 / G, from the box it runs in) and ``cutoff12``/``cutoff16``/``cutoff18`` (``lj/cut/coul/long`` + ``pppm``
-1e-6, 1e-5 before OPENMM-1; the bulk with LAMMPS' tail correction, the slab without). Each record names its settings (``long_range``,
+1e-6, 1e-5 before OPENMM-1, with MD-LR-2's isotropic Coulomb mesh, ``md.liquid.coul_mesh_lines``; the bulk with
+LAMMPS' tail correction, the slab without). Each record names its settings (``long_range``,
 ``long_range_settings``) and the k-space grids LAMMPS used (``kspace``); a record without ``long_range`` timed the
 coarser settings of before MD-LR.
 
@@ -128,13 +129,16 @@ from pathlib import Path
 
 from . import long_range as LR
 
-MD_BENCH_VERSION = 3       # 3: cutoff variants at Coulomb 1e-6 (OPENMM-1); 2: slab boxes (MD-BENCH-2)
+MD_BENCH_VERSION = 4       # 4: cutoff variants' isotropic Coulomb mesh (MD-LR-2); 3: their Coulomb 1e-6 (OPENMM-1);
+                           # 2: slab boxes (MD-BENCH-2)
 #: What each version of the benchmark measures, for the note that asks whether to run it again (``rerun_note``).
 #: Raise ``MD_BENCH_VERSION`` and add a line here whenever a change makes new numbers differ from stored ones.
 VERSION_CHANGES = {
     1: "bulk C6F14 boxes (MD-BENCH-1)",
     2: "a 3,800-atom C6F14 slab with vacuum by default and the long-range settings of MD-LR (MD-BENCH-2)",
     3: "the cutoff variants' Coulomb PPPM at 1e-6 instead of 1e-5, as the surface-tension runs now use (OPENMM-1)",
+    4: "the cutoff variants' Coulomb PPPM mesh with one spacing in every direction instead of LAMMPS' own, as the "
+       "surface-tension runs now use (MD-LR-2)",
 }
 SMILES = "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"     # perfluorohexane, C6F14
 MOLECULE = "C6F14"

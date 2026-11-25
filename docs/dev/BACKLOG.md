@@ -1172,10 +1172,14 @@ Brandon approved this follow-up of MD-LR (relayed 2026-11-24). Reports: `Runs\md
     B's 101 production frames: within 0.013 ± 0.004 and 0.002 ± 0.004 mN/m of converged at 1e-6.
   - Tests: `tests/test_md_long_range.py` (the table, the rule's G and meshes for the pilots' boxes, warnings,
     differences), `tests/test_md_liquid.py` (inputs, old folders, the CLI option, the LAMMPS smoke run's G and mesh).
+- Done (2026-11-25, after #59 and #61 merged; branch `fix/md-lr-2-followup-bench-v4`):
+  - `md.bench`: the cutoff variants' inputs get the rule too (`bench_input` uses `md.liquid._kspace`), so
+    `MD_BENCH_VERSION` 4 (`VERSION_CHANGES[4]`): each machine is asked whether to run it again (MD-BENCH-3).
+  - #59's OpenMM recommendation text quoted B's 11.71 (as run): now B's corrected 11.41 from `PILOT_TABLE`, and
+    the 9.6 % screen gap against A-fine, as LAMMPS' reason has it. The OpenMM validation's comparison with B in
+    docs/ENGINES.md, docs/PLATFORMS.md and the CHANGELOG gives the corrected value beside the as-run one
+    (−0.35 ± 0.61 mN/m). DEVLOG entries, OPENMM-1's done list and `PILOT_TABLE['B'].source` keep 11.71 as run.
 - Next:
-  - `md.bench`: the cutoff variants' inputs get the rule too, so their timings change by a few %. #59 raises
-    `MD_BENCH_VERSION` to 3 for its Coulomb 1e-6; whether to make it 4 for this is a merge-time choice.
-  - #59's OpenMM recommendation text still quotes B's 11.71 (as run): 11.41 after both merge.
   - The recommendation for GPU screens stays 16 Å + tail (Brandon's 2026-11-22 default); it reads 9.6 % low for
     C6F14. Whether screens should say so in the GUI or move to another default is Brandon's call.
 

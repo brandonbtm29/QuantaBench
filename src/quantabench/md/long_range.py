@@ -692,8 +692,10 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
             return LongRangeRecommendation(
                 "cutoff", 16.0, "gpu", s,
                 "OpenMM can use a GPU here, and 16 Å + tail is pilot B's setup, which reproduced Tsige & Grest's C6F14 "
-                "value (11.71 ± 0.30 vs 11.25 mN/m); OpenMM runs it several times faster than LAMMPS' GPU package, "
-                "whose PPPM and bonded terms stay on the CPU", v, basis, warnings, notes, inputs, speed_source=src)
+                f"value ({PILOT_TABLE['B'].sigma_tail:.2f} ± {PILOT_TABLE['B'].sigma_err:.2f} vs 11.25 mN/m); OpenMM "
+                "runs it several times faster than LAMMPS' GPU package, whose PPPM and bonded terms stay on the CPU; "
+                f"as a screen it reads {-100 * pilot_gap('B'):.1f} % below converged full long-range dispersion "
+                f"(A-fine {a_fine.sigma_raw:.2f} mN/m)", v, basis, warnings, notes, inputs, speed_source=src)
         return LongRangeRecommendation(
             "cutoff", 16.0, "gpu", s,
             "LAMMPS can use a GPU here, and 16 Å + tail reproduced Tsige & Grest's C6F14 value (pilot B: "
