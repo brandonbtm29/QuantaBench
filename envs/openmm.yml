@@ -1,0 +1,20 @@
+# OpenMM, QuantaBench's second MD engine (OPENMM-1), in its own environment: Windows, Linux and macOS.
+#
+#   conda env create -f envs/openmm.yml        # or: mamba / micromamba
+#
+# QuantaBench finds this environment's Python by itself (qb-openmm in ~/miniforge3/envs and the other usual
+# conda/mamba folders; `quantabench-cli doctor` shows what it found and which GPU platforms OpenMM sees), or set
+# it in Settings > Engines > OpenMM Python (openmm_python). OpenMM runs start in that Python with QuantaBench's
+# own source on PYTHONPATH: they need only openmm and numpy, so nothing else is installed here.
+#
+# Platforms (`quantabench-cli doctor`): CPU everywhere; OpenCL with the GPU's own driver on Windows (AMD,
+# NVIDIA, Intel) and macOS (Apple's OpenCL: single precision only, Apple GPUs have no FP64); CUDA on NVIDIA
+# (linux-64, win-64). Linux: add ocl-icd-system for the system's OpenCL drivers; AMD ROCm (HIP) is the
+# separate openmm-hip package (linux-64). Solves for win-64, linux-64 and osx-arm64 (checked 2026-11-23).
+name: qb-openmm
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - openmm>=8.6
+  - numpy

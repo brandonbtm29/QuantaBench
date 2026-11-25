@@ -158,6 +158,23 @@ def test_settings_engine_path_is_per_machine(capsys, monkeypatch):
     assert "--machine [NAME]" in " ".join(capsys.readouterr().out.split())
 
 
+def test_settings_md_engine_is_per_machine(capsys, monkeypatch):
+    """OPENMM-1 (Brandon, 2026-11-24): the MD engine is set per computer; the shared default stays "auto"."""
+    from quantabench import settings as sm
+
+    monkeypatch.setattr(sm, "_this_machine", lambda: "Bench-Mac")
+    assert cli.main(["settings", "--md-engine", "openmm"]) == 0
+    assert cli.main(["settings", "--md-engine", "lammps", "--machine", "BENCH-PC"]) == 0
+    assert "MD engine on bench-pc: lammps" in capsys.readouterr().out
+    s = sm.load()
+    assert s.engines.md_engine == "auto" and s.engines.machine_md_engine == {"bench-mac": "openmm", "bench-pc": "lammps"}
+    assert s.md_engine_for(scope=True) == ("openmm", "this machine")
+    assert "engines.machine_md_engine" in sm._machine_entry(s.dist.machine_updated, "bench-pc")
+    assert cli.main(["settings", "--md-engine", "default"]) == 0
+    s = sm.load()
+    assert s.md_engine_for(scope=True) == ("auto", "all machines") and s.md_engine_for("bench-pc") == "lammps"
+
+
 def test_resume_keeps_the_runs_options(tmp_path, capsys):
     """RESUME-1: --qm-memory, --no-keep-cubes and --molecule-timeout belong to the run: a resume keeps them (b03's
     ESP pass resumed at the settings' 4 GB and kept its cubes), and an option given again still wins."""

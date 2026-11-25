@@ -53,8 +53,8 @@ LAMMPS' own ``Performance:`` line of the timed run. Variants are ``<accelerator>
 
 The dispersion variants are MD-LR's options with their defaults (``md.long_range.settings``): ``ewald``
 (``lj/long/coul/long`` 12 Å + ``pppm/disp``: Coulomb 1e-6, G = 2.77 / rc and a dispersion mesh no coarser than
-0.52 / G, from the box it runs in) and ``cutoff12``/``cutoff16``/``cutoff18`` (``lj/cut/coul/long`` + ``pppm`` 1e-5;
-the bulk with LAMMPS' tail correction, the slab without). Each record names its settings (``long_range``,
+0.52 / G, from the box it runs in) and ``cutoff12``/``cutoff16``/``cutoff18`` (``lj/cut/coul/long`` + ``pppm``
+1e-6, 1e-5 before OPENMM-1; the bulk with LAMMPS' tail correction, the slab without). Each record names its settings (``long_range``,
 ``long_range_settings``) and the k-space grids LAMMPS used (``kspace``); a record without ``long_range`` timed the
 coarser settings of before MD-LR.
 
@@ -128,12 +128,13 @@ from pathlib import Path
 
 from . import long_range as LR
 
-MD_BENCH_VERSION = 2       # 2: slab boxes (MD-BENCH-2); records name their geometry, k-space grids and timings
+MD_BENCH_VERSION = 3       # 3: cutoff variants at Coulomb 1e-6 (OPENMM-1); 2: slab boxes (MD-BENCH-2)
 #: What each version of the benchmark measures, for the note that asks whether to run it again (``rerun_note``).
 #: Raise ``MD_BENCH_VERSION`` and add a line here whenever a change makes new numbers differ from stored ones.
 VERSION_CHANGES = {
     1: "bulk C6F14 boxes (MD-BENCH-1)",
     2: "a 3,800-atom C6F14 slab with vacuum by default and the long-range settings of MD-LR (MD-BENCH-2)",
+    3: "the cutoff variants' Coulomb PPPM at 1e-6 instead of 1e-5, as the surface-tension runs now use (OPENMM-1)",
 }
 SMILES = "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F"     # perfluorohexane, C6F14
 MOLECULE = "C6F14"
@@ -155,7 +156,12 @@ TEMPERATURE = 298.15        # K
 TIMESTEP = 1.0              # fs
 TDAMP = 100.0               # fs
 ACCELERATORS = ("cpu", "gpu", "kokkos")
+#: OPENMM-1: the same box timed by OpenMM (``md.openmm_engine.bench``) on its GPU platform or its CPU one
+OPENMM_ACCELERATORS = ("openmm-gpu", "openmm-cpu")
+ALL_ACCELERATORS = ACCELERATORS + OPENMM_ACCELERATORS
 DEFAULT_VARIANTS = ("cpu-ewald", "cpu-cutoff12", "cpu-cutoff16", "gpu-cutoff12", "gpu-cutoff16")
+#: ``--md-variants openmm`` (OPENMM-1): the OpenMM variant worth timing where OpenMM has a GPU; never a default
+OPENMM_VARIANTS = ("openmm-gpu-cutoff16",)
 MAX_STEPS = 10_000          # the timed run stops here or at max_seconds, whichever comes first
 WARMUP_STEPS = 100
 DEFAULT_MAX_SECONDS = 60.0
@@ -204,15 +210,24 @@ def dispersion_cutoff(dispersion: str) -> tuple[str, float]:
 
 
 def parse_variant(name: str) -> Variant:
-    accel, sep, disp = name.strip().lower().partition("-")
+    s = name.strip().lower()
+    if s.startswith("openmm-"):                       # openmm-gpu-cutoff16, openmm-cpu-ewald; openmm-gpu = cutoff16
+        kind_, _, disp = s[len("openmm-"):].partition("-")
+        accel = f"openmm-{kind_}"
+        if accel not in OPENMM_ACCELERATORS:
+            raise ValueError(f"MD variant {name!r}: openmm-gpu-<dispersion> or openmm-cpu-<dispersion>")
+        kind, rc = dispersion_cutoff(disp or "cutoff16")
+        return Variant(accel, "ewald" if kind == "ewald" else f"cutoff{rc:g}")
+    accel, sep, disp = s.partition("-")
     if not sep or accel not in ACCELERATORS:
-        raise ValueError(f"MD variant {name!r}: <{'|'.join(ACCELERATORS)}>-<ewald|cutoff12|cutoff16|...>")
+        raise ValueError(f"MD variant {name!r}: <{'|'.join(ALL_ACCELERATORS)}>-<ewald|cutoff12|cutoff16|...>")
     kind, rc = dispersion_cutoff(disp)
     return Variant(accel, "ewald" if kind == "ewald" else f"cutoff{rc:g}")
 
 
 def parse_variants(text: str | Sequence[str] | None) -> list[str] | None:
-    """``--md-variants``: a comma list (or a sequence) of variant names, "default" for ``DEFAULT_VARIANTS``;
+    """``--md-variants``: a comma list (or a sequence) of variant names, "default" for ``DEFAULT_VARIANTS``, "openmm"
+    for ``OPENMM_VARIANTS``;
     None or empty = the default (only the variants this LAMMPS can run). Raises ValueError on a bad name."""
     if text is None:
         return None
@@ -221,7 +236,8 @@ def parse_variants(text: str | Sequence[str] | None) -> list[str] | None:
         return None
     out: list[str] = []
     for item in items:
-        for name in (DEFAULT_VARIANTS if item.lower() == "default" else (item,)):
+        group = {"default": DEFAULT_VARIANTS, "openmm": OPENMM_VARIANTS}.get(item.lower(), (item,))
+        for name in group:
             v = parse_variant(name).name
             if v not in out:
                 out.append(v)
@@ -254,7 +270,7 @@ def _order(name: str) -> tuple:
     except ValueError:
         return (9, 0.0, 9, name)
     kind, rc = dispersion_cutoff(v.dispersion)
-    return (ACCELERATORS.index(v.accelerator), 0.0 if kind == "ewald" else rc, GEOMETRIES.index(geo), name)
+    return (ALL_ACCELERATORS.index(v.accelerator), 0.0 if kind == "ewald" else rc, GEOMETRIES.index(geo), name)
 
 
 # ------------------------------------------------------------------------------------------- LAMMPS
@@ -357,8 +373,28 @@ def find_lammps(refresh: bool = False, path: str | None = None) -> tuple[LammpsI
     return LammpsInfo(info.path, info.source, h["version"], h["packages"], h["accelerators"], h["gpu_present"]), ""
 
 
+def openmm_platforms(refresh: bool = False) -> dict:
+    """``md.openmm_engine.probe_platforms`` of this machine (probed once per process)."""
+    from . import openmm_engine as OE
+
+    return OE.probe_platforms(refresh=refresh)
+
+
+def openmm_can_run(v: Variant) -> tuple[bool, str]:
+    desc = openmm_platforms()
+    if desc.get("error"):
+        return False, desc["error"]
+    if v.accelerator == "openmm-gpu" and not any(p["name"] in ("CUDA", "HIP", "OpenCL") and p.get("precisions")
+                                                 for p in desc.get("platforms", [])):
+        return False, f"OpenMM {desc.get('version')} sees no GPU platform here"
+    return True, ""
+
+
 def can_run(info: LammpsInfo, v: Variant) -> tuple[bool, str]:
     missing = [p for p in REQUIRED_PACKAGES if info.packages and not info.has(p)]
+    if v.accelerator.startswith("openmm"):          # the box is LAMMPS-prepared; OpenMM times it
+        return (False, f"this LAMMPS lacks {' and '.join(missing)} (it prepares the box)") if missing else \
+            openmm_can_run(v)
     if missing:
         return False, f"this LAMMPS lacks the {' and '.join(missing)} package{'s' if len(missing) > 1 else ''}"
     if v.accelerator != "cpu" and v.dispersion == "ewald":
@@ -555,6 +591,62 @@ def check_consistency(ref: Mapping[str, float] | None, got: Mapping[str, float] 
     off = [k for k in (*terms, "ebond", "eangle", "edihed", "pxx", "pyy", "pzz")
            if k in ref and k in got and abs(got[k] - ref[k]) > (pressure_tol if k.startswith("p") else e_tol)]
     return "mismatch", detail + (f"; differing: {', '.join(off)}" if off else "")
+
+
+def check_energy(ref: Mapping[str, float] | None, got: Mapping[str, float] | None) -> tuple[str, str]:
+    """An OpenMM variant's run-0 potential energy against LAMMPS' CPU run on the same configuration (OpenMM gives no
+    pressure tensor on a single-precision GPU worth checking; σ is computed afterwards in double precision)."""
+    if not ref or "pe" not in ref:
+        return "skipped", "no CPU reference at run 0"
+    if not got or "pe" not in got:
+        return "skipped", "no run-0 energy from this variant"
+    terms = ("evdwl", "ecoul", "elong")
+    nonbonded = sum(ref.get(k, 0.0) for k in terms)
+    scale = sum(abs(ref.get(k, 0.0)) for k in terms) + abs(ref["pe"] - nonbonded)
+    tol = ENERGY_TOL_ABS + ENERGY_TOL_REL * scale
+    de = got["pe"] - ref["pe"]
+    detail = f"pe {got['pe']:,.3f} vs LAMMPS CPU {ref['pe']:,.3f} kcal/mol (diff {de:+,.3f}, tolerance {tol:.2g})"
+    return ("ok" if math.isfinite(de) and abs(de) <= tol else "mismatch"), detail
+
+
+def run_openmm_variant(work: Path, v: Variant, threads: int, *, steps: int = MAX_STEPS,
+                       max_seconds: float = DEFAULT_MAX_SECONDS, geometry: str = "bulk",
+                       box: Sequence[float] | None = None, should_stop: Callable[[], bool] | None = None) -> dict:
+    """Time ``v`` (an ``openmm-gpu`` or ``openmm-cpu`` variant) on the benchmark box in ``work`` with OpenMM, in the
+    OpenMM environment (``md.openmm_engine.bench``): the same model, Langevin NVT at 298.15 K, 1 fs."""
+    from ..chem import external
+    from . import openmm_engine as OE
+
+    kind, rc = dispersion_cutoff(v.dispersion)
+    rec: dict = {"accelerator": "openmm", "engine": "openmm", "dispersion": v.dispersion, "cutoff_A": rc,
+                 "timestep_fs": TIMESTEP, "date": _now(), "bench_version": MD_BENCH_VERSION, "geometry": geometry,
+                 "long_range": LR.describe(LR.settings(kind, rc), box if kind == "ewald" else None), "error": ""}
+    if box:
+        rec["box_A"] = [round(float(x), 4) for x in box]
+    py, why = OE.find_openmm_python()
+    if py is None:
+        rec["error"] = why
+        return rec
+    n = 1 if v.accelerator == "openmm-gpu" else max(1, int(threads))
+    cmd = [py, "-m", "quantabench.md.openmm_engine", "bench", "bench_start.data", "ff.params", "--molecule",
+           "molecule.json", "--dispersion", v.dispersion, "--geometry", geometry,
+           "--platform", "gpu" if v.accelerator == "openmm-gpu" else "CPU", "--threads", str(n),
+           "--steps", str(int(steps)), "--max-seconds", f"{max_seconds:g}"]
+    env = external.program_env(n, {k: val for k, val in OE.openmm_env(py, n).items()
+                                   if k in ("PYTHONPATH", "OPENMM_CPU_THREADS")})
+    try:
+        run = external.run_program(cmd, work, threads=n, env=env, log_name=f"out.{v.name}", should_stop=should_stop,
+                                   check=False, timeout=2.0 * max_seconds + 300.0)
+    except external.ExternalProgramError as exc:
+        rec["error"] = str(exc).splitlines()[0]
+        return rec
+    lines = [x for x in run.text().splitlines() if x.startswith("{")]
+    if run.returncode != 0 or not lines:
+        rec["error"] = f"OpenMM exited with code {run.returncode}: {run.tail(3)}"
+        return rec
+    rec.update(json.loads(lines[-1]))
+    rec["threads"] = n
+    return rec
 
 
 def verified(rec: Mapping) -> bool:
@@ -955,7 +1047,7 @@ def run_md_benchmark(variants: Sequence[str] | None = None, *, size: str = DEFAU
     src = system_dir(size)
     tm = F.TypedMolecule.from_dict(json.loads((src / "molecule.json").read_text(encoding="utf-8")))
     work = external.make_scratch_dir("md_bench")
-    for f in ("bench_start.data", "ff.params"):
+    for f in ("bench_start.data", "ff.params", "molecule.json"):
         shutil.copy2(src / f, work / f)
     refs: dict[str, dict | None] = {}
     failed = False
@@ -969,12 +1061,18 @@ def run_md_benchmark(variants: Sequence[str] | None = None, *, size: str = DEFAU
                                   max_seconds=max_seconds, should_stop=stop, tag=f"ref-cpu-{v.dispersion}",
                                   geometry=geometry, box=box)
                 refs[v.dispersion] = ref.get("run0")
-            rec = run_variant(lammps, tm, work, v, n_threads, steps=steps, max_seconds=max_seconds, should_stop=stop,
-                              geometry=geometry, box=box)
+            if v.accelerator.startswith("openmm"):
+                rec = run_openmm_variant(work, v, n_threads, steps=steps, max_seconds=max_seconds, geometry=geometry,
+                                         box=box, should_stop=stop)
+            else:
+                rec = run_variant(lammps, tm, work, v, n_threads, steps=steps, max_seconds=max_seconds,
+                                  should_stop=stop, geometry=geometry, box=box)
             rec["size"] = size
             rec.setdefault("atoms", system.get("atoms"))
             if v.accelerator == "cpu":
                 refs.setdefault(v.dispersion, rec.get("run0"))
+            elif v.accelerator.startswith("openmm"):
+                rec["check"], rec["check_detail"] = check_energy(refs.get(v.dispersion), rec.get("run0"))
             else:
                 rec["check"], rec["check_detail"] = check_consistency(refs.get(v.dispersion), rec.get("run0"))
                 if refs.get(v.dispersion):
@@ -1124,6 +1222,8 @@ def fmt_ns(x: float) -> str:
 
 def _context(rec: Mapping) -> str:
     label = str(rec.get("accelerator", ""))
+    if label == "openmm":
+        return f"OpenMM {rec.get('platform', '')} {rec.get('precision', '')}".strip()
     if label in ("gpu", "kokkos-gpu"):
         return str(rec.get("gpu_api") or "GPU") if label == "gpu" else "KOKKOS GPU"
     return f"{int(rec.get('threads') or 1)} thr"

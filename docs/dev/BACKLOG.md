@@ -1240,7 +1240,11 @@ docs/WORKERS.md, "The MD benchmark", docs/UI_PLAN.md (Machines dock).
   Compare with `lmp.exe` from the LAMMPS Windows installer to tell a wheel problem from an input problem.
 - 2026-11-05: a third test fails the same way on the workstation, 1 of 6 identical runs: the LAMMPS run of the periodic-boundary test (TFA alone, 2-layer slab, now `test_molecule_across_periodic_boundary_runs`); marked flaky on Windows too.
 
-## GPU-1 (= FORK-3): AIMNet2 on AMD and Apple GPUs (replace NVIDIA Warp D3) · done on ROCm 2026-11-05; MPS needs-Brandon
+## GPU-1 (= FORK-3): AIMNet2 on AMD and Apple GPUs (replace NVIDIA Warp D3) · done (ROCm 2026-11-05; the Mac's MPS 2026-11-23)
+- 2026-11-23 (MAC-GPU report, `Runs\mac-gpu-2026-11-23\report.md`): the Warp-free `AIMNet2TorchCalculator` runs on the
+  M3 Max's `mps` in float32 within 2.6e-5 eV and 1.1e-5 eV/Å of the stock CPU calculator, 7 PFAS. It pays only with
+  large batches (4.6-6.9x two CPU threads at 64-256 conformers, 1.3x for one molecule's refinement), so `lanes auto`
+  keeps planning CPU lanes; cross-molecule batching would be a new item.
 - 2026-11-04: Warp is CPU-only on macOS too, so the same adapter enables AIMNet2 on the MacBook's GPU (MPS,
   float32). Test the adapter on `mps` as well (needs-Brandon), and offer the change upstream to `aimnet`.
 - `aimnet` 0.2 computes DFT-D3 (and neighbor lists) through `nvalchemi-toolkit-ops` / NVIDIA Warp, which
@@ -2551,13 +2555,62 @@ small job may start in a gap if it does not delay the reserved start of the big 
 - Minimal repro of the `initializeGL` access violation with the AMD driver, filed upstream; re-check the
   `<0.13` pin on each pyvistaqt release (and test 0.13 on macOS).
 
-### FORK-8: LAMMPS reliability on Windows and a Mac GPU build · later
-- With MD-1: the same SMD input 20 times with the Windows installer's `lmp.exe` vs the PyPI wheel. Then
-  `scripts/build_lammps_macos.sh` for an OpenCL GPU-package build in mixed precision, with a measured
-  speedup over the Mac's CPU.
+### FORK-8: LAMMPS reliability on Windows and a Mac GPU build · Mac GPU build deferred 2026-11-23
+- With MD-1: the same SMD input 20 times with the Windows installer's `lmp.exe` vs the PyPI wheel.
+- **The Mac GPU build is deferred** (MAC-GPU report 2026-11-23): LAMMPS' GPU package accumulates in double on the
+  device for mixed and double precision, and `lal_device.cpp` refuses a GPU without FP64 (Apple's), so "mixed mode
+  keeps double accumulation" does not hold there: it would be single precision, and only the pair style moves to the
+  GPU (PPPM and the bonded terms were 75 % of the workstation's GPU run). Estimated ~2x the Mac's CPU. OpenMM covers
+  the Mac's GPU instead (FORK-9 / OPENMM-1).
 
-### FORK-9: OpenMM on the Mac's GPU · later (0.4 MD)
-- Benchmark the beta `openmm-metal` plugin against OpenCL; go/no-go note in PLATFORMS.md.
+### FORK-9 → OPENMM-1: OpenMM as a second MD engine, with the Apple GPU · in-PR 2026-11-23 (branch `feat/openmm-1-openmm-engine`)
+Re-scoped from "OpenMM on the Mac's GPU (benchmark openmm-metal)". Brandon (2026-11-23): "I agree to keep OpenMM and
+LAMMPS, and I approve writing the code for Apple GPU for OpenMM. I think we can just add a note as a part of the
+selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs much faster at reduced accuracy."
+- `envs/openmm.yml` (conda-forge OpenMM 8.6; the plugin is moot: OpenMM's own Metal platform is an open upstream PR,
+  single precision, about OpenCL's speed); `doctor`, `machines` and Settings > Engines show OpenMM's platforms and
+  the precisions each allows.
+- `md.openmm_engine`: the folder's LAMMPS model as an OpenMM System (harmonic, opls, fourier, cvff; special bonds;
+  LB natively, geometric and pair_ij through a table; PME, LJ-PME, cutoff with the tail), parity tests against LAMMPS
+  `run 0` per style for OPLS-AA and a GAFF2-like model.
+- `md.openmm_run` inside SIM-1's supervisor: the liquid slab's stages, the same output files, state-XML checkpoints,
+  pause/resume, frames (`slab.dcd`), on-the-fly Kirkwood-Buff σ samples (with a cutoff shift and a 1e-4 strain, so they
+  equal LAMMPS' virial), optional test-area samples; `caffeinate` on the Mac.
+- σ in double precision (`md.openmm_sigma`): `md surface-tension` reruns the frames (LAMMPS `rerun` at Coulomb 1e-6,
+  else OpenMM's CPU platform) and checks the on-the-fly samples against them.
+- The engine choice: `md liquid-slab --engine`, `md run --engine`, Settings > Engines > MD engine, Simulate > Run MD
+  folder... asks for a folder that has not started, each with the note; the recommender and `machines --bench md`
+  (`--md-variants default,openmm`: `openmm-gpu-cutoff16`) know it.
+- Validation (done): pilot B on the Mac's GPU, σ 11.09 vs 11.71 ± 0.30 mN/m with the tail (−0.65 ± 0.61), densities
+  within 0.3 %, single precision unbiased against a double-precision rerun; `Runs\openmm-validation-2026-11-23\report.md`.
+- Decided (Brandon, 2026-11-24: "I agree with PR 59 to commit and your suggestions"), in this PR:
+  - frames: once the slab has finished, the frames are rerun and the check passed, `md surface-tension` keeps every
+    10th frame and deletes the rest (`frame_keep_every`, on by default; `--keep-frames`); `*.dcd` is in the synced
+    `.stglobalignore`;
+  - σ is the run's own 20-fs samples when they pass the check against the double-precision rerun (as built);
+  - LAMMPS cutoff runs default to Coulomb 1e-6 (the isotropic-mesh rule comes later);
+  - the engine default is per computer: Automatic (OpenMM where a usable GPU is detected, else LAMMPS), saved in
+    `engines.machine_md_engine`; Brandon's note stays;
+  - the Mac's own LAMMPS path points at the `qb-lammps` conda `lmp` (set with `quantabench-cli`, on the Mac).
+- Follow-ups: OPENMM-2 (below).
+
+### OPENMM-2: OpenMM follow-ups · ready after OPENMM-1
+- GAFF2 with LJ-PME on OpenMM against the Mac's GAFF2 `pppm/disp` LAMMPS run; OpenMM's LJ-PME (OPLS-AA, geometric
+  correction table) against A-fine. Until then the recommender marks LJ-PME on OpenMM provisional.
+- The upstream Metal platform (OpenMM PR #5488) when it ships: add it to the platform order and measure it.
+- Frames (done in OPENMM-1, Brandon 2026-11-24): every 10th kept after a passing check. Left: save them only in the
+  production part (the settle part's frames are rerun too).
+- Coulomb accuracy (done in OPENMM-1, Brandon 2026-11-24: 1e-6 for cutoff runs). At PPPM 1e-5 the virial σ was
+  **+0.252 ± 0.004 mN/m** high on pilot B's system (2,501 frames of the OPENMM-1 validation run at 1e-5 vs 1e-6; +0.9
+  on a small hexane slab at 8 Å); pilots B and C carry it. Left: measure what 1e-6 costs on the GPU package (PPPM on
+  the CPU threads); the isotropic-mesh rule (MD-LR) comes later.
+- The MacBook's LAMMPS for QuantaBench was the `.venv`'s PyPI wheel (MPICH): every run ends with SIGTERM after "OFI
+  poll failed (default nic=en0)" in MPI_Finalize (exit −15, even for a one-line input), and SIM-1's supervisor marks a
+  segment done only on exit 0. Done 2026-11-24: the Mac's own LAMMPS path is the `qb-lammps` conda `lmp`. Left: fix
+  MPICH's netmod in the wheel, and/or let the supervisor accept a complete log (done tag + "Total wall time") with a
+  signal exit, as `md.openmm_sigma`'s rerun does.
+- The on-the-fly σ error bar of the validation run was 0.53 mN/m against pilot B's 0.30 for the same number of
+  samples (white noise 0.45 in both): longer production or 10-fs samples if 0.3 is the target.
 
 ## Needs Brandon (hardware / Windows / decisions)
 

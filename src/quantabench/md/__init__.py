@@ -23,7 +23,12 @@ folder's parts as segments, one LAMMPS process at a time, with pause through a S
 (``quantabench-cli md run/status/pause/resume``); ``md.telemetry`` reads the live progress from the engine's own log.
 All three are pure Python.
 
-None of them import the LAMMPS Python module (or OpenFF, ParmEd) at import time.
+OpenMM as a second engine (OPENMM-1): ``md.openmm_engine`` builds a folder's LAMMPS model as an OpenMM System (and
+finds the OpenMM environment, ``envs/openmm.yml``), ``md.openmm_run`` is the process the supervisor starts for an
+OpenMM segment (in that environment), ``md.openmm_sigma`` evaluates its saved frames (``md.dcd``) in double precision
+for σ. Only ``build_system`` and the run itself import ``openmm``.
+
+None of them import the LAMMPS Python module (or OpenFF, ParmEd, OpenMM) at import time.
 """
 
 from .long_range import recommend_long_range

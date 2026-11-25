@@ -109,8 +109,8 @@ class Stage:
 @dataclass
 class OutputFile:
     """A file a part appends to while it runs. ``kind``: "ave/time" (rows ``step values...``), "ave/chunk" (blocks
-    ``step nchunks total`` + rows), "dump" (``ITEM: TIMESTEP`` frames) or "print" (``fix print`` rows: the first
-    column is not the step, so such files are never cut). ``rewrites_start``: a resumed run writes the checkpoint's
+    ``step nchunks total`` + rows), "dump" (``ITEM: TIMESTEP`` frames), "dcd" (an OpenMM run's binary frames,
+    ``md.dcd``) or "print" (``fix print`` rows: the first column is not the step, so such files are never cut). ``rewrites_start``: a resumed run writes the checkpoint's
     step again (an ``ave/time`` with one sample per row writes at its setup; a dump writes its first frame), so a cut
     for a resume at step S removes S too."""
 
@@ -504,6 +504,10 @@ def cut_at(path: str | Path, kind: str, step: int, keep_step: bool) -> int:
     path = Path(path)
     if kind == "print" or not path.is_file():
         return 0
+    if kind == "dcd":                       # OpenMM runs' frames (md.dcd: binary, fixed-size frames)
+        from . import dcd
+
+        return dcd.truncate(path, step, keep_step)
 
     def beyond(s: int | None) -> bool:
         return s is not None and (s > step or (s == step and not keep_step))

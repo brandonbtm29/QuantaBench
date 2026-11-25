@@ -15,8 +15,10 @@ light module (no numpy, no LAMMPS) that the CLI, ``md.liquid`` and the Simulate 
 ``cutoff`` (the "screening length")
     The LJ (and real-space Coulomb) cutoff rc in Å, 8-30. Defaults: 12 for ``ewald``, 16 for ``cutoff``.
 Coulomb accuracy (``kspace_accuracy``)
-    PPPM's relative force accuracy. Defaults: 1e-6 for ``ewald`` (converged), 1e-5 for ``cutoff`` (pilot B's, which
-    reproduced Tsige & Grest; PPPM runs on the CPU threads of a GPU run and sets its speed).
+    PPPM's relative force accuracy. Default 1e-6 for both (converged). Until 2026-11-24 ``cutoff`` used 1e-5 (pilot
+    B's): on 2,501 frames of pilot B's system that put σ +0.252 ± 0.004 mN/m above 1e-6 (OPENMM-1's validation;
+    1e-6 and 1e-7 agree within 0.01), so pilots B and C are ~0.25 high; Brandon chose 1e-6 (PPPM runs on the CPU
+    threads of a GPU run, so a cutoff run on the GPU package is somewhat slower).
 Dispersion k-space (``ewald`` only)
     ``disp_grid = "spacing"`` (default): ``kspace_modify gewald/disp G`` with G = ``DISP_G_RC`` / rc, and
     ``mesh/disp`` computed in the input from the box so that no spacing exceeds h = ``DISP_H_G`` / G (the inputs
@@ -67,7 +69,7 @@ CUTOFF_UNIT = "Å"
 CUTOFF_RANGE = (8.0, 30.0)
 DEFAULT_CUTOFF = {"ewald": 12.0, "cutoff": 16.0}
 #: Coulomb PPPM relative accuracy per method when none is given
-COULOMB_ACCURACY = {"ewald": 1.0e-6, "cutoff": 1.0e-5}
+COULOMB_ACCURACY = {"ewald": 1.0e-6, "cutoff": 1.0e-6}      # cutoff: 1e-5 until OPENMM-1 (+0.25 mN/m in σ)
 PURPOSES = {"screen": "Quick screen (σ to a few %, fastest on this machine)",
             "reference": "Reference value (numerically converged, no tail approximation)"}
 GEOMETRIES = ("slab", "bulk")
@@ -294,6 +296,7 @@ class MachineInfo:
     gpu: bool = False                   # LAMMPS there has the GPU package and found a GPU it can use
     note: str = ""                      # how that was decided
     threads: int | None = None
+    engine: str = "lammps"              # OPENMM-1: "openmm": ``gpu`` means an OpenMM GPU platform (OpenCL, CUDA, HIP)
     benchmark: dict = field(default_factory=dict, repr=False, compare=False)
 
     def to_dict(self) -> dict:
@@ -349,18 +352,39 @@ def _gpu_check_failed() -> bool:
     return bool(recs) and not any(bench.verified(r) for r in recs)
 
 
-def machine_for(answer: str | bool | None) -> MachineInfo:
-    """``--gpu yes|no|auto``: a stated machine, or this computer's (``detect_machine``)."""
+def detect_openmm_machine() -> MachineInfo:
+    """This computer for the OpenMM engine (OPENMM-1): does OpenMM see a GPU platform here?"""
+    from . import openmm_engine as OE
+
+    md = _this_benchmark()
+    desc = OE.probe_platforms()
+    if desc.get("error"):
+        return MachineInfo(False, f"OpenMM: {desc['error']}; recommending for the CPU", benchmark=md,
+                           engine="openmm")
+    gpus = [p for p in desc.get("platforms", []) if p["name"] in ("CUDA", "HIP", "OpenCL") and p.get("precisions")]
+    if not gpus:
+        return MachineInfo(False, f"OpenMM {desc.get('version')} has no GPU platform here", benchmark=md,
+                           engine="openmm")
+    g = gpus[0]
+    dev = f" on {', '.join(g['devices'])}" if g.get("devices") else ""
+    return MachineInfo(True, f"OpenMM {desc.get('version')} runs {g['name']}{dev} ({'/'.join(g['precisions'])} "
+                             "precision)", benchmark=md, engine="openmm")
+
+
+def machine_for(answer: str | bool | None, engine: str = "lammps") -> MachineInfo:
+    """``--gpu yes|no|auto``: a stated machine, or this computer's (``detect_machine``; for ``engine`` "openmm",
+    ``detect_openmm_machine``)."""
     if isinstance(answer, bool):
-        return MachineInfo(answer, "as stated")
+        return MachineInfo(answer, "as stated", engine=engine)
     a = str(answer or "auto").strip().lower()
+    what = "OpenMM" if engine == "openmm" else "LAMMPS"
     if a in ("yes", "y", "true", "1", "gpu"):
-        return MachineInfo(True, "stated: LAMMPS can use a GPU on the machine that runs it")
+        return MachineInfo(True, f"stated: {what} can use a GPU on the machine that runs it", engine=engine)
     if a in ("no", "n", "false", "0", "cpu"):
-        return MachineInfo(False, "stated: CPU only")
+        return MachineInfo(False, "stated: CPU only", engine=engine)
     if a != "auto":
         raise ValueError(f"--gpu {answer!r}: yes, no or auto")
-    return detect_machine()
+    return detect_openmm_machine() if engine == "openmm" else detect_machine()
 
 
 # ------------------------------------------------------------------------------------------- the recommendation
@@ -470,10 +494,11 @@ def _setup_speed(row_id: str | None, machine: MachineInfo, method: str, cutoff: 
                  ) -> tuple[float | None, str, str]:
     """(ns/day, basis, source): this machine's MD benchmark when it has a fitting record, else the pilot table's row
     ``row_id`` (None: no row fits)."""
-    v, basis = _benchmark_speed(machine.benchmark, method, cutoff, accelerator, geometry, n_atoms, n_molecules, box)
+    key = f"openmm-{accelerator}" if machine.engine == "openmm" else accelerator
+    v, basis = _benchmark_speed(machine.benchmark, method, cutoff, key, geometry, n_atoms, n_molecules, box)
     if v:
         return v, basis, "benchmark"
-    if row_id is None:
+    if row_id is None or machine.engine == "openmm":   # the pilot table is LAMMPS'
         return None, "", ""
     v, basis = _speed(row_id, n_atoms, n_molecules)
     return v, basis, ("pilot table" if v else "")
@@ -529,6 +554,20 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
         return LongRangeRecommendation("ewald", rc, "cpu", s, reason, v, basis, warnings, notes, inputs,
                                        speed_source=src)
 
+    if machine.engine == "openmm" and (purpose == "reference" or not (gpu and max_rc >= 16.0)) and geo == "slab":
+        rec = ewald(("a reference value needs full long-range dispersion: " if purpose == "reference" else
+                     "the lateral box is too narrow for a 16 Å cutoff, so full long-range dispersion: " if gpu else
+                     "no GPU platform for OpenMM here; full long-range dispersion: ")
+                    + "OpenMM computes it as LJ-PME"
+                    + (" on the GPU (LAMMPS' pppm/disp is CPU only)" if gpu else " on the CPU (slow: LAMMPS' "
+                       "pppm/disp is the faster CPU engine)"))
+        rec.accelerator = "gpu" if gpu else "cpu"
+        rec.ns_per_day, rec.speed_basis, rec.speed_source = _setup_speed(None, machine, "ewald", rec.cutoff,
+                                                                         rec.accelerator, geo, n_atoms, n_molecules,
+                                                                         box)
+        rec.notes.append("provisional: OpenMM's LJ-PME has not yet been checked against A-fine (OPENMM-1 validated the "
+                         "16 Å cutoff against pilot B)")
+        return rec
     if purpose == "reference":
         rec = ewald("a reference value needs converged full long-range dispersion: no tail approximation, the slab "
                     "stays at the bulk density (pilot A: +0.05 %), and these settings are converged to ~0.03 mN/m "
@@ -559,6 +598,12 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
                 notes.append(f"this machine's MD benchmark: {v:.3g} ns/day for this, {ew:.3g} for full long-range "
                              f"dispersion on the CPU ({v / ew:.1f} x)")
         a_fine = PILOT_TABLE["A-fine"]
+        if machine.engine == "openmm":
+            return LongRangeRecommendation(
+                "cutoff", 16.0, "gpu", s,
+                "OpenMM can use a GPU here, and 16 Å + tail is pilot B's setup, which reproduced Tsige & Grest's C6F14 "
+                "value (11.71 ± 0.30 vs 11.25 mN/m); OpenMM runs it several times faster than LAMMPS' GPU package, "
+                "whose PPPM and bonded terms stay on the CPU", v, basis, warnings, notes, inputs, speed_source=src)
         return LongRangeRecommendation(
             "cutoff", 16.0, "gpu", s,
             "LAMMPS can use a GPU here, and 16 Å + tail reproduced Tsige & Grest's C6F14 value (pilot B: 11.71 ± 0.30 "
@@ -644,18 +689,19 @@ def check_settings(s: Mapping, geometry: str = "slab", box: Sequence[float] | No
                            "this G (converged: 0.52 at G 0.23, 0.57 at G 0.28; 1.17 lost 0.19 mN/m)")
     if float(s["kspace_accuracy"]) > 1.0e-5 * (1 + 1e-6):
         out.append(f"Coulomb PPPM {s['kspace_accuracy']:g} is looser than any pilot ran (1e-5 already shifts σ by "
-                   "+0.15 mN/m against 1e-6, mesh check)")
-    elif purpose == "reference" and float(s["kspace_accuracy"]) > 1.0e-6 * (1 + 1e-6):
-        out.append(f"Coulomb PPPM {s['kspace_accuracy']:g}: +0.15 mN/m against 1e-6 at 1e-5 (mesh check); a "
-                   "reference value uses 1e-6")
+                   "+0.15 to +0.25 mN/m against 1e-6: the mesh check, OPENMM-1's validation)")
+    elif float(s["kspace_accuracy"]) > 1.0e-6 * (1 + 1e-6):
+        out.append(f"Coulomb PPPM {s['kspace_accuracy']:g}: σ +0.15 to +0.25 mN/m against 1e-6 at 1e-5 (the mesh "
+                   "check; 2,501 frames of pilot B's system in OPENMM-1's validation); the default is 1e-6")
     return out
 
 
 def notes_for(s: Mapping, geometry: str = "slab", machine: MachineInfo | bool | None = None) -> list[str]:
     """What to know about a set of ``settings`` that is not a bias: where it runs, what the analysis adds."""
     gpu = machine.gpu if isinstance(machine, MachineInfo) else bool(machine)
+    openmm = isinstance(machine, MachineInfo) and machine.engine == "openmm"
     out = []
-    if s["method"] == "ewald" and gpu:
+    if s["method"] == "ewald" and gpu and not openmm:
         out.append("the GPU stays idle: LAMMPS' GPU package has no lj/long/coul/long or pppm/disp")
     if s["method"] == "cutoff" and str(geometry).lower() != "bulk":
         out.append("the tail correction is added to σ by `md surface-tension`; it does not restore the slab's density "

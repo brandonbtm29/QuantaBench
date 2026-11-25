@@ -76,7 +76,7 @@ def md(**variants):
 
 # ------------------------------------------------------------------------------------------- sizes and keys
 def test_sizes_geometries_and_keys():
-    assert bench.DEFAULT_SIZE == "slab" and bench.MD_BENCH_VERSION == 2
+    assert bench.DEFAULT_SIZE == "slab" and bench.MD_BENCH_VERSION == 3     # 3: cutoff variants at Coulomb 1e-6
     assert {k: bench.geometry_of(k) for k in bench.SYSTEMS} == {"slab": "slab", "small": "bulk",
                                                                  "pilot-slab": "slab", "pilot": "bulk"}
     assert bench.SYSTEMS["slab"]["config"]["n_molecules"] * 20 == 3800
@@ -302,7 +302,7 @@ def test_md_estimate_uses_the_folders_slab_box(tmp_path, capsys):
     out_dir = tmp_path / "c6f14"
     assert cli.main(["md", "liquid-slab", "--smiles", bench.SMILES, "--name", "c6f14", "-o", str(out_dir),
                      "--packing", "lattice", "--lateral", "40", "--molecules", "190", "--long-range", "ewald",
-                     "--gpu", "no"]) == 0
+                     "--gpu", "no", "--engine", "lammps"]) == 0
     capsys.readouterr()
     assert cli.main(["md", "estimate", str(out_dir), "--json"]) == 0
     got = json.loads(capsys.readouterr().out)

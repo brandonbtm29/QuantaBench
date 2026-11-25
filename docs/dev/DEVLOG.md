@@ -979,6 +979,84 @@ physical cores; check whether Thorough ring conformers should seed from more tha
   running). The tests above ran 540-atom LAMMPS jobs there on 1-2 threads at below-normal priority, behind the
   pytest lock.
 
+## 2026-11-23: OpenMM as a second MD engine, with the Apple GPU (OPENMM-1, branch `feat/openmm-1-openmm-engine`)
+
+Brandon approved keeping both engines and writing the Apple-GPU code for OpenMM, with a note in the engine choice
+("OpenMM runs much faster at reduced accuracy"). Built on SIM-1's supervisor (#55) and MD-BENCH-2 (#54), from the
+MAC-GPU report's prototype converter (`Runs\mac-gpu-2026-11-23\scripts\bench_c6f14.py`).
+
+- **Converter** (`md.openmm_engine`). Parity with LAMMPS `run 0` on minimized boxes (`tests/test_md_openmm.py`,
+  run here with LAMMPS 22 Jul 2025 and OpenMM 8.6.1 from PyPI): C6F14 OPLS-AA at 12 Å (slab, bulk + tail, LJ-PME),
+  C6F6 (cvff impropers), GAFF2-like C6F6 and C6F14 (fourier, LB, 1-4 Coulomb 1/1.2; bulk + tail, LJ-PME) and an
+  explicit `pair_coeff 1 2`: bonded terms to 1e-6, nonbonded within 2e-4 of its terms, all on the first try. On pilot
+  B's slab OpenMM gives 497.80 kcal/mol; LAMMPS 497.40 at its PPPM 1e-5, 497.76 at 1e-6, 497.79 at 1e-7: the
+  prototype's 0.4 kcal/mol "mismatch" was LAMMPS' k-space error.
+- **σ: what the frames can and cannot do.** Thinning pilot B's own 10-fs pressure series: block error 0.30 mN/m every
+  10 or 20 fs, 0.38 every 50 fs, 0.81 every 100 fs, 2.9 every 1 ps, 7.3 every 5 ps (10 ns). The virial decorrelates
+  in ~20 fs (g = 2.1 at 10 fs; bond vibrations), so 1-ps frames (the MAC-GPU plan) are ten times less precise than
+  pilot B, and dense frames are too big (117 KB each). So the run samples σ itself every 20 steps: two energies at
+  the area strained by ±ε at constant volume (atoms moved with the box), a central difference that is the
+  Kirkwood-Buff virial. Measured cost on pilot B's slab: M3 Max 84 → 67 ns/day, RX 9060 XT 137 → 90 (mixed).
+- **Making the on-the-fly σ equal LAMMPS' virial** (small hexane slab at 8 Å, 101 frames, LAMMPS rerun as reference):
+  - Without anything: +1.0 mN/m. Split on one frame (Reference platform, ε = 1e-6): the LJ part agreed to 0.0005; the
+    Coulomb part was −0.91 against LAMMPS at PPPM 1e-5, but 1e-6 and 1e-7 gave 23.71 and 23.70 and OpenMM 23.69: the
+    LAMMPS side was off. On pilot B's frame LAMMPS' σ at 1e-5 is +0.36 above 1e-6/1e-7 (−239.74 vs −240.09/−240.10),
+    and OpenMM's finite difference gives −240.04.
+  - A truncated LJ also jumps at rc: pairs crossing it under the strain add an "impulsive" term the force virial does
+    not have (+2 mN/m here). A force group that is never integrated adds −U_ij(rc) per pair within rc (zero force),
+    which cancels the jumps. The LJ force still jumps at rc, so a central difference is biased in proportion to ε:
+    −0.16 mN/m at 1e-3, −0.04 at 2e-4, −0.03 ± 0.04 at 5e-5 (Reference platform: −0.15/−0.03/−0.02). Default ε = 1e-4.
+  - So the rerun uses Coulomb k-space at least 1e-6, and the check in `md surface-tension` compares like with like.
+    The real-run test (540-atom hexane on OpenMM's CPU platform, paused and resumed) passes with |mean difference| <
+    0.3 mN/m over its frames.
+- **Runner** (`md.openmm_run`): bulk (minimize, warm-up at 0.5 fs with a 50-fs Langevin, NPT with the Monte Carlo
+  barostat) and slab (opened in Python like `in.slab`, `slab_start.data` for the rerun), LAMMPS-shaped logs, the same
+  output files, state-XML checkpoints (`stepCount` inside), pause at `pause_every` (now also a multiple of the frame,
+  σ-sample and test-area intervals), periodic `state.a/b.xml`, cut and resume through SIM-1's supervisor (DCD frames
+  cut by `md.dcd.truncate`). Found on the way: `md run --detach` dropped `--priority` (the detached supervisor ran at
+  the settings' priority): fixed.
+- **The workstation** (RX 9060 XT, OpenCL, below normal, beside A-fine and CREST): OpenMM sees single, mixed and double; pilot B's
+  slab 135 (single), 137 (mixed), 121 (LJ-PME 12 Å, mixed) ns/day; with σ samples every 20 fs 97 / 90. The
+  `qb-openmm` environment was created there from `envs/openmm.yml` (and on the MacBook).
+- **Validation: pilot B on the MacBook's GPU** (`Runs\openmm-validation-2026-11-23\report.md`): pilot B's own files,
+  bulk 1 ns + slab 2 + 10 ns, OpenCL single precision, σ samples every 20 fs, test-area every 200 fs, frames every
+  1 ps; `md run --detach` with this branch's code from a scratch copy, 4.6 h (bulk 77.6, slab 67.8 ns/day), ~35 % of
+  one core at nice 19 beside the GAFF2 LAMMPS slab. σ raw 8.95 ± 0.53 mN/m (B 9.60 ± 0.30), with the 16 Å tail 11.09
+  (B 11.71): −0.65 ± 0.61. Test-area 9.39 ± 0.49, the 1-ps frames' rerun 9.52 ± 2.05. On the fly minus the
+  double-precision rerun, same 10,001 frames: −0.10 ± 0.09 (rms 9.1 per frame: the GPU's single-precision noise).
+  Every 4th production frame rerun at B's PPPM 1e-5: +0.252 ± 0.004 mN/m above 1e-6, so B itself is ~0.25 high
+  (−0.40 ± 0.61 against B corrected). Bulk 1.6693 ± 0.0014 (B 1.6719 ± 0.0016), plateau 1.6431 (B 1.6386),
+  10-90 width 9.9 Å (B 10.2). The error bar is 0.53, not 0.30, for the same sample count (white noise 0.45 in both).
+  The frames' rerun ran 3,237 frames on the MacBook (2 threads, nice 19) and 8,764 on the workstation (4 threads,
+  below normal, ~18 min) after the frames were copied there (outside SyncThing).
+- **Found:** the MacBook's LAMMPS for QuantaBench is the `.venv`'s PyPI wheel (MPICH), which exits −15 after every
+  run ("OFI poll failed (default nic=en0)" at MPI_Finalize); the rerun now judges a chunk by its rows and "Total wall
+  time". SIM-1's supervisor would mark finished LAMMPS segments failed on the Mac (BACKLOG OPENMM-2).
+
+### 2026-11-24: Brandon's decisions on OPENMM-1, in the same PR
+
+Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, as built:
+
+- **Frames thinned after the check.** `md surface-tension` keeps every `frame_keep_every`-th frame of `slab.dcd` (10,
+  on by default) once the slab part has finished, every frame has its row in `pressure_tensor.txt` and the on-the-fly
+  σ has passed its check (`md.openmm_sigma.thin_frames`, `md.dcd.thin`: the file is rewritten beside itself and then
+  replaces it). The rows stay, so the analysis is unchanged afterwards; `slab_frames_thinned.json` records it, and the
+  rerun no longer cuts rows past the last frame when that frame was thinned away. `--keep-frames` and
+  `--frame-keep-every 0` keep them all. `*.dcd` was already in the synced `.stglobalignore` (now with a comment), so
+  frames stay on the computer that ran them.
+- **σ** from the run's own 20-fs samples when they pass the check: as built; ENGINES.md says it is decided.
+- **Coulomb 1e-6 for LAMMPS cutoff runs** (`long_range.COULOMB_ACCURACY`; the check warns at 1e-5 with the +0.15 to
+  +0.25 mN/m it costs). OpenMM's PME tolerance stays 1e-5 (`OPENMM_EWALD_TOLERANCE`: at 1e-5 OpenMM already equals
+  LAMMPS at 1e-7 on pilot B's slab), so a folder asking LAMMPS for 1e-6 does not slow OpenMM down. The MD benchmark's
+  cutoff variants change with it: `MD_BENCH_VERSION` 3, so MD-BENCH-3 asks each machine whether to run it again.
+- **The engine per computer.** `engines.md_engine` is now "auto" (the shared default) and Settings > Engines > MD
+  engine writes `engines.machine_md_engine` for this computer only (merged entry by entry on save, like the other
+  per-machine tables). Automatic is OpenMM where OpenMM finds CUDA, HIP or OpenCL with a device, else LAMMPS
+  (`openmm_engine.usable_gpu`); `doctor` prints the engine and the reason, and `quantabench-cli settings --md-engine`
+  sets it for this computer or `--machine NAME`.
+- **The MacBook's LAMMPS** for QuantaBench is now its `qb-lammps` conda `lmp` (its own entry in the settings, set with
+  `quantabench-cli settings --engine-path lammps=...` on the MacBook), so SIM-1's supervisor no longer meets the PyPI wheel's exit −15 there.
+
 ## 2026-11-23: Update button and launchers on all three OSes; the installer design (DIST-1, branch `feat/dist-1-update-launchers`)
 - **The ask** (Brandon, 2026-11-23): installers and an Update button on every OS, plus his standing rule for his apps
   (an update button, a launcher that hides the terminal). PR 1 finishes the Update button and the launchers for

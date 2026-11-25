@@ -985,7 +985,12 @@ class SettingsDialog(QDialog):
     PROGRAM_FIELDS = (("xtb", "xtb", "xtb executable"), ("crest", "CREST", "crest executable"),
                       ("mopac", "MOPAC", "MOPAC executable"), ("psi4_python", "Psi4 Python", "Python with psi4"),
                       ("obabel", "Open Babel", "obabel executable (file formats QuantaBench does not read)"),
-                      ("lammps", "LAMMPS", "lmp executable (MD; the Windows installer's lmp.exe has the GPU package)"))
+                      ("lammps", "LAMMPS", "lmp executable (MD; the Windows installer's lmp.exe has the GPU package)"),
+                      ("openmm_python", "OpenMM Python", "Python with openmm (the qb-openmm environment of "
+                                                         "envs/openmm.yml: QuantaBench's second MD engine)"))
+    #: (label, engines.md_engine) of Engines > Molecular dynamics > MD engine (OPENMM-1)
+    MD_ENGINES = (("Automatic: OpenMM where this computer has a usable GPU, else LAMMPS", "auto"),
+                  ("LAMMPS (the reference engine)", "lammps"), ("OpenMM (fast on GPUs, reduced precision)", "openmm"))
     #: (label, engines.crest_wsl_scratch) of Engines > Runs > CREST scratch through WSL (chem.wsl_scratch.MODES)
     CREST_WSL_SCRATCH = (("Automatic: /dev/shm if it has room, else WSL's disk", "auto"),
                          ("WSL's memory (/dev/shm)", "shm"), ("WSL's own disk", "disk"),
@@ -1080,6 +1085,30 @@ class SettingsDialog(QDialog):
             "through /mnt/c, as before (slow, heavy disk writes). Native CREST (Linux, macOS) is not affected.")
         rf.addRow("CREST scratch through WSL", self.crest_wsl_scratch)
         lay.addWidget(run)
+
+        md = QGroupBox("Molecular dynamics")
+        mf = QFormLayout(md)
+        self.md_engine = QComboBox()
+        self.md_engine.setObjectName("md_engine")
+        for label, key in self.MD_ENGINES:
+            self.md_engine.addItem(label, key)
+        self._md_engine_was = self.s.md_engine_for()
+        self.md_engine.setCurrentIndex(max(0, self.md_engine.findData(self._md_engine_was)))
+        from ..md.liquid import ENGINE_NOTE
+
+        self.md_engine.setToolTip("The engine new liquid-slab folders are written for on this computer (quantabench-cli "
+                                  "md liquid-slab; md run --engine switches a folder that has not started). Saved for "
+                                  f"{machine} only. " + ENGINE_NOTE)
+        mf.addRow("MD engine", self.md_engine)
+        where = QLabel(f"Saved for <code>{machine}</code> only.")
+        where.setStyleSheet("color: gray;")
+        mf.addRow(where)
+        note = QLabel(ENGINE_NOTE)
+        note.setObjectName("md_engine_note")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray;")
+        mf.addRow(note)
+        lay.addWidget(md)
         lay.addStretch(1)
         return w
 
@@ -1105,16 +1134,25 @@ class SettingsDialog(QDialog):
                     rows.append((name, external.find_program(name, refresh=True), ""))
             py = typed.get("psi4_python") or external.find_python_with("psi4", "psi4_python") or ""
             version = external.python_module_version(py, "psi4") if py else None
-            return rows, py, version
+            from ..md import openmm_engine as OE
+
+            omm = OE.probe_platforms(typed.get("openmm_python") or None)
+            return rows, py, version, omm
 
         def done(result):
             if self._closed:
                 return                    # the dialog was closed while detection ran: drop the result
-            rows, py, version = result
+            rows, py, version, omm = result
             lines = [f"{n}: " + (f"{i.version or 'version ?'} at {i.path} ({i.source})" if i
                                  else (why or "not found")) for n, i, why in rows]
             lines.append("Psi4: " + (f"{version} via {py}" if version else
                                      (f"{py} cannot import psi4" if py else "not found")))
+            if omm.get("error"):
+                lines.append(f"OpenMM: {omm['error']}")
+            else:
+                plats = ", ".join(f"{p['name']} ({'/'.join(p['precisions'])})" for p in omm.get("platforms", [])
+                                  if p.get("precisions") and p["name"] != "Reference")
+                lines.append(f"OpenMM: {omm.get('version')} via {omm.get('python')}: {plats}")
             self.program_report.setPlainText("\n".join(lines))
 
         def failed(msg):
@@ -1280,4 +1318,8 @@ class SettingsDialog(QDialog):
         e.qm_memory_gb = self.qm_memory.value()
         e.timeout_s = self.ext_timeout.value()
         e.crest_wsl_scratch = self.crest_wsl_scratch.currentData() or "auto"
+        chosen = self.md_engine.currentData() or "auto"
+        if chosen != self._md_engine_was:                  # this computer only (Brandon, 2026-11-24)
+            s.set_md_engine_for(chosen)
+            s.stamp_machine(None, ["engines.machine_md_engine"])
         return s

@@ -258,6 +258,129 @@ def choose_accelerator(run: sim.Run, info, requested: str | None) -> tuple[str, 
     return req, "as asked"
 
 
+# ------------------------------------------------------------------------------------------- OpenMM (OPENMM-1)
+class OpenMMInfo:
+    """The OpenMM environment a run uses: its Python, where it was found, and what ``describe_platforms`` saw."""
+
+    def __init__(self, path: str, source: str, desc: dict):
+        self.path, self.source, self.desc = path, source, desc
+        self.version = str(desc.get("version", ""))
+
+    def precisions(self, platform: str) -> list[str]:
+        for p in self.desc.get("platforms", []):
+            if p["name"].lower() == platform.lower():
+                return list(p.get("precisions") or [])
+        return []
+
+
+def find_openmm() -> tuple[OpenMMInfo | None, str]:
+    """(OpenMMInfo, why not): the OpenMM Python (``md.openmm_engine.find_openmm_python``) and its platforms."""
+    from . import openmm_engine as OE
+
+    py, how = OE.find_openmm_python()
+    if py is None:
+        return None, how
+    desc = OE.probe_platforms(py)
+    if desc.get("error"):
+        return None, desc["error"]
+    return OpenMMInfo(py, how, desc), ""
+
+
+OPENMM_PLATFORMS = ("CUDA", "HIP", "OpenCL", "CPU", "Reference")
+
+
+def choose_openmm_platform(folder: Path, info: OpenMMInfo, requested: str | None) -> tuple[str, str]:
+    """("Platform:precision", why) for an OpenMM segment. ``requested`` (``--variant``): auto, gpu, cpu, or a platform
+    name with an optional precision ("opencl", "opencl-mixed", "cuda-single"); auto takes the folder's
+    ``openmm_platform``/``openmm_precision`` settings, else the fastest GPU platform at mixed precision where it has
+    it (single on Apple GPUs), else the CPU."""
+    from . import openmm_engine as OE
+
+    cfg = (sim.read_json(Path(folder) / "liquid_setup.json") or {}).get("config") or {}
+    req = (requested or "").strip().lower() or "auto"
+    plat, prec = "", ""
+    if req == "auto":
+        plat = str(cfg.get("openmm_platform") or "auto")
+        prec = str(cfg.get("openmm_precision") or "auto")
+        plat = "" if plat.lower() == "auto" else plat
+        prec = "" if prec.lower() == "auto" else prec
+    elif req == "gpu":
+        plat = next((p for p in ("CUDA", "HIP", "OpenCL") if info.precisions(p)), "")
+        if not plat:
+            raise sim.RunError("gpu: OpenMM sees no usable GPU platform here (quantabench-cli doctor)")
+    else:
+        name, _, prec = req.partition("-")
+        plat = next((p for p in OPENMM_PLATFORMS if p.lower() == name), "")
+        if not plat:
+            raise sim.RunError(f"variant {requested!r}: auto, gpu, cpu, or an OpenMM platform "
+                               f"({', '.join(p.lower() for p in OPENMM_PLATFORMS)}) with an optional -single, "
+                               "-mixed or -double")
+    if not plat:
+        plat, best_prec = OE.best_platform(info.desc)
+        why = "the fastest platform OpenMM has here"
+        if plat in ("CPU", "Reference"):
+            why += ("; no GPU platform, so OpenMM runs on the CPU, much slower than LAMMPS there (md run --engine "
+                    "lammps before the run starts)")
+    else:
+        best_prec = ""
+        why = "as asked"
+    usable = info.precisions(plat)
+    if not usable:
+        raise sim.RunError(f"{plat}: OpenMM cannot use it here (quantabench-cli doctor lists its platforms)")
+    if plat in ("CPU", "Reference"):
+        return f"{plat}:{usable[0]}", why
+    prec = prec or best_prec or ("mixed" if "mixed" in usable else usable[0])
+    if prec not in usable:
+        raise sim.RunError(f"{plat} has no {prec} precision here ({', '.join(usable)}"
+                           + ("; Apple GPUs have no FP64" if prec in ("mixed", "double") else "") + ")")
+    return f"{plat}:{prec}", why
+
+
+def openmm_build_record(info: OpenMMInfo, accel: str) -> dict:
+    plat, _, prec = accel.partition(":")
+    devices = next((p.get("devices") for p in info.desc.get("platforms", []) if p["name"] == plat), []) or []
+    return {"engine": "openmm", "version": info.version, "path": info.path, "source": info.source,
+            "platform": plat, "precision": prec, "device": ", ".join(devices)}
+
+
+def openmm_command(info: OpenMMInfo, part: str, log_name: str, accel: str, threads: int, checkpoint: str | None
+                   ) -> tuple[list[str], int, dict]:
+    """(command, CPU threads, environment) of an OpenMM segment (``md.openmm_run``). On macOS it runs under
+    ``caffeinate -i -s``, so the Mac does not sleep while it runs (on battery the lid still sends it to sleep)."""
+    from ..chem import external
+    from . import openmm_engine as OE
+
+    plat, _, prec = accel.partition(":")
+    n = max(1, int(threads))
+    cmd = [info.path, "-m", "quantabench.md.openmm_run", ".", "--part", part, "--log", log_name,
+           "--platform", plat, "--precision", prec or "auto", "--threads", str(n)]
+    if checkpoint:
+        cmd += ["--checkpoint", checkpoint]
+    if sys.platform == "darwin" and Path("/usr/bin/caffeinate").is_file():
+        cmd = ["/usr/bin/caffeinate", "-i", "-s", *cmd]
+    extra = {k: v for k, v in OE.openmm_env(info.path, n).items() if k in ("PYTHONPATH", "OPENMM_CPU_THREADS",
+                                                                         "PYTHONUNBUFFERED")}
+    return cmd, n, external.program_env(n, extra)
+
+
+def choose_openmm_checkpoint(folder: str | Path, run: sim.Run, part: sim.Part) -> sim.Checkpoint:
+    """Where the next OpenMM segment of ``part`` starts: the furthest of its state XML files (the pause one, the
+    periodic ones) within the part. They are portable (any machine, platform or OpenMM build reads them)."""
+    from . import openmm_run as OR
+
+    folder = Path(folder)
+    if not run.part_segments(part.name):
+        return sim.Checkpoint("start")
+    cands: list[tuple[int, int, sim.Checkpoint]] = []
+    for pref, name in ((1, OR.pause_file(part.name)), *((0, n) for n in OR.state_files(part.name))):
+        s = OR.xml_step(folder / name)
+        if s is not None and part.first_step <= s <= part.last_step:
+            cands.append((s, pref, sim.Checkpoint("xml", name, s)))
+    if not cands:
+        return sim.Checkpoint("start")
+    return max(cands, key=lambda c: (c[0], c[1]))[2]
+
+
 def engine_command(info, input_name: str, accelerator: str, threads: int, log_name: str | None
                    ) -> tuple[list[str], int, str]:
     """(command, CPU threads, short label). ``log_name`` None: the input opens its own log."""
@@ -411,15 +534,25 @@ class Supervisor:
                                    "quantabench-cli md resume")
             if clear_stop(folder):
                 self.log("Removed a STOP file left from before.")
-            info, why = find_engine(self.lammps_path)
-            if info is None:
-                raise sim.RunError(f"LAMMPS: {why}")
-            build = build_record(info)
-            accel, why_accel = choose_accelerator(run, info, self.variant)
-            threads = int(self.threads or self._default_threads())
+            if run.engine == "openmm":
+                info, why = find_openmm()
+                if info is None:
+                    raise sim.RunError(f"OpenMM: {why}")
+                accel, why_accel = choose_openmm_platform(folder, info, self.variant)
+                build = openmm_build_record(info, accel)
+                threads = int(self.threads or (self._default_threads() if accel.startswith("CPU") else 1))
+                what = f"OpenMM {info.version} ({info.path}), {accel} ({why_accel})"
+            else:
+                info, why = find_engine(self.lammps_path)
+                if info is None:
+                    raise sim.RunError(f"LAMMPS: {why}")
+                build = build_record(info)
+                accel, why_accel = choose_accelerator(run, info, self.variant)
+                threads = int(self.threads or self._default_threads())
+                what = f"LAMMPS {info.version} ({info.path}), {accel} ({why_accel})"
             level = self._priority_level()
-            self.log(f"Run {run.name or folder.name} ({run.template}) on {self.machine}: LAMMPS {info.version} "
-                     f"({info.path}), {accel} ({why_accel}), {threads} threads, priority {level}")
+            self.log(f"Run {run.name or folder.name} ({run.template}) on {self.machine}: {what}, {threads} threads, "
+                     f"priority {level}")
             from .. import priority as prio_mod
 
             with prio_mod.children_at(level):
@@ -471,7 +604,9 @@ class Supervisor:
 
         folder = self.folder
         n = len(run.segments) + 1
-        ckpt = choose_checkpoint(folder, run, part, self.machine, build)
+        openmm = run.engine == "openmm"
+        ckpt = (choose_openmm_checkpoint(folder, run, part) if openmm
+                else choose_checkpoint(folder, run, part, self.machine, build))
         if ckpt.kind == "start":
             input_name = part.input
             log_name = part.log
@@ -482,13 +617,20 @@ class Supervisor:
             if any(cut.values()):
                 self.log(f"Part {part.name}: outputs cut at step {ckpt.step:,} before resuming ("
                          + ", ".join(f"{k} -{v}" for k, v in cut.items() if v) + ")")
-            input_name = self._write_segment_input(run, part, ckpt, n)
+            input_name = part.input if openmm else self._write_segment_input(run, part, ckpt, n)
             log_name = f"log.{part.name}.seg{n}"
-        has_log = _input_has_log(folder / input_name)
-        cmd, used_threads, label = engine_command(info, input_name, accel, threads, None if has_log else log_name)
+        env = None
         disp = run.protocol.dispersion
+        if openmm:
+            cmd, used_threads, env = openmm_command(info, part.name, log_name, accel, threads,
+                                                    ckpt.file if ckpt.kind != "start" else None)
+            variant = f"openmm-{accel.lower().replace(':', '-')}"
+        else:
+            has_log = _input_has_log(folder / input_name)
+            cmd, used_threads, label = engine_command(info, input_name, accel, threads, None if has_log else log_name)
+            variant = f"{accel}-{disp}" if disp and accel != "none" else accel
         seg = sim.Segment(n=n, part=part.name, machine=self.machine, platform=sys.platform, build=build,
-                          variant=f"{accel}-{disp}" if disp and accel != "none" else accel, threads=used_threads,
+                          variant=variant, threads=used_threads,
                           command=[Path(cmd[0]).name, *cmd[1:]], input=input_name, log=log_name,
                           screen=f"screen.{part.name}.seg{n}.txt", start=ckpt.__dict__, started=sim.now_iso(),
                           first_step=None)
@@ -527,7 +669,7 @@ class Supervisor:
 
         returncode, error = None, ""
         try:
-            res = external.run_program(cmd, folder, threads=used_threads, log_name=seg.screen,
+            res = external.run_program(cmd, folder, threads=used_threads, env=env, log_name=seg.screen,
                                        should_stop=should_stop, check=False, timeout=ENGINE_TIMEOUT_S, poll_s=0.25)
             returncode = res.returncode
         except Cancelled:
@@ -560,7 +702,11 @@ class Supervisor:
         if seg.status == "running":
             if state.paused_step is not None and returncode == 0:
                 seg.status = "paused"
-                if part.resume != "rerun":
+                if openmm:
+                    from . import openmm_run as OR
+
+                    seg.end = {"kind": "xml", "file": OR.pause_file(part.name), "step": state.paused_step}
+                elif part.resume != "rerun":
                     seg.end = {"kind": "restart", "file": part.pause_restart, "data": part.pause_data,
                                "step": state.paused_step}
             elif part.done_tag and state.has_tag(part.done_tag) and returncode == 0:
@@ -568,7 +714,7 @@ class Supervisor:
             else:
                 seg.status = "failed"
                 errs = state.errors or T.summarize_log(folder / seg.screen).errors
-                error = (errs[-1] if errs else f"LAMMPS exited with code {returncode}"
+                error = (errs[-1] if errs else f"{'OpenMM' if openmm else 'LAMMPS'} exited with code {returncode}"
                          + ("" if returncode else f" before {part.done_tag or 'the end of its input'}"))
         seg.error = error
         if seg.status in ("paused", "stopped"):
@@ -631,7 +777,8 @@ def _engine_pid(exe: str) -> int | None:
 
 # ------------------------------------------------------------------------------------------- detached start
 def supervisor_command(folder: str | Path, *, resume: bool = False, variant: str | None = None,
-                       threads: int | None = None, lammps: str | None = None) -> list[str]:
+                       threads: int | None = None, lammps: str | None = None, priority: str | None = None
+                       ) -> list[str]:
     cmd = [sys.executable, "-m", "quantabench", "md", "resume" if resume else "run", str(Path(folder).resolve())]
     if variant:
         cmd += ["--variant", variant]
@@ -639,16 +786,19 @@ def supervisor_command(folder: str | Path, *, resume: bool = False, variant: str
         cmd += ["--threads", str(int(threads))]
     if lammps:
         cmd += ["--lammps", lammps]
+    if priority:
+        cmd += ["--priority", priority]
     return cmd
 
 
 def start_detached(folder: str | Path, *, resume: bool = False, variant: str | None = None,
-                   threads: int | None = None, lammps: str | None = None) -> subprocess.Popen:
+                   threads: int | None = None, lammps: str | None = None, priority: str | None = None
+                   ) -> subprocess.Popen:
     """Start the supervisor as a process of its own that outlives the caller (the GUI, a terminal): no console
     window, its own process group, out of the caller's job object where Windows allows it; its output is appended to
     ``supervisor.log`` in the folder."""
     folder = Path(folder).resolve()
-    cmd = supervisor_command(folder, resume=resume, variant=variant, threads=threads, lammps=lammps)
+    cmd = supervisor_command(folder, resume=resume, variant=variant, threads=threads, lammps=lammps, priority=priority)
     out = open(folder / sim.SUPERVISOR_LOG, "a", encoding="utf-8")  # noqa: SIM115 - handed to the child
     env = {**os.environ, "PYTHONUNBUFFERED": "1", DETACHED_ENV: "1"}   # its own lines go to the log once
     kwargs: dict = {"cwd": str(folder), "stdin": subprocess.DEVNULL, "stdout": out, "stderr": subprocess.STDOUT,

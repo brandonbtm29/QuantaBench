@@ -2,6 +2,44 @@
 
 ## Unreleased (after 0.3.0)
 
+### OpenMM as a second MD engine, with the Apple GPU (OPENMM-1, 2026-11-23)
+- **The MD engine is a choice:** LAMMPS (the reference) or OpenMM, which runs much faster on GPUs at reduced
+  arithmetic precision (single on Apple GPUs, mixed on most others); σ itself is computed afterwards in double
+  precision. `md liquid-slab --engine openmm`, `md run --engine openmm` (a folder that has not started), Settings >
+  Engines > **MD engine** (with the OpenMM Python path), and Simulate > Run MD folder... asks for a liquid-slab folder
+  that has not started; each says what the choice means.
+- **`envs/openmm.yml`** (the `qb-openmm` conda environment); `doctor`, `machines` and Settings > Engines > Detect show
+  OpenMM's platforms (CUDA, OpenCL, HIP, CPU) and the precisions each allows (Apple: single only).
+- **The same folder, the same model:** OpenMM builds the folder's LAMMPS model (harmonic, opls, fourier, cvff;
+  1-4 scaling; Lorentz-Berthelot or geometric mixing; PME; an LJ cutoff with the tail, or LJ-PME for full long-range
+  dispersion), checked term by term against LAMMPS. The run supervisor runs it like a LAMMPS run (segments, pause,
+  resume from portable state XML, progress, the Jobs dock) and it writes the same files, plus `slab.dcd` and
+  on-the-fly σ samples (`sigma_kb.txt`). Pilot B's slab runs at 84 ns/day on the M3 Max's GPU and 137 on the
+  workstation's RX 9060 XT (LAMMPS' GPU package: 21).
+- **`md surface-tension` on an OpenMM run** first evaluates its saved frames in double precision (`--rerun auto`:
+  LAMMPS where found, else OpenMM's CPU platform; `--threads`), checks the on-the-fly samples against them, and
+  reports σ with the error bar of the series that passed (the other beside it), plus an optional test-area estimate.
+- `machines --bench md --md-variants default,openmm` also times OpenMM (`openmm-gpu-cutoff16`; any
+  `openmm-gpu-<dispersion>` or `openmm-cpu-<dispersion>`); `md estimate` and the long-range
+  recommendation use it (on OpenMM, full long-range dispersion runs on the GPU as LJ-PME).
+- Fixed: `md run --detach --priority P` started the supervisor at the settings' priority instead of P.
+- Validated on pilot B (C6F14, 16 Å) on the MacBook's GPU in single precision: σ 11.09 mN/m with the tail against
+  B's 11.71 ± 0.30 (−0.65 ± 0.61), bulk and plateau densities within 0.3 %; the GPU's on-the-fly σ minus a
+  double-precision rerun of the same frames: −0.10 ± 0.09 mN/m (`Runs\openmm-validation-2026-11-23`).
+- Decided (Brandon, 2026-11-24):
+  - **The MD engine is set per computer.** Settings > Engines > MD engine saves this computer's choice only
+    (`engines.machine_md_engine`); the default, **Automatic**, is OpenMM where OpenMM finds a usable GPU (CUDA, HIP
+    or OpenCL), else LAMMPS. `doctor` prints which one this computer uses and why.
+  - **σ of an OpenMM run** is the run's own 20-fs on-the-fly samples when they pass the check against the
+    double-precision rerun of the frames, else the rerun's.
+  - **Frames are thinned after that check:** once the slab part has finished, every frame is rerun and the check has
+    passed, `md surface-tension` keeps every 10th frame of `slab.dcd` (`frame_keep_every`, `--frame-keep-every`;
+    `--keep-frames` keeps all) and deletes the rest; never before. `*.dcd` stays out of SyncThing.
+  - **Coulomb 1e-6 for LAMMPS cutoff runs** (was 1e-5, pilot B's, which put σ +0.25 mN/m high on pilot B's system).
+    `md liquid-slab`'s `cutoffN` variants and the MD benchmark's cutoff variants use it (MD benchmark version 3, so
+    each machine is asked whether to run it again, MD-BENCH-3); OpenMM's PME stays at 1e-5, which already matches
+    LAMMPS at 1e-7 there.
+
 ### Update button and terminal-free launchers on all three OSes (DIST-1, 2026-11-23)
 - **Help > Check for updates... shows what is new**: the CHANGELOG.md sections the new commits bring, rendered, then
   the commits, why updates follow main (not releases) and how far main is past the newest release.

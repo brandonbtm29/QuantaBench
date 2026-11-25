@@ -22,7 +22,8 @@ data model, its engines and force fields, and the order to build it in.
   time windows, a move from CPU to GPU, or a crash end a segment, and the next one continues from the restart file.
   The pilots needed this by hand.
 - **LAMMPS first, OpenMM second.** LAMMPS runs every setup QuantaBench writes, on AMD, Apple and NVIDIA. OpenMM
-  comes in v2 for ML-potential MD (OpenMM-ML) and the OpenFF-native path.
+  comes in v2 for ML-potential MD (OpenMM-ML) and the OpenFF-native path. Since OPENMM-1 (2026-11-23) OpenMM also runs
+  liquid slabs as a second engine, much faster on GPUs at reduced precision; LAMMPS stays the reference.
 - **Force fields are composed, like physics in COMSOL** (Brandon, 2026-11-22). Each component gets a force-field
   node with a resolution, and global "physics" nodes set the LJ cutoff (the screening length), long-range dispersion
   and electrostatics. Compatibility is checked, defaults are backed by benchmarks, and every parameter keeps its
@@ -200,7 +201,7 @@ Components
   C6F14 x 489            [OPLS-AA + Watkins-Jorgensen ▾]  [all-atom ▾]  charges [OPLS-AA ▾]  ✓ 20/20 typed
 Physics
   Van der Waals          LJ 12-6 · cutoff (screening length) [16 Å]  long range [tail correction, added to σ ▾]
-  Electrostatics         PPPM 1e-5
+  Electrostatics         PPPM 1e-6
   Combining, 1-4         geometric · 0.5 / 0.5 (from OPLS-AA)
 Checks                   ✓ one combining rule  ✓ real units  ✓ the cutoff has its tail  ✓ GPU styles exist
 Notes                    ⚠ GAFF2 gave 1.836 g/cm³ for C6F14 (measured ~1.68): for fluorocarbons only with a refit
@@ -229,7 +230,7 @@ Advanced    in.bulk / in.slab as written (read-only in v1; saved as a template o
 **4. Engine and resources.**
 
 ```
-Engine    (•) LAMMPS 4 Jul 2026 (OPENMP, GPU/OpenCL)       ( ) OpenMM (v2)
+Engine    (•) LAMMPS 4 Jul 2026 (OPENMP, GPU/OpenCL)       ( ) OpenMM 8.6 (OpenCL; faster on GPUs, reduced precision)
 Variant   [gpu-cutoff16: pair style on the GPU, PPPM on 6 threads ▾]   cpu-cutoff16, 4 threads
 Run on    [This computer ▾]   21 ns/day (benchmark, verified) → 13 ns in 15 h
           (v2: Auto and the workers, each with its estimate and its time window)
@@ -614,7 +615,7 @@ Parameterization: PFOA on graphite in water                                     
 │  └─ Na⁺ x 1              [Joung-Cheatham (TIP3P set) ▾]
 ├─ Physics
 │  ├─ Van der Waals        LJ 12-6 · cutoff (screening length) [16 Å] · long range [tail correction ▾]
-│  ├─ Electrostatics       PPPM 1e-5 · slab correction [auto]
+│  ├─ Electrostatics       PPPM 1e-6 · slab correction [auto]
 │  └─ Combining rule       [Lorentz-Berthelot ▾] · cross terms graphite-water [table...]
 └─ Checks
    ✓ one combining rule and one 1-4 scaling for the molecules
@@ -900,6 +901,11 @@ editable inputs.
    stays Freire 2006 (12.33) with no offsets; the OPLS-AA shortfall is documented, not corrected.
 8. **OpenMM's place:** in v2 next to the workers, or after the workers and sweeps? Is AIMNet2 MD (a PFAS molecule
    in water or on graphite) worth a v2 spike? (Open; PR 1's Run and Segment model has an `engine` field for it.)
+   **Answered (Brandon, 2026-11-23):** keep both, LAMMPS and OpenMM: "we can just add a note as a part of the
+   selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs much faster at reduced accuracy."
+   OPENMM-1 adds OpenMM as a second engine for liquid slabs now (the same folder, files and supervisor; the engine is
+   chosen when the folder is written or before it starts, with that note). LAMMPS stays the reference engine;
+   OpenMM-ML (AIMNet2 MD) is still v2.
 9. **Steered MD:** move to Colvars (needs the COLVARS package in every machine's LAMMPS), or keep `fix smd` for the
    rigid pull and use Colvars only for the flexible one? **PR 1 keeps `fix smd` for the rigid pull** (section 10's
    recommendation), as a "rerun" part.
@@ -912,6 +918,9 @@ editable inputs.
     (Possible once PR 1 is merged: `md liquid-slab` per liquid, then `md run --detach` one at a time.)
 12. **The Mac's GPU:** try a LAMMPS OpenCL build (FORK-8) or OpenMM Metal (FORK-9) first, or neither for now?
     (Open; PR 1 runs the Mac's conda-forge LAMMPS on the CPU.)
+    **Answered (Brandon, 2026-11-23):** OpenMM on the Apple GPU ("I approve writing the code for Apple GPU for
+    OpenMM"). It runs through Apple's OpenCL in single precision (no FP64), and σ is computed afterwards in double
+    precision (OPENMM-1). The LAMMPS OpenCL build (FORK-8) is deferred: without FP64 it could only be single precision.
 
 ## 15. Setup templates and pre-flight checks
 

@@ -30,8 +30,27 @@ and the work items are in [dev/BACKLOG.md](dev/BACKLOG.md) (`PLAT-*`, `DIST-*`, 
 | Psi4 1.9.1 (+ PCMSolver, dftd3/4) | 🟡 conda-forge win-64 | ✅ | ✅ conda-forge osx-arm64 |
 | PySCF (future: NMR, GPU DFT) | 🔴 no native support ([5](#sources)): WSL or ↗ | 🟡 | 🟡 |
 | LAMMPS Python wheel (CPU) | ✅ but intermittently non-deterministic (MD-1) | ✅ | 🟡 needs PyPI's `mpich` (`lammps[mpi]`, in the `md` extra since 2026-11-06) |
-| LAMMPS GPU | 🟡 OpenCL `lmp.exe` (~9x over 12 cores in earlier tests) | 🟡 | 🟡 OpenCL build, mixed precision → FORK-8 |
-| OpenMM (0.4 MD) | 🟡 OpenCL | 🟡 CUDA/OpenCL | 🟡 OpenCL; Metal plugin is beta ([6](#sources)) |
+| LAMMPS GPU | ✅ OpenCL `lmp.exe`, pair style on the GPU (pilot B's slab 21.0 ns/day) | 🟡 | 🔴 not built: LAMMPS' mixed and double precision need device FP64, which Apple GPUs lack; single only, little gain (FORK-8, deferred) |
+| OpenMM MD engine (OPENMM-1, `envs/openmm.yml`) | ✅ OpenCL single/mixed/double on the RX 9060 XT: pilot B's slab 137 ns/day mixed | 🟡 CUDA/OpenCL/HIP | ✅ OpenCL, single precision only: pilot B's slab 84 ns/day; σ computed afterwards in double precision. Upstream Metal platform pending ([6](#sources)) |
+
+### MD on the GPUs (OPENMM-1, 2026-11-23)
+
+Pilot B's C6F14 slab (OPLS-AA, 9,780 atoms, 40.3 x 40.3 x 200.9 Å, 16 Å cutoff, PME, 1 fs), ns/day:
+
+| | MacBook M3 Max (30-core GPU) | Workstation RX 9060 XT (gfx1200) |
+|---|---:|---:|
+| LAMMPS, CPU (OpenMP) | not timed (its GAFF2 pppm/disp slab: 9-10 on 8-10 threads) | 3.9 (4 threads; pilot B's first 3 ns) |
+| LAMMPS, GPU package (pair style on the GPU, PPPM and bonded on 6 CPU threads) | not built (FORK-8) | 21.0 |
+| OpenMM, OpenCL single | 84 | 135 |
+| OpenMM, OpenCL mixed | fails: no FP64 | 137 |
+| OpenMM + on-the-fly σ samples every 20 fs (the default) | 67 (single; the validation run's slab: 67.8) | 90 (mixed), 97 (single) |
+| OpenMM LJ-PME 12 Å (full long-range dispersion; LAMMPS' pppm/disp is CPU-only) | 79 (Lorentz-Berthelot, MAC-GPU) | 121 (mixed) |
+
+OpenMM keeps the CPU almost free (~30 % of one core). The Mac's numbers were taken beside a LAMMPS run on 8 of its
+CPU threads; the workstation's beside A-fine and CREST on its CPU, below-normal priority. Precision: Apple GPUs have
+no FP64, so OpenMM runs there in single precision; the pressure tensor such a GPU gives by finite differences is not
+precise enough for σ (one sample 19 mN/m off), so σ is computed afterwards in double precision (docs/ENGINES.md,
+"OpenMM, the second MD engine"). Validation against pilot B (σ 11.09 vs 11.71 ± 0.30 mN/m with the tail, densities within 0.3 %, the GPU's single precision unbiased against a double-precision rerun): `Runs\openmm-validation-2026-11-23\`.
 
 The conda environments in `envs/` solve for linux-64, win-64 and osx-arm64; CREST is the only program
 with no Windows build. (An earlier note said xtb 6.7.1 and CREST were missing for osx-arm64. That was
@@ -154,8 +173,8 @@ Policy:
 | **FORK-5** ✅ (macOS, CI) | conda-forge's osx-arm64 CREST links Apple's Accelerate and cannot optimize 19+ atoms; CREST has no Windows build | The fork's `qb/macos` workflow builds it with OpenBLAS as a relocatable folder (release needs Brandon); Windows stays on WSL (`qb/windows` has a native build) | CREST on the Mac | the fork's smoke cases match Linux to 1e-10 Eh; the MacBook's PFAS run modes match Linux 3.0.2 |
 | **FORK-6** | PySCF has no native Windows support | No fork: route PySCF jobs (NMR, later GPU DFT) to the Mac or WSL (M2/M3) | NMR on any GUI machine | — |
 | **FORK-7** | pyvistaqt 0.13's framebuffer widget crashes in `initializeGL` with the AMD driver | Upstream issue with a minimal repro; keep the `<0.13` pin; test 0.13 on macOS | Newer pyvistaqt | Repro filed; pin re-checked each release |
-| **FORK-8** | LAMMPS: the Windows PyPI wheel is non-deterministic (MD-1), and macOS has no GPU build | Compare with `lmp.exe` from the Windows installer. `scripts/build_lammps_macos.sh` for an OpenCL GPU-package build in mixed precision (Apple GPUs have no fp64; mixed mode keeps double accumulation) | Reliable SMD on Windows; LAMMPS GPU on the Mac | Same SMD input gives identical results 20/20; Mac GPU vs CPU speedup measured |
-| **FORK-9** | OpenMM on the Mac's GPU | Evaluate the `openmm-metal` plugin (beta, built from source) against OpenCL for the 0.4 MD bridge | MD on the Mac GPU | Benchmark and a go/no-go note |
+| **FORK-8** (deferred) | LAMMPS: the Windows PyPI wheel is non-deterministic (MD-1), and macOS has no GPU build | Compare with `lmp.exe` from the Windows installer. A Mac OpenCL GPU-package build is deferred: LAMMPS' mixed and double precision accumulate in double on the device and refuse a GPU without FP64 (Apple's), so it would be single precision, with only the pair style on the GPU (~2x the Mac's CPU, estimated; MAC-GPU report 2026-11-23). OpenMM covers the Mac's GPU (FORK-9) | Reliable SMD on Windows | Same SMD input gives identical results 20/20 |
+| **FORK-9** ✅ → OPENMM-1 | OpenMM on the Mac's GPU, re-scoped to "OpenMM as a second MD engine" | conda-forge OpenMM 8.6 (no build: OpenCL on Apple, OpenCL/CUDA/HIP elsewhere), `md.openmm_engine`/`md.openmm_run`, σ in double precision afterwards. The `openmm-metal` plugin is moot: OpenMM's own Metal platform is an open upstream PR, single precision, about OpenCL's speed ([6](#sources)) | MD on the Mac GPU and faster MD on the workstation | Pilot B reproduced on the Mac's GPU (docs/ENGINES.md) |
 
 Results so far (2026-11-05):
 - **FORK-1:** [brandonbtm29/dxtb](https://github.com/brandonbtm29/dxtb), branch `qb/tad-mctc-0.11`, tag
@@ -225,7 +244,7 @@ Results so far (2026-11-05):
 3. **P3 (0.5):**
    - DIST-3 GUI routing (with UI-5) and DIST-4 stage routing
    - installers and launchers on all three OSes
-   - FORK-5, FORK-8, FORK-9
+   - FORK-5; FORK-8 deferred (no FP64 on Apple GPUs); FORK-9 done as OPENMM-1
 
 ## Sources
 
@@ -234,7 +253,7 @@ Results so far (2026-11-05):
 3. conda-forge xtb files (6.7.1 for linux-64, win-64, osx-64, osx-arm64): https://anaconda.org/conda-forge/xtb/files
 4. conda-forge crest files (3.0.2 for linux-64, osx-64, osx-arm64): https://anaconda.org/conda-forge/crest/files
 5. PySCF install guide ("not supported natively on Windows"): https://pyscf.org/user/install.html
-6. openmm-metal (beta Metal platform for OpenMM): https://github.com/bdenhollander/openmm-metal
+6. openmm-metal (beta Metal platform for OpenMM): https://github.com/bdenhollander/openmm-metal ; OpenMM's own Metal platform, PR #5488 (Oct 2026, open): https://github.com/openmm/openmm/pull/5488
 7. Ray installation ("multi-node Ray clusters [on Windows] experimental and untested"): https://docs.ray.io/en/latest/ray-overview/installation.html
 8. tad-libcint on PyPI (0.4.0, Oct 20, 2026; Windows, Linux, macOS arm64 wheels): https://pypi.org/project/tad-libcint/
 9. dxtb on PyPI (0.4.0; libcint interface Linux-only): https://pypi.org/project/dxtb

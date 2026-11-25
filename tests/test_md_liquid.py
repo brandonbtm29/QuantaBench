@@ -223,7 +223,7 @@ def test_cutoff_variant_has_tail_in_bulk_only(c6f14, tmp_path):
     assert "lj/cut/coul/long ${rc}" in bulk and "variable rc             index 16" in bulk
     assert "pair_modify     mix geometric tail yes" in bulk
     assert "tail yes" not in slab and "kspace_style    pppm ${kacc}" in slab and "pppm/disp" not in slab
-    assert "variable kacc           index 1e-05" in slab and "disp_h" not in slab     # B's Coulomb accuracy
+    assert "variable kacc           index 1e-06" in slab and "disp_h" not in slab     # 1e-5 (B's) until OPENMM-1
     readme = (tmp_path / "README.txt").read_text(encoding="utf-8")
     assert "-sf hybrid gpu omp -pk gpu 1 device_type generic pair/only on -pk omp 4 -in in.slab" in readme
     for text in (bulk, slab):                     # the guard against a GPU run without nonbonded forces
@@ -242,7 +242,7 @@ def test_long_range_config_resolution():
     e10 = L.LiquidSlabConfig(cutoff=10.0).resolved()
     assert e10.disp_gewald == pytest.approx(0.277) and e10.disp_spacing == pytest.approx(0.52 / 0.277)
     c = L.LiquidSlabConfig(dispersion="cutoff16").resolved()
-    assert (c.cutoff, c.kspace_accuracy, c.disp_gewald, c.disp_spacing) == (16.0, 1e-5, None, None)
+    assert (c.cutoff, c.kspace_accuracy, c.disp_gewald, c.disp_spacing) == (16.0, 1e-6, None, None)
     assert L.LiquidSlabConfig(dispersion="cutoff16", cutoff=16.0).resolved().cutoff == 16.0
     with pytest.raises(ValueError, match="disagree"):
         L.LiquidSlabConfig(dispersion="cutoff16", cutoff=14.0).resolved()
@@ -464,7 +464,8 @@ def test_read_lj_types_refuses_what_it_cannot_correct(tmp_path):
 def test_cli_liquid_slab_and_surface_tension(tmp_path):
     out = tmp_path / "hex"
     assert cli.main(["md", "liquid-slab", "--smiles", HEXANE, "--name", "hexane", "-o", str(out), "--lateral", "26",
-                     "--thickness", "20", "--packing", "lattice", "--dispersion", "cutoff12", "--sigma-ref", "17.9"]) == 0
+                     "--thickness", "20", "--packing", "lattice", "--dispersion", "cutoff12", "--sigma-ref", "17.9",
+                     "--engine", "lammps"]) == 0
     meta = json.loads((out / "liquid_setup.json").read_text(encoding="utf-8"))
     assert (out / "in.slab").is_file() and meta["config"]["reference_sigma"] == 17.9
     lr = meta["long_range"]          # an explicit choice wins; the recommendation (whatever this machine) differs
@@ -481,8 +482,10 @@ def test_cli_liquid_slab_and_surface_tension(tmp_path):
 def test_cli_long_range_options(tmp_path, capsys):
     """MD-LR: without a choice the recommendation for the stated machine is used and printed; explicit options win
     and both are shown; contradictory options are refused."""
+    # LAMMPS' recommendations: the default engine depends on this computer's GPU since 2026-11-24 (OpenMM where
+    # OpenMM has one)
     base = ["md", "liquid-slab", "--smiles", HEXANE, "--name", "hexane", "--lateral", "34", "--thickness", "16",
-            "--packing", "lattice"]
+            "--packing", "lattice", "--engine", "lammps"]
 
     def setup(name):
         return json.loads((tmp_path / name / "liquid_setup.json").read_text(encoding="utf-8"))
@@ -492,7 +495,7 @@ def test_cli_long_range_options(tmp_path, capsys):
     assert "Recommended for this setup: 16 Å LJ cutoff + tail correction on the GPU because" in out
     assert "Using it:" in out
     m = setup("gpu")
-    assert m["config"]["dispersion"] == "cutoff16" and m["config"]["kspace_accuracy"] == 1e-5
+    assert m["config"]["dispersion"] == "cutoff16" and m["config"]["kspace_accuracy"] == 1e-6
     assert m["long_range"]["chosen_by"] == "recommendation" and not m["long_range"]["differences"]
     readme = (tmp_path / "gpu" / "README.txt").read_text(encoding="utf-8")
     assert "LONG-RANGE SETTINGS" in readme and "Chosen (recommendation)" in readme and "provisional" in readme

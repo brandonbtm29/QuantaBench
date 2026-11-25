@@ -369,8 +369,8 @@ variants at 30 s) it took 207 s with the build.
     (MD-LR, `md.long_range`):
     - `ewald`: `lj/long/coul/long` 12 Å + `pppm/disp`, Coulomb 1e-6, dispersion G = 2.77 / rc and a mesh no coarser
       than 0.52 / G, computed from the box it runs in (the slab's, vacuum and all).
-    - `cutoff12`, `cutoff16`, `cutoff18`: `lj/cut/coul/long` + `pppm` 1e-5 (the bulk box with LAMMPS' tail
-      correction, the slab without).
+    - `cutoff12`, `cutoff16`, `cutoff18`: `lj/cut/coul/long` + `pppm` 1e-6 (1e-5 until 2026-11-24; the bulk box
+      with LAMMPS' tail correction, the slab without).
     - `cpu-*`: `-sf omp -pk omp N`, N = `--md-threads`, by default this machine's one-lane thread budget, at most
       its physical cores.
     - `gpu-*`: `-sf hybrid gpu omp -pk gpu 1 [device_type generic] pair/only on -pk omp N` (the pair style on the
@@ -427,11 +427,11 @@ variants at 30 s) it took 207 s with the build.
 - **Without LAMMPS** the benchmark is skipped with the reason (`md: not measured (LAMMPS not found (...))`).
   Nothing else in the profile changes.
 - **When a release changes the benchmark** (MD-BENCH-3). Each record carries the benchmark version it was measured
-  with (`bench_version`; `md.bench.MD_BENCH_VERSION`, 2 since MD-BENCH-2, with a line per version in
+  with (`bench_version`; `md.bench.MD_BENCH_VERSION`, 3 since OPENMM-1 (2 since MD-BENCH-2), with a line per version in
   `VERSION_CHANGES`). When this QuantaBench's version is newer than a machine's stored record, QuantaBench asks
   whether to run it again. It never re-runs it by itself:
   - `quantabench-cli machines` prints a note under that machine, for example `note: This computer's MD benchmark is
-    from benchmark version 1. This QuantaBench's is version 2: (what changed), so new numbers differ from the stored
+    from benchmark version 2. This QuantaBench's is version 3: (what changed), so new numbers differ from the stored
     ones. Run it again? quantabench-cli machines --bench md (a few minutes, best while the machine is otherwise
     idle). Nothing re-runs it on its own.` For another machine it names that machine (`... --bench md on mac-test`). `--json` has the same text per machine in
     `md_bench_rerun` ("" when the record is current).

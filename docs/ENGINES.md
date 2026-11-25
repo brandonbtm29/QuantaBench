@@ -1321,14 +1321,14 @@ recommendation is printed and written to README.txt and `liquid_setup.json` (`lo
 | `--long-range` | pair and kspace styles | σ | runs on |
 |---|---|---|---|
 | `ewald`: full long-range dispersion | `lj/long/coul/long long long rc` (rc 12 Å) + `pppm/disp`: Coulomb 1e-6; dispersion G = 2.77/rc and a mesh no coarser than 0.52/G, from the box (the slab-safe rule below) | the r⁻⁶ sum is complete: no tail correction, the slab keeps the bulk density (in 't Veld et al. 2007; Isele-Holder et al. 2012) | CPU (OPENMP, INTEL, OPT; LAMMPS has no GPU styles for it) |
-| `cutoff`: LJ cutoff + tail | `lj/cut/coul/long rc` (rc 16 Å) + `pppm 1e-5` | raw σ biased low (up to 20 % for alkanes at 12 Å, Ismail et al. 2007); the analysis adds the tail (below), which does not restore the slab's density | CPU or GPU package |
+| `cutoff`: LJ cutoff + tail | `lj/cut/coul/long rc` (rc 16 Å) + `pppm 1e-6` (1e-5 until 2026-11-24) | raw σ biased low (up to 20 % for alkanes at 12 Å, Ismail et al. 2007); the analysis adds the tail (below), which does not restore the slab's density | CPU or GPU package |
 
 | option | what | default |
 |---|---|---|
 | `--cutoff RC` | **LJ cutoff (screening length)**, Å (8-30): the real-space cutoff of the LJ and Coulomb terms; with `cutoff` the LJ ends there | `ewald` 12, `cutoff` 16 |
 | `--purpose` | what the recommendation aims at: `screen` (σ to a few %, the fastest on the machine) or `reference` (numerically converged, no tail approximation) | `screen` |
 | `--gpu` | can LAMMPS use a GPU on the machine that will run the folder? `auto`: this computer's (`lmp -h` lists the GPU package and a GPU, and the MD benchmark's CPU/GPU check, if run, passed) | `auto` |
-| `--coulomb-accuracy A` | PPPM's relative force accuracy | `ewald` 1e-6, `cutoff` 1e-5 |
+| `--coulomb-accuracy A` | PPPM's relative force accuracy | 1e-6 (`cutoff` used 1e-5 until 2026-11-24, below) |
 | `--disp-grid` | `ewald`'s dispersion k-space: `spacing` (the rule) or `accuracy` (LAMMPS picks G and the mesh) | `spacing` |
 | `--disp-gewald G`, `--disp-spacing H` | the rule's G (1/Å) and largest mesh spacing (Å) | 2.77/rc, 0.52/G |
 | `--disp-accuracy REAL KSPACE` | `force/disp/real`, `force/disp/kspace` (kcal/mol/Å) for `accuracy` | 1e-5 2e-5 |
@@ -1398,7 +1398,7 @@ Warnings (never blocking): a cutoff under 16 Å in a slab (pilot C at 12 Å: pla
 below Tsige & Grest; the tail restores σ to 11.12, not the density), a cutoff + tail for a reference value (a residual
 low bias of a few %: B's 11.71 against ≈ 12.06 for converged settings on A's frames; −5 % for hexane at 16 Å,
 Isele-Holder et al. 2012), pppm/disp looser than the converged settings, a mesh or G outside what the mesh check
-validated, Coulomb looser than 1e-5, a box too narrow for the cutoff. The user's choice always wins; when it differs,
+validated, Coulomb looser than 1e-6 (at 1e-5 σ is +0.15 to +0.25 mN/m high), a box too narrow for the cutoff. The user's choice always wins; when it differs,
 both are printed and recorded. The numbers live in one table, `md.long_range.PILOT_TABLE` (with each row's
 source), and are **provisional until the A-fine run** (pilot A with these settings, due 2026-11-24/25) gives its σ.
 Caveat: the CPU speeds compare 4 threads (16 Å) with 8 (pppm/disp); `machines --bench md` measures both on one machine,
@@ -1550,6 +1550,124 @@ last periodic restart file.
 keeps binary restart files and trajectory dumps on the machine that wrote them (they are of no use to another
 build), while logs, data files (`*.pause.data`, `bulk_final.data`), the pressure tensor, the profiles and `run.json`
 sync, so a run can be analyzed, and resumed from its data file, on another machine.
+
+## OpenMM, the second MD engine (`--engine openmm`; OPENMM-1)
+
+A liquid-slab folder runs on **LAMMPS** (the reference engine) or on **OpenMM**. OpenMM runs much faster on GPUs, at
+reduced arithmetic precision: single precision on Apple GPUs (they have no FP64; "mixed" fails there), mixed on most
+others (NVIDIA, AMD). σ itself is computed afterwards in double precision. LAMMPS stays the reference.
+
+```
+conda env create -f envs/openmm.yml                     # the qb-openmm environment: openmm and numpy only
+quantabench-cli doctor                                   # "OpenMM (MD engine)": its platforms and precisions
+quantabench-cli md liquid-slab --smiles ... -o DIR --engine openmm [--kb-every 20] [--frame-every 1000] [--ta-every 0]
+                                 [--frame-keep-every 10]
+quantabench-cli md run DIR [--variant auto|gpu|cpu|opencl|opencl-mixed|cuda|hip] [--detach]
+quantabench-cli md run DIR --engine openmm               # switch a folder that has not started
+quantabench-cli md surface-tension DIR [--rerun auto|lammps|openmm|openmm-reference|none] [--threads 4] [--keep-frames]
+```
+
+Settings > Engines > **MD engine** sets the default for new folders **on this computer** (`engines.machine_md_engine`,
+one entry per computer; Decided (Brandon, 2026-11-24)). **Automatic**, the default, is OpenMM where OpenMM finds a
+usable GPU platform here (CUDA, HIP or OpenCL: the Mac's GPU, the workstation's Radeon), else LAMMPS;
+`quantabench-cli doctor` prints which one and why ("MD engine for new folders"); `quantabench-cli settings
+--md-engine auto|lammps|openmm|default [--machine NAME]` sets it from the command line. `engines.md_engine` stays the
+shared default, "auto", for every computer without its own choice. **OpenMM Python** gives the environment's
+interpreter (blank: QuantaBench finds `qb-openmm` in the usual conda folders). Simulate > Run MD folder... asks which
+engine runs a liquid-slab folder that has not started, with the same note.
+
+**The same model.** `md.openmm_engine` builds the OpenMM `System` from the folder's own LAMMPS files (`system.data`,
+`ff.params`, the styles and 1-4 scaling in `liquid_setup.json`): harmonic bonds and angles (k = 2K), `opls`,
+`fourier` and `harmonic` dihedrals and `cvff` impropers as periodic torsions, `special_bonds 0 0 f`, Lorentz-Berthelot
+mixing natively and geometric mixing (and any explicit `pair_coeff i j`) through a `CustomNonbondedForce` table,
+Coulomb PME, the LJ cut at rc (with the homogeneous tail in the bulk NPT) or LJ-PME for full long-range dispersion
+(`ewald`; for geometric force fields a short-range table makes both halves geometric, as LAMMPS' pppm/disp). Anything
+it cannot translate is refused by name. `tests/test_md_openmm.py` compares every bonded term and the nonbonded total
+with LAMMPS `run 0` on the same minimized box, for OPLS-AA (geometric; `opls` dihedrals; `cvff` impropers of C6F6) and
+a GAFF2-like model (`fourier` dihedrals, Lorentz-Berthelot, Coulomb 1-4 × 1/1.2), with a cutoff, with the tail, and
+with LJ-PME: bonded terms agree to 1e-6, the nonbonded total within 2e-4 of its terms. On pilot B's slab
+(9,780 atoms) OpenMM's energy, 497.80 kcal/mol, is LAMMPS' at a Coulomb accuracy of 1e-7 (497.79); at pilot B's
+1e-5 LAMMPS gives 497.40 (its PPPM error, not OpenMM's). So OpenMM's PME tolerance is 1e-5 even where the folder asks
+LAMMPS for 1e-6 (`OPENMM_EWALD_TOLERANCE`; never tighter, which would only slow it down).
+
+**The run** (`md.openmm_run`, started by the run supervisor in the OpenMM environment with QuantaBench's source on
+PYTHONPATH; `caffeinate -i -s` on macOS) has the stages of `in.bulk` and `in.slab` and writes the same files, so
+`md status`, the Jobs dock and `md surface-tension` read it like a LAMMPS run: `bulk_density.txt`, `bulk_final.data`,
+`slab_box.txt`, `density_profile.txt`, `slab_final.data`, and a LAMMPS-shaped log (thermo rows, `Performance:` lines,
+the `QB_*` tags). Thermostat: Langevin (1/ps; 20/ps during the warm-up and a lattice start's compression); barostat:
+Monte Carlo every 25 steps, isotropic; `CMMotionRemover` every 1000 steps. Checkpoints are OpenMM state XML files
+(`<part>.pause.xml` when STOP pauses it, `<part>.state.a/b.xml` every `restart_every` steps), which any machine,
+platform or OpenMM build reads, so a run can move between the Mac and the workstation; the supervisor cuts the outputs
+at the checkpoint's step before a resume, the frames (`slab.dcd`, kind "dcd") included. Platform and precision:
+`auto` is the fastest GPU platform at mixed precision where it has it, else single (Apple), else the CPU; or
+`--variant opencl-mixed`, `cuda`, `cpu`, ... per segment. Without a GPU, use LAMMPS: OpenMM's CPU platform
+evaluates the geometric-mixing table (a `CustomNonbondedForce`) without SIMD and ran a 3,000-atom C6F14 box at
+0.3 ns/day on one thread where LAMMPS ran 8.4 (the cloud test machine; the MD benchmark's `openmm-cpu-*` variants
+measure it). Its CPU platform is still the fallback for the σ rerun where LAMMPS is missing.
+
+**σ in double precision.** The pressure tensor σ comes from is not taken from a single-precision GPU (one sample's σ
+was 19 mN/m off there: Runs/mac-gpu-2026-11-23). Two series are written instead:
+
+- **On the fly** (`sigma_kb.txt`, every `kb_every` = 20 steps): σ_inst = [U(+ε) − U(−ε)] / (2ε · 2A), the energy at
+  two boxes whose area is scaled by 1 ± ε at constant volume with every atom moved with the box, which is the
+  Kirkwood-Buff virial σ of that configuration. Two energy evaluations per sample cost about 20 % (pilot B's slab on
+  the M3 Max: 84 → 67 ns/day). Two details make it the same number as LAMMPS' virial: a force group that is never
+  integrated adds −U_ij(rc) for each pair within the LJ cutoff, so a pair crossing rc under the strain does not add
+  an "impulsive" jump (without it +1 to +2 mN/m on a small hexane slab at 8 Å); and ε = 1e-4, because the LJ force
+  jumps at rc and a central difference across that kink is biased in proportion to ε (−0.16 mN/m at 1e-3, −0.04 at
+  2e-4 on that slab).
+- **The frames** (`slab.dcd`, every `frame_every` = 1000 steps) are evaluated again on the CPU in double precision by
+  `md surface-tension` (`md.openmm_sigma.rerun`): a LAMMPS `rerun` with the folder's own model (`compute pressure NULL
+  virial`) where QuantaBench finds LAMMPS, else OpenMM's CPU platform (or `openmm-reference`, double throughout), into
+  `pressure_tensor.txt` (the equipartition kinetic part added). The rerun's Coulomb k-space accuracy is at least 1e-6:
+  at pilot B's 1e-5, LAMMPS' PPPM virial was off by +0.36 mN/m in σ on a frame of pilot B and +0.9 on the
+  small hexane slab, against 1e-6 and 1e-7 (which agree within 0.01) and OpenMM's PME.
+
+Why both: σ's samples decorrelate in ~20 fs (bond vibrations dominate the virial), so the error bar shrinks with the
+number of samples, and frames are big (117 KB each for 9,780 atoms). Pilot B's own 10-fs pressure series, thinned,
+gives a block error of 0.30 mN/m every 10 fs, 0.30 every 20 fs, 0.38 every 50 fs, 0.81 every 100 fs, 2.9 every 1 ps
+over 10 ns: 1-ps frames alone are ten times less precise than pilot B. So `md surface-tension` compares the on-the-fly
+samples with the rerun at the frames both have; when the mean difference is within 0.1 mN/m plus twice its standard
+error, σ is the on-the-fly series (its error bar), and the rerun's own value is reported beside it; otherwise σ is the
+rerun's and the check fails in the report. Decided (Brandon, 2026-11-24): σ is reported from the run's own 20-fs
+samples when they pass this check, as above.
+
+**The frames after the check.** Decided (Brandon, 2026-11-24): once the slab part has finished, every frame is in
+`pressure_tensor.txt` and the check has passed, `md surface-tension` keeps every `frame_keep_every`-th frame of
+`slab.dcd` (10 by default: one per 10 ps) and deletes the rest (`md.openmm_sigma.thin_frames`; the validation run's
+12,001 frames, 1.45 GB, would become 1,201, 0.15 GB). It never deletes before that: a running slab, frames not yet rerun or a failed
+check leave every frame. `pressure_tensor.txt` keeps all its rows, so the analysis gives the same σ afterwards;
+`slab_frames_thinned.json` records what was done, and the report says so. `--keep-frames` keeps them all this time,
+`--frame-keep-every 0` (or `frame_keep_every` 0 in `liquid_setup.json`) for good. A folder whose frames were thinned
+cannot be continued with more frames. The frames are not synced: `*.dcd` is in the synced `.stglobalignore` of
+QuantaBench's SyncThing folder, so each stays on the computer that ran it.
+
+With `ta_every` the run also samples the test-area method (Gloor et al.
+2005; ΔU(±ε) of the nonbonded energy with molecules moved as wholes), a second estimate in the report. The LJ tail
+for a cutoff is added afterwards as for LAMMPS runs.
+
+**Benchmark and estimates.** `quantabench-cli machines --bench md --md-variants default,openmm` adds
+`openmm-gpu-cutoff16` (any `openmm-gpu-<dispersion>` or `openmm-cpu-<dispersion>` works): the same box timed by
+OpenMM, its run-0 energy checked against LAMMPS' CPU run. `md estimate`, the run-time line of `md liquid-slab` and the
+long-range recommendation use those records; on OpenMM with a GPU the recommendation runs full long-range dispersion
+on the GPU as LJ-PME (provisional until checked against A-fine, OPENMM-2).
+
+**Validation against pilot B** (2026-11-23; C6F14, OPLS-AA, 16 Å cutoff, from pilot B's own packing, bulk 1 ns +
+slab 2 + 10 ns on the M3 Max's GPU in single precision, 4.6 h; `Runs\openmm-validation-2026-11-23\report.md`):
+
+| | OpenMM (Mac GPU, single) | pilot B (LAMMPS) |
+|---|---:|---:|
+| σ raw, on the fly every 20 fs (mN/m) | 8.95 ± 0.53 | 9.60 ± 0.30 |
+| σ + LJ tail beyond 16 Å | 11.09 | 11.71 |
+| σ by test-area / by the 1-ps frames' rerun | 9.39 ± 0.49 / 9.52 ± 2.05 | |
+| bulk NPT density (g/cm³) | 1.6693 ± 0.0014 | 1.6719 ± 0.0016 |
+| slab plateau (g/cm³) | 1.6431 | 1.6386 |
+
+The difference in σ is −0.65 ± 0.61 mN/m (1.1 σ); B's own Coulomb PPPM at 1e-5 puts it 0.252 ± 0.004 mN/m too high
+(2,501 of the run's frames at 1e-5 and 1e-6), which leaves −0.40 ± 0.61. The on-the-fly samples of the Apple GPU minus
+the double-precision rerun of the same 10,001 frames: −0.10 ± 0.09 mN/m, so single precision does not bias σ. The
+error bar (0.53) is above B's 0.30 for the same number of samples (white noise 0.45 in both): B's ten 1-ns blocks
+scattered less than this run's; a run ~2.5 times longer, or samples every 10 fs, would make sure of 0.30.
 
 ## Not available yet
 
