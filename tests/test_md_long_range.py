@@ -116,12 +116,6 @@ def test_choice_against_recommendation_and_warnings():
     assert LR.check_settings(LR.settings("cutoff", 12), "bulk") == []
     assert LR.check_settings(LR.settings("cutoff", 16), "slab") == []
     assert any("residual low bias" in x for x in LR.check_settings(LR.settings("cutoff", 16), purpose="reference"))
-    # MD-LR-2: LAMMPS' own Coulomb mesh in a slab (coarse along z) is warned about; the default rule is not
-    acc = LR.settings("cutoff", 16, coul_grid="accuracy")
-    wa = LR.check_settings(acc, "slab", PILOT_SLAB)
-    assert len(wa) == 1 and "1.5 times coarser along z" in wa[0] and "2.37" in wa[0]
-    assert LR.check_settings(acc, "bulk") == []
-    assert LR.differences(acc, rec) == ["Coulomb mesh: accuracy (recommended: spacing)"]
     # the old pppm/disp settings: LAMMPS' estimate in a slab
     old = LR.settings("ewald", disp_grid="accuracy", disp_real_accuracy=1e-4, disp_kspace_accuracy=2e-3)
     w = LR.check_settings(old, "slab")
@@ -133,6 +127,18 @@ def test_choice_against_recommendation_and_warnings():
     assert any("looser than any pilot" in x for x in LR.check_settings(LR.settings("cutoff", 16, kspace_accuracy=1e-4)))
     assert any("too small" in x for x in LR.check_settings(LR.settings("cutoff", 16), "slab", (30.0, 30.0, 200.0)))
     assert LR.notes_for(LR.settings("ewald"), "slab", True) and not LR.notes_for(LR.settings("ewald"), "slab", False)
+
+
+def test_coulomb_mesh_choice_warning():
+    """MD-LR-2: LAMMPS' own Coulomb mesh for a cutoff run in a slab (coarse along z) is warned about and listed as a
+    difference from the recommendation; the default rule is not."""
+    rec = recommend_long_range("slab", PILOT_SLAB, n_atoms=9780, machine=True)
+    acc = LR.settings("cutoff", 16, coul_grid="accuracy")
+    wa = LR.check_settings(acc, "slab", PILOT_SLAB)
+    assert len(wa) == 1 and "1.5 times coarser along z" in wa[0] and "2.37" in wa[0]
+    assert LR.check_settings(acc, "bulk") == []
+    assert LR.differences(acc, rec) == ["Coulomb mesh: accuracy (recommended: spacing)"]
+    assert LR.differences(LR.settings("cutoff", 16), rec) == []
 
 
 def test_pilot_table_is_documented():
