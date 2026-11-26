@@ -1684,7 +1684,9 @@ for a cutoff is added afterwards as for LAMMPS runs.
 `openmm-gpu-cutoff16` (any `openmm-gpu-<dispersion>` or `openmm-cpu-<dispersion>` works): the same box timed by
 OpenMM, its run-0 energy checked against LAMMPS' CPU run. `md estimate`, the run-time line of `md liquid-slab` and the
 long-range recommendation use those records; on OpenMM with a GPU the recommendation runs full long-range dispersion
-on the GPU as LJ-PME (provisional until checked against A-fine, OPENMM-2).
+on the GPU as LJ-PME for a reference value or a box too narrow for 16 Å. Checked against A-fine (GPU-SCREEN-1,
+below): the model and the slab's σ match, but in mixed precision its on-the-fly σ samples read ~0.3 mN/m high, so
+16 Å + tail stays the OpenMM screen until that is handled (docs/dev/BACKLOG.md, GPU-SCREEN-1).
 
 **Validation against pilot B** (2026-11-23; C6F14, OPLS-AA, 16 Å cutoff, from pilot B's own packing, bulk 1 ns +
 slab 2 + 10 ns on the M3 Max's GPU in single precision, 4.6 h; `Runs\openmm-validation-2026-11-23\report.md`):
@@ -1703,6 +1705,38 @@ mesh (0.30 mN/m: 9.30 raw, 11.41 with the tail) leaves −0.35 ± 0.61 (0.6 σ).
 the double-precision rerun of the same 10,001 frames: −0.10 ± 0.09 mN/m, so single precision does not bias σ. The
 error bar (0.53) is above B's 0.30 for the same number of samples (white noise 0.45 in both): B's ten 1-ns blocks
 scattered less than this run's; a run ~2.5 times longer, or samples every 10 fs, would make sure of 0.30.
+
+**LJ-PME against A-fine** (GPU-SCREEN-1, 2026-11-25; `Runs\md-pilot-2026-11-20\pilot_openmm_ljpme_report.md`). A-fine's
+C6F14 slab (OPLS-AA W&J, geometric mixing) from A-fine's own bulk end state and box, 2 + 10 ns on the workstation's
+RX 9060 XT (OpenCL, mixed precision, one CPU thread) with LJ-PME at the spacing rule (G 2.77/rc = 0.2308 1/Å, A-fine's
+18 x 18 x 90 dispersion mesh), PME Coulomb at OpenMM's 1e-5, rc 12 Å:
+
+| | OpenMM LJ-PME (GPU, mixed) | A-fine (LAMMPS `pppm/disp`, CPU) |
+|---|---:|---:|
+| σ, on-the-fly samples every 20 fs (mN/m) | 13.31 ± 0.63 | 12.62 ± 0.40 |
+| σ, the same corrected by its mean difference from the double-precision rerun (below) | 13.02 ± 0.63 | |
+| on the fly − LAMMPS rerun (A-fine's settings), 10,000 production frames | +0.30 ± 0.08 mN/m (rms 8.2 per frame) | |
+| slab plateau vs bulk (A-fine's bulk NPT, 1.6716 g/cm³) | −0.26 % | −0.44 % |
+| 10-90 interface width | 9.8 Å | 9.8 Å |
+| speed (σ samples, test-area samples, frames) | 74 ns/day, 1 CPU thread | 5.85 ns/day, 8 threads |
+
+- **The model is A-fine's.** In double precision (OpenCL double, = the Reference platform here) the run's own
+  central-difference σ of A-fine's 101 production frames equals LAMMPS at A-fine's settings to −0.001 ± 0.007 mN/m per
+  frame (rms 0.07), and on 10,000 of this run's frames to +0.006 ± 0.001. The settings are converged: a dispersion mesh
+  twice as fine −0.023, G·rc 3.26 +0.040 (−0.001 with a mesh twice as fine), Coulomb 1e-6 +0.006 ± 0.007; the
+  geometric-minus-LB table's jump at rc, left in by the σ samples, −0.011 ± 0.003. OpenMM shifts its LJ-PME pair energy
+  within rc so that it is continuous at rc (checked on a pair), so the samples need no cutoff shift for it.
+- **The on-the-fly samples are biased in mixed precision with LJ-PME.** They read 0.30 ± 0.08 mN/m above the
+  double-precision rerun of the same frames, which fails the check (`md surface-tension` then reports the 1-ps frames'
+  rerun σ: 15.61 ± 2.55 mN/m here). The same frames in mixed precision read +0.20 ± 0.07 above
+  double, and a continuation from a state file with the run's own Engine, sampling every 20 fs four ways,
+  gave mixed minus double on identical configurations +0.30 ± 0.08 (10,000 samples). By force group on 3,688 frames:
+  the `NonbondedForce` with LJ-PME +0.181 ± 0.018 (rms 1.1), the bonded terms −0.07 ± 0.12 (they carry the rms 7.3
+  mN/m of single-precision noise per sample), the table +0.001; with the LJ cut at 12 Å instead the `NonbondedForce`
+  (Coulomb PME only) gives +0.024 ± 0.012 and the LJ table −0.010 ± 0.011, so the cutoff runs (OPENMM-1's validation)
+  are not affected. Double-precision samples would remove it but cost about 17 ms per energy on this GPU against
+  ~7 ms mixed (an estimate: about 2.5 times the run's time at 20-fs samples), and sampling less often loses precision
+  (10-block error 0.63 mN/m at 20 fs, 1.10 at 100 fs). The test-area estimate, also mixed precision: 13.05 ± 0.62.
 
 ## Not available yet
 

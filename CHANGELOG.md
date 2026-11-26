@@ -2,6 +2,17 @@
 
 ## Unreleased (after 0.3.0)
 
+### OpenMM LJ-PME against A-fine (GPU-SCREEN-1, 2026-11-25)
+- A-fine's C6F14 slab on the workstation's GPU with OpenMM's LJ-PME (mixed precision, one CPU thread, 74 ns/day):
+  the model equals A-fine's frame by frame in double precision, and its σ, 13.02 ± 0.63 mN/m once corrected, matches
+  A-fine's 12.62 ± 0.40. Its on-the-fly σ samples, though, read 0.30 ± 0.08 mN/m high in mixed precision (the
+  `NonbondedForce` with LJ-PME; cutoff runs are not affected), so the GPU σ screen stays 16 Å + tail until Brandon
+  picks a fix (BACKLOG GPU-SCREEN-1). `Runs\md-pilot-2026-11-20\pilot_openmm_ljpme_report.md`.
+- Fixed: an OpenMM LJ-PME folder without a dispersion mesh spacing (`disp_grid accuracy`, or written before MD-LR)
+  gave OpenMM a zero mesh (−inf on the CPU platform, a crash on Reference); the mesh now always follows the spacing
+  rule (`md.openmm_engine.ljpme_parameters`).
+- The OpenMM recommendation's LJ-PME note says what this check found instead of "provisional".
+
 ### After #59 and #61: pilot B's corrected σ in the OpenMM reason, MD benchmark version 4 (MD-LR-2 follow-up, 2026-11-25)
 - **MD benchmark version 4:** the benchmark's cutoff variants now use MD-LR-2's Coulomb mesh rule, as the
   surface-tension runs do, so their ns/day can differ from version 3's. Each machine is asked whether to run it

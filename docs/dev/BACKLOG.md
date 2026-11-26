@@ -2625,7 +2625,7 @@ selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs m
 
 ### OPENMM-2: OpenMM follow-ups · ready after OPENMM-1
 - GAFF2 with LJ-PME on OpenMM against the Mac's GAFF2 `pppm/disp` LAMMPS run; OpenMM's LJ-PME (OPLS-AA, geometric
-  correction table) against A-fine. Until then the recommender marks LJ-PME on OpenMM provisional.
+  correction table) against A-fine (done 2026-11-25: GPU-SCREEN-1, below).
 - The upstream Metal platform (OpenMM PR #5488) when it ships: add it to the platform order and measure it.
 - Frames (done in OPENMM-1, Brandon 2026-11-24): every 10th kept after a passing check. Left: save them only in the
   production part (the settle part's frames are rerun too).
@@ -2640,6 +2640,34 @@ selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs m
   signal exit, as `md.openmm_sigma`'s rerun does.
 - The on-the-fly σ error bar of the validation run was 0.53 mN/m against pilot B's 0.30 for the same number of
   samples (white noise 0.45 in both): longer production or 10-fs samples if 0.3 is the target.
+
+### GPU-SCREEN-1: OpenMM LJ-PME on the GPU as the σ screen? · in-PR 2026-11-25 (branch `feat/gpu-screen-1-openmm-ljpme-default`); the default change needs-Brandon
+Brandon approved (2026-11-25) the check: make OpenMM LJ-PME (full long-range dispersion) + PME Coulomb on the GPU the
+GPU σ-screen default if it reproduces A-fine (12.62 ± 0.40 mN/m) and the frame-rerun check passes. Report:
+`Runs\md-pilot-2026-11-20\pilot_openmm_ljpme_report.md`; the run: `c6f14_oplsaa_openmm_ljpme\`.
+- The run: A-fine's model, bulk end state and box on the workstation's RX 9060 XT (OpenCL mixed, one CPU thread),
+  2 + 10 ns at 74 ns/day: σ 13.31 ± 0.63 on the fly, 13.02 ± 0.63 corrected (below), against A-fine's 12.62 ±
+  0.40: +0.40 ± 0.75 (0.5 combined SE).
+- The model matches A-fine's exactly (double precision, frame by frame: −0.001 ± 0.007 mN/m on A-fine's frames,
+  +0.006 ± 0.001 on the run's), and OpenMM's LJ-PME settings are converged (≤ 0.04 mN/m).
+- **The frame-rerun check fails:** the mixed-precision on-the-fly samples read 0.30 ± 0.08 mN/m above the
+  double-precision LAMMPS rerun of the same 10,000 frames (A-fine's settings). The bias is the `NonbondedForce` with
+  LJ-PME in mixed precision (+0.18 ± 0.02 on the same frames; Coulomb PME alone +0.02, the bonded terms none), so
+  the 16 Å cutoff runs are not affected. So the recommendation was **not** changed (16 Å + tail stays the OpenMM GPU
+  screen); its OpenMM LJ-PME note now says what was found.
+- Fixed here: an LJ-PME folder without a mesh spacing (`disp_grid accuracy`, or written before MD-LR) asked OpenMM
+  for G with a zero mesh, which gives −inf on the CPU platform and a crash on Reference: the mesh now always follows
+  the spacing rule (`openmm_engine.ljpme_parameters`).
+- **Needs Brandon** (then the default change is a small PR; a draft of it is on the workstation,
+  `scratch\gpu-screen-1\gpu-screen-1-default-flip-draft.patch`):
+  1. correct the on-the-fly σ by its measured mean difference from the double-precision rerun of the frames (free;
+     the rerun is done anyway; error √(SE² + SE_diff²): 0.628 → 0.633 here), instead of falling back to the 1-ps frames'
+     σ when the check fails; or
+  2. σ samples of the `NonbondedForce` in double precision where the GPU has FP64 (~17 ms per energy on the RX 9060
+     XT: about 2.5 times the run time at 20-fs samples; Apple GPUs have no FP64, so they would still need 1.); or
+  3. keep 16 Å + tail as the screen.
+- Follow-ups: a GPU double-precision frame rerun (`--rerun openmm-gpu`: 10,001 frames in ~6 min on the RX 9060 XT
+  against ~50 min of one LAMMPS CPU thread); OpenMM's own bulk NPT density with LJ-PME (this run used A-fine's).
 
 ## Needs Brandon (hardware / Windows / decisions)
 

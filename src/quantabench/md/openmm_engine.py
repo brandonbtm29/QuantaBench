@@ -30,7 +30,9 @@ What is translated (LAMMPS ``real`` units -> OpenMM's nm, kJ/mol, ps):
   "ewald" variant). OpenMM's LJ-PME uses Lorentz-Berthelot within rc and geometric C6 in reciprocal space, which is
   LAMMPS' ``mix/disp geom`` for the arithmetic force fields; for geometric ones a short-range table adds the
   geometric-minus-LB difference within rc, so both parts are geometric, as in LAMMPS. The dispersion splitting and
-  mesh follow ``md.long_range`` (G = 2.77 / rc, mesh ceil(L / h)) unless told otherwise.
+  mesh follow ``md.long_range`` (G = 2.77 / rc, mesh ceil(L / h), h = 0.52 / G) unless told otherwise
+  (``ljpme_parameters``). OpenMM shifts its LJ-PME pair energy within rc by a constant so that it is continuous at rc
+  (the step from LB to the geometric C6); forces are unchanged.
 
 Force groups (``GROUPS``) let a caller evaluate parts of the energy: bonds 0, angles 1, dihedrals 2, impropers 3,
 the ``NonbondedForce`` 4 (Coulomb, 1-4 pairs, and LB or LJ-PME Lennard-Jones), the table LJ 5; ``NONBONDED`` =
@@ -248,8 +250,8 @@ class Physics:
     lj: str = "cutoff"                   # "cutoff" (lj/cut/coul/long) | "pme" (LJ-PME: LAMMPS' "ewald" variant)
     tail: bool = False                   # homogeneous LJ tail correction (cutoff only; the bulk NPT)
     ewald_tolerance: float = 1e-5        # Coulomb PME (OpenMM's ewaldErrorTolerance)
-    disp_gewald: float | None = None     # LJ-PME splitting G, 1/Å (None: 2.77 / rc)
-    disp_spacing: float | None = None    # LJ-PME mesh spacing, Å (None: OpenMM's choice from the tolerance)
+    disp_gewald: float | None = None     # LJ-PME splitting G, 1/Å (None: md.long_range's rule, 2.77 / rc)
+    disp_spacing: float | None = None    # LJ-PME largest mesh spacing, Å (None: the rule's 0.52 / G)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -382,6 +384,20 @@ def build_system(model: LammpsModel, phys: Physics, *, box_A: Sequence[float] | 
     return s
 
 
+def ljpme_parameters(phys: Physics, box_A: Sequence[float]) -> tuple[float, tuple[int, int, int]]:
+    """LJ-PME's splitting G (1/Å) and mesh for a box (Å): ``phys.disp_gewald``, else ``md.long_range``'s rule
+    G = 2.77 / rc, and ceil(L / h) points per direction with h = ``phys.disp_spacing``, else the rule's 0.52 / G (A-fine's
+    18 x 18 x 90 for its slab box). The mesh is always given: OpenMM picks one from its tolerance only when the splitting
+    is left to it as well, and with a G and a zero mesh it computes nothing usable (−inf on the CPU platform, a crash
+    on the Reference platform; GPU-SCREEN-1)."""
+    from . import long_range as LR
+
+    g = float(phys.disp_gewald or LR.DISP_G_RC / float(phys.cutoff_A))
+    h = float(phys.disp_spacing or LR.DISP_H_G / g)
+    n = tuple(max(1, math.ceil(float(x) / h - 1e-9)) for x in box_A)
+    return g, n                                                       # type: ignore[return-value]
+
+
 def _nonbonded(s, model: LammpsModel, phys: Physics, box: np.ndarray) -> None:
     import openmm as mm
 
@@ -393,12 +409,8 @@ def _nonbonded(s, model: LammpsModel, phys: Physics, box: np.ndarray) -> None:
     nb.setUseSwitchingFunction(False)
     nb.setUseDispersionCorrection(bool(phys.tail) and phys.lj == "cutoff")
     if phys.lj == "pme":
-        g = (phys.disp_gewald or 2.77 / phys.cutoff_A) * 10.0          # 1/Å -> 1/nm
-        if phys.disp_spacing:
-            n = [max(1, math.ceil(float(x) / float(phys.disp_spacing) - 1e-9)) for x in box]
-            nb.setLJPMEParameters(g, *n)
-        else:
-            nb.setLJPMEParameters(g, 0, 0, 0)                          # the mesh from the tolerance
+        g, n = ljpme_parameters(phys, box)
+        nb.setLJPMEParameters(g * 10.0, *n)                            # 1/Å -> 1/nm
     types = model.types
     eps = np.array([model.pair[t][0] for t in types]) * KCAL
     sig = np.array([model.pair[t][1] for t in types]) / 10.0
@@ -463,7 +475,9 @@ def add_cutoff_shift(system, model: LammpsModel, phys: Physics) -> int | None:
     crosses rc, so a finite difference of the energy gives the mechanical virial, as LAMMPS' pressure does (its
     forces have no impulsive part at rc); without it, σ from the energy picks up that impulsive term (about +1 mN/m
     for hexane at rc = 8 Å, less at larger rc). The integrator must leave the group out
-    (``setIntegrationForceGroups``). None for LJ-PME (its real-space jump at rc is under 2 % of the plain one's)."""
+    (``setIntegrationForceGroups``). None for LJ-PME: OpenMM's own LJ-PME pair energy is continuous at rc, and the
+    geometric-minus-LB table's jump there, left in, puts σ only 0.011 ± 0.003 mN/m low (C6F14, A-fine's 101 frames in
+    double precision; GPU-SCREEN-1)."""
     import openmm as mm
 
     if phys.lj != "cutoff":

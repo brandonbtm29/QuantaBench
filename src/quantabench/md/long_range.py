@@ -654,8 +654,9 @@ def recommend_long_range(geometry: str = "slab", box: Sequence[float] | None = N
         rec.ns_per_day, rec.speed_basis, rec.speed_source = _setup_speed(None, machine, "ewald", rec.cutoff,
                                                                          rec.accelerator, geo, n_atoms, n_molecules,
                                                                          box)
-        rec.notes.append("provisional: OpenMM's LJ-PME has not yet been checked against A-fine (OPENMM-1 validated the "
-                         "16 Å cutoff against pilot B)")
+        rec.notes.append("OpenMM's LJ-PME model equals A-fine's frame by frame, and its slab reproduced A-fine's σ, but "
+                         "its on-the-fly σ samples read ~0.3 mN/m high in mixed precision (GPU-SCREEN-1), so `md "
+                         "surface-tension` falls back to the frames' double-precision rerun and its wider error bar")
         return rec
     if purpose == "reference":
         rec = ewald("a reference value needs converged full long-range dispersion: no tail approximation, the slab "
