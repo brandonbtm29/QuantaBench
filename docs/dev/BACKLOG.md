@@ -1193,8 +1193,9 @@ docs/ENGINES.md, "Liquid-slab MD and surface tension"; code: `md/oplsaa_pf.py`, 
     sulfonamides, CHF2 ...) needs a per-molecule OPLS-AA charge route (LigParGen-style 1.14·CM1A-LBCC or 1.2·CM5).
   - `md.oplsaa_pf`: GROMACS oplsaa.ff's other fluorine types (opls_720-730 ring types, 956-960 alkyl fluorides,
     160-165 TFE), OPLS-AA alcohols and alkylbenzenes, Pádua 2002's junction torsions and CL&P's sulfonate /
-    trifluoroacetate heads (il.ff commit 898c19d5a4), OPLS-AA Li+/Na+/K+. Every value with its source line;
-    `scripts/check_oplsaa_pf_params.py`: 161 entries, 0 mismatches. No charge redistribution (one derived charge,
+    trifluoroacetate heads (il.ff commit 898c19d5a4), Black et al. 2017's perfluoroether groups (PFE.xml, commit
+    f8fa0aff6c; written with `dihedral_style fourier`), OPLS-AA Li+/Na+/K+. Every value with its source line;
+    `scripts/check_oplsaa_pf_params.py`: 204 entries, 0 mismatches. No charge redistribution (one derived charge,
     by Silva et al. 2016's rule); one labelled transfer (the n:1 FTOH C-C-C-O torsion). Each molecule gets a tier
     (published / composed / transferred) and its recipe.
   - The same model as `oplsaa` for every molecule `oplsaa` types except C6F6 (tests compare them term by term and
@@ -1202,7 +1203,7 @@ docs/ENGINES.md, "Liquid-slab MD and surface tension"; code: `md/oplsaa_pf.py`, 
   - Coverage (NOVA, `Runs\ff-1-2026-11-27\coverage_summary.md`): fluorinated σ liquids 28 of 93 (`oplsaa` 19);
     PFAS QSAR set 358 of 3,857 (`oplsaa` 75): 272 published, 66 composed, 20 transferred.
   - Validation (cloud container, bulk NPT 0.3 ns, ~2,000 atoms, 12 Å + tail): running; results in the PR's next commit.
-  - Tests: `tests/test_md_oplsaa_pf.py` (51, incl. two LAMMPS smoke runs).
+  - Tests: `tests/test_md_oplsaa_pf.py` (61, incl. three LAMMPS smoke runs).
 - Open (Brandon):
   - σ slabs for the covered liquids with a measured σ (proposal in the PR): which, and on which machine.
   - W&J's own F-C-C-F torsion has V3 = 0.25 kcal/mol; GROMACS' (used by the pilots and kept here) has V3 = 0.
@@ -1212,7 +1213,6 @@ docs/ENGINES.md, "Liquid-slab MD and surface tension"; code: `md/oplsaa_pf.py`, 
   - The default `--ff` for fluorinated molecules: keep `oplsaa`, or pick `oplsaa-pf` automatically when `oplsaa`
     refuses?
 - Next (FF-2 and later):
-  - Perfluoroethers (Black et al. 2017's PFPE parameters; their torsions have phases: `dihedral_style fourier`).
   - A charge route for groups without published charges, with OPLS-AA LJ and bonded terms by bond type, gated by the
     bulk density of the σ set's esters and ethers before any slab.
   - CHF2 / HFC / HFE groups from class-specific force fields where they fit OPLS-AA's forms; the H-F cross term

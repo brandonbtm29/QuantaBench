@@ -5,7 +5,8 @@
 ### OPLS-AA/PF, a force field for fluorinated liquids and PFAS (FF-1, 2026-11-28)
 - **`md liquid-slab --ff oplsaa-pf`:** OPLS-AA with Watkins & Jorgensen's perfluoroalkyl types, extended only with
   published OPLS-AA-compatible groups (GROMACS' other fluorine types, Pádua's fluorocarbon/hydrocarbon junction
-  torsions, Silva et al.'s 1H,1H-perfluoroalcohols, CL&P's sulfonate and trifluoroacetate heads, OPLS-AA Li+/Na+/K+),
+  torsions, Silva et al.'s 1H,1H-perfluoroalcohols, Black et al.'s perfluoroethers, CL&P's sulfonate and
+  trifluoroacetate heads, OPLS-AA Li+/Na+/K+),
   every value with its source line and no charge redistribution; anything else is refused with the reason. It gives
   the pilots' C6F14 model unchanged (`oplsaa` stays the default) and labels each molecule with the published recipe
   it follows. Covers 28 of the 93 fluorinated σ liquids and 358 of the 3,857 fluorinated PFAS-set molecules

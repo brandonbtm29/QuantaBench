@@ -9,7 +9,8 @@ far it reaches, and what is left. User-facing how-to: docs/ENGINES.md, "Liquid-s
 Stay in the OPLS-AA family and extend it only with published, OPLS-AA-compatible group parameters: Watkins &
 Jorgensen's perfluoroalkyl types [2], the other fluorine types already in GROMACS' OPLS-AA distribution (fluoro-,
 difluoro- and hexafluorobenzene, benzotrifluoride, monoalkyl fluorides, 2,2,2-trifluoroethanol) [1, 6], Pádua's
-fluorocarbon/hydrocarbon junction torsions [8] and CL&P's sulfonyl and carboxylate heads [9-11], all with OPLS-AA's
+fluorocarbon/hydrocarbon junction torsions [8], Black et al.'s perfluoroether groups [12] and CL&P's sulfonyl and
+carboxylate heads [9-11], all with OPLS-AA's
 own transferable charges and geometric mixing. This is the route our own pilots validated (C6F14: σ 12.46 ± 0.40 mN/m
 over four runs against Freire's 12.33, +1 %) and the one the fluorinated-liquid literature validates for density, ΔHvap
 and σ (below). It is built as the `oplsaa-pf` force field (`md.oplsaa_pf`). It covers the perfluorinated and the
@@ -88,11 +89,12 @@ fields/`, has the wider evidence; this table adds [12, 14, 16, 25, 26, 29, 30] r
 **Scope, most common first in the project's sets.** Perfluoroalkanes (linear, branched, cyclic; exactly `oplsaa`'s
 types and terms); semifluorinated chains (a perfluoroalkyl block on an alkyl chain, as in fluorotelomer
 backbones); benzene rings with H, F, CF3, CH3, CH2R and Br; monoalkyl fluorides; alcohols, 2,2,2-trifluoroethanol and
-the 1H,1H-perfluoroalcohols; perfluoroalkanesulfonate anions (triflate, PFBS ... PFOS) and trifluoroacetate;
-Li+, Na+ and K+. The liquid slab takes neutral molecules only; the anions and cations are typed for later aqueous work.
+the 1H,1H-perfluoroalcohols; open-chain perfluoroethers and perfluoropolyethers (with -CF2CH2OH ends);
+perfluoroalkanesulfonate anions (triflate, PFBS ... PFOS) and trifluoroacetate; Li+, Na+ and K+. The liquid slab takes neutral molecules only; the anions and cations are typed for later aqueous work.
 
 **Sources** (every number is stored as its source writes it, with its line; `scripts/check_oplsaa_pf_params.py`
-re-reads both files and checked all 161 entries, 0 mismatches, 2026-11-28):
+re-reads the three files and checked all 204 entries, 0 mismatches, 2026-11-28; a test with three planted errors
+showed it catches them):
 
 | what | source |
 |---|---|
@@ -102,6 +104,7 @@ re-reads both files and checked all 161 entries, 0 mismatches, 2026-11-28):
 | monoalkyl fluorides (956-960) | GROMACS oplsaa.ff, which marks them "tentative" |
 | 2,2,2-trifluoroethanol (160-165) and its CT_4 bonded terms | GROMACS oplsaa.ff ("Duffy's TFE" in [14]) |
 | fluorocarbon/hydrocarbon junction torsions | Pádua 2002 [8], as CL&P's il.ff (commit 898c19d5a4, MIT) lines 455-461 carry them |
+| perfluoroether groups: ether O, CF3-O, O-CF2-O, CF2(O)C, CF(O)C2, the Zdol -CF2CH2OH end, their bonded terms | Black et al. 2017 [12], as the authors' foyer file PFE.xml (mosdef-hub/forcefield_perfluoroethers, commit f8fa0aff6c; no license file, numbers cited, not copied as a file) |
 | sulfonate (triflate) and perfluoroalkanesulfonyl head; trifluoroacetate | CL&P il.ff [9-11] |
 | Li+, Na+, K+ | GROMACS oplsaa.ff opls_406-408 (Åqvist [32]) |
 
@@ -112,17 +115,22 @@ re-reads both files and checked all 161 entries, 0 mismatches, 2026-11-28):
   and the molecule must add up to its formal charge exactly. One value is derived, by a published rule: Silva et al.'s
   1H,1H-perfluoroalcohols take TFE's parameters for -CF2CH2OH "adjusting the partial charge of the fluorinated carbon
   to maintain the neutrality of the molecule" [14]: +0.326 e (labelled in the molecule's notes).
-- **Bonded terms** are looked up in a fixed order: CL&P for a term touching an anion head; W&J's own C-C-C-C torsion
-  for four perfluoroalkyl carbons; GROMACS' TFE terms (bond type CT_4); Pádua's junction torsions for a
+- **Bonded terms** are looked up in a fixed order: Black et al.'s PFE.xml for a term touching a perfluoroether atom;
+  CL&P for a term touching an anion head; W&J's own C-C-C-C torsion for four perfluoroalkyl carbons (also through
+  an O-bonded or Silva CF2, which have no C-C-C-C term of their own); GROMACS' TFE terms (bond type CT_4); Pádua's junction torsions for a
   fluorocarbon/hydrocarbon junction; then GROMACS by bond type, exactly as GROMACS looks it up (exact, then
   X wildcards). A term found nowhere refuses the molecule.
+- **Perfluoroether torsions have phase angles** (Black et al.'s CFn-O terms), which LAMMPS' `dihedral_style opls`
+  cannot hold: such a molecule is written with `dihedral_style fourier`, its OPLS torsions converted exactly
+  (K = V/2, d = 0° or 180°; a test checks the energy at every angle). The OpenMM engine reads fourier torsions.
 - **One labelled transfer**: the C-C-C-O torsion of a 1H,1H-perfluoroalcohol (CF2-CF2-CH2-OH) is in none of the
   sources (Silva et al. say they took the missing junction torsions from Pádua, whose set has no C-C-C-O term); the
   TFE CH2 is read as a plain CT and GROMACS' hydrocarbon alcohol term (ffbonded.itp line 1607) is used. Those
   molecules are tagged `transferred`.
 - **Tier of each molecule** (`TypedMolecule.tier`, `.recipe`, in README.txt and liquid_setup.json): `published`
   (it follows a published recipe: W&J perfluoroalkanes, OPLS-AA alkanes/aromatics/alcohols/alkyl fluorides, the
-  semifluorinated W&J + Pádua recipe, TFE, Silva's alcohols, CL&P's anions), `composed` (published groups combined in
+  semifluorinated W&J + Pádua recipe, TFE, Silva's alcohols, Black et al.'s perfluoroethers, CL&P's anions),
+  `composed` (published groups combined in
   a way no paper validated, e.g. an n:2 fluorotelomer alcohol) or `transferred`.
 
 **What stays the same.** For every molecule `oplsaa` types except hexafluorobenzene, `oplsaa-pf` gives the same
@@ -149,7 +157,11 @@ numbers line by line), so the validated C6F14 model is unchanged: the pilots' ow
 4. **Monoalkyl fluorides are "tentative" in GROMACS' own file**, and no liquid validation of opls_956-960 was found.
 5. **Long perfluoroalkyl chains**: OPLS-AA overpredicts their melting point and σ grows too fast with chain length
    [3]; above about C10 expect crystallization in slabs.
-6. **Anions**: the PFSA combination (W&J chain + CL&P's perfluoroalkanesulfonyl head) is what Damião et al. describe
+6. **Perfluoroethers mix two F-C-C-F terms**: a term that touches an O-bonded carbon takes Black et al.'s
+   (V3 = 1.046 kJ/mol, W&J's paper value), one inside a perfluoroalkyl chain GROMACS' (V3 = 0, as in the pilots).
+   Black et al.'s own molecules (perfluorodiglyme, -triglyme, Krytox, Zdol) have no chain C-C-C-C; through an O-bonded
+   carbon it takes W&J's perfluoro torsion here.
+7. **Anions**: the PFSA combination (W&J chain + CL&P's perfluoroalkanesulfonyl head) is what Damião et al. describe
    for PFSAs in water (per the 2026-11-22 literature review; their own files not checked); longer perfluoroalkanoates
    (PFOA-) are refused because CL&P has trifluoroacetate only and the α-CF2 has no published type.
 
@@ -180,14 +192,11 @@ first 0.1 ns dropped), 1 CPU thread; ΔHvap from a 5 ns gas-phase run of one mol
 ## Next steps (FF-1 follow-ups, BACKLOG)
 
 1. σ slabs for the covered liquids that have measured σ, as Brandon's decision (proposal in the FF-1 report).
-2. Perfluoroethers by Black et al. (PFPE.xml in mosdef-hub/forcefield_perfluoroethers, no license file; torsions
-   with arbitrary phases need `dihedral_style fourier`): 1 σ liquid and about 41 neutral perfluoroethers of the PFAS
-   set.
-3. A charge route for the groups with no published charges (LigParGen-style 1.14·CM1A-LBCC, or 1.2·CM5 from Psi4),
+2. A charge route for the groups with no published charges (LigParGen-style 1.14·CM1A-LBCC, or 1.2·CM5 from Psi4),
    OPLS-AA LJ and bonded terms by bond type, gated by the bulk density of the σ set's esters and ethers.
-4. CHF2 / HFC / HFE groups from the class-specific force fields above, if their functional forms fit OPLS-AA.
-5. The H-F cross term (pair-specific `pair_coeff i j`) for semifluorinated molecules.
-6. Aqueous PFAS: a water model matched to the ions (SPC/E or TIP4P/2005 class) and the anions above; PFCA heads.
+3. CHF2 / HFC / HFE groups from the class-specific force fields above, if their functional forms fit OPLS-AA.
+4. The H-F cross term (pair-specific `pair_coeff i j`) for semifluorinated molecules.
+5. Aqueous PFAS: a water model matched to the ions (SPC/E or TIP4P/2005 class) and the anions above; PFCA heads.
 
 ## References (checked against Crossref, 2026-11-28)
 

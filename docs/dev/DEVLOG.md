@@ -1252,9 +1252,12 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
   LJ and bonded terms, after a density check.
 - **Built**: `md/oplsaa_pf.py` and the `oplsaa-pf` backend (`md.forcefield.type_oplsaa_pf`; `--ff oplsaa-pf`). Types
   from GROMACS oplsaa.ff (ring F/CF3/Br types 720-730, alkyl fluorides 956-960 "tentative", TFE 160-165, alcohols,
-  alkylbenzenes, Li+/Na+/K+), Pádua 2002's junction torsions and CL&P's sulfonate / trifluoroacetate heads (il.ff
-  898c19d5a4). Every value with its line; `scripts/check_oplsaa_pf_params.py` re-read GROMACS and CL&P: 161 entries,
-  0 mismatches. No charge redistribution; one derived charge (Silva et al. 2016's rule, +0.326 e) and one labelled
+  alkylbenzenes, Li+/Na+/K+), Pádua 2002's junction torsions, CL&P's sulfonate / trifluoroacetate heads (il.ff
+  898c19d5a4) and Black et al. 2017's perfluoroether groups (the authors' PFE.xml, f8fa0aff6c). Every value with its
+  line; `scripts/check_oplsaa_pf_params.py` re-read GROMACS, CL&P and PFE.xml: 204 entries, 0 mismatches (and found
+  three planted errors). Perfluoroether torsions have phase angles: such molecules are written with
+  `dihedral_style fourier` (`md.liquid` now writes multi-term fourier coefficients), every OPLS torsion converted
+  exactly. No charge redistribution; one derived charge (Silva et al. 2016's rule, +0.326 e) and one labelled
   transfer (the n:1 FTOH C-C-C-O torsion, from GROMACS' hydrocarbon alcohol term). Molecules carry `recipe` and `tier`
   (published / composed / transferred), in README.txt and liquid_setup.json.
 - **Same model as `oplsaa`** for every molecule `oplsaa` types except C6F6 (term by term in the tests; the pilots' own
@@ -1266,8 +1269,8 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
 - **Coverage** (NOVA, `Runs\ff-1-2026-11-27\`): fluorinated σ liquids 28 of 93 (`oplsaa` 19); PFAS QSAR set 358 of
   3,857 (`oplsaa` 75). First refusals in the PFAS set: N 1,153, ether/ester/carbonyl/acid O 900, I 234, S outside a
   sulfonate 231, Cl 212, sp2 C 194, CHF2 138.
-- **Tests**: `tests/test_md_oplsaa_pf.py`, 51 (types, charges, tiers, refusals, provenance of every term, unit
-  conversions, C6F14 unchanged, two LAMMPS smoke runs). On NOVA (behind `scratch\pytest.lock`, below normal): ruff
+- **Tests**: `tests/test_md_oplsaa_pf.py`, 61 (types, charges, tiers, refusals, provenance of every term, unit
+  conversions, C6F14 unchanged, the exact fourier conversion, three LAMMPS smoke runs). On NOVA (behind `scratch\pytest.lock`, below normal): ruff
   clean, the MD tests 142 passed, 3 skipped (the PyPI LAMMPS wheel's "Windows fatal exception 0xc0000139" lines at
   `lammps()` start are printed by faulthandler and do not fail anything).
 - **Validation** (cloud container, bulk NPT + gas-phase ΔHvap): running; next commit.

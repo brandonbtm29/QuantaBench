@@ -16,6 +16,9 @@ What it covers (the design note, docs/FORCEFIELDS.md, has the reasons and the va
 * alcohols: hydrocarbon alcohols (OPLS-AA), 2,2,2-trifluoroethanol (OPLS-AA, opls_160-165) and the
   1H,1H-perfluoroalcohols CF3(CF2)nCH2OH by Silva et al. 2016's recipe (the TFE parameters for -CF2CH2OH, the
   fluorinated carbon's charge adjusted for neutrality: ``SILVA_RULE``);
+* perfluoroethers (perfluoropolyethers, CF2-O-CF2, with -CF2CH2OH ends) from Black et al. 2017's OPLS-AA-based
+  PFPE parameters (``PFE_*``; torsions with phase angles, so such a molecule is written with ``dihedral_style
+  fourier``, every OPLS torsion converted exactly);
 * perfluoroalkanesulfonate anions (CF3SO3-, CnF2n+1SO3-) and trifluoroacetate from CL&P (Canongia Lopes & Pádua),
   and the OPLS-AA (Åqvist) cations Li+, Na+, K+ as counter-ions. Liquid slabs are for neutral molecules only.
 
@@ -30,9 +33,11 @@ Every table entry keeps the values as its source writes them, in its units, with
 * ``gromacs``: GROMACS ``share/top/oplsaa.ff`` (ffnonbonded.itp / ffbonded.itp) at ``md.oplsaa.GROMACS_COMMIT``,
   the same files ``md.oplsaa`` cites (nm, kJ/mol, kJ mol-1 nm-2, kJ mol-1 rad-2, degrees);
 * ``clp``: CL&P's ``il.ff`` at ``CLP_COMMIT`` (Å, kJ/mol; bond and angle constants are k/2 as in GROMACS, so
-  K_LAMMPS = k / 2 / 4.184; torsions are OPLS V1..V4 in kJ/mol).
+  K_LAMMPS = k / 2 / 4.184; torsions are OPLS V1..V4 in kJ/mol);
+* ``pfe``: Black et al.'s ``PFE.xml`` at ``PFE_COMMIT`` (OpenMM/foyer units: nm, kJ/mol, radians; bonds and angles
+  ½k(x - x0)²; torsions k [1 + cos(nφ - phase)]).
 
-``scripts/check_oplsaa_pf_params.py`` re-reads both files and checks every entry, value and line number.
+``scripts/check_oplsaa_pf_params.py`` re-reads the three files and checks every entry, value and line number.
 
 Conventions: no charge is redistributed. A molecule's charges are the sum of its atom types' published charges
 (OPLS-AA's transferable neutral groups), with one derived value (``SILVA_RULE``), and must add up to the formal
@@ -43,6 +48,7 @@ combined, is reported (``PFAssignment.recipe``, ``.tier``).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from rdkit import Chem
@@ -53,6 +59,8 @@ KJ_PER_KCAL = O.KJ_PER_KCAL
 
 CLP_COMMIT = "898c19d5a4622ae60af727a38aa76e2fd34f18e7"
 CLP_URL = f"https://github.com/paduagroup/clandp/blob/{CLP_COMMIT}/il.ff"
+PFE_COMMIT = "f8fa0aff6cfb6b23d659c4b2937eadfb54fbc34e"
+PFE_URL = f"https://github.com/mosdef-hub/forcefield_perfluoroethers/blob/{PFE_COMMIT}/perfluoroethers/xml/PFE.xml"
 
 REFERENCES = {
     **{k: v for k, v in O.REFERENCES.items() if k in ("jorgensen1996", "watkins2001", "jorgensen2004", "gromacs")},
@@ -76,6 +84,11 @@ REFERENCES = {
                  "2016, 425, 297-304. doi:10.1016/j.fluid.2016.06.011 (W&J tail + the TFE parameters for -CF2CH2OH, "
                  "the fluorinated carbon's charge adjusted for neutrality, Pádua's junction torsions)",
     "clp": f"CL&P force field il.ff (Canongia Lopes, Pádua et al.), MIT, commit {CLP_COMMIT[:10]}: {CLP_URL}",
+    "black2017": "Black, Silva, Klein, Iacovella, Morgado, Martins, Filipe, McCabe. Perfluoropolyethers: development of "
+                 "an all-atom force field for molecular simulations and validation with new experimental vapor "
+                 "pressures and liquid densities. J. Phys. Chem. B 2017, 121, 6588-6600. doi:10.1021/acs.jpcb.7b00891 "
+                 f"(numbers from the authors' foyer file PFE.xml, mosdef-hub/forcefield_perfluoroethers commit "
+                 f"{PFE_COMMIT[:10]}; the paper's SI tables were not compared)",
 }
 
 MIXING = O.MIXING
@@ -105,6 +118,7 @@ class PFType:
     description: str
     source: str                  # "gromacs ffnonbonded.itp line N" / "clp il.ff line N"
     reference: str               # REFERENCES key
+    pfe: str = ""                # class in Black et al.'s PFE.xml ("" = none)
 
     @property
     def epsilon_kcal(self) -> float:
@@ -121,6 +135,11 @@ def _g(name, el, mass, q, sig_nm, eps_kj, bt, clp, fam, desc, line, ref) -> PFTy
 
 def _c(name, el, mass, q, sig_A, eps_kj, clp, fam, desc, line, ref, bt="") -> PFType:
     return PFType(f"clp_{name}", el, mass, q, sig_A, eps_kj, bt, clp, fam, desc, f"CL&P il.ff line {line}", ref)
+
+
+def _p(name, el, mass, q, sig_nm, eps_kj, bt, cls, desc, line) -> PFType:
+    return PFType(name, el, mass, q, sig_nm * 10.0, eps_kj, bt, "CF" if cls == "CF" else ("F" if cls == "F" else ""),
+                  "pfpe", desc, f"PFE.xml line {line}", "black2017", pfe=cls)
 
 
 TYPES: dict[str, PFType] = {t.name: t for t in (
@@ -204,6 +223,15 @@ TYPES: dict[str, PFType] = {t.name: t for t in (
     _c("CO2", "C", 12.011, 0.70, 3.75, 0.43932, "CO", "carboxylate", "carboxylate C", 151, "clp_tfa"),
     _c("CFA", "C", 12.011, 0.40, 3.50, 0.27614, "CF", "carboxylate", "CF3 of trifluoroacetate", 166, "clp_tfa"),
     _c("FFA", "F", 18.998, -0.20, 2.95, 0.22175, "F", "carboxylate", "F of trifluoroacetate", 167, "clp_tfa"),
+    # perfluoroethers, Black et al. 2017 (PFE.xml <NonbondedForce> lines; the chain CF3/CF2 not bonded to O are W&J's
+    # opls_961/962, whose numbers PFE.xml repeats as pfpe_961/140)
+    _p("pfpe_180", "O", 15.9994, -0.400, 0.279, 0.635968, "OS", "OS", "ether O between fluorinated carbons", 21),
+    _p("pfpe_181", "C", 12.011, 0.560, 0.350, 0.276144, "CT", "CF", "CF3 bonded to ether O", 22),
+    _p("pfpe_189", "C", 12.011, 0.640, 0.350, 0.276144, "CT", "CF", "CF2 between two ether O", 24),
+    _p("pfpe_139", "C", 12.011, 0.440, 0.350, 0.276144, "CT", "CF", "CF2 bonded to one ether O and one C", 25),
+    _p("pfpe_141", "C", 12.011, 0.320, 0.350, 0.276144, "CT", "CF", "CF bonded to one ether O and two C", 27),
+    _p("pfpe_965", "F", 18.9984, -0.120, 0.295, 0.221752, "F", "F", "F on a carbon bonded to ether O", 28),
+    _p("pfpe_161", "C", 12.011, 0.526, 0.325, 0.259408, "CT", "CF", "CF2 between ether O and CH2OH (Zdol end)", 30),
 )}
 
 #: Silva et al. 2016, Sec. 2.4: "the -CF2CH2OH segment was modeled with the parameters developed by Duffy for
@@ -218,6 +246,9 @@ TYPES[SILVA_CF2] = PFType(SILVA_CF2, "C", 12.011, None, 3.25, 0.259408, "CT", "C
                           "GROMACS oplsaa.ff/ffnonbonded.itp line 172 (LJ); charge " + SILVA_RULE, "silva2016")
 
 PERFLUORO_CARBONS = O.PERFLUORO_CARBONS
+PFPE_CARBONS = frozenset({"pfpe_181", "pfpe_189", "pfpe_139", "pfpe_141", "pfpe_161"})
+#: carbons that take Watkins & Jorgensen's own C-C-C-C torsion when four of them form a dihedral
+WJ_CCCC = PERFLUORO_CARBONS | {SILVA_CF2} | PFPE_CARBONS
 AROMATIC_C = frozenset({"opls_145", "opls_718", "opls_720", "opls_724", "opls_727", "opls_729"})
 ION_TYPES = {"Li": "opls_406", "Na": "opls_407", "K": "opls_408"}
 
@@ -362,6 +393,79 @@ CLP_IMPROPERS: dict[tuple[str, str, str, str], tuple[tuple[float, float, float, 
     ("CF", "O2", "CO", "O2"): ((0.0, 87.8640, 0.0, 0.0), 572),
 }
 
+#: Black et al. 2017, PFE.xml <HarmonicBondForce>: (length nm, k kJ mol-1 nm-2, line); V = ½ k (r - r0)²
+PFE_BONDS: dict[tuple[str, str], tuple[float, float, int]] = {
+    ("CF", "OS"): (0.13600, 267776.0, 38),
+    ("CF", "F"): (0.13320, 307105.6, 39),
+    ("CF", "CF"): (0.15290, 224262.4, 40),
+    ("CT", "CF"): (0.15290, 224262.4, 41),
+    ("CT", "H"): (0.10900, 284512.0, 42),
+    ("CT", "OH"): (0.14100, 267776.0, 43),
+    ("OH", "H"): (0.09450, 462750.4, 44),
+}
+
+#: PFE.xml <HarmonicAngleForce>: (angle rad, k kJ mol-1 rad-2, line); V = ½ k (θ - θ0)²
+PFE_ANGLES: dict[tuple[str, str, str], tuple[float, float, int]] = {
+    ("CF", "OS", "CF"): (2.11883, 502.080, 47),
+    ("OS", "CF", "F"): (1.93208, 418.400, 48),
+    ("OS", "CF", "OS"): (1.83260, 774.877, 49),
+    ("OS", "CF", "CF"): (1.88146, 418.400, 50),
+    ("OS", "CF", "CT"): (1.88146, 418.400, 51),
+    ("F", "CF", "F"): (1.90415, 644.336, 52),
+    ("CF", "CF", "F"): (1.91114, 418.400, 53),
+    ("CF", "CF", "CF"): (1.96699, 488.273, 54),
+    ("CT", "CF", "F"): (1.93208, 418.400, 55),
+    ("CF", "CT", "H"): (1.88146, 313.800, 56),
+    ("CF", "CT", "OH"): (1.93208, 418.400, 57),
+    ("H", "CT", "H"): (1.88146, 276.144, 58),
+    ("H", "CT", "OH"): (1.93208, 292.880, 59),
+    ("CT", "OH", "H"): (1.91114, 460.240, 60),
+}
+
+#: PFE.xml <PeriodicTorsionForce> <Proper>: ((periodicity, phase rad, k kJ/mol), ...), first line of the entry;
+#: V = Σ k [1 + cos(nφ - phase)]. The periodicity-0 terms are constants (no force) and are dropped.
+PFE_DIHEDRALS: dict[tuple[str, str, str, str], tuple[tuple[tuple[int, float, float], ...], int]] = {
+    ("F", "CF", "OS", "CF"): (((0, 0.0, -6.08011), (1, 0.0, 0.0), (2, 0.0, 0.0), (3, 1.0821, 3.63523),
+                               (4, 1.44862, 12.62547)), 63),
+    ("OS", "CF", "OS", "CF"): (((0, 0.0, -17.26808), (1, 0.2618, 16.18191), (2, 0.62832, 6.82348),
+                                (3, 1.15192, 7.47191), (4, 1.51844, 15.62435)), 69),
+    ("CF", "CF", "OS", "CF"): (((0, 0.0, 0.0), (1, -0.24435, 92.43661), (2, 0.0, 0.0), (3, -1.62316, 17.74497),
+                                (4, -1.48353, -20.39374)), 75),
+    ("OS", "CF", "CF", "F"): (((0, 0.0, 0.0), (1, 0.0, 0.0), (2, 0.0, 0.0), (3, 0.0, 3.74811), (4, 0.0, 0.0)), 81),
+    ("OS", "CF", "CF", "OS"): (((0, 0.0, 5.19783), (1, 0.0, 0.0), (2, 0.0, -4.01572), (3, 0.0, -1.51607),
+                                (4, 0.0, 0.0)), 87),
+    ("OS", "CF", "CF", "CF"): (((0, 0.0, 3.99045), (1, 0.0, 0.0), (2, -0.22689, -3.62259), (3, 0.57596, 3.62301),
+                                (4, 0.0, 0.0)), 93),
+    ("F", "CF", "CF", "F"): (((0, 0.0, 0.0), (1, 0.0, -5.23), (2, 3.14159, 0.0), (3, 0.0, 0.523),
+                              (4, 3.14159, 0.0)), 99),
+    ("CF", "CF", "CF", "F"): (((0, 0.0, 0.0), (1, 0.0, 0.6276), (2, 3.14159, 0.0), (3, 0.0, 0.8368),
+                               (4, 3.14159, 0.0)), 105),
+    ("CT", "CF", "OS", "CF"): (((0, 0.0, 4.64621), (1, 0.22689, 32.67532), (2, 0.0, 0.0), (3, 1.0821, 9.25999),
+                                (4, -1.67552, -15.34972)), 111),
+    ("OS", "CF", "CT", "H"): (((0, 0.0, 0.0), (1, 0.0, 0.0), (2, 0.24435, 2.51701), (3, 0.19199, 3.59213),
+                               (4, 0.0, 0.0)), 117),
+    ("OS", "CF", "CT", "OH"): (((0, 0.0, 4.73135), (1, 0.0, 0.0), (2, 0.0, -4.02168), (3, 0.0, 0.0),
+                                (4, 0.0, 0.0)), 123),
+    ("F", "CF", "CT", "H"): (((0, 0.0, 0.0), (1, 0.0, 0.0), (2, 3.14159, 0.0), (3, 0.0, 0.65689),
+                              (4, 3.14159, 0.0)), 129),
+    ("F", "CF", "CT", "OH"): (((0, 0.0, 0.0), (1, 0.0, 0.0), (2, 3.14159, 0.0), (3, 0.0, 1.12968),
+                               (4, 3.14159, 0.0)), 135),
+    ("CF", "CT", "OH", "H"): (((0, 0.0, 0.0), (1, 0.0, 9.36798), (2, 3.14159, -4.5501), (3, 0.0, 0.0),
+                               (4, 3.14159, 0.0)), 141),
+    ("H", "CT", "OH", "H"): (((0, 0.0, 0.0), (1, 0.0, 0.0), (2, 3.14159, 0.0), (3, 0.0, 0.99579),
+                              (4, 3.14159, 0.0)), 147),
+}
+
+
+def pfe_class(t: str) -> str:
+    """The PFE.xml class of a type: its own for pfpe_*; W&J perfluoro carbons CF, their F F; the TFE end group's
+    CT/H/OH (PFE.xml types its Zdol -CH2OH with opls_160-165)."""
+    pt = TYPES[t]
+    if pt.pfe:
+        return pt.pfe
+    return {"opls_965": "F", "opls_164": "F", "opls_160": "CT", "opls_165": "H", "opls_162": "OH",
+            "opls_163": "H"}.get(t, "CF" if t in PERFLUORO_CARBONS else "")
+
 
 # --------------------------------------------------------------------------------------------- the typing
 @dataclass
@@ -502,7 +606,45 @@ def assign(mol: Chem.Mol) -> PFAssignment:
                 if f.GetSymbol() == "F":
                     types[f.GetIdx()] = "clp_FFA"
 
-    # 2. alcohols: hydrocarbon (OPLS-AA) or the TFE / Silva -CF2CH2OH segment
+    # 2a. perfluoroethers (Black et al. 2017): an ether O between two perfluorinated sp3 carbons
+    for a in mol.GetAtoms():
+        if a.GetSymbol() != "O" or types[a.GetIdx()] or a.GetDegree() != 2 or a.GetFormalCharge():
+            continue
+        cs = [x for x in a.GetNeighbors() if x.GetSymbol() == "C"]
+        if len(cs) != 2 or not all(_is_sp3_c(x) and _n(x, "H") == 0 and _n(x, "F") >= 1 for x in cs):
+            continue
+        if a.IsInRing():
+            raise _refuse(a, "is a ring ether O between fluorinated carbons (Black et al.'s parameters are for "
+                             "open-chain perfluoroethers; epoxides and cyclic ethers are not covered)")
+        types[a.GetIdx()] = "pfpe_180"
+    for a in mol.GetAtoms():
+        if a.GetSymbol() != "C" or types[a.GetIdx()]:
+            continue
+        ether = [x for x in a.GetNeighbors() if types[x.GetIdx()] == "pfpe_180"]
+        if not ether:
+            continue
+        nf, no = _n(a, "F"), len(ether)
+        eidx = {x.GetIdx() for x in ether}
+        other = [x for x in a.GetNeighbors() if x.GetSymbol() != "F" and x.GetIdx() not in eidx]
+        if any(x.GetSymbol() != "C" for x in other) or _n(a, "O") != no:
+            raise _refuse(a, "is a perfluoroether carbon with a neighbour other than C, F or ether O")
+        ch2oh = [x for x in other if _n(x, "H") == 2 and _n(x, "O") == 1 and _n(x, "C") == 1]
+        if nf == 3 and no == 1:
+            types[a.GetIdx()] = "pfpe_181"
+        elif nf == 2 and no == 2:
+            types[a.GetIdx()] = "pfpe_189"
+        elif nf == 2 and no == 1 and len(other) == 1:
+            types[a.GetIdx()] = "pfpe_161" if ch2oh else "pfpe_139"
+        elif nf == 1 and no == 1 and len(other) == 2:
+            types[a.GetIdx()] = "pfpe_141"
+        else:
+            raise _refuse(a, f"is a perfluoroether carbon with {nf} F and {no} ether O: not one of Black et al.'s "
+                             "types (CF3-O, O-CF2-O, CF2(O)C, CF(O)C2)")
+        for f in a.GetNeighbors():
+            if f.GetSymbol() == "F":
+                types[f.GetIdx()] = "opls_164" if types[a.GetIdx()] == "pfpe_161" else "pfpe_965"
+
+    # 2b. alcohols: hydrocarbon (OPLS-AA) or the TFE / Silva -CF2CH2OH segment (or Black et al.'s Zdol end)
     for a in mol.GetAtoms():
         if a.GetSymbol() != "O" or types[a.GetIdx()]:
             continue
@@ -525,6 +667,8 @@ def assign(mol: Chem.Mol) -> PFAssignment:
             for x in c.GetNeighbors():
                 if x.GetSymbol() == "H":
                     types[x.GetIdx()] = "opls_165"
+            if types[cf.GetIdx()] == "pfpe_161":           # Black et al.'s Zdol end group: published as a whole
+                continue
             if nf == 3:
                 types[cf.GetIdx()] = "opls_161"
             elif nf == 2:
@@ -629,7 +773,8 @@ def assign(mol: Chem.Mol) -> PFAssignment:
                 continue
             raise _refuse(a, "is a fluorinated carbon on a benzene ring other than CF3")
         pf_nbrs = [x for x in carbons if _perfluoro_c(x) or types[x.GetIdx()] in ("clp_C1F", "clp_CBT", "clp_CFA",
-                                                                                     "opls_161", SILVA_CF2)]
+                                                                                     "opls_161", SILVA_CF2,
+                                                                                     *PFPE_CARBONS)]
         if nf in (1, 2) and not pf_nbrs:
             raise _refuse(a, f"is a CF{'2' if nf == 2 else ''} with no perfluorinated carbon neighbour (a gem-"
                              "difluoride or isolated CF inside a hydrocarbon: W&J and Pádua cover perfluoro blocks)")
@@ -651,6 +796,7 @@ def assign(mol: Chem.Mol) -> PFAssignment:
                 host, "opls_140")
         elif sym == "F":
             t = {"opls_718": "opls_719", "opls_720": "opls_721", "opls_727": "opls_728", "opls_725": "opls_726",
+                 **{c: "pfpe_965" for c in PFPE_CARBONS - {"pfpe_161"}}, "pfpe_161": "opls_164",
                  "opls_957": "opls_956", "opls_959": "opls_956", "opls_960": "opls_956"}.get(host)
             if t is None and host in PERFLUORO_CARBONS:
                 t = "opls_965"
@@ -718,6 +864,15 @@ RECIPES: list[tuple[frozenset[str], bool | None, str, tuple[str, ...]]] = [
     (frozenset({"tfe"}), False, "OPLS-AA 2,2,2-trifluoroethanol (opls_160-165)", ("silva2016",)),
     (frozenset({"tfe", "perfluoroalkane"}), None, "1H,1H-perfluoroalcohol: Silva et al. 2016 (W&J tail, TFE "
      "parameters for -CF2CH2OH, Pádua's junction torsions; liquid density within 2 %)", ("silva2016",)),
+    (frozenset({"pfpe"}), False, "perfluoropolyether: Black et al. 2017 (OPLS-AA-based PFPE; density within "
+     "0.02 g/cm³, ΔHvap within 0.3 kcal/mol)", ("black2017",)),
+    (frozenset({"pfpe", "perfluoroalkane"}), False, "perfluoroether: Black et al. 2017's ether groups with W&J "
+     "perfluoroalkyl chains (their model's CFn are W&J's); a C-C-C-C torsion through an O-bonded carbon takes W&J's",
+     ("black2017", "watkins2001")),
+    (frozenset({"pfpe", "tfe"}), False, "perfluoropolyether alcohol (Zdol end group): Black et al. 2017",
+     ("black2017",)),
+    (frozenset({"pfpe", "tfe", "perfluoroalkane"}), False, "perfluoropolyether alcohol (Zdol end group) with W&J "
+     "chains: Black et al. 2017", ("black2017", "watkins2001")),
     (frozenset({"sulfonate"}), False, "CL&P triflate anion (Canongia Lopes & Pádua 2004)", ("clp2004",)),
     (frozenset({"sulfonate", "perfluoroalkane"}), False, "perfluoroalkanesulfonate anion: W&J chain + CL&P's "
      "perfluoroalkanesulfonyl head (the combination Damião et al. 2023 describe; their own files not checked)",
@@ -773,6 +928,41 @@ def _touches_clp(types: tuple[str, ...]) -> bool:
     return any(t.startswith("clp_") for t in types)
 
 
+def _touches_pfe(types: tuple[str, ...]) -> bool:
+    return any(t.startswith("pfpe_") for t in types)
+
+
+def _pfe_key(types: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(pfe_class(t) for t in types)
+
+
+def pfe_torsion(terms: tuple[tuple[int, float, float], ...], label: str, line: int) -> Term:
+    """A PFE.xml torsion (k [1 + cos(nφ - phase)], kJ/mol) as LAMMPS ``opls`` V1..V4 when every phase is OPLS's
+    (0 for odd n, π for even n: V_n = 2k), else as ``fourier`` (K = k, n, d = phase in degrees), kcal/mol. The
+    periodicity-0 terms are constants and are dropped."""
+    live = [(n, ph, k) for n, ph, k in terms if n > 0 and k != 0.0]
+    src = f"PFE.xml line {line} (Black et al. 2017)"
+    if all(abs(ph - (0.0 if n % 2 else math.pi)) < 1e-4 and n <= 4 for n, ph, k in live):
+        v = [0.0, 0.0, 0.0, 0.0]
+        for n, _ph, k in live:
+            v[n - 1] = 2.0 * k / KJ_PER_KCAL
+        return Term("opls", tuple(x + 0.0 for x in v), label, src)
+    flat: list[float] = []
+    for n, ph, k in live:
+        flat += [k / KJ_PER_KCAL, float(n), math.degrees(ph)]
+    return Term("fourier", tuple(flat), label, src)
+
+
+def opls_to_fourier(v: tuple[float, ...]) -> tuple[float, ...]:
+    """OPLS V1..V4 (E = ½V1(1+cos φ) + ½V2(1-cos 2φ) + ½V3(1+cos 3φ) + ½V4(1-cos 4φ)) as fourier K, n, d terms
+    (E = Σ K [1 + cos(nφ - d)]): K = V/2, d = 0° for odd n and 180° for even n. Exact."""
+    flat: list[float] = []
+    for n, vn in enumerate(v, start=1):
+        if vn != 0.0:
+            flat += [vn / 2.0, float(n), 0.0 if n % 2 else 180.0]
+    return tuple(flat) if flat else (0.0, 1.0, 0.0)
+
+
 def _junction_term(types: tuple[str, ...]) -> bool:
     fl = any(_clp(t) == "CF" for t in types if TYPES[t].family in ("perfluoroalkane", "tfe"))
     hy = any(_clp(t) == "CT" for t in types if TYPES[t].element == "C")
@@ -780,6 +970,12 @@ def _junction_term(types: tuple[str, ...]) -> bool:
 
 
 def bond_parameters(a: str, b: str) -> Term:
+    if _touches_pfe((a, b)):
+        k = _lookup(PFE_BONDS, _pfe_key((a, b)))
+        if k:
+            r0, kk, line = PFE_BONDS[k]
+            return Term("harmonic", (kk / 2.0 / KJ_PER_KCAL / 100.0, r0 * 10.0), "pfe " + "-".join(k),
+                        f"PFE.xml line {line} (Black et al. 2017)")
     if _touches_clp((a, b)):
         k = _lookup(CLP_BONDS, (_clp(a), _clp(b)))
         if k:
@@ -794,6 +990,12 @@ def bond_parameters(a: str, b: str) -> Term:
 
 
 def angle_parameters(a: str, b: str, c: str) -> Term:
+    if _touches_pfe((a, b, c)):
+        k = _lookup(PFE_ANGLES, _pfe_key((a, b, c)))
+        if k:
+            th, kk, line = PFE_ANGLES[k]
+            return Term("harmonic", (kk / 2.0 / KJ_PER_KCAL, math.degrees(th)), "pfe " + "-".join(k),
+                        f"PFE.xml line {line} (Black et al. 2017)")
     if _touches_clp((a, b, c)):
         k = _lookup(CLP_ANGLES, (_clp(a), _clp(b), _clp(c)))
         if k:
@@ -820,20 +1022,27 @@ def _opls(v_kj: tuple[float, ...]) -> tuple[float, float, float, float]:
 def dihedral_parameters(a: str, b: str, c: str, d: str) -> Term:
     """The proper dihedral a-b-c-d (type names), looked up in this order:
 
+    0. a term touching a perfluoroether atom (pfpe_*): Black et al.'s PFE.xml by class;
     1. a term touching a CL&P anion head: CL&P by class;
-    2. four W&J perfluoroalkyl carbons: Watkins & Jorgensen's C-C-C-C torsion (as ``md.oplsaa``);
+    2. four W&J perfluoroalkyl carbons: Watkins & Jorgensen's C-C-C-C torsion (as ``md.oplsaa``; also through the
+       CF2 of Silva's -CF2CH2OH and the O-bonded carbons of a perfluoroether, which have no C-C-C-C term of their own);
     3. a GROMACS term that names the TFE bond type CT_4 (Duffy's trifluoroethanol terms);
     4. a fluoroalkyl / hydrocarbon junction: Pádua 2002's terms from CL&P, by class;
     5. GROMACS by bond type (exact, then X wildcards), as GROMACS itself looks it up.
     """
     tt = (a, b, c, d)
+    if _touches_pfe(tt):
+        k = _lookup(PFE_DIHEDRALS, _pfe_key(tt))
+        if k:
+            terms, line = PFE_DIHEDRALS[k]
+            return pfe_torsion(terms, "pfe " + "-".join(k), line)
     if _touches_clp(tt):
         k = _lookup(CLP_DIHEDRALS, tuple(_clp(t) for t in tt))
         if k:
             v, line = CLP_DIHEDRALS[k]
             return Term("opls", _opls(v), "clp " + "-".join(k), f"CL&P il.ff line {line}")
-    if set(tt) <= PERFLUORO_CARBONS | {SILVA_CF2}:
-        label, v, src = O.dihedral_parameters(*(("opls_962" if t == SILVA_CF2 else t) for t in tt))
+    if set(tt) <= WJ_CCCC:
+        label, v, src = O.dihedral_parameters(*(("opls_962" if t not in PERFLUORO_CARBONS else t) for t in tt))
         return Term("opls", tuple(v), label, src)
     bts = tuple(_gmx_bt(t) for t in tt)
     if "CT_4" in bts:

@@ -91,6 +91,10 @@ CASES = {
                                                    "published"),
     "[O-]C(=O)C(F)(F)F": ({"clp_CFA", "clp_FFA", "clp_CO2", "clp_O2F"}, -1, "published"),
     "[Na+]": ({"opls_407"}, 1, "published"),
+    "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)OC(F)(F)C(F)(F)C(F)(F)C(F)(F)F": ({"pfpe_180", "pfpe_139", "pfpe_965", "opls_962",
+                                                                    "opls_961"}, 0, "published"),
+    "FC(F)(F)OC(F)(F)C(F)(F)OC(F)(F)C(F)(F)OC(F)(F)F": ({"pfpe_180", "pfpe_181", "pfpe_139"}, 0, "published"),
+    "OCC(F)(F)OC(F)(F)C(F)(F)OC(F)(F)OC(F)(F)CO": ({"pfpe_161", "pfpe_189", "opls_160", "opls_164"}, 0, "published"),
 }
 
 
@@ -138,6 +142,8 @@ def test_semifluorinated_junction_uses_padua_torsions():
     ("O=S(=O)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F", "S outside a sulfonate"),
     ("FC(F)=C(F)C(F)(F)F", "sp2/sp carbon"),
     ("Fc1cccc2ccccc12", "single benzene ring"),
+    ("FC(F)(F)[C@]1(F)OC1(F)F", "ring ether O"),
+    ("FC(F)(F)OC(F)(Cl)F", "not C, H, F, O, S or Br"),
 ])
 def test_refuses_what_no_source_covers(smiles, why):
     with pytest.raises(F.ForceFieldError, match=why):
@@ -151,7 +157,8 @@ def test_liquid_slab_refuses_ions_but_typing_allows_them():
 
 
 # -------------------------------------------------------------------------------------------- provenance
-PROVENANCE = ["CCCCF", "Cc1ccc(F)cc1", "FC(F)(F)c1ccccc1", "Fc1ccc(Br)cc1", "Fc1c(F)c(F)c(F)c(F)c1F",
+PROVENANCE = ["FC(F)(F)C(F)(F)C(F)(F)C(F)(F)OC(F)(F)C(F)(F)C(F)(F)C(F)(F)F", "OCC(F)(F)OC(F)(F)C(F)(F)OC(F)(F)OC(F)(F)CO",
+              "CCCCF", "Cc1ccc(F)cc1", "FC(F)(F)c1ccccc1", "Fc1ccc(Br)cc1", "Fc1c(F)c(F)c(F)c(F)c1F",
               "CCCCC(F)(F)C(F)(F)C(F)(F)C(F)(F)F", "OCC(F)(F)C(F)(F)C(F)(F)F", "OCCC(F)(F)C(F)(F)C(F)(F)F",
               "[O-]S(=O)(=O)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F", "[O-]C(=O)C(F)(F)F", C6F14]
 
@@ -163,7 +170,8 @@ def test_every_term_names_its_source_line(smiles):
         assert "line" in t.source and "[" in t.source, t.source
     for table in (tm.bond_types, tm.angle_types, tm.dihedral_types, tm.improper_types):
         for k, t in table.items():
-            assert ("ffbonded.itp line" in t.source or "il.ff line" in t.source), (k, t.source)
+            assert ("ffbonded.itp line" in t.source or "il.ff line" in t.source or "PFE.xml line" in t.source), \
+                (k, t.source)
     assert tm.references and all(r for r in tm.references)
     assert tm.recipe and tm.tier in ("published", "composed", "transferred")
 
@@ -173,7 +181,7 @@ def test_every_table_entry_has_a_source():
         assert "line" in t.source and t.reference in PF.REFERENCES, t.name
         assert t.charge is not None or t.name == PF.SILVA_CF2
     for table in (PF.GMX_BONDS, PF.GMX_ANGLES, PF.GMX_DIHEDRALS, PF.CLP_BONDS, PF.CLP_ANGLES, PF.CLP_DIHEDRALS,
-                  PF.CLP_IMPROPERS):
+                  PF.CLP_IMPROPERS, PF.PFE_BONDS, PF.PFE_ANGLES, PF.PFE_DIHEDRALS):
         for k, v in table.items():
             line = v[-2] if table in (PF.GMX_BONDS, PF.GMX_ANGLES, PF.GMX_DIHEDRALS) else v[-1]
             assert isinstance(line, int) and line > 0, k
@@ -195,8 +203,51 @@ def test_unit_conversions():
     assert np.allclose(np.array(v) / 4.184, O.rb_to_opls(O.PERFLUORO_CCCC_RB), atol=1e-5)
 
 
+def _opls_energy(v, phi):
+    return (0.5 * v[0] * (1 + math.cos(phi)) + 0.5 * v[1] * (1 - math.cos(2 * phi)) + 0.5 * v[2] * (1 + math.cos(3 * phi))
+            + 0.5 * v[3] * (1 - math.cos(4 * phi)))
+
+
+def _fourier_energy(c, phi):
+    return sum(c[i] * (1 + math.cos(c[i + 1] * phi - math.radians(c[i + 2]))) for i in range(0, len(c), 3))
+
+
+def test_perfluoroethers_switch_to_an_exact_fourier_series():
+    """Black et al.'s CFn-O torsions have phase angles: the molecule is written with dihedral_style fourier, every
+    OPLS torsion converted exactly (same energy at every angle), the PFE terms as PFE.xml gives them."""
+    tm = typed("FC(F)(F)C(F)(F)C(F)(F)C(F)(F)OC(F)(F)C(F)(F)C(F)(F)C(F)(F)F")
+    assert tm.styles["dihedral"] == "fourier"
+    assert all(t.style == "fourier" and len(t.coeffs) % 3 == 0 for t in tm.dihedral_types.values())
+    v = O.rb_to_opls(O.PERFLUORO_CCCC_RB)
+    c = tm.dihedral_types["perfluoro CT-CT-CT-CT"].coeffs
+    for phi in np.linspace(-math.pi, math.pi, 37):
+        assert _fourier_energy(c, phi) == pytest.approx(_opls_energy(v, phi), abs=1e-9)
+    t = tm.dihedral_types["pfe F-CF-OS-CF"]
+    terms, _line = PF.PFE_DIHEDRALS[("F", "CF", "OS", "CF")]
+    want = sum(k * (1 + math.cos(n * 0.7 - ph)) for n, ph, k in terms if n > 0) / 4.184
+    assert _fourier_energy(t.coeffs, 0.7) == pytest.approx(want, abs=1e-9)
+    assert any("fourier" in n for n in tm.notes)
+    back = F.TypedMolecule.from_dict(tm.to_dict())
+    assert back.styles == tm.styles and back.tier == tm.tier and back.recipe == tm.recipe
+
+
+def test_perfluoroether_ff_params_line():
+    import tempfile
+    from pathlib import Path
+
+    tm = typed("FC(F)(F)OC(F)(F)C(F)(F)OC(F)(F)C(F)(F)OC(F)(F)F")
+    with tempfile.TemporaryDirectory() as d:
+        L.write_ff_params(Path(d) / "ff.params", tm)
+        lines = [ln for ln in (Path(d) / "ff.params").read_text(encoding="utf-8").splitlines()
+                 if ln.startswith("dihedral_coeff")]
+    for ln in lines:
+        f = ln.split("#")[0].split()
+        m = int(f[2])
+        assert len(f) == 3 + 3 * m and all(float(x) == int(float(x)) for x in f[4::3])     # m (K n d) x m
+
+
 # -------------------------------------------------------------------------------------------- LAMMPS smoke
-@pytest.mark.parametrize("smiles", ["OCC(F)(F)C(F)(F)C(F)(F)F", "Cc1ccc(F)cc1"])
+@pytest.mark.parametrize("smiles", ["OCC(F)(F)C(F)(F)C(F)(F)F", "Cc1ccc(F)cc1", "FC(F)(F)C(F)(F)OC(F)(F)C(F)(F)OC(F)(F)F"])
 def test_lammps_smoke_run(smiles, tmp_path):
     """A few hundred steps of the bulk and slab stages of an OPLS-AA/PF liquid: every coefficient is written in a
     form LAMMPS reads, and the energies stay finite (not a result: far too short)."""

@@ -328,6 +328,16 @@ def type_oplsaa_pf(mol: Chem.Mol, name: str = "", smiles: str = "") -> TypedMole
             t = PF.improper_carboxylate()
             tm.improper_types.setdefault(t.label, TermType(t.style, list(t.coeffs), t.source))
             tm.impropers.append((c, o1, a.GetIdx(), o2, t.label))
+    if any(t.style == "fourier" for t in tm.dihedral_types.values()):
+        # a torsion with phase angles (Black et al.'s perfluoroethers): one dihedral style for the molecule, so every
+        # OPLS torsion is written as the exactly equivalent fourier series
+        for lbl, t in list(tm.dihedral_types.items()):
+            if t.style == "opls":
+                tm.dihedral_types[lbl] = TermType("fourier", list(PF.opls_to_fourier(tuple(t.coeffs))),
+                                                  t.source + "; written as the equivalent fourier series")
+        tm.styles["dihedral"] = "fourier"
+        tm.notes.append("torsions with phase angles (Black et al.'s perfluoroethers): dihedral_style fourier; the OPLS "
+                        "torsions are written as their exact fourier equivalents")
     if transfers:
         tm.tier = "transferred"
     tm.notes.append(f"recipe ({tm.tier}): {recipe}")
@@ -485,4 +495,4 @@ def estimate_density(mol: Chem.Mol) -> tuple[float, str]:
 def describe_backends(file=sys.stdout) -> None:
     for key, b in BACKENDS.items():
         ok, why = backend_available(key)
-        print(f"{key:7s} {'yes' if ok else 'no ':3s} {b.description}" + ("" if ok else f" [{why}]"), file=file)
+        print(f"{key:9s} {'yes' if ok else 'no ':3s} {b.description}" + ("" if ok else f" [{why}]"), file=file)

@@ -340,8 +340,11 @@ def _g(x: float) -> str:
 def _coeff_text(style: str, coeffs: Sequence[float]) -> str:
     """Coefficients as LAMMPS reads them: integers where the style wants integers."""
     c = list(coeffs)
-    if style == "fourier":                       # m K n d
-        return f"1 {_g(c[0])} {int(round(c[1]))} {_g(c[2])}"
+    if style == "fourier":                       # m K1 n1 d1 [K2 n2 d2 ...]
+        if len(c) % 3:
+            raise ValueError(f"fourier coefficients come in (K, n, d) triples, got {len(c)}")
+        return f"{len(c) // 3} " + " ".join(f"{_g(c[i])} {int(round(c[i + 1]))} {_g(c[i + 2])}"
+                                             for i in range(0, len(c), 3))
     if style == "cvff":                          # K d n
         return f"{_g(c[0])} {int(round(c[1]))} {int(round(c[2]))}"
     return " ".join(_g(v) for v in c)
