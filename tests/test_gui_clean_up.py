@@ -102,7 +102,8 @@ def test_actions_keys_and_buttons(win):
     win.keymap.set_state(state, save=False)
     assert _key(win.a_clean_2d) == ["Ctrl+Shift+L"] and _key(win.a_clean_3d) == ["Ctrl+Shift+M"]
     assert win.keymap.conflicts() == {}
-    assert win.model_kit.b_clean.toolTip().endswith("(Ctrl+Shift+M)")          # the kit's button shows its key
+    shown = win.keymap.key_text("build.clean_3d")                               # ⇧⌘M on macOS
+    assert shown and win.model_kit.b_clean.toolTip().endswith(f"({shown})")    # the kit's button shows its key
     kit = win.model_kit
     assert kit.b_clean.text() == "Clean up" and not kit.b_clean.isEnabled()       # no edit open
     kit.start(_distorted(GENX_R))

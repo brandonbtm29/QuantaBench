@@ -1028,7 +1028,7 @@ after-the-fact checks, into `progress.json`) and by the Simulate panel's review 
   (styles in the build, GPU switches), disk space and run time against the time window.
 - Acceptance: a test per check with a deliberately broken setup; the C6F14 pilots' folders pass.
 
-## BUILD-CLEAN: "Clean up" for a molecule's 2D layout and 3D structure · in-PR 2026-11-28 (branch `feat/build-clean`)
+## BUILD-CLEAN: "Clean up" for a molecule's 2D layout and 3D structure · in-PR 2026-11-28 (PR #66, branch `feat/build-clean`)
 Brandon (2026-11-22): "When a molecule is built, do we currently have an option where we can 'clean up' the structure
 like ChemDraw?"
 - Before:
