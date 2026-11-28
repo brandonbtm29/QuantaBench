@@ -261,7 +261,25 @@ def test_benchmark_variants_and_recommendation_know_openmm():
     assert rec.ns_per_day == pytest.approx(90.0) and rec.speed_source == "benchmark"
     ref = LR.recommend_long_range("slab", (40.3, 40.3, 200.9), n_atoms=9780, machine=m, purpose="reference")
     assert (ref.method, ref.accelerator) == ("ewald", "gpu") and "LJ-PME" in ref.reason
+    # GPU-SCREEN-1: the model is checked against A-fine; the mixed-precision on-the-fly samples are not usable as they are
+    assert any("0.3 mN/m high in mixed precision" in n for n in ref.notes)
+    assert not any("has not yet been checked" in n for n in ref.notes)
     assert not any("GPU stays idle" in n for n in ref.notes)
+
+
+def test_ljpme_mesh_is_always_given():
+    """GPU-SCREEN-1: LJ-PME gets a mesh even when the folder names none (``disp_grid`` "accuracy", or a folder written
+    before MD-LR): OpenMM given a G and a zero mesh computes −inf on its CPU platform and crashes on Reference. The
+    rule (G 2.77 / rc, h ≤ 0.52 / G) gives A-fine's own 18 x 18 x 90 for its slab box."""
+    g, n = OE.ljpme_parameters(OE.Physics(lj="pme", cutoff_A=12.0), (40.4457, 40.4457, 201.187))
+    assert g == pytest.approx(2.77 / 12.0) and n == (18, 18, 90)
+    assert OE.ljpme_parameters(OE.Physics(lj="pme", disp_gewald=0.2717, disp_spacing=1.0), (40.0, 40.0, 200.0)) == (
+        0.2717, (40, 40, 200))
+    meta = {"molecule": {}, "config": {"dispersion": "ewald", "cutoff": 12.0, "disp_grid": "accuracy",
+                                       "kspace_accuracy": 1e-6}}
+    phys = OE.physics_from_setup(meta, "slab")
+    assert phys.lj == "pme" and phys.disp_spacing is None and phys.ewald_tolerance == 1e-5
+    assert OE.ljpme_parameters(phys, (40.0, 40.0, 200.0))[1] == (18, 18, 89)
 
 
 def _openmm_like_folder(folder: Path, kb_bias: float = 0.0, n: int = 40_000, every: int = 20, frame_every: int = 1000,

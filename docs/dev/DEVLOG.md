@@ -1220,3 +1220,25 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
 - Tests: `tests/test_md_bench_slab.py` (version 4 and its line; the cutoff variants' slab and bulk inputs have the
   mesh rule, `ewald` does not), `tests/test_md_openmm.py` (the OpenMM reason quotes 11.41, not 11.71, and the screen
   gap).
+
+## 2026-11-25: GPU-SCREEN-1, OpenMM LJ-PME against A-fine (branch `feat/gpu-screen-1-openmm-ljpme-default`)
+- **The run** (Brandon approved, 2026-11-25): A-fine's C6F14 slab (489 molecules, OPLS-AA W&J) from A-fine's bulk end
+  state and box, 2 + 10 ns on the workstation's RX 9060 XT with QuantaBench's OpenMM engine (main a576434): LJ-PME at the
+  spacing rule (A-fine's 18 x 18 x 90, G 0.2308), PME Coulomb 1e-5, rc 12 Å, OpenCL mixed, one CPU thread, WMI at
+  below-normal priority beside CREST and a LAMMPS replica (neither slowed). 74 ns/day with σ samples every 20 fs,
+  test-area every 200 fs and frames every 1 ps. Folder `Runs\md-pilot-2026-11-20\c6f14_oplsaa_openmm_ljpme\`.
+- **σ**: 13.31 ± 0.63 mN/m from the on-the-fly samples; 13.02 ± 0.63 corrected by their mean difference from the
+  double-precision LAMMPS rerun of the run's 10,000 production frames with A-fine's exact settings (cloud, PyPI LAMMPS);
+  A-fine 12.62 ± 0.40: +0.40 ± 0.75 (0.5 combined SE).
+- **Model check** (OpenCL double on the GPU, = Reference): A-fine's 101 frames −0.001 ± 0.007 mN/m against LAMMPS at
+  A-fine's settings; the run's frames +0.006 ± 0.001. Converged: dispersion mesh x2 −0.023, G·rc 3.26 +0.040 (−0.001
+  with mesh x2), Coulomb 1e-6 +0.006; the geometric-minus-LB table's jump at rc −0.011. OpenMM's LJ-PME pair energy
+  is continuous at rc (it shifts it), checked on a pair.
+- **The on-the-fly check fails**: +0.30 ± 0.08 mN/m (mixed minus double). Located: the `NonbondedForce` with LJ-PME in
+  mixed precision (+0.181 ± 0.018 on 3,688 frames; Coulomb PME alone +0.024 ± 0.012, bonded −0.07 ± 0.12 with the
+  rms 7.3 noise, table +0.001); a continuation from a state file sampling both precisions on identical
+  configurations: +0.30 ± 0.08. So no default change; the options are in BACKLOG GPU-SCREEN-1 for Brandon.
+- **Fixed**: `setLJPMEParameters(G, 0, 0, 0)` (no spacing in the folder) gives −inf on the CPU platform and a segfault
+  on Reference: `ljpme_parameters` always gives the rule's mesh. Test: `test_ljpme_mesh_is_always_given`.
+- Found on the way: `getPMEParametersInContext` raises "not using PME" on OpenCL for an LJPME context (works on the
+  CPU platform); `ruff check` (0.17.6) flags two existing lines in `dist/profile.py` (F401, S607), not touched here.
