@@ -9,7 +9,8 @@ pages:
                 are not installed are listed, disabled, with why), solvent, charge and multiplicity, the conformer
                 search, the rank step and the DFT (QM) stage
     Resources   where it runs (this computer; the workers are listed for DIST-3), threads, priority, GPU, memory and
-                the time limit per molecule
+                the time limit per molecule; for this computer, the device planner's CPU only / GPU only / GPU + threads
+                times and the fastest (``dist.scheduler``, SCHED-3)
     Review      the review of the molecules for this job (``chem.advisor``, as the Review window): findings, the Fast
                 screen / Recommended / Careful presets, and Apply, which sets the dialog's fields
 
@@ -378,6 +379,13 @@ class JobDialog(QDialog):
         self.run_on_info = _note()
         form.addRow("Run on", self.w_run_on)
         form.addRow(self.run_on_info)
+        self.devices_info = _note()
+        self.devices_info.setObjectName("job_devices")
+        self.devices_info.setToolTip("The device planner (quantabench-cli jobs plan): this job's time on the CPU only, "
+                                     "the GPU only and the GPU + threads, from this computer's benchmarks. How it runs "
+                                     "is Settings > Compute > Parallel lanes.")
+        self._profile, self._profile_read, self._sizes = None, False, {}
+        form.addRow("Devices", self.devices_info)
         if others:
             self.start_probe()
         self.w_threads = QSpinBox()
@@ -676,6 +684,8 @@ class JobDialog(QDialog):
         self.run_on_info.setText(self._run_on_note())
         self.run_on_info.setVisible(not local)
         spec = self.spec()
+        self.devices_info.setText(self._devices_note(spec.config()) if local else "")
+        self.devices_info.setVisible(local)
         problems = spec.problems()
         if not spec.cfg.qm_method and self.w_qm_on.isChecked():
             problems.append("DFT: give a functional")
@@ -683,6 +693,40 @@ class JobDialog(QDialog):
         self.problems.setText("; ".join(problems))
         self.problems.setVisible(bool(problems))
         self.submit_btn.setEnabled(not problems and bool(self.ids()))
+
+    def _devices_note(self, cfg) -> str:
+        """The device planner's comparison for this job on this computer (SCHED-3); never raises."""
+        try:
+            from .. import priority
+            from ..dist import profile, scheduler
+
+            if not self._profile_read:
+                self._profile, self._profile_read = profile.load_profile(profile.machine_name()), True
+            ids = self.ids()
+            size, rotors = self._mean_size(ids)
+            return scheduler.dialog_text(cfg, len(ids), self._profile, budget=priority.budget_of(cfg), size=size,
+                                         rotors=rotors)
+        except Exception as exc:  # noqa: BLE001 - a note never breaks the dialog
+            return f"Devices: no estimate ({type(exc).__name__}: {exc})"
+
+    def _mean_size(self, ids: list[str], sample: int = 200) -> tuple[float, float]:
+        """(atoms with hydrogens, rotatable bonds) on average over up to ``sample`` of ``ids`` (cached per id list)."""
+        key = (len(ids), ids[0] if ids else "", ids[-1] if ids else "")
+        if key not in self._sizes:
+            from ..chem.inputs import MoleculeInput
+            from ..dist import speed
+
+            step = max(1, len(ids) // sample)
+            sizes, rotors = [], []
+            for ident in ids[::step][:sample]:
+                row = self.win.model.row(ident)
+                if row is None or not row.smiles:
+                    continue
+                inp = row.input if isinstance(row.input, MoleculeInput) else MoleculeInput(id=ident, smiles=row.smiles)
+                sizes.append(speed.molecule_size(inp))
+                rotors.append(speed.molecule_rotors(inp))
+            self._sizes[key] = ((sum(sizes) / len(sizes), sum(rotors) / len(rotors)) if sizes else (0.0, 0.0))
+        return self._sizes[key]
 
     def _level_note(self) -> str:
         from ..chem import engines

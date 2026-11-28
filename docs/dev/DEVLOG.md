@@ -1242,3 +1242,38 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
   on Reference: `ljpme_parameters` always gives the rule's mesh. Test: `test_ljpme_mesh_is_always_given`.
 - Found on the way: `getPMEParametersInContext` raises "not using PME" on OpenCL for an LJPME context (works on the
   CPU platform); `ruff check` (0.17.6) flags two existing lines in `dist/profile.py` (F401, S607), not touched here.
+
+## 2026-11-28: SCHED-3 PR 1, the device planner (branch `feat/sched-3-device-planner`)
+- **What** (Brandon approved starting SCHED-3 on 2026-11-27): `dist.scheduler`, the planning core of SCHED-3, and two
+  surfaces. For a job (an MD run folder, or an `md:` / `build:` / `crest:` spec) on a machine of the registry it
+  predicts the time of the CPU only, the GPU only (its host threads) and the GPU + threads, marks the fastest, gives the
+  lean assignment (the fewest threads within 10 %) and says why; for two or more jobs it checks every pair side by side
+  against one after the other. `quantabench-cli jobs plan JOB ... [--machine] [--threads] [--timings] [--slowdown]
+  [--json]`; the job dialog's Resources page shows the comparison for a build on this computer (Devices, with the
+  molecules' mean size). It plans only: the queue still runs one build and one MD job at a time (PR 2: the ledger).
+- **The data it uses:** the MD benchmark scaled by `md.bench.estimate_hours`, replaced by the run's own segments on that
+  machine (of the part with most ns left); the molecule benchmarks per lane, replaced by `--timings`' learned per-lane
+  rates; the fitted CREST cost model (none fitted yet on either computer: CREST times are "unknown" until `timings --fit`).
+- **The models, each a stated constant with its source:** LAMMPS' GPU package as g + (1 − g) x A(t)/A(t_bench) (g the
+  benchmark's "Pair" share, else 0.07 from pilots B/C; A Amdahl with serial fraction 0.35 from B/C's CPU use: 237 % of
+  600 % and 173 % of 400 %); OpenMM's GPU platform one thread; MD threads at most the physical cores. Builds: the lanes
+  `--lanes auto` plans per engine kind, each lane at the benchmark's rate x (threads / benchmark threads)^q (q 0.48 MMFF,
+  0.31 PyTorch engines, from the 2026-11-05 lane measurements, 0.4 otherwise). Side by side, physical cores are the
+  shared resource: an SMT thread is worth 0.12 of a core (the workstation's tblite lanes: 24 x 1 +9 %, 12 x 2 +14 % over
+  12 x 1). Without that, two CPU batches on the workstation's 12 cores looked 45 % faster together in the first draft.
+- **Decisions in the code:** each job keeps its assignment to its end (lanes are planned once; an MD segment keeps its
+  threads), so no "take the freed threads" credit; side by side only when neither job finishes later than in its turn
+  (a running job goes first) or the pair 10 % sooner; within 3 %, fewer threads win. dxtb never gets GPU + CPU lanes
+  (one precision per run) and no GPU option without a measured GPU rate.
+- **With the real registry** (read-only on the workstation, 2026-11-28): the MacBook's fresh profile gives the 9,780-atom
+  C6F14 slab (13 ns, 16 Å) ~4.3 h on OpenMM's GPU (single precision) against ~33 h on 9 CPU threads, and AIMNet2 on CPU
+  lanes (7,104/h vs 5,179/h on MPS); beside each other they fit its 9-thread budget. The workstation's entry (2026-11-06)
+  has no MD benchmark and no GPU (a CPU-only PyTorch then), so its MD jobs get "no prediction" until tonight's refresh;
+  its AIMNet2 GPU ratio (~10x in docs/PLATFORMS.md) is not in the registry, so the tests cover a faster and a slower GPU.
+- **Tests:** `tests/test_scheduler.py` (29: choices, lean, shared cores, learned segments and timings, pairs, a running
+  job, slowdown, specs, run folders, the CLI with a registry, the dialog text) and `test_the_dialog_shows_the_device_planner`
+  in `tests/test_gui_jobs.py`. Workstation (Windows, its `.venv`): test_scheduler, test_gui_jobs, test_cli, test_profile
+  70 passed. Cloud (Linux, core deps only as in CI, xvfb): the full suite 2,005 passed, 111 skipped.
+- **Questions for Brandon** (BACKLOG SCHED-3): pin the GPU MD constants with a `gpu-cutoff16` thread sweep on the
+  workstation (~10 min, when the GPU is free)? Use the planner's GPU-lane rule in `--lanes auto` (PR 2)?
+- **Next:** SCHED-3 PR 2 (the ledger in the queue, the Jobs dock's shares, RAM/VRAM, the measured slowdown).

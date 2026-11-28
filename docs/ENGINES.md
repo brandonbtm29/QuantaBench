@@ -992,6 +992,76 @@ spell waits up to 2 s) and adds the latest sample to `GET /v1/info` (`"sensors"`
 older worker answers 404; the GUI then shows "older worker without sensors" and asks again after 10 minutes.
 Clients that do not know the `sensors` key ignore it.
 
+## Planning devices (`quantabench-cli jobs plan`, the job dialog; SCHED-3)
+
+Brandon (2026-11-23): "The point of the scheduler is to compare what each job needs, then optimize and make one job go
+faster by dedicating just GPU, CPU, or both." The device planner (`dist.scheduler`, SCHED-3 PR 1) does that from what
+QuantaBench has measured, and says why. It plans only: nothing is started or changed.
+
+```
+quantabench-cli jobs plan JOB [JOB ...] [--machine NAME] [--threads N] [--timings [PATH ...]] [--slowdown 0.1] [--json]
+
+quantabench-cli jobs plan Runs/md-pilot/c6f14_cutoff16                       # an MD run folder
+quantabench-cli jobs plan "md:atoms=9780,ns=13,dispersion=cutoff16" "crest:molecules=1318,atoms=40,threads=10,running=yes"
+quantabench-cli jobs plan "build:method=aimnet2,molecules=5000,atoms=30" --machine <another machine>
+```
+
+A JOB is an MD run folder (its atoms, the ns still to run, its dispersion, its engine once it has started, its
+segments; a running one keeps its segment's threads and device) or a spec: `md:atoms=,ns=,dispersion=[,engine=lammps|openmm][,geometry=slab|bulk][,box=LXxLYxLZ]`,
+`build:method=,molecules=[,solvent=][,atoms=]` (a batch through the pipeline) or
+`crest:molecules=,atoms=[,rotors=][,method=gfnff|gfn2][,quick=yes|no]`. Each also takes `name=`, `threads=N` (it runs on
+exactly N threads, as its lane spec says), `device=cpu|gpu` and `running=yes` (it runs already: one after the other it
+comes first). `--machine` plans for another machine of the registry with its own benchmarks and thread budget.
+
+**For each job**, three assignments and their time to finish:
+- **CPU only** on the thread budget; **GPU only** with the host threads it needs (MD: 1; a build's GPU lane: 4);
+  **GPU + threads**. Each line gives the numbers behind it and where they come from, and the fastest is marked. Of
+  options within 3 % of each other the one with fewer threads wins.
+- **MD**: the machine's MD benchmark (`machines --bench md`) for the job's dispersion, scaled to its atoms and box as
+  `md estimate` does. The run's own segments on this machine replace the benchmark for their variant (they timed this
+  very system). LAMMPS' GPU package runs the pair style on the GPU and PPPM and the bonded terms on OpenMP threads
+  (75-86 % of the step in pilots B and C), so its time per step is g + (1 − g) x A(t)/A(t_bench): g the step's wait
+  for the GPU (the benchmark's "Pair" share; 7 % without one), A Amdahl's law with a serial fraction of 0.35 (from the
+  pilots' CPU use: 237 % of 600 % on 6 threads, 173 % of 400 % on 4). OpenMM's GPU platform needs one CPU thread.
+  Threads beyond the physical cores add nothing to an MD run. Ewald dispersion has no LAMMPS GPU style (OpenMM's
+  LJ-PME runs on GPUs).
+- **Builds** run as lanes, so a batch's rate is its lanes' sum: the CPU lanes `--lanes auto` plans for the engine
+  (MMFF one per physical core, PyTorch engines 2-thread lanes on the physical cores, external programs 2-thread lanes
+  on all threads; no memory cap here), each at the benchmark's rate x (lane threads / benchmark threads)^q (q 0.48
+  for MMFF and 0.31 for PyTorch engines from the workstation's lanes against one 12-thread process, 0.4 otherwise),
+  plus a GPU lane at the GPU's benchmark rate. `--timings` learns per-lane rates from earlier runs of the method on
+  that machine (`dist.timings`) and uses them first. Benchmark times are those of its short protocol (4 conformers,
+  2 refined): a production run takes longer, the ranking does not change. dxtb (GFN1/GFN2) stays on the CPU unless its
+  GPU rate was measured with dxtb GPU = on (5-8x slower on the workstation's GPU), and never GPU and CPU lanes in one
+  run. MMFF, tblite, the xtb program and MOPAC are CPU only.
+- **CREST** is CPU only (through WSL on Windows), in lanes of 4-5 threads, timed by the machine's fitted cost model
+  (`timings --fit`) at the mean size; without a fit the time is unknown and the planner says how to get one.
+- With the GPU, the **lean** assignment: the fewest threads within 10 % of the fastest. For GPU MD with LAMMPS that is
+  the GPU plus a few threads (about 7 of 12 with the constants above), what the job takes beside another one.
+
+**For two or more jobs**, every pair: one after the other (a running job first, else the shorter first; each on its
+fastest assignment) against the best split of the machine (one job per GPU, threads within the budget). Threads that
+share physical cores slow each other: a thread beyond the cores is worth 0.12 of a core (the workstation's tblite lanes:
+24 x 1 ran 9 % faster than 12 x 1, 12 x 2 14 %), and side by side every busy thread runs at the machine's share. Each job
+keeps its assignment to its end (lanes are planned once per run, an MD segment keeps its threads). Side by side is
+advised only when neither job finishes later than in its turn one after the other, or the pair finishes at least 10 %
+sooner; the text says which job finishes how much sooner or later. Running together has a cost that is not measured
+yet (memory bandwidth, heat): `--slowdown 0.1` makes each job 10 % slower side by side.
+
+What the planner says with the data of the two computers:
+- **GPU MD and a CPU batch.** OpenMM on a GPU takes one thread, so beside a CREST batch neither finishes later: run
+  them together. LAMMPS' GPU package needs PPPM threads, and a CPU batch on the same cores slows it: side by side it
+  gets the GPU and a few threads, and the planner says how much later the MD run then finishes.
+- **The MacBook**: AIMNet2 at 7,104 molecules/h on the CPU and 5,179/h on the Apple GPU (registry, 2026-11-28): CPU
+  lanes. OpenMM on its GPU (single precision, no FP64: σ comes from a double-precision rerun of the frames) ran the
+  3,800-atom slab at 189 ns/day against 24 for LAMMPS' 16 Å on 9 threads.
+- **Two CPU batches** on the same cores finish no sooner side by side: one after the other.
+
+In the GUI, the job dialog's Resources page shows the same comparison for the job on this computer (with the
+molecules' mean size), under **Devices**. Not yet (SCHED-3 PR 2): the queue starting a job when its profile fits beside
+the running ones (the ledger), the Jobs dock's shares, RAM and GPU memory (the machine monitor's samples), the measured
+slowdown, an MD run's thread scaling learned from its own segments, and a job taking the threads the other one frees.
+
 ## tblite (`tblite-gfn2`, `tblite-gfn1`)
 
 - **Install.** Linux/macOS: `pip install tblite` (part of the `xtb` extra). Windows: PyPI has no wheel,
