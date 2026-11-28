@@ -317,6 +317,65 @@ Newest entries at the bottom. One entry per working session or nightly run.
   (outcome `timeout`, wall = the limit) is censored data, kept out of the fit as before; a censored fit could use
   it later.
 
+## 2026-11-18: CREST lanes of 4 threads or more, rotatable bonds in the CREST cost model (SCHED-2, branch `feat/crest-lanes`, PR #29)
+Written 2026-11-28 from the PR (DOCS-1); the PR had no DEVLOG entry.
+- **Why:** in the CREST rebuild of Nov 17-18 the workstation ran 7 x 2 lanes through WSL with a 90-minute limit. 37 of
+  the 88 molecules with 17-19 rotatable bonds ran out of time, and 59 of its 230 lane-hours went to molecules that then
+  ran out of time. The MacBook's 4-thread lanes had none.
+- **Lanes:** `--conformers crest` on a machine with no known performance cores plans lanes of at least 4 threads (23
+  threads: 3 x 5 + 2 x 4). `--conformers auto` and the other external programs keep 2-thread lanes; Apple Silicon keeps
+  3 x 4.
+- **The fit:** `timings --fit` fits CREST time = A x atoms^p x (1 + rotatable bonds)^r x threads^-q when the timing rows
+  have rotor counts. A saved rotor term feeds the dynamic CREST threads, the predicted seconds and the review's
+  estimate, and a CREST run with it hands out its most expensive molecules first. The built-in model is unchanged
+  (atoms^4): the rebuild had no molecule under 9 rotatable bonds.
+- **Evidence** (the rebuild's 738 finished GFN-FF --quick searches, 25-108 atoms, 9-34 rotatable bonds): scatter x2.91
+  with atoms alone, x2.76 with the rotor term. Atoms and rotors correlate (r = 0.74), so the split differs by machine;
+  rotatable bonds, not size, picked the searches that ran out of time.
+- Tests: `tests/test_telemetry.py`, `tests/test_lanes.py`, `tests/test_priority.py`.
+
+## 2026-11-18: a time window per machine (BATCH-1, branch `feat/machine-window`, PR #30)
+Written 2026-11-28 from the PR (DOCS-1); the PR had no DEVLOG entry.
+- `machines set NAME --window 02:00-08:00` (or `none`) and the Machines dock's "Time window" field. The worker checks
+  every 30 s (`JobManager._check_window`): it pauses with drain at the end of its window and resumes at its start. A
+  window may wrap midnight and is the machine's local time; a worker started outside its window starts paused. Only a
+  pause the window made is lifted by the window (a pause by hand or the battery stays).
+- It replaces the workstation's scratch script that paused and resumed the MacBook's worker over the worker commands.
+- Tests: `tests/test_machine_control.py`, `tests/test_gui_machines.py` (94 related tests passed).
+
+## 2026-11-18: staged batches from the CLI (BATCH-1, branch `feat/batch-runner`, PR #31)
+Written 2026-11-28 from the PR (DOCS-1); the PR had no DEVLOG entry.
+- `quantabench-cli batch run` / `batch status` (`dist/batch.py`) replace the workstation's untested scratch scripts
+  `run_tranche.py` and `qb_grid.py`. Phases (`--phases gas,water`) run as attempts over what no run folder of the
+  phase has finished, up to `--max-attempts` (4); the machines are asked before each attempt (`auto` or named;
+  `--include-paused`); `--deadline` stops the batch (exit 5) and the same command resumes it.
+- Snapshots: what other machines finished in their synced run folders is copied in, from every unmerged `grid.json`
+  of the phase. On Nov 18 a killed attempt of the script had left 337 finished molecules uncounted.
+- `--list FILE` runs one input file per line; the end writes `paired.csv` and `report.md`. Not ported: the
+  QSAR-specific `analyze_tranche.py` step and the budget setter (`machines set --max-cpu` covers it).
+- Tests: `tests/test_batch.py`. Full suite in the cloud: 1,704 passed, 40 skipped.
+
+## 2026-11-19: the conformer-pool merge line logged once (branch `fix/duplicate-pool-log`, PR #32)
+Written 2026-11-28 from the PR (DOCS-1); the PR had no DEVLOG entry.
+- A molecule whose CREST and RDKit pools were merged (`--crest-with-rdkit`, the Careful recipe) logged "conformer pools
+  merged: ..." twice (seen in the CREST rebuild's logs). The first log call in `chem/pipeline.py` is gone; the note
+  stays in the pool's notes and `summary.json`. `tests/test_crest.py::test_the_merged_pool_refines_both_sources` checks
+  that the line appears once.
+
+## 2026-11-20: liquid-slab MD and surface tension (MD-2, branch `feat/md-surface-tension`, PR #33)
+Written 2026-11-28 from the PR (DOCS-1); the PR had no DEVLOG entry.
+- `md/oplsaa.py`: OPLS-AA typing traced to GROMACS `oplsaa.ff` and cross-checked against foyer's `oplsaa.xml` (85
+  checks, no difference): alkanes, perfluoroalkanes with the Watkins & Jorgensen 2001 types, benzene and
+  fluorobenzenes; anything else is refused. `md/forcefield.py`, `md/ff_driver.py`: GAFF2 and OpenFF Sage 2.3.0 with
+  AM1-BCC as cross-checks, in their own conda env.
+- `md/liquid.py` writes the packed box, the bulk NPT and slab NVT inputs and a README; dispersion variants `ewald`
+  (pppm/disp), `cutoff12`, `cutoff16`, `cutoff18`. `md/surface_tension.py`: σ from the pressure tensor with 1-ns block
+  errors, statistical inefficiency, Flyvbjerg-Petersen blocking and density-profile checks. CLI: `md liquid-slab`,
+  `md surface-tension`.
+- Checked on the workstation: a short C6F14 run on the CPU (ewald) and the GPU (cutoff16). With the GPU package
+  `in.run` hung after the bulk stage; `in.bulk` and `in.slab` as two processes work.
+- Tests: `tests/test_md_liquid.py` (25). Full suite in the cloud: 1,757 passed, 36 skipped.
+
 ## 2026-11-20: CREST through WSL in a folder inside WSL (CREST-SCRATCH-1, branch `fix/crest-wsl-scratch`)
 - **The problem:** the workstation runs CREST as `wsl:.../bin/crest`, in its Windows job folder through `/mnt/c`. Every
   file CREST writes crossed WSL's 9P bridge to NTFS: about 20 MB/s of disk writes right after a CREST batch started.
@@ -338,6 +397,38 @@ Newest entries at the bottom. One entry per working session or nightly run.
 - **Tests:** `tests/test_wsl_scratch.py` (23) runs the real scripts through a stand-in `wsl.exe` and `df` on
   Linux (dash, as on Ubuntu). Not verified: a real WSL. The disk writes with `auto` on the workstation are the
   check (BACKLOG CREST-SCRATCH-1).
+
+## 2026-11-20: the flaky speed-aware lanes test (branch `fix/flaky-lanes-test`, PR #36)
+Written 2026-11-28 from the PR (DOCS-1); the PR had no DEVLOG entry.
+- `tests/test_lanes.py::test_speed_aware_slow_lane_leaves_the_batch_to_the_fast_lane` failed about 1 run in 6: the
+  fast lane (no test delay) finished all 4 molecules before the slow lane's process was ready, so the slow lane was
+  never asked and no hold line was logged. The fast lane now takes 1 s per molecule
+  (`QUANTABENCH_TEST_LANE_DELAY=cpu1=1.0,cpu2=2.0`); the decision under test is unchanged. After: 25 sequential and 12
+  parallel runs passed. Test only, no CHANGELOG entry.
+
+## 2026-11-20: an MD benchmark of each machine, and the AMD OpenCL fix (MD-BENCH-1, branch `feat/md-bench`, PR #35)
+Written 2026-11-28 from the PR (DOCS-1); the PR had no DEVLOG entry.
+- **The GPU fix:** on the workstation's RX 9060 XT the GPU package's default "AMD_GPU" OpenCL tuning built empty
+  neighbor lists without an error, so the pair style and PPPM returned no force, energy or virial (an NPT box of C6F14
+  expanded to half its density; `clear` hung). `device_type generic` fixes it (forces match the CPU to 1e-6).
+  `md.liquid.gpu_switches()` gives `-sf hybrid gpu omp -pk gpu 1 device_type generic pair/only on -pk omp N` (15.2
+  ns/day for 9,780 atoms, against 10.2 with everything on the GPU), and `in.bulk` / `in.slab` stop with `QB_ERROR`
+  (exit 3) when the pair style returns no energy.
+- **The benchmark:** `machines --bench md` (opt-in), liquid C6F14 OPLS-AA (`small` 3,000 or `pilot` 9,780 atoms); CPU
+  `ewald`, `cutoff12`, `cutoff16` and GPU `cutoff12`, `cutoff16`. Each GPU variant repeats the CPU's `run 0` and is
+  marked `mismatch` when pressure or energy differ; results go to `md_throughput` in the machine's registry file.
+- Tests: `tests/test_md_bench.py`.
+
+## 2026-11-21: the LJ tail beyond the cutoff in `md surface-tension` (MD-2, branch `feat/md-tail-correction`, PR #37)
+Written 2026-11-28 from the PR (DOCS-1); the PR had no DEVLOG entry.
+- Pilot C (C6F14, OPLS-AA, plain 12 Å cutoff, 2 + 10 ns on the GPU) read 7.96 ± 0.32 mN/m raw, against 11.25 for
+  Tsige & Grest's 16 Å + tail and 12.33 measured (Freire 2006). A slab can't use `pair_modify tail yes`.
+- The mean-field tail for a tanh profile (Blokhuis et al. 1995): `tail_integral` (Gauss-Legendre; checked against
+  SciPy's `dblquad` and the sharp-interface limit), `lj_tail_sigma` (site densities, geometric or arithmetic mixing,
+  explicit pair coefficients), `read_lj_types` (the folder's `ff.params`, `in.slab` and data file; None for non-LJ
+  styles). `analyze` uses the slab's own tanh fit (w = d/2, checked numerically). Pilot C + tail: 11.12 (tail +3.16;
+  a hand calculation gave 3.20). Raw σ stays the headline: a corrected cutoff σ is a check against `ewald`.
+- Tests: `tests/test_md_liquid.py`.
 
 ## 2026-11-22: FIX-6, the flaky macOS test of run priority (branch `fix/fix-6-macos-priority-test`)
 - **CI's failure** (#25's macOS run, 2026-11-17): `apply_to_pids([child], "low")` changed 1 process and the next
@@ -1204,6 +1295,19 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
 - Tests: `tests/test_md_long_range.py`, `tests/test_md_liquid.py` (incl. the LAMMPS smoke run: the slab's G and grid in
   the log equal `coulomb_gewald` / `coulomb_mesh`).
 
+## 2026-11-24: PRIO-2, a live priority change on Linux lowers every thread (branch `fix/prio-2-linux-thread-priority`, PR #60)
+Written 2026-11-28 from the PR (DOCS-1); the PR left its BACKLOG, DEVLOG and CHANGELOG lines until #56, #58 and #59 merged.
+- Linux keeps a nice value and an I/O priority per thread, and `setpriority(PRIO_PROCESS, pid)` changes only the thread
+  whose id is the pid. `apply_to_process` already walked `/proc/self/task`; `apply_to_pids` (a live change: the
+  Machines dock, `machines set`) did not, so a lane's running threads (PyTorch's and OpenMP's pools) kept the old
+  priority.
+- `_linux_tasks(pid)` and `_linux_lower_tasks(pid, level)` lower every thread's nice value and I/O priority, never
+  raising one (a thread that ended is skipped; a process that ended or can't be lowered counts as "left as they
+  are"). `_pid_level`: a process is at a level only when all its threads are. macOS and Windows are unchanged.
+- Test: `tests/test_priority.py::test_apply_to_pids_lowers_every_thread_of_a_running_process` (on `main` the second
+  thread stayed at 0). Cloud: `tests/test_priority.py` 26 passed; full suite 2,044 passed, 35 skipped, and one
+  memory-guard failure late in the run that passes alone (as TEST-WIN-1's).
+
 ## 2026-11-25: MD-LR-2 follow-up after #59 and #61 merged (branch `fix/md-lr-2-followup-bench-v4`)
 - **`MD_BENCH_VERSION` 4** (`VERSION_CHANGES[4]`): `md.bench.bench_input` builds its k-space lines with
   `md.liquid._kspace`, so since #61 the benchmark's cutoff variants carry MD-LR-2's Coulomb mesh rule (G pinned, one
@@ -1242,3 +1346,16 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
   on Reference: `ljpme_parameters` always gives the rule's mesh. Test: `test_ljpme_mesh_is_always_given`.
 - Found on the way: `getPMEParametersInContext` raises "not using PME" on OpenCL for an LJPME context (works on the
   CPU platform); `ruff check` (0.17.6) flags two existing lines in `dist/profile.py` (F401, S607), not touched here.
+
+## 2026-11-26: TEST-WIN-1, lane leftover checks leave out this process's own CPCM helper (branch `fix/test-win-1-cpcm-helper-in-lane-checks`, PR #64)
+Written 2026-11-28 from the PR (DOCS-1); the PR left its BACKLOG and DEVLOG lines until #63 merged.
+- On the workstation 14 tests in `tests/test_lanes.py` failed after `test_eng_mopac.py::test_real_pipeline_native_cosmo`
+  whenever the real MOPAC is installed. `chem.cpcm_worker` keeps one CPCM helper per process until the process exits
+  (by design, FAIL-1), and that test ranks in water, so the test process's own helper (a venv launcher, its
+  interpreter and a third process) was still running at the leftover checks.
+- `lane_processes()` leaves out the processes of this process's own helpers (from the `cpcm_worker` registry, with
+  their children); any other process running the helper still counts. New test
+  `test_lane_processes_leaves_out_only_this_process_s_own_cpcm_helper`. Only `tests/test_lanes.py` changes.
+- Cloud (Linux, xvfb): ruff clean, `tests/test_lanes.py` 191 passed. The workstation, real MOPAC, the MOPAC test then
+  `tests/test_lanes.py`: `main` af571d2 15 failed (the 14 lane tests and the MOPAC test), 174 passed; the branch 1
+  failed (the MOPAC test, 3.22 vs 3.0 ± 0.2), 188 passed. TEST-WIN-1's other bullets stay open.

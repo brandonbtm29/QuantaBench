@@ -22,6 +22,12 @@
   validation's comparison with pilot B (docs/ENGINES.md, docs/PLATFORMS.md) gives B's corrected value beside the
   value as run: −0.35 ± 0.61 mN/m.
 
+### A live priority change on Linux lowers every thread of a lane (PRIO-2, 2026-11-24)
+- Linux keeps a nice value and an I/O priority per thread. A run priority changed while a batch ran (the Machines
+  dock, `machines set`) lowered only each lane's main thread, so the threads it already ran (PyTorch's and OpenMP's
+  pools, a dxtb or AIMNet2 refine) kept the old priority. `priority.apply_to_pids` now lowers every thread under
+  `/proc/<pid>/task`, never raising one. macOS and Windows are unchanged.
+
 ### OpenMM as a second MD engine, with the Apple GPU (OPENMM-1, 2026-11-23)
 - **The MD engine is a choice:** LAMMPS (the reference) or OpenMM, which runs much faster on GPUs at reduced
   arithmetic precision (single on Apple GPUs, mixed on most others); σ itself is computed afterwards in double

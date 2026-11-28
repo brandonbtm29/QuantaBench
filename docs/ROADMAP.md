@@ -2,17 +2,41 @@
 
 Status key: done, next, later. Version numbers are targets, not promises.
 
+## Next (2026-11-28)
+
+Since 0.3.0 (tagged 2026-11-18) most of the work went into molecular dynamics, ahead of the 0.4 plan: liquid-slab MD
+and surface tension (MD-2), long-range settings with recommendations (MD-LR, MD-LR-2), MD runs as jobs (SIM-1 PR 1),
+OpenMM as a second engine (OPENMM-1) and an MD benchmark per machine (MD-BENCH-1, -2, -3). Next to it: the Update
+button and launchers on all three OSes (DIST-1), Settings > Controls (UI-9) and more Settings tabs, paste and
+drag-and-drop (UI-4) and the model kit's build mode (UI-7). What comes next, in this order unless plans change:
+
+1. **A scheduler by resource** (SCHED-3): each job gets its fastest device assignment (GPU, CPU or both), and jobs run
+   side by side when that helps.
+2. **The Simulate panel** (SIM-1 PR 2), then setup templates (SIM-2: bulk liquid, solvation box, polymer melt,
+   liquid-liquid interface) and pre-flight checks for MD setups (SIM-3).
+3. **A force field for PFAS in MD** (FF-1): today's OPLS-AA typing covers only alkanes, perfluoroalkanes and
+   (fluoro)benzenes.
+4. **Clean up** for a molecule's 2D layout and 3D structure (BUILD-CLEAN).
+5. Then the rest of Spartan parity for properties (0.3's open items below: VAL-2, orbitals, scans and transition
+   states, NMR, more ML potentials).
+
+Meanwhile: double-precision σ samples on GPUs that have FP64 (GPU-SCREEN-2), and the CREST rebuild's water phase
+(CREST-RUN-1).
+
 ## Platform and multi-machine track (runs alongside the releases)
 
 QuantaBench targets Windows 11, WSL2, Linux and macOS (Apple Silicon) equally, and should let
 Brandon's MacBook and the Windows workstation work on one project together. The details, the platform matrix and
 the fork/upstream plan are in [PLATFORMS.md](PLATFORMS.md).
 
-Status 2026-11-18: P1 and P2 are built, and P3's "Run on" routing is in the job dialog. The workstation and the
+Status 2026-11-28: P1 and P2 are built, and P3's "Run on" routing is in the job dialog. The workstation and the
 MacBook ran the PFAS QSAR set together in 15 staged batches (13,206 molecules, gas and water, Nov 11-14), with
-machine control (budgets, pause and resume, work moving off a paused machine). CREST runs on the workstation through
-WSL. A CREST rebuild of the set's flexible neutral molecules is half done (BACKLOG: CREST-RUN-1). 0.3.0 is tagged
-(`v0.3.0`, 2026-11-18).
+machine control (budgets, pause and resume, work moving off a paused machine). Since 0.3.0 (`v0.3.0`, 2026-11-18)
+the run scripts became features (a time window per machine, `batch run`, CREST lanes by rotatable bonds), programs
+can no longer outlive QuantaBench, lane plans fit the free memory, and the Update button and terminal-free launchers
+work on all three OSes. CREST runs on the workstation through WSL, in a folder inside WSL. The CREST rebuild of the
+set's flexible neutral molecules finished its gas phase on 2026-11-22; its water phase runs on the workstation
+(BACKLOG: CREST-RUN-1).
 
 - **P1 (with 0.3):**
   - macOS in CI (PLAT-2) and the first run on the MacBook (PLAT-1)
@@ -26,12 +50,19 @@ WSL. A CREST rebuild of the set's flexible neutral molecules is half done (BACKL
   - tblite Windows wheels (FORK-2)
   - Windows checks of the external engines (ENG-1; CREST through WSL, ENG-2, done)
   - machine control: budgets, pause and resume, a closing laptop (DIST-7, done)
+  - an MD benchmark of each machine in ns/day, offered again when the benchmark changes (MD-BENCH-1, -2, -3, done
+    2026-11-20 to 24)
+  - robustness: programs and probes that can't outlive or hang QuantaBench (ENG-3, ENG-3b), lane plans that fit the
+    free memory (MEM-1), a cancel that reaches a paused job (FIX-8) (done 2026-11-22/23)
 - **P3 (with 0.5):**
   - "Run on" machine routing in the GUI (DIST-3, done) and per-stage routing (DIST-4)
   - the staged-batch scripts as features: a time window per machine, deadlines, batch lists (BATCH-1), and CREST
-    lanes by rotatable bonds (SCHED-2)
-  - installers and terminal-free launchers with an Update button on all three OSes
-  - native CREST on Windows (FORK-5), LAMMPS fixes and a Mac GPU build (FORK-8), OpenMM on Metal (FORK-9)
+    lanes by rotatable bonds (SCHED-2); done 2026-11-19 (`machines set --window`, `batch run`, a rotor term in
+    `timings --fit`). Left: routing by predicted cost, and a time limit that scales with it (SCHED-2)
+  - the Update button and terminal-free launchers on all three OSes (DIST-1, done 2026-11-24); installers next
+  - a scheduler that gives each job its fastest device assignment (SCHED-3, next)
+  - native CREST on Windows (FORK-5, parked: CREST runs through WSL), LAMMPS fixes (FORK-8; the Mac GPU build is
+    deferred), and MD on the Mac's GPU through OpenMM (FORK-9, done as OPENMM-1, 2026-11-25)
 
 ## 0.1: Geometry builder (done)
 
@@ -149,12 +180,14 @@ external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENG
 - [x] Spartan's van der Waals radii (CPK area/volume to 0.5 %/0.1 %), the corrected solvent-accessible area,
       ESP polar areas; Settings > Surfaces & radii and Settings > Display (kJ/mol).
 - [ ] Validation against the Spartan Essential 76 PFAS ωB97X-D results (VAL-2: data imported, runs planned).
-- [ ] A settings dialog as detailed as Spartan's Preferences (SETTINGS-1: Compute, import filters, Lookups,
-      Machines left).
-- [x] Structure input like Spartan's: import from many formats with an Import Options dialog and ChemDraw
-      clipboard (UI-4), an embedded 2D sketcher (UI-6), the 3D model kit (UI-7: the edit model, and the build
-      mode in the 3D view with the Model Kit dock, in PR). Left: hand checks on Windows and macOS. Plan in
-      UI_PLAN.md.
+- [ ] A settings dialog as detailed as Spartan's Preferences (SETTINGS-1). Done: Surfaces & radii, Display, and on
+      2026-11-22 Compute, Build defaults (import filters, ring conformers, salts as separate entries), Lookups and
+      Controls (key bindings with presets, UI-9). Left: Machines.
+- [x] Structure input like Spartan's: import from many formats with an Import Options dialog, ChemDraw
+      clipboard, paste, drag-and-drop and Copy as (UI-4), an embedded 2D sketcher (UI-6), the 3D model kit (UI-7: the
+      edit model, and the build mode in the 3D view with the Model Kit dock, 2026-11-22). Left: hand checks on
+      Windows and macOS. Plan in UI_PLAN.md.
+- [ ] Clean up for a molecule's 2D layout and 3D structure, as ChemDraw has (BUILD-CLEAN, next).
 - [x] **Conformer ranking** (RANK-1, RANK-2): a rank step after refinement, g-xTB with a GFN1-xTB CPCM term in
       water and AIMNet2 in the gas phase, on by default; chosen after benchmarks against DFT (VALIDATION.md).
 - [x] **Run tooling:** run timings in every run folder and `timings` (SCHED-1 step 1), a review of the molecules
@@ -171,23 +204,43 @@ external-engine layer (`chem/external.py`, engine plugins). See [ENGINES.md](ENG
 - [ ] GPU DFT: gpu4pyscf on NVIDIA, a HIP port when one exists.
 - [ ] More ML potentials: UMA/OMol25 (fairchem), AceFF, MACE-OFF, Egret-1; user choice per run.
 
-## 0.4: Molecular dynamics bridge (later)
+## 0.4: Molecular dynamics bridge (in progress, ahead of plan)
 
+Started early for the PFAS surface-tension work. The Simulate workspace's design is in
+[SIMULATE_DESIGN.md](SIMULATE_DESIGN.md) (RES-1, approved 2026-11-23); the methods are in [ENGINES.md](ENGINES.md).
+
+- [x] **Liquid-slab MD and surface tension** (MD-2, 2026-11-20): `md liquid-slab` writes the packed box and the bulk
+      NPT and slab NVT inputs; `md surface-tension` gives σ with block errors, and the LJ tail beyond the cutoff for
+      cutoff runs (2026-11-21). C6F14 with OPLS-AA and full long-range dispersion reads 12.62 ± 0.40 mN/m (A-fine),
+      against 12.33 measured.
+- [x] **Long-range settings for slabs** with recommendations and warnings (MD-LR, 2026-11-23; MD-LR-2, 2026-11-25):
+      slab-safe pppm/disp meshes, an isotropic Coulomb mesh for cutoff runs, the pilots' table.
+- [x] **MD runs as jobs** (SIM-1 PR 1, 2026-11-23): segments, pause and resume, ns/day and ETA in the Jobs dock.
+- [x] **OpenMM as a second MD engine** (OPENMM-1, 2026-11-25): much faster on GPUs, Apple's included, at reduced
+      precision, with σ computed afterwards in double precision; its LJ-PME checked against A-fine (GPU-SCREEN-1).
+- [x] **An MD benchmark per machine** in ns/day, with a small slab like the surface-tension runs (MD-BENCH-1, -2, -3).
+- [ ] The Simulate panel (SIM-1 PR 2), setup templates (SIM-2) and pre-flight checks (SIM-3).
+- [ ] A scheduler by resource for MD and the other jobs (SCHED-3).
 - [ ] Force-field assignment: OpenFF Sage and GAFF2 with AM1-BCC charges (openff-toolkit, Interchange);
-      OPLS-AA option.
-- [ ] Topology export to LAMMPS (`atom_style full` with bonds, angles, dihedrals), OpenMM, and GROMACS.
+      OPLS-AA option. Started in MD-2: OPLS-AA typing for alkanes, perfluoroalkanes and (fluoro)benzenes, and GAFF2
+      and OpenFF Sage with AM1-BCC as cross-checks in their own conda environment. Next: a force field for PFAS (FF-1).
+- [ ] Topology export to LAMMPS (`atom_style full` with bonds, angles, dihedrals), OpenMM, and GROMACS. LAMMPS (MD-2's
+      folders) and OpenMM (the folder's LAMMPS model as an OpenMM System, OPENMM-1) are done; GROMACS is left.
 - [ ] LAMMPS input templates: minimize, `nve/limit` relax, NVT/NPT, annealing, and steered MD with a
       flexible adsorbate and solvent. (0.2 has steered MD for a rigid adsorbate on a frozen slab, in
-      vacuum, with GPU package flags; Jarzynski averaging over repeated pulls is still to do.)
+      vacuum, with GPU package flags; Jarzynski averaging over repeated pulls is still to do.) The liquid slab's
+      bulk NPT and slab NVT are done (MD-2); more setups are SIM-2.
 - [ ] Run LAMMPS or OpenMM from the GUI with live plots of temperature, energy, and pulling force from
-      the log.
+      the log. Runs from the GUI are done (SIM-1 PR 1); the plots come with the Simulate panel (SIM-1 PR 2).
 - [ ] OpenMM-ML MD with AIMNet2 or AceFF on the GPU (OpenCL platform on Windows).
 - [ ] Packmol-style solvation boxes and amorphous carbon or polymer sorbent builders.
 - [ ] Trajectory playback (OVITO viewport, MDAnalysis).
 
-## 0.5: Distribution (later)
+## 0.5: Distribution (started early)
 
-- [ ] Windows installer (conda constructor or PyInstaller) with a first-run GPU wizard.
+- [ ] Windows installer (conda constructor or PyInstaller) with a first-run GPU wizard. The design was decided on
+      2026-11-24 in [DISTRIBUTION.md](DISTRIBUTION.md): a bootstrap installer built in CI on release tags, per user
+      (DIST-1 PR 2, ready).
 - [ ] Linux packages (conda, AppImage).
 - [ ] macOS `.app` bundle (Apple Silicon; notarization later). macOS itself is no longer deferred to
       0.5: it is brought up in P1 of the platform track.

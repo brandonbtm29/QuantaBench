@@ -8,7 +8,7 @@ Design reference: `docs/UI_PLAN.md`. Keep QuantaBench its own app: borrow featur
 
 ---
 
-## CREST-RUN-1: CREST rebuild of the flexible neutral molecules · started 2026-11-17; paused 2026-11-18 (needs-Brandon to resume)
+## CREST-RUN-1: CREST rebuild of the flexible neutral molecules · started 2026-11-17; gas phase done 2026-11-22; water phase running on the workstation since 2026-11-25 (needs-Brandon)
 Brandon (2026-11-17): run CREST for the flexible neutral molecules, gas then water, without the 173 with 20 or more
 rotatable bonds. 1,501 molecules with 9 to 19 rotatable bonds, `--conformers crest --crest-method gfnff
 --crest-fallback rdkit --molecule-timeout 5400`, refine top 20, `--freq`, `--rank auto`, background priority; the
@@ -41,8 +41,11 @@ on the workstation (not in the repository).
   application may hang". The WSL CREST links a pthreads OpenBLAS and got `OPENBLAS_NUM_THREADS=5`, and wsl.exe wrote
   its stdout to NTFS. Fixed in CREST-LOG-1 (one BLAS thread per CREST thread; the output stays inside WSL). Resume
   with that merged.
+- **2026-11-28 (DOCS-1, from the run folder):** with CREST-LOG-1 merged (#47), the gas phase finished 2026-11-22
+  07:48. The water phase runs on the workstation alone since 2026-11-25 17:42 (60 min per molecule), still through
+  the scratch scripts (BATCH-1's acceptance run is open).
 
-## CREST-LOG-1: CREST through WSL: one BLAS thread and a bounded log · in-PR 2026-11-22 (branch `fix/crest-log-1-openblas`)
+## CREST-LOG-1: CREST through WSL: one BLAS thread and a bounded log · done 2026-11-22 (PR #47)
 Found by the ops agent at the 2026-11-22 resume of CREST-RUN-1 (above): one lane's `crest.log` grew to 368 MB in 11
 minutes, nearly all "OpenBLAS Warning : Detect OpenMP Loop and this application may hang. Please rebuild the library
 with USE_OPENMP=1 option.", written by wsl.exe to the Windows job folder as thousands of small writes a second.
@@ -68,7 +71,7 @@ with USE_OPENMP=1 option.", written by wsl.exe to the Windows job folder as thou
 - Later: switch the WSL environment to conda-forge's OpenMP OpenBLAS (`libopenblas=*=openmp*`) as well, if a profile
   ever shows CREST's serial BLAS calls matter (not needed for the warning).
 
-## CREST-SCRATCH-1: CREST through WSL in a folder inside WSL · done 2026-11-20 (branch `fix/crest-wsl-scratch`)
+## CREST-SCRATCH-1: CREST through WSL in a folder inside WSL · done 2026-11-20 (PR #34)
 On the workstation CREST runs as `wsl:.../bin/crest` and used to run in its Windows job folder through `/mnt/c`: every
 file it wrote crossed WSL's 9P bridge to NTFS, about 20 MB/s of disk writes (some 70 GB an hour) just after a CREST
 batch started.
@@ -87,13 +90,13 @@ batch started.
   opt-in /dev/shm for native Linux CREST (off by default: it already runs on a local disk); the same folder inside WSL
   for other `wsl:` programs (xtb, if it is ever run that way).
 
-## TELEM-1: Timings of killed attempts keep the molecule's features and finished stages · in-PR 2026-11-18 (PR #26)
+## TELEM-1: Timings of killed attempts keep the molecule's features and finished stages · done 2026-11-18 (PR #26)
 Brandon (2026-11-18): "double check and see if we are recording the metadata for failed molecules, so we can continue
 to improve the simulation load and thread allocation." A lane killed by the time limit sent no telemetry, so its
 attempt had no features and only the stage it was killed in. The fix computes the features at dispatch and keeps
 the stages the parent saw begin (`RunTelemetry.stage_seen`). Details in the PR and its CHANGELOG entry.
 
-## SCHED-2: CREST lanes and the cost model by rotatable bonds · in progress (lanes and the fit: PR, 2026-11-18)
+## SCHED-2: CREST lanes and the cost model by rotatable bonds · partly done (lanes and the fit: 2026-11-19, PR #29); routing, the time limit and the replay are open
 From CREST-RUN-1's timings: atoms and rotatable bonds explain the cost of a CREST search about equally (scatter x2.91
 with atoms alone, x2.76 with log(1 + rotors)), rotatable bonds, not atom count, decide which searches run out of
 time, and 2 threads per search are too few from about 17 rotatable bonds.
@@ -116,7 +119,7 @@ time, and 2 threads per search are too few from about 17 rotatable bonds.
 - Acceptance: a rerun of CREST-RUN-1's time-limit failures finishes, and a simulated replay of its gas phase
   shows fewer lane-hours lost.
 
-## BATCH-1: The staged-batch scripts as features · in progress (time window: PR #30; batches: PR, 2026-11-18)
+## BATCH-1: The staged-batch scripts as features · code done 2026-11-19 (time window: PR #30; `batch run`: PR #31); the acceptance run is open
 The QSAR runs depend on scripts outside the repository (`scratch/batches/` on the workstation): the tranche runner
 with its deadline and resume, the budget setter, and the time window for one machine. They have no tests.
 - **A time window per machine** in the settings (for example 02:00 to 08:00): the worker pauses with drain at the
@@ -137,6 +140,8 @@ with its deadline and resume, the budget setter, and the time window for one mac
   unmerged `grid.json` of the phase, `--include-paused`, `--list` of input files, `paired.csv` and `report.md`. The
   deadline lives in `batch run`, not `grid build`. Not ported: the QSAR-specific `analyze_tranche.py` step, and the
   budget setter (`machines set --max-cpu` covers it). Left: run CREST-RUN-1's water phase with it (acceptance).
+- 2026-11-28 (DOCS-1): #30 and #31 merged 2026-11-19. Not accepted yet: CREST-RUN-1's water phase (since
+  2026-11-25) still runs through the workstation's scratch scripts (`run_tranche.py`), not `batch run`.
 
 ## FIX-9: No user name in the tests' example paths · done 2026-11-24 (PR #57)
 Found 2026-11-23: two tests held a real Windows user name in example paths (`tests/test_eng_xtb.py`, the xtbout
@@ -147,7 +152,7 @@ rule (#24: no machine names, user names or personal paths in tracked files).
 - Also: a DEVLOG entry (2026-11-22, SETTINGS-1 follow-ups) named one of the maintainer's machines; it now says "the
   workstation". A search of the tracked files finds no other real user or machine name.
 
-## FIX-8: Cancel reaches a paused job (a grid share on a paused machine) · in-PR 2026-11-22 (branch `fix/fix-8-cancel-paused`)
+## FIX-8: Cancel reaches a paused job (a grid share on a paused machine) · done 2026-11-23 (PR #53)
 Found at the CREST-RUN-1 restart (2026-11-22): `grid cancel` on the old water grid cancelled the MacBook's queued
 share, but its paused share (2 molecules done, 821 not started) stayed "paused". `JobManager.cancel` handled queued,
 interrupted and running jobs only. A paused job is in none of those states: its batch has stopped and it is requeued
@@ -162,7 +167,7 @@ at the machine's next resume, so the MacBook would have gone on with the old sha
 - **Left for after the merge** (needs-Brandon): deploy it to the MacBook, then cancel the old CREST water share
   `d348feda1d4b` (`grid cancel 2026-11-22_075005_grid_crest-flex-lt20_water`) before the MacBook is resumed by hand.
 
-## FIX-6: A flaky macOS test of run priority · in-PR 2026-11-22 (branch `fix/fix-6-macos-priority-test`)
+## FIX-6: A flaky macOS test of run priority · done 2026-11-22 (PR #42)
 `tests/test_machine_control.py::test_priority_applied_to_running_processes` fails now and then on macOS CI (a
 process is left at nice -10); it passes on a rerun. Seen on #17 and #25. Find the race or make the test wait for
 the priority change.
@@ -182,7 +187,7 @@ the priority change.
   `test_a_priority_lost_in_an_exec_is_set_again`.
 - Found on the way: PRIO-2 below.
 
-## PRIO-2: A live priority change on Linux lowers only each lane's main thread · ready
+## PRIO-2: A live priority change on Linux lowers only each lane's main thread · done 2026-11-27 (PR #60)
 Found with FIX-6 (2026-11-22). Linux keeps a nice value (and an I/O priority) per thread, and `setpriority(PRIO_PROCESS,
 pid)`, which psutil's `nice()` calls, changes only the thread whose id is the pid. `priority.apply_to_process` walks
 `/proc/self/task`; `apply_to_pids`, used when the priority changes while a batch runs (DIST-7), does not, so a lane's
@@ -190,6 +195,10 @@ threads that already run (PyTorch's and OpenMP's pools, a dxtb or AIMNet2 refine
 lane starts later inherit the new one from the main thread. Checked in the cloud: after `psutil.Process(pid).nice(10)`
 the main thread is at 10 and the child's other thread at 0. Fix: walk `/proc/<pid>/task` for each process (nice and
 ionice), with a test that a lane's second thread is lowered too.
+- **Done 2026-11-27 (PR #60):** `apply_to_pids` lowers every thread under `/proc/<pid>/task` (nice value and I/O
+  priority, never raising one; a thread that ended meanwhile is skipped), and on Linux a process is at a level only
+  when all its threads are. macOS and Windows are unchanged. Test:
+  `tests/test_priority.py::test_apply_to_pids_lowers_every_thread_of_a_running_process`.
 
 ## REL-1: Tag 0.3.0 · done 2026-11-18 (Brandon: "complete item 8"; tag `v0.3.0`)
 0.1, 0.2 and 0.3 are all unreleased and nothing is tagged. After TELEM-1 and this status update: set the version,
@@ -270,7 +279,7 @@ Follow-ups:
 - 1423-20-7 (C6F13-SF5) has no force-field parameters. Its refinements start from raw ETKDG geometries, and some end
   about 11 eV higher (bonds broken). A check that the refined bonds match the input would flag such conformers.
 
-## FIX-7: The flaky Windows worker test that leaves jobs.sqlite-wal behind · in-PR 2026-11-22 (branch `fix/fix-7-windows-worker-wal`)
+## FIX-7: The flaky Windows worker test that leaves jobs.sqlite-wal behind · done 2026-11-22 (PR #43)
 `tests/test_worker.py::test_archive_manifest_sync_temp_files_and_failed_streams` failed again on #34's Windows CI
 (2026-11-20): the run folder still had `jobs.sqlite-wal` when the job reported "done". FIX-2 (#16, #21) had made the
 checkpoint retry and the polls after the final counts use them (`Job.finishing`); the test had failed on #15, #20, #21.
@@ -399,7 +408,7 @@ Follow-up: when it shows up, fix the hanging test itself (a modal dialog at wind
   table read-only, which recreates `-wal` and cannot remove it. Fixed (#21): from the final counts on, `Job.finishing`
   makes polls report the stored counts without opening the table.
 
-## UI-9: Settings > Controls: key bindings with presets and rebinding · in-PR 2026-11-22 (branch `feat/ui-9-controls`)
+## UI-9: Settings > Controls: key bindings with presets and rebinding · done 2026-11-22 (PR #50)
 Brandon (2026-11-22): "Let's reconsider keyboard bindings for all. Like I said, I want to be careful about copying
 Spartan too closely for IP reasons. Second, maybe we could add Controls as a submenu in Settings? ... There are a
 couple of layouts (QuantaBench, others from other software, Spartan) with the option to reset to the default
@@ -636,7 +645,7 @@ calculation output reads cclib outputs and `.spartan` documents; the 2D view (RD
   installed, never bundled or imported. The embedded editors need QtWebEngine, which is in
   `PySide6-Addons`, not the `PySide6-Essentials` QuantaBench depends on: an optional `[editor]` extra.
 
-## UI-4: Import from many formats, with Spartan-style import options · in-PR (formats and options done; paste, drag-and-drop and Copy as in PR, branch `feat/ui-4-clipboard-dnd`)
+## UI-4: Import from many formats, with Spartan-style import options · done 2026-11-22 (formats and options 2026-11-07; paste, drag-and-drop and Copy as: PR #39); the ChemDraw hand checks needs-Brandon
 Depends on: none (goes into today's File menu and Molecules box; UI-1 later moves it into Build).
 - **Done 2026-11-07 (branch `feat/import-formats`):** the formats, the Open Babel fallback, the Import Options
   dialog with Settings > Import and `Settings.import_`, the text box (InChI, InChIKey), the CLI flags
@@ -645,7 +654,7 @@ Depends on: none (goes into today's File menu and Molecules box; UI-1 later move
   search). Code: `chem/formats.py`, `chem/import_options.py`, `gui/import_options.py`; tests:
   `tests/test_import_formats.py`, `tests/test_import_options.py`, `tests/test_gui_import_options.py`.
   Screenshot: `docs/img/import_options_dialog.png`.
-- **Paste, drag-and-drop and Copy as · in-PR 2026-11-22 (branch `feat/ui-4-clipboard-dnd`):** built on the
+- **Paste, drag-and-drop and Copy as · done 2026-11-22 (PR #39):** built on the
   2026-11-07 clipboard work (`feat/clipboard`, merged; bullet below).
   - Paste now goes through File > Open's path: read on a worker thread, then the Import Options (dialog when the
     paste has choices and Settings > Import says to ask; filters, 2D → 3D, posted fields as list columns). Text
@@ -784,12 +793,12 @@ Depends on: UI-4 for the MOL/CDXML plumbing; the spike can start any time.
   from SMILES and templates; the hand-off matches canonical SMILES); works offline; screenshots on
   Windows and macOS.
 
-## UI-7: 3D model kit (a builder in the 3D view) · core done 2026-11-07; build mode in-PR 2026-11-22 (PR #44, branch `feat/ui-7-build-mode`)
+## UI-7: 3D model kit (a builder in the 3D view) · core done 2026-11-07; build mode done 2026-11-22 (PR #44)
 Depends on: none to start (the 3D view exists); UI-1 places it in Build.
 - **Done (core, branch `feat/model-kit-core`):** `chem/edit.py` (the edit model, commands, `History`) and
   `chem/fragments.py` (the fragment library). Every operation below is a plain function with tests;
   PFOA, PFOS, GenX and 6:2 FTS build with kit operations and match MMFF94 within 0.03 Å.
-- **In PR #44 (2026-11-22):** the GUI build mode, as `docs/dev/MODEL_KIT_GUI.md` now describes it.
+- **Done in PR #44 (merged 2026-11-22):** the GUI build mode, as `docs/dev/MODEL_KIT_GUI.md` now describes it.
   - **Build mode and undo.**
     - Build mode is in `gui/viewer3d.py` (`set_stubs`, `buildClicked`; a stub and an atom under the cursor: the
       nearer wins), with the dock and controller in `gui/model_kit.py`.
@@ -943,7 +952,7 @@ Follow-ups (ready):
 - Acceptance: tests that each preset produces the right `BuildConfig`; queue runs jobs in order with
   cancellation; screenshot.
 
-## RES-1: MD front-end survey and Simulate workspace design · in-PR 2026-11-22 (branch `feat/res-1-simulate-design`)
+## RES-1: MD front-end survey and Simulate workspace design · done 2026-11-22 (PR #38; the design approved 2026-11-23, SIM-1)
 Depends on: none (research only; can run any night).
 - 2026-11-22: `docs/SIMULATE_DESIGN.md`: the survey of 9 tools plus OpenFF Interchange/NAGL and RadonPy (a table over
   the six aspects, what to borrow and avoid), the workspace flow as text mockups, the data model (System,
@@ -967,7 +976,7 @@ Depends on: none (research only; can run any night).
   Protocol, Run), engines (OpenMM, LAMMPS), what to build in which order, open questions for Brandon.
   No code. Cite sources.
 
-## SIM-1: Simulate workspace v1 · in-PR 2026-11-23 (PR 1, branch `feat/sim-1-md-run-jobs`); PR 2 ready after it
+## SIM-1: Simulate workspace v1 · PR 1 done 2026-11-23 (PR #55); PR 2 ready
 Brandon (2026-11-23): "Yes you can start building out the simulate workspace. For the MD, I would like to eventually
 have some default geometries and common set ups." Design: `docs/SIMULATE_DESIGN.md` (approved; §12 the two PRs, §15
 the setups he asked for). Docs: docs/ENGINES.md, "MD runs as jobs".
@@ -1089,7 +1098,7 @@ faster by dedicating just GPU, CPU, or both."
 - 2026-11-05: done through FORK-1: the dxtb fork with tad-libcint 0.4 gives GFN2, polarizability and IR
   intensities natively on Windows (the workstation: matches Linux to ~1e-15 to 4e-9).
 
-## MD-2: Liquid-slab surface tension · merged 2026-11-20 (PR #33); the pilot runs are running
+## MD-2: Liquid-slab surface tension · done 2026-11-20 (PR #33; the GPU fix PR #35, the LJ tail PR #37); the C6F14 OPLS-AA pilots are done (MD-LR, MD-LR-2)
 - 2026-11-20, GPU: on the workstation's RX 9060 XT (OpenCL), LAMMPS' default AMD tuning gave empty neighbor lists, so there were no nonbonded forces (NPT expanded; `clear` hung). Fixed by `device_type generic` in `md.liquid.gpu_switches()`, plus a `QB_ERROR` guard in the inputs (PR with MD-BENCH-1). Other AMD/OpenCL cards untested.
 Plan: the Claude Doc "Plan: first MD surface-tension tests in QuantaBench"; methods: docs/ENGINES.md, "Liquid-slab MD
 and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecular dynamics".
@@ -1124,8 +1133,12 @@ and surface tension"; why: docs/SURFACE_TENSION.md, "Surface tension by molecula
   - A GUI page (the Simulate workspace, SIM-1) and runs through the job queue.
 - Open: the C6F14 reference. Freire et al. 2006 measured 12.33 mN/m at 298.15 K; Jasper's compilation (Stiles &
   Cady 1952) gives 11.44. The plan uses 12.33; both are recorded in the pilot READMEs.
+- **Done since (DOCS-1, 2026-11-28):** the LJ tail for the cutoff variants (PR #37, 2026-11-21); the C6F14 OPLS-AA
+  pilots A, B and C, then A-fine, in `md.long_range.PILOT_TABLE` (MD-LR #52, MD-LR-2 #61); MD runs as jobs (SIM-1 PR 1,
+  #55); OpenMM as a second engine (OPENMM-1, #59). Still open from the list above: the default force field for PFAS,
+  the Träg & Zahn refit, semifluorinated chains, the test-area method as an estimator, and the Simulate panel (SIM-1 PR 2).
 
-## MD-LR: Long-range settings for slabs: options and recommendations · done 2026-11-23 (PR #52); follow-up MD-LR-2 in-PR
+## MD-LR: Long-range settings for slabs: options and recommendations · done 2026-11-23 (PR #52); follow-up MD-LR-2 done 2026-11-25 (PRs #61, #62)
 Brandon (2026-11-22): "I like giving the users options to decide on the grid method and screening length, but I like
 the idea of giving them recommendations based on their setup." Earlier: the screening length (the LJ cutoff) as an
 option when a force field is set up. Code: `md/long_range.py`; docs: docs/ENGINES.md, "Liquid-slab MD and surface
@@ -1155,7 +1168,7 @@ tension".
     `check_settings()`.
   - Old `cpu-ewald` benchmark records (without `long_range`) timed the coarse settings; rerun `machines --bench md`.
 
-## MD-LR-2: A-fine in the pilot table, B and C corrected, an isotropic Coulomb mesh for plain pppm · in-PR 2026-11-24 (branch `feat/md-lr-2-a-fine-coulomb-mesh`)
+## MD-LR-2: A-fine in the pilot table, B and C corrected, an isotropic Coulomb mesh for plain pppm · done 2026-11-25 (PR #61; follow-up PR #62)
 Brandon approved this follow-up of MD-LR (relayed 2026-11-24). Reports: `Runs\md-pilot-2026-11-20\pilot_A_fine_report.md`,
 `pilots_summary.md`, `followup_checks_2026-11-23\`, `coulomb_mesh_rule_check_2026-11-24\`. Meant to merge after #59 (OPENMM-1).
 - Done (2026-11-24):
@@ -1183,7 +1196,7 @@ Brandon approved this follow-up of MD-LR (relayed 2026-11-24). Reports: `Runs\md
   - The recommendation for GPU screens stays 16 Å + tail (Brandon's 2026-11-22 default); it reads 9.6 % low for
     C6F14. Whether screens should say so in the GUI or move to another default is Brandon's call.
 
-## MD-BENCH-1: An MD benchmark of each machine (ns/day) · in-PR 2026-11-20 (branch `feat/md-bench`, after PR #33; the workstation run needs-Brandon)
+## MD-BENCH-1: An MD benchmark of each machine (ns/day) · done 2026-11-20 (PR #35); the workstation run needs-Brandon (see MD-BENCH-2)
 Brandon (2026-11-20): "Maybe the worker benchmarking could include a short MD run?" Docs: docs/WORKERS.md, "The MD
 benchmark"; code: `md/bench.py`.
 - Done (2026-11-20):
@@ -1213,7 +1226,7 @@ benchmark"; code: `md/bench.py`.
   - A "Benchmark MD" button in the Machines dock. Use ns/day for splitting MD jobs across machines once MD runs as
     worker jobs (SIM-1).
 
-## MD-BENCH-2: A small slab benchmark that matches the surface-tension runs · in-PR 2026-11-23 (branch `feat/md-bench-2-small-slab`; the real runs wait for quiet machines)
+## MD-BENCH-2: A small slab benchmark that matches the surface-tension runs · done 2026-11-23 (PR #54); the real runs: the MacBook 2026-11-27, the workstation not yet
 Brandon (2026-11-23): "I would like to have a Benchmark for the MD section, but maybe we could use a smaller
 simulation?" Code: `md/bench.py`, `md/long_range.py`; docs: docs/WORKERS.md, "The MD benchmark".
 - Done (2026-11-23):
@@ -1239,6 +1252,10 @@ simulation?" Code: `md/bench.py`, `md/long_range.py`; docs: docs/WORKERS.md, "Th
     pilots; on the MacBook `--md-lammps ~/miniforge3/envs/qb-lammps/bin/lmp`.
   - A worker in auto mode with `--bench-methods ...,md` does not re-measure a machine that has only bulk records.
   - After A-fine: its numbers into `PILOT_TABLE` (MD-LR's follow-up); the benchmark then only replaces speeds.
+    Done in MD-LR-2 (#61).
+- 2026-11-28 (DOCS-1, from the machine registry): the MacBook's slab benchmark ran 2026-11-27 (version 4):
+  cpu-ewald 19.5, cpu-cutoff12 31.0, cpu-cutoff16 24.2 and openmm-gpu-cutoff16 189 ns/day (check ok). The
+  workstation has no MD record yet.
 
 ## MD-BENCH-3: Ask before re-running a changed MD benchmark · done 2026-11-24 (PR #58)
 Brandon (2026-11-23, on re-running MD benchmarks): "just ask the user if they would like to rerun the new benchmark
@@ -1350,7 +1367,7 @@ not try to match Spartan exactly.
 - Follow-ups: an entry for each new engine or QM list item (the tests ask for it); entries for the frequency and
   thermochemistry choices (qRRHO, symmetry number) and the Properties page if those raise questions.
 
-## ENG-3: Engine follow-ups · ready (the robustness part: in-PR 2026-11-22, branch `feat/eng-3-process-robustness`)
+## ENG-3: Engine follow-ups · ready (the robustness part done 2026-11-22: PR #41, and ENG-3b PR #49)
 - `vibrations.from_hessian(...)`: make the second half of `analyze()` public so `qm.vibrations_from_hessian`
   stops duplicating it (see the QM builder's suggested signature in DEVLOG 2026-11-01).
 - QM charges (MBIS/Löwdin) as an option for the exported conformer charges (extxyz, LAMMPS data).
@@ -1364,7 +1381,7 @@ not try to match Spartan exactly.
   Spartan's surface, recorded as `qm_surf_iso_au`). Water HF/6-31G*: σ²tot 478 (0.002) vs 345 (0.001).
 - Psi4 log: write the MBIS free-atom and finite-field SCFs to a second output file, so cclib can re-import
   `<id>_qm_log.out` (today it stops at the free-atom UKS "Beta Occupied" block).
-- Review 2026-11-01 leftovers (robustness) · in-PR 2026-11-22 (branch `feat/eng-3-process-robustness`;
+- Review 2026-11-01 leftovers (robustness) · done 2026-11-22 (PR #41;
   `quantabench.proctree`, docs/ENGINES.md "Programs never outlive QuantaBench"):
   - Windows: every program `run_program` starts (and tblite's CPCM helper) is created suspended, put in a
     kill-on-close job object of its own, then resumed; lanes are in a kill-on-close job of their parent. A hard GUI
@@ -1378,7 +1395,7 @@ not try to match Spartan exactly.
   - The GUI builds its window without probing (`external.deferred_probes`); a worker probes the versions not cached
     on disk yet and relabels the engine lists.
   - Already done by SCRATCH-1 (2026-11-13): failed-run scratch folders go 3 days after their process ended.
-  - ENG-3b · in-PR 2026-11-22 (branch `feat/eng-3b-posix-lifeline`; Brandon, 2026-11-22: "Please also build this
+  - ENG-3b · done 2026-11-22 (PR #49; Brandon, 2026-11-22: "Please also build this
     watchdog for MacBook"): native programs on Linux and macOS run under the same lifeline guard, so a GUI or CLI
     killed outright (SIGKILL, a crash) takes them along; the usage meter samples the guard's largest descendant.
   - Still open: a process that starts its own session (setsid, a daemon) is outside the guard's group (neither CREST
@@ -1386,11 +1403,12 @@ not try to match Spartan exactly.
 - MOPAC COSMO: energies step as surface segments switch (CF3COO⁻ in water: finite-difference forces off by
   0.3 eV/Å at h = 1 mÅ); consider running MOPAC frequencies in the gas phase automatically.
 
-## TEST-WIN-1: The full suite on the workstation: failures that are not the code's · ready
+## TEST-WIN-1: The full suite on the workstation: failures that are not the code's · ready (the first bullet done 2026-11-27, PR #64)
 Found 2026-11-22 (ENG-3), each also on `main`:
 - `test_eng_mopac.py::test_real_pipeline_native_cosmo` leaves this process's tblite CPCM helper running (it lives
   until exit, `chem.cpcm_worker`), so the 14 `test_lanes.py` tests that check for no child processes fail after it
   when the real MOPAC is installed. Close the helpers at the end of that test, or count them out in `lane_processes`.
+  **Fixed (PR #64):** `lane_processes` leaves out this process's own CPCM helpers.
 - The same two real-MOPAC tests miss their reference values with MOPAC 23.2.5 (water dipole 1.347 vs 1.259 D; the
   COSMO pipeline's 3.22 vs 3.0 ± 0.2).
 - With `QT_QPA_PLATFORM=offscreen`, `tests/test_gui.py` crashes the process (access violation in pyvistaqt's
@@ -1399,13 +1417,13 @@ Found 2026-11-22 (ENG-3), each also on `main`:
 - `test_vibrations.py` (3) stop at the memory guard late in a full run (2.9 GB in use against a 2.8 GB budget); alone
   they pass.
 
-## MEM-1: Memory on the workstation · in-PR 2026-11-22 (branch `fix/mem-1-lane-plan-free-memory`; the `.wslconfig` needs-Brandon)
-- Done (in-PR): `auto` lane plans are capped by the memory available at the plan less 2 GB, not only 0.75 x the RAM
+## MEM-1: Memory on the workstation · done 2026-11-22 (PR #48); the `.wslconfig` written on the workstation 2026-11-23
+- Done (PR #48): `auto` lane plans are capped by the memory available at the plan less 2 GB, not only 0.75 x the RAM
   (DEVLOG 2026-11-22).
 - needs-Brandon: a `.wslconfig` (`%UserProfile%\.wslconfig`; it takes effect after `wsl --shutdown`, which stops every
   WSL and Docker job), so the WSL VM (CREST lanes, their /dev/shm folders, Docker) never takes more than 12 GB:
   `[wsl2]` `memory=12GB`, `swap=4GB`; `[experimental]` `autoMemoryReclaim=dropCache` (the documented default, written
-  out so a later WSL does not change it unseen).
+  out so a later WSL does not change it unseen). Written on the workstation 2026-11-23.
 - Ideas, not done: CREST's /dev/shm choice could also require Windows' own free memory (it checks WSL's MemAvailable,
   which counts up to the VM's cap); a Psi4 job's memory could be capped at the lane's share when it starts.
 
@@ -1590,7 +1608,7 @@ Open (needs-Brandon):
     documents); Bondi radii give −6.8 % volume, RDKit's `volume_A3` −4.1 %.
   - `sasa_A2` used FreeSASA's ProtOr radii, 0 for non-protein atoms: fixed (Bondi + 1.4 Å probe).
 
-## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · in progress 2026-11-06 (branch `feat/val2-essential76`; the runs needs-Brandon)
+## VAL-2: ωB97X-D/def2-SVP vs Spartan for the 76 PFAS · tooling merged 2026-11-06 (branch `feat/val2-essential76`); the runs needs-Brandon
 - The QM stage reproduces Spartan's level (Spartan used 6-31G*: run `wb97x-d/6-31g*` too). Compare
   dipoles, polarizabilities, 0.002 au volumes/areas and ESP extrema with Spartan's exports; recommend a
   default level for the 4,700-PFAS descriptor run with timings (PFBA anion: ~4.5 min on 2 threads with
@@ -1621,7 +1639,7 @@ Open (needs-Brandon):
   Spartan's geometries would compare those (needs ESP/density-surface pairs in `validate`: QSAR_ELPOT_MIN/MAX,
   QSAR_ELPOT_AREA/VOLUME, polar areas vs `qm_surf_*`).
 
-## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · in-PR (Surfaces & radii, Display done 2026-11-06; the next tabs in SETTINGS-1 PRs)
+## SETTINGS-1: A settings dialog as detailed as Spartan's Preferences · in progress (Surfaces & radii, Display 2026-11-06; Compute, Build defaults, Lookups, the follow-ups and Controls (UI-9) done 2026-11-22: PRs #40, #45, #46, #51, #50); the Machines tab is open
 Review of Spartan '24's eleven tabs: Brandon's Claude Doc "Spartan Preferences review and QuantaBench settings plan".
 Rule: a setting that changes a computed value is a science setting (`jobs.SCIENCE_FIELDS`, sent to grid
 workers by `dist.worker.validate_config`); display settings never rename or rescale exported columns.
@@ -1635,23 +1653,23 @@ workers by `dist.worker.validate_config`); display settings never rename or resc
   raw descriptor list keep the column units; orbital energies stay in eV.
 - Next, one tab per change, each with a GUI test like `tests/test_gui_settings_surfaces.py`:
   - **Compute** (Spartan's Jobs): an Expert box hiding the lane spec, GPU linear algebra and dxtb-on-GPU; a
-    "N cores, M logical" line. In PR (`feat/settings-1-compute`, 2026-11-22): *Molecules at once* (Automatic, one at
+    "N cores, M logical" line. Done 2026-11-22 (PR #40): *Molecules at once* (Automatic, one at
     a time, N) and the Expert box's lane spec edit this machine's one spec (`Settings.lanes_for`, as the Machines dock
     and the job dialog); the tab's per-machine changes are stamped for the SyncThing merge. Not science settings.
   - **Build defaults** (Settings > Import Filters, Conformer Rules): strip water, HCl and named counter-ions
-    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search. In PR
-    (`feat/settings-1-build-defaults`, 2026-11-22): `strip_water`, `strip_acids`, `strip_counterions` (names of
+    before the largest-fragment rule (science settings); a ring-conformer option for the RDKit search. Done
+    2026-11-22 (PR #45): `strip_water`, `strip_acids`, `strip_counterions` (names of
     `standardize.NAMED_COUNTERIONS`) and `ring_conformers` ("normal" | "thorough": twist-boats of six-membered rings,
     Spartan's "Thorough"), all science fields, off/normal by default; `build --strip`, `--ring-conformers`. Open:
     whether salts should keep their counter-ion as a separate entry (the settings plan's question).
   - **Lookups** (Databases, URLs): URL templates with `%inchikey`, `%inchi`, `%cas`, `%smiles`, `%name`
     (PubChem, NIST WebBook by CAS, nmrshiftdb, EPA CompTox), opened from the molecule list; PubChem cache folder
-    and maximum age; a folder of reference tables with experimental values. In PR (`feat/settings-1-lookups`,
-    2026-11-22): the templates (`settings.lookups.urls`, `quantabench.lookups`), the molecule list's right-click
+    and maximum age; a folder of reference tables with experimental values. Done 2026-11-22
+    (PR #46): the templates (`settings.lookups.urls`, `quantabench.lookups`), the molecule list's right-click
     *Look up* menu, the cache folder and maximum age (`lookups.pubchem_cache_dir`, `pubchem_max_age_days`). Left: the
     folder of reference tables; the nmrshiftdb2 template (its documented 13C JCAMP export) is not checked against
     the site.
-  - **Follow-ups** (Brandon, 2026-11-22; in PR `feat/settings-1-followups`): salts as separate entries
+  - **Follow-ups** (Brandon, 2026-11-22; done 2026-11-22, PR #51): salts as separate entries
     (`counterion_entries`, `chem.salts`: K-PFOS gives PFOS⁻ and K⁺, linked by `counterion_of`; no new counter-ion
     names); Automatic lanes never above the physical cores, typed specs up to the logical threads with a note;
     `twist_boat_seeds` (Thorough ring conformers, default 20 after a 45-molecule check, an advanced science setting).
@@ -1855,7 +1873,7 @@ thread speed is and the temperature of the PC."
     readers of the keys (speed-aware lanes, `lanes auto`, grid and chunk weights) use the run's solvent.
   - Settings > Compute: memory per lane and time limit per molecule.
 
-### IMPORT-2: Read Spartan '24 `.spartan` documents · in review 2026-11-05 (branches `feat/spartan-import`, `feat/spartan-qsar`; acceptance pending)
+### IMPORT-2: Read Spartan '24 `.spartan` documents · on main since 2026-11-05 (branches `feat/spartan-import`, `feat/spartan-qsar`); acceptance pending
 - A `.spartan` file is an OLE compound document with one storage per molecule (`Molecules/M0001/...`):
   `Input.gz` holds the keywords, the label (CAS number in Brandon's files), charge and multiplicity and the
   Cartesian coordinates; `PropertyArchive.gz` holds about 50 scalar properties (`PROP VALUE NAME = value`:
@@ -2321,7 +2339,7 @@ pause button on a machine and the work is redistributed?"
   49 molecules the Mac is 2.3x the workstation, so pass `--weights bench-mac=2.3,local=1` until grids
   learn their weights.
 
-### UPD-1: Update button gaps · in review 2026-11-06 (branch `feat/update-packages`; worker updates: design only)
+### UPD-1: Update button gaps · merged 2026-11-06 (branch `feat/update-packages`); worker updates: 3c for this computer's worker done in DIST-1 (PR #56), a and b open
 Brandon asked whether Help > Check for updates pulls "the latest packages and GitHub version". It pulled
 the code, but three things never arrived through it.
 
@@ -2592,7 +2610,7 @@ small job may start in a gap if it does not delay the reserved start of the big 
   GPU (PPPM and the bonded terms were 75 % of the workstation's GPU run). Estimated ~2x the Mac's CPU. OpenMM covers
   the Mac's GPU instead (FORK-9 / OPENMM-1).
 
-### FORK-9 → OPENMM-1: OpenMM as a second MD engine, with the Apple GPU · in-PR 2026-11-23 (branch `feat/openmm-1-openmm-engine`)
+### FORK-9 → OPENMM-1: OpenMM as a second MD engine, with the Apple GPU · done 2026-11-25 (PR #59)
 Re-scoped from "OpenMM on the Mac's GPU (benchmark openmm-metal)". Brandon (2026-11-23): "I agree to keep OpenMM and
 LAMMPS, and I approve writing the code for Apple GPU for OpenMM. I think we can just add a note as a part of the
 selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs much faster at reduced accuracy."
@@ -2623,7 +2641,7 @@ selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs m
   - the Mac's own LAMMPS path points at the `qb-lammps` conda `lmp` (set with `quantabench-cli`, on the Mac).
 - Follow-ups: OPENMM-2 (below).
 
-### OPENMM-2: OpenMM follow-ups · ready after OPENMM-1
+### OPENMM-2: OpenMM follow-ups · ready (OPENMM-1 merged 2026-11-25)
 - GAFF2 with LJ-PME on OpenMM against the Mac's GAFF2 `pppm/disp` LAMMPS run; OpenMM's LJ-PME (OPLS-AA, geometric
   correction table) against A-fine (done 2026-11-25: GPU-SCREEN-1, below).
 - The upstream Metal platform (OpenMM PR #5488) when it ships: add it to the platform order and measure it.
@@ -2641,7 +2659,7 @@ selection process (MD Engine: OpenMM, LAMMPS etc) and explain that OpenMM runs m
 - The on-the-fly σ error bar of the validation run was 0.53 mN/m against pilot B's 0.30 for the same number of
   samples (white noise 0.45 in both): longer production or 10-fs samples if 0.3 is the target.
 
-### GPU-SCREEN-1: OpenMM LJ-PME on the GPU as the σ screen? · in-PR 2026-11-25 (branch `feat/gpu-screen-1-openmm-ljpme-default`); the default change needs-Brandon
+### GPU-SCREEN-1: OpenMM LJ-PME on the GPU as the σ screen? · done 2026-11-27 (PR #63); the default change: option 2 chosen 2026-11-27 (GPU-SCREEN-2, not merged yet)
 Brandon approved (2026-11-25) the check: make OpenMM LJ-PME (full long-range dispersion) + PME Coulomb on the GPU the
 GPU σ-screen default if it reproduces A-fine (12.62 ± 0.40 mN/m) and the frame-rerun check passes. Report:
 `Runs\md-pilot-2026-11-20\pilot_openmm_ljpme_report.md`; the run: `c6f14_oplsaa_openmm_ljpme\`.
@@ -2680,10 +2698,10 @@ GPU σ-screen default if it reproduces A-fine (12.62 ± 0.40 mN/m) and the frame
   passes natively on the Windows workstation (Radeon RX 9060 XT, OpenGL 4.6) with pyvistaqt 0.12; pyvistaqt 0.13
   crashed (now pinned `<0.13`). Still to check by hand: HiDPI picking feel, 20k-atom slab frame rate.
 - **HW-4 · needs-Brandon:** LAMMPS `in.smd` with the GPU (OpenCL) build on Windows.
-- **DEC-1 · needs-Brandon:** approve `docs/SIMULATE_DESIGN.md` (after RES-1).
-- **VAL-1 · in review 2026-11-05:** tooling done on `feat/validate` (see VAL-1 above); the Spartan wide table of
-  the PFAS QSAR run is the reference. Still needs-Brandon: a re-import for the new key columns, the charge
-  mismatches, and the 300-molecule gas/water run. The Essential 76 ωB97X-D comparison is VAL-2.
+- **DEC-1 · done 2026-11-23:** approve `docs/SIMULATE_DESIGN.md` (after RES-1). Approved (SIM-1).
+- **VAL-1 · done 2026-11-05:** tooling merged from `feat/validate` (see VAL-1 above); the Spartan wide table of
+  the PFAS QSAR run is the reference. Still needs-Brandon: a re-import for the new key columns and the charge
+  mismatches (the 300-molecule gas/water run is done). The Essential 76 ωB97X-D comparison is VAL-2.
 
 ## Later (from ROADMAP)
 Orbital isosurfaces, NMR (PySCF), properties inspector,
