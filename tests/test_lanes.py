@@ -71,12 +71,35 @@ def cores(monkeypatch):
     monkeypatch.setattr(resources, "physical_cores", lambda: 12)
 
 
+def own_cpcm_helpers():
+    """pids of this process's own CPCM helpers and their children. ``chem.cpcm_worker`` keeps one helper per process
+    until the process exits, by design, so a real-engine test that ranked in water before these left one running
+    (TEST-WIN-1: the real MOPAC's COSMO pipeline test, on the workstation). On Windows a venv's python.exe is a
+    launcher with the interpreter as its child, hence the children. A lane's helper is the lane's child, not in this
+    process's registry, so it still counts as a leftover."""
+    from quantabench.chem import cpcm_worker
+
+    with cpcm_worker._helpers_lock:                                  # noqa: SLF001 - the registry itself
+        procs = [h.proc for h in cpcm_worker._helpers.values()]      # noqa: SLF001
+    pids = set()
+    for proc in procs:
+        if proc is None or proc.poll() is not None:
+            continue
+        pids.add(proc.pid)
+        with contextlib.suppress(psutil.Error):
+            pids.update(c.pid for c in psutil.Process(proc.pid).children(recursive=True))
+    return pids
+
+
 def lane_processes():
-    """Live children of this process except multiprocessing's resource tracker (one per parent, by design) and the CI
-    hang watchdog (tests/hang_watchdog.py)."""
+    """Live children of this process except multiprocessing's resource tracker (one per parent, by design), the CI
+    hang watchdog (tests/hang_watchdog.py) and this process's own CPCM helpers (``own_cpcm_helpers``)."""
+    own = own_cpcm_helpers()
     out = []
     for p in psutil.Process().children(recursive=True):
         try:
+            if p.pid in own:
+                continue
             cmd = " ".join(p.cmdline())
             if p.status() == psutil.STATUS_ZOMBIE or "resource_tracker" in cmd or "hang_watchdog" in cmd:
                 continue
@@ -89,6 +112,40 @@ def lane_processes():
 def summary_rows(run_dir):
     with open(run_dir / "summary.csv", newline="", encoding="utf-8") as f:
         return {r["id"]: r for r in csv.DictReader(f)}
+
+
+# ------------------------------------------------------------------------------------- leftover checks
+def test_lane_processes_leaves_out_only_this_process_s_own_cpcm_helper():
+    """TEST-WIN-1: this process's CPCM helper (chem.cpcm_worker, kept until the process exits) is not a leftover lane,
+    so a real-engine test that ranked in water before this file no longer fails its checks; any other process
+    running the same helper, as a lane's own would, still counts."""
+    import subprocess
+    import sys
+
+    from quantabench.chem import cpcm_worker
+
+    threads = 7                                     # a registry entry of its own, whatever other tests started
+    h = cpcm_worker.helper(threads)
+    with h.lock:
+        h.proc = h._start()                         # noqa: SLF001 - started as term() starts it, without tblite
+    stray = subprocess.Popen([sys.executable, "-m", "quantabench.chem.cpcm_worker", "1", "normal"],
+                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        assert h.proc.poll() is None and stray.poll() is None
+        own = own_cpcm_helpers()
+        assert h.proc.pid in own and stray.pid not in own
+        left = lane_processes()
+        assert stray.pid in left and not own & set(left)
+    finally:
+        h.close()
+        with cpcm_worker._helpers_lock:             # noqa: SLF001
+            cpcm_worker._helpers.pop(threads, None)  # noqa: SLF001
+        stray.stdin.close()
+        stray.wait(timeout=30)
+    deadline = time.time() + 10                     # a Windows venv launcher's interpreter ends a moment later
+    while lane_processes() and time.time() < deadline:
+        time.sleep(0.1)
+    assert lane_processes() == []
 
 
 # ------------------------------------------------------------------------------------- lane specs
