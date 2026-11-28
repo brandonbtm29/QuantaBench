@@ -27,6 +27,13 @@ hydrogens are put on a metal). MMFF94 has no parameters for bonded metals, so Mi
 metal's UFF type taken from its geometry (``MinimizeResult.note`` says when UFF has no type for that geometry and
 another was used).
 
+**Clean up** (``clean_up``, BUILD-CLEAN) is Minimize run to convergence and checked: MMFF94 (UFF where MMFF94 has no
+parameters) with the held atoms fixed, in rounds of ``max_iters`` until it converges, then refused (``EditError``, the
+model unchanged) when the bonds read from the new coordinates differ from the model's (``chem.clean.
+geometry_bond_problems``) or a configuration the old coordinates defined is inverted or lost
+(``chem.clean.stereo_changes``: centres and double bonds as ``to_mol`` reads them from 3D). A centre that was flat before
+may take a configuration; ``CleanResult.defined`` lists those.
+
 Every change is a ``Command`` with ``apply(model)`` and ``undo(model)``. ``History`` keeps the undo and redo
 stacks here and in tests; the GUI wraps the same commands in a ``QUndoStack`` (``model.history`` only needs a
 ``push(command)`` that applies it). Atom indices are 0-based, as in the 3D view's labels.
@@ -483,6 +490,18 @@ class MinimizeResult:
     converged: bool
     moved: int = 0         # atoms free to move
     note: str = ""         # why UFF, or the UFF type used for a metal whose geometry UFF has no type for
+
+
+@dataclass(frozen=True)
+class CleanResult:
+    energy: float                  # kcal/mol after the clean-up
+    energy_before: float           # kcal/mol before it, same force field
+    forcefield: str                # "MMFF94", "MMFF94s", "UFF" or "none"
+    converged: bool
+    held: int = 0                  # atoms held fixed
+    rounds: int = 0                # Minimize rounds of ``max_iters`` steps
+    note: str = ""                 # why UFF (as MinimizeResult.note)
+    defined: tuple[str, ...] = ()  # configurations the new geometry defines where the old one was flat
 
 
 # ====================================================================== fragment templates
@@ -987,6 +1006,12 @@ class EditableMolecule:
         """MMFF94 (UFF when MMFF has no parameters) with ``frozen`` atoms fixed. Open valences count as
         hydrogens while minimizing."""
         return self.do(Minimize(tuple(frozen), max_iters))
+
+    def clean_up(self, frozen: Iterable[int] = (), *, max_iters: int = 2000, rounds: int = 5) -> CleanResult:
+        """Clean up the 3D structure: Minimize (MMFF94, UFF when MMFF94 has no parameters) with ``frozen`` atoms held
+        fixed, in up to ``rounds`` rounds of ``max_iters`` steps, then checked (module docstring). Raises EditError,
+        changing nothing, when the clean-up would change the bonds read from the coordinates or the stereo."""
+        return self.do(CleanUp(tuple(frozen), max_iters, rounds))
 
     def relax(self, atoms: Iterable[int] | None = None, *, radius: int = 2, max_iters: int = 200) -> MinimizeResult:
         """Quick local relax: only atoms within ``radius`` bonds of ``atoms`` (default: the last edit) move."""
@@ -1606,6 +1631,48 @@ class EditableMolecule:
         self._set_positions(np.array(ff.Positions()).reshape(-1, 3)[:n])
         return MinimizeResult(energy, name, converged, m.GetNumAtoms() - len(fixed), note)
 
+    def _graph(self) -> tuple:
+        atoms = tuple((a.GetAtomicNum(), a.GetFormalCharge(), a.GetIsotope()) for a in self._mol.GetAtoms())
+        bonds = tuple(sorted((min(b.GetBeginAtomIdx(), b.GetEndAtomIdx()), max(b.GetBeginAtomIdx(), b.GetEndAtomIdx()),
+                              b.GetBondTypeAsDouble()) for b in self._mol.GetBonds()))
+        return atoms, bonds
+
+    def _clean_label(self, _mol, i: int) -> str:
+        return self.label(i) if 0 <= i < self.n_atoms else f"H{i}"
+
+    def _op_clean_up(self, frozen, max_iters, rounds) -> CleanResult:
+        from . import clean
+
+        if self.n_atoms < 2:
+            return CleanResult(0.0, 0.0, "none", True, note="nothing to clean up yet")
+        graph = self._graph()
+        before = self.to_mol()                      # its stereo, read from the coordinates; EditError when invalid
+        energy_before, _name = self.energy()
+        held = {int(f) for f in frozen if 0 <= int(f) < self.n_atoms}
+        res, done = None, 0
+        while done < max(1, int(rounds)):
+            res = self._op_minimize(sorted(held), max_iters)
+            done += 1
+            if res.converged:
+                break
+        if self._graph() != graph:                  # a force field never changes them; checked all the same
+            raise EditError("Clean up was refused: the bonds changed. Nothing was changed.")
+        label = self._clean_label
+        problems = clean.geometry_bond_problems(self._mol, label)
+        if problems:
+            raise EditError("Clean up was refused: " + "; ".join(problems[:3])
+                            + (f" (and {len(problems) - 3} more)" if len(problems) > 3 else "")
+                            + ". Nothing was changed. Move the atoms apart (or hold fewer atoms fixed) and try again.")
+        after = self.to_mol()
+        changes = clean.stereo_changes(before, after, label)
+        if changes:
+            raise EditError("Clean up was refused: it would change the stereo: " + "; ".join(changes[:4])
+                            + (f" (and {len(changes) - 4} more)" if len(changes) > 4 else "")
+                            + ". Nothing was changed. Fix the geometry around it by hand, or select those atoms and "
+                            "their neighbours with Freeze selected on, and try again.")
+        return CleanResult(res.energy, energy_before, res.forcefield, res.converged, len(held), done, res.note,
+                           tuple(clean.new_stereo(before, after, label)))
+
     def _op_relax(self, atoms, radius, max_iters) -> MinimizeResult:
         centre = [a for a in (atoms if atoms is not None else self.last_edit) if 0 <= a < self.n_atoms]
         if not centre or self.n_atoms < 2:
@@ -1941,6 +2008,17 @@ class Minimize(Command):
 
     def _run(self, model):
         return model._op_minimize(self.frozen, self.max_iters)
+
+
+@dataclass(eq=False)
+class CleanUp(Command):
+    frozen: tuple[int, ...] = ()
+    max_iters: int = 2000
+    rounds: int = 5
+    text = "Clean up"
+
+    def _run(self, model):
+        return model._op_clean_up(self.frozen, self.max_iters, self.rounds)
 
 
 @dataclass(eq=False)

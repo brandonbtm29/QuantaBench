@@ -260,8 +260,8 @@ atoms rigidly about their center, Shift+drag slides them in the view plane; a cl
 the selection) and **Build** (Ctrl+4: the Model Kit. Pick an element, then its geometry (metals from
 the periodic table take coordination geometries), or a fragment, in the Model Kit dock; click a free
 valence (a stub) to attach it or an atom to replace it; Ctrl+Z / Ctrl+Y undo and redo, Minimize runs
-MMFF94, or UFF where MMFF94 has no parameters, and Add to list hands the structure to the molecule
-list). Labels: element, index (0-based, as in ASE and RDKit),
+MMFF94, or UFF where MMFF94 has no parameters, Clean up tidies the structure (below), and Add to list hands
+the structure to the molecule list). Labels: element, index (0-based, as in ASE and RDKit),
 element + index, or charge. Colors: element (Jmol), charge (red = negative, white = 0, blue =
 positive, on a scale symmetric about zero, as Spartan and Avogadro draw ESP maps), or tag (surface
 gray, adsorbate orange).
@@ -278,6 +278,20 @@ selected molecule into the sketcher; **Insert fragment** adds a PFAS piece (CF3,
 groups) that you join with a bond. Valence and other structure problems are reported before anything is
 added. It needs `pip install -e ".[editor]"`; the editor (17.5 MB) downloads the first time the dock opens
 ([INSTALL.md](docs/INSTALL.md#optional-extras)).
+
+**Clean up** tidies a structure without changing it: right-click a molecule in the list > Clean up, Build > Clean
+up the 2D layout / the 3D structure, or the Clean up buttons of the Model Kit and the Sketch dock.
+
+- *2D layout* lays the 2D view's drawing out again with RDKit's CoordGen (long chains as a 120° zig-zag, as the 2D
+  view draws them) and undoes rotations and flips. The Sketch dock's button does the same to the drawing in the
+  sketcher (Ctrl+Z twice there brings the old drawing back).
+- *3D structure* minimizes the structure until it converges (MMFF94, or UFF where MMFF94 has no parameters) in the
+  Model Kit, as one step that Ctrl+Z undoes. From the list it first opens the molecule in the Model Kit (its shown
+  conformer when it is built); the kit's Replace or Add to list then hands the result back. *Holding the selected atoms
+  fixed* (in the Model Kit: Freeze selected) keeps the atoms selected in the views where they are.
+- The bonds and the stereo never change. A clean-up that would invert a centre, turn a double bond from E to Z,
+  break a bond or push two atoms into bonding distance is refused with a message saying which atoms, and nothing
+  changes. A centre that was flat before gets a configuration, and the message names it.
 
 **Surface builder:** Build & Preview shows the slab in the 3D view; "Move adsorbate" switches to Move
 mode so you can orient the molecule by hand. Save and "Export LAMMPS SMD setup..." write the moved

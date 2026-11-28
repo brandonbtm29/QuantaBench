@@ -34,9 +34,10 @@ current choice there, an atom is replaced by the current atom type, a click in e
 fragment of an empty model (Shift+click: a separate piece), and Ctrl+click selects.
 
 The edit tools act on the selected atoms: Delete (atoms, or the whole piece), bond order (1 -> 2 -> 3), charge ±,
-make and break a bond, the measured distance / angle / dihedral (2, 3 or 4 atoms) set to a typed value, Add H and
+make and break a bond, the measured distance / angle / dihedral (2, 3 or 4 atoms) set to a typed value, Add H,
 Minimize (MMFF94; UFF when MMFF94 has no parameters, which the dock says, as for metals; the selection frozen when
-asked). A quick local relax runs inside each edit (``model.auto_relax``), so Undo takes it back too. A failed edit
+asked) and Clean up (BUILD-CLEAN: Minimize until it converges, refused when the bonds read from the coordinates or the
+stereo would change, ``chem.edit.CleanUp``; then the 2D view is laid out again; ``gui.clean_up`` has its actions). A quick local relax runs inside each edit (``model.auto_relax``), so Undo takes it back too. A failed edit
 (``EditError``) is reported on the message line and changes nothing.
 
 Every edit is a ``chem.edit.Command``; ``UndoAdaptor`` is the ``model.history`` that puts them on a ``QUndoStack``
@@ -76,6 +77,7 @@ from PySide6.QtWidgets import (
 
 from ..chem import edit as kit
 from ..chem import fragments as frag_lib
+from ..chem.clean import CleanError
 from ..chem.edit import AtomType, EditableMolecule, EditError
 from ..chem.fragments import Fragment
 
@@ -459,9 +461,15 @@ class ModelKitPanel(QWidget):
         self.b_minimize.setToolTip("MMFF94; UFF when MMFF94 has no parameters (metals and other elements it lacks); "
                                    "open valences count as hydrogens")
         self.b_minimize.clicked.connect(lambda _c=False: self.minimize())
+        self.b_clean = QPushButton("Clean up")
+        self.b_clean.setToolTip("Clean up the structure: Minimize until it converges (MMFF94; UFF where MMFF94 has no "
+                                "parameters), refused when the bonds or the stereo would change; the 2D view is laid "
+                                "out again. One step to undo.")
+        self.b_clean.clicked.connect(lambda _c=False: self.clean_up())
         self.freeze_box = QCheckBox("Freeze selected")
-        self.freeze_box.setToolTip("Keep the selected atoms where they are while minimizing")
+        self.freeze_box.setToolTip("Keep the selected atoms where they are while minimizing or cleaning up")
         row.addWidget(self.b_minimize)
+        row.addWidget(self.b_clean)
         row.addWidget(self.freeze_box)
         lay.addLayout(row)
         self.ff_label = QLabel()
@@ -993,6 +1001,34 @@ class ModelKitPanel(QWidget):
                      + (f". {res.note}" if res.note else ""))
         return res
 
+    def clean_up(self, held: list[int] | None = None):
+        """Clean up the model (``EditableMolecule.clean_up``: one undoable step, refused when the bonds or the stereo
+        would change) with ``held`` atoms fixed (default: the selected atoms when Freeze selected is on), then lay the
+        2D view out again. Returns the ``CleanResult``, or None when it was refused (the message line says why)."""
+        if not self.active:
+            return None
+        if held is None:
+            held = self.selected() if self.freeze_box.isChecked() else []
+        res = self._do(self.model.clean_up, held)
+        if res is None:
+            return None
+        notes = []
+        try:
+            layout = self.win.viewer2d.clean_up().layout
+        except CleanError as exc:
+            notes.append(f"2D layout kept: {exc}")
+        else:
+            notes.append(f"2D: {layout} layout")
+        if res.defined:
+            notes.append("was flat before, now defined: " + ", ".join(res.defined))
+        if res.note:
+            notes.append(res.note)
+        self.say(f"Cleaned up with {res.forcefield}: E {res.energy_before:.2f} → {res.energy:.2f} kcal/mol"
+                 + ("" if res.converged else f" (not converged after {res.rounds} rounds: Clean up again)")
+                 + (f", {res.held} atom(s) held fixed" if res.held else "")
+                 + "; bonds and stereo unchanged. " + ". ".join(notes))
+        return res
+
     def _do(self, fn, *args):
         """Run one edit; an ``EditError`` goes to the message line and changes nothing."""
         try:
@@ -1088,7 +1124,7 @@ class ModelKitPanel(QWidget):
 
     def _update_state(self) -> None:
         on = self.active
-        for w in (*self.tool_buttons, self.b_minimize, self.b_add, self.b_close):
+        for w in (*self.tool_buttons, self.b_minimize, self.b_clean, self.b_add, self.b_close):
             w.setEnabled(on)
         self.b_replace.setEnabled(on and self.source_id is not None)
         self.b_replace.setText(f"Replace {self.source_id}" if on and self.source_id else "Replace")

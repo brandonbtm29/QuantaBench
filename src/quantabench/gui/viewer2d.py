@@ -17,7 +17,10 @@ Why it is built this way:
   it draws long perfluoroalkyl chains as crankshafts or curls, and RDKit's legacy depictor draws CF2
   chains as straight lines. When the longest acyclic heavy-atom path is long enough, it is pinned to
   an ideal 120° zig-zag and RDKit's depictor places everything else around it (the two F of each CF2
-  then splay outward, the way PFAS are drawn in the literature).
+  then splay outward, the way PFAS are drawn in the literature). The rule is ``chem.clean.layout_2d``.
+* **Clean up** (``clean_up``, BUILD-CLEAN) lays the shown molecule out again with ``chem.clean.clean_2d``
+  (that rule, checked: the drawing must keep the connectivity and every defined configuration) and undoes
+  the user's rotations and flips.
 """
 
 from __future__ import annotations
@@ -31,14 +34,16 @@ from PySide6.QtCore import QByteArray, QEvent, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPainter, QWheelEvent
 from PySide6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView, QLabel, QVBoxLayout, QWidget
 from rdkit import Chem
-from rdkit.Chem import rdDepictor
 from rdkit.Chem.Draw import rdMolDraw2D
-from rdkit.Geometry import Point2D, Point3D
+from rdkit.Geometry import Point3D
 
+from quantabench.chem import clean
+from quantabench.chem.clean import DEPICTION_BOND, ZIGZAG_MIN_ATOMS
 from quantabench.gui import keymap
 from quantabench.gui.selection import ACCENT_HEX, ACCENT_RGB, SelectionModel
 
-__all__ = ["ACCENT_HEX", "ACCENT_RGB", "MoleculeViewer2D", "build_depiction", "compute_2d_coords"]
+__all__ = ["ACCENT_HEX", "ACCENT_RGB", "DEPICTION_BOND", "ZIGZAG_MIN_ATOMS", "MoleculeViewer2D", "build_depiction",
+           "compute_2d_coords"]
 #: Opacity of the highlight discs and bond bands drawn under the selected atoms.
 ACCENT_ALPHA = 0.6
 
@@ -46,10 +51,6 @@ ACCENT_ALPHA = 0.6
 BOND_PX = 40.0
 #: Pick radius as a fraction of the bond length: generous enough for a label, smaller than half a bond.
 PICK_RADIUS = 0.42
-#: Longest acyclic heavy-atom path (atoms) from which the chain is laid out as an explicit zig-zag.
-ZIGZAG_MIN_ATOMS = 6
-#: RDKit's standard 2D bond length (Å-like depiction units).
-DEPICTION_BOND = 1.5
 FULL_INDEX_PROP = "_qb_full_index"
 
 ZOOM_MIN, ZOOM_MAX = 0.05, 60.0
@@ -59,63 +60,17 @@ KEY_ZOOM = 1.25
 
 
 # ---------------------------------------------------------------------------------------- depiction
-def _longest_acyclic_path(mol: Chem.Mol) -> list[int]:
-    """Longest simple path through acyclic heavy atoms (each acyclic component is a tree, so two BFS
-    sweeps find its diameter exactly)."""
-    ok = {a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() > 1 and not a.IsInRing()}
-    adj = {i: [n.GetIdx() for n in mol.GetAtomWithIdx(i).GetNeighbors() if n.GetIdx() in ok] for i in ok}
-
-    def farthest(start: int) -> tuple[int, dict[int, int | None]]:
-        prev: dict[int, int | None] = {start: None}
-        queue = [start]
-        for u in queue:
-            for v in adj[u]:
-                if v not in prev:
-                    prev[v] = u
-                    queue.append(v)
-        return queue[-1], prev
-
-    best: list[int] = []
-    seen: set[int] = set()
-    for s in sorted(ok):
-        if s in seen:
-            continue
-        a, prev = farthest(s)
-        seen |= set(prev)
-        b, prev = farthest(a)
-        path = [b]
-        while prev[path[-1]] is not None:
-            path.append(prev[path[-1]])
-        if len(path) > len(best):
-            best = path
-    return best
+_longest_acyclic_path = clean.longest_acyclic_path
 
 
 def compute_2d_coords(mol: Chem.Mol) -> None:
-    """Give ``mol`` a single 2D conformer: CoordGen, or a pinned zig-zag for long acyclic chains.
+    """Give ``mol`` a single 2D conformer: CoordGen, or a pinned zig-zag for long acyclic chains
+    (``chem.clean.layout_2d``, the module docstring).
 
     Bond lengths are normalized to RDKit's 1.5 units and the result is straightened (most bonds at
     30°/90° to the x axis) with minimal rotation, so long molecules come out horizontal.
     """
-    mol.RemoveAllConformers()
-    path = _longest_acyclic_path(mol)
-    prefer = rdDepictor.GetPreferCoordGen()
-    try:
-        if len(path) >= ZIGZAG_MIN_ATOMS:
-            rdDepictor.SetPreferCoordGen(False)  # CoordGen does not honour a coordinate map here
-            dx = DEPICTION_BOND * math.cos(math.radians(30.0))
-            dy = DEPICTION_BOND * 0.5
-            cmap = {atom: Point2D(k * dx, (k % 2) * dy) for k, atom in enumerate(path)}
-            rdDepictor.Compute2DCoords(mol, coordMap=cmap)
-        else:
-            rdDepictor.SetPreferCoordGen(True)
-            rdDepictor.Compute2DCoords(mol)
-            if mol.GetNumBonds():
-                rdDepictor.NormalizeDepiction(mol, canonicalize=1)
-    finally:
-        rdDepictor.SetPreferCoordGen(prefer)
-    if mol.GetNumBonds():
-        rdDepictor.StraightenDepiction(mol, minimizeRotation=True)
+    clean.layout_2d(mol)
 
 
 def build_depiction(mol: Chem.Mol, show_hydrogens: bool = False) -> tuple[Chem.Mol, list[int]]:
@@ -312,6 +267,24 @@ class MoleculeViewer2D(QWidget):
         if self.scene is not None:
             self.scene.clear()
         self._item = self._renderer = self._message = None
+
+    def clean_up(self) -> clean.Clean2D:
+        """Lay the shown molecule out again (``chem.clean.clean_2d``: the CoordGen / zig-zag rule, its drawing checked
+        against the molecule's connectivity and stereo) and undo rotations and flips. Returns what was done; raises
+        ``chem.clean.CleanError`` (the drawing stays as it is) when nothing is shown or no layout keeps the stereo."""
+        if self._full is None:
+            raise clean.CleanError("No molecule is shown in the 2D view.")
+        try:
+            depict, to_full = build_depiction(self._full, self.show_hydrogens)
+        except Exception as exc:  # noqa: BLE001 - a structure RDKit cannot depict: say so, keep the drawing
+            raise clean.CleanError(f"The 2D layout failed: {type(exc).__name__}: {exc}") from None
+        res = clean.clean_2d(depict)
+        self._depict, self._to_full = res.mol, to_full
+        self._xform = np.eye(2)
+        self.error = ""
+        self._render()
+        self.fit()
+        return res
 
     def rotate(self, degrees: float) -> None:
         """Rotate the drawing in-plane about its centroid; positive is counter-clockwise on screen."""

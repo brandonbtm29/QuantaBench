@@ -143,6 +143,7 @@ The kit's actions are named, with their default keys in one place (`gui.keymap.S
 | `edit.redo` | the platform's Redo key, plus Ctrl+Y |
 | `build.model_kit` | none |
 | `kit.minimize` | none (Avogadro 2's keymap: Ctrl+Alt+O) |
+| `build.clean_3d` (the kit's Clean up), `build.clean_2d` | none (BUILD-CLEAN, `gui.clean_up`) |
 
 None of these defaults copies another program's. Settings > Controls rebinds them (docs/CONTROLS.md).
 

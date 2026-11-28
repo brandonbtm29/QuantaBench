@@ -111,6 +111,9 @@ SPECS: tuple[ActionSpec, ...] = (
     ActionSpec("build.surface_builder", "Surface builder...", "Build"),
     ActionSpec("build.model_kit", "Model kit (Build mode)", "Build"),
     ActionSpec("kit.minimize", "Minimize the Model Kit's structure", "Build"),
+    # Clean up (BUILD-CLEAN): no keys by default, as Minimize (docs/CONTROLS.md: no key for rare commands)
+    ActionSpec("build.clean_2d", "Clean up the 2D layout", "Build"),
+    ActionSpec("build.clean_3d", "Clean up the 3D structure", "Build"),
     # ---------------------------------------------------------------- Mouse modes of the 3D view
     ActionSpec("view.mode_rotate", "Rotate mode", "Mouse mode", ("Ctrl+1",)),
     ActionSpec("view.mode_select", "Select mode", "Mouse mode", ("Ctrl+2",)),

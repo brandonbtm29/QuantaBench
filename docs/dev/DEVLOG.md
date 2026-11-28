@@ -1242,3 +1242,38 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
   on Reference: `ljpme_parameters` always gives the rule's mesh. Test: `test_ljpme_mesh_is_always_given`.
 - Found on the way: `getPMEParametersInContext` raises "not using PME" on OpenCL for an LJPME context (works on the
   CPU platform); `ruff check` (0.17.6) flags two existing lines in `dist/profile.py` (F401, S607), not touched here.
+
+## 2026-11-28: Clean up for 2D and 3D (BUILD-CLEAN, branch `feat/build-clean`)
+- **One check for both.** A clean-up is accepted only when the result still says the same molecule. 2D: the new layout
+  is written as a MOL block (wedges worked out for the new coordinates; a read drawing's old wedge properties dropped)
+  and read back with RDKit, then compared atom by atom with the original (`chem.clean.connectivity_changes`:
+  element, charge, isotope, H count, radicals, bonds and orders) and by stereo (`stereo_changes`: the original's
+  defined centres and double bonds only, R/S and E/Z from the new CIP labeler for the message, an isomeric-SMILES
+  comparison for what has no label). 3D: the stereo `to_mol` reads from the coordinates before and after, plus
+  `geometry_bond_problems` (a bond over 1.6 times the covalent radii, non-bonded atoms within 1.1 times), because
+  xTB and CREST take bonds from the coordinates.
+- **2D layouts in order:** the view's rule (`layout_2d`: CoordGen, or the pinned zig-zag from 6 acyclic heavy atoms),
+  CoordGen alone, RDKit's depictor; a layout that changes the structure is passed over (`Clean2D.notes`), one that
+  keeps it but draws squashed bonds only when nothing better comes. RDKit 2026.09 re-wedges from the chiral tags when
+  it writes a MOL block (checked: mirrored coordinates keep `[C@H]`); the read-back check does not rely on it.
+- **The zig-zag rule's squashed bonds:** GenX's longest acyclic path is pinned, and RDKit's depictor then put the
+  carbonyl O and one F 0.80 units from their carbons (1.5 is standard). `layout_2d` takes CoordGen's layout when it
+  has fewer `layout_problems` (bonds outside 0.7-1.4 x, atoms within 0.4 x). PFOA, PFOS and 6:2 FTOH keep the zig-zag.
+- **3D through the Model Kit.** Clean up 3D from the list opens the molecule as Edit selected does and runs there, so
+  it is one QUndoStack step ("Clean up") and Replace / Add to list hand it back; a listed molecule's results are not
+  changed behind the user's back. The atoms selected in the views keep their indices in the edit (a built molecule's
+  conformer has explicit H; a pending one's input gets them appended by AddHs in the same order), so "holding the
+  selected atoms fixed" re-selects them after the edit opens. Minimize rounds: 5 x 2000 steps until converged.
+- **Sketch dock:** Clean up exports MOL V3000, runs `clean_molblock` and imports the result with `clear=True`. With
+  the real sketcher (Qt WebEngine under xvfb, cloud): the cleaned drawing exports as the same molecule with even
+  bonds (`test_real_sketcher_in_child`, `QB_TEST_SKETCHER=1`), and Ctrl+Z in the sketcher takes it back in two steps
+  (the import, then the clear: an empty canvas in between), so the status line says "Ctrl+Z twice". Module exposes
+  no undo function, so QuantaBench cannot make it one step. The sketcher exports a centre's enhanced stereo group
+  (STEABS, STERAC, STEREL collections); RDKit keeps them through the clean-up, and `stereo_changes` compares them
+  too. (A block without a group and with chiral flag 0, as RDKit writes one, shows as "and1" in the sketcher.)
+- **Keys:** none by default for `build.clean_2d` and `build.clean_3d`. docs/CONTROLS.md: QuantaBench's defaults do
+  not copy another program's (ChemDraw's Clean Up Structure is Ctrl+Shift+K), and rare commands get none.
+- Tests: `tests/test_clean.py` (messy 2D drawings with wedges and E/Z, the zig-zag kept, refusals through a stand-in
+  layout or a mirroring minimizer, held atoms, undo/redo exact, UFF, a flat centre), `tests/test_gui_clean_up.py`
+  (the kit's button, the right-click entries, the 2D view, the Sketch dock's block hand-off, the keymap).
+  Screenshots: `docs/dev/screenshots/BUILD-CLEAN/` from `scripts/clean_up_smoke.py` (xvfb, the cloud).
