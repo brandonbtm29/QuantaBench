@@ -2,6 +2,17 @@
 
 ## Unreleased (after 0.3.0)
 
+### The device planner: CPU, GPU or both for a job, and which jobs to run side by side (SCHED-3 PR 1, 2026-11-28)
+- **`quantabench-cli jobs plan JOB ...`** compares, for each job on a machine of the registry, its time on the CPU
+  only, the GPU only and the GPU + threads, from the machine's benchmarks (MD scaled to the job's atoms and box), the
+  run's own MD segments, earlier runs' timings (`--timings`) and the fitted CREST cost model; it marks the fastest, gives
+  the lean assignment (GPU MD with LAMMPS: the GPU and a few threads, since PPPM runs on the CPU; OpenMM: the GPU and one
+  thread) and says why. For two or more jobs it says whether each pair finishes sooner side by side than one after the
+  other, with the times of each (threads that share physical cores slow each other; a running job goes first). A JOB is
+  an MD run folder or a spec (`md:atoms=9780,ns=13,dispersion=cutoff16`, `build:method=aimnet2,molecules=5000`,
+  `crest:molecules=1318,atoms=40,threads=10,running=yes`). The job dialog's Resources page shows the same comparison
+  for a build on this computer (Devices). It plans only; starting jobs side by side is SCHED-3 PR 2.
+
 ### OpenMM LJ-PME against A-fine (GPU-SCREEN-1, 2026-11-25)
 - A-fine's C6F14 slab on the workstation's GPU with OpenMM's LJ-PME (mixed precision, one CPU thread, 74 ns/day):
   the model equals A-fine's frame by frame in double precision, and its σ, 13.02 ± 0.63 mN/m once corrected, matches

@@ -7,7 +7,7 @@ import importlib
 
 
 def register(subparsers) -> None:
-    for name in ("profile", "lanes", "worker", "client", "batch", "timings"):
+    for name in ("profile", "lanes", "worker", "client", "batch", "timings", "scheduler"):
         mod = importlib.import_module(f"{__package__}.{name}")
         fn = getattr(mod, "register_cli", None)
         if fn is not None:

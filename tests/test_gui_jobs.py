@@ -282,3 +282,26 @@ def test_conformer_search_auto_in_the_pipeline_dock_and_the_dialog(tmp_path):
         d.close()
     finally:
         _close(app, w)
+
+
+def test_the_dialog_shows_the_device_planner(tmp_path):
+    """SCHED-3: the Resources page compares the CPU only, the GPU only and the GPU + threads for this job here."""
+    from quantabench.dist import profile
+
+    app = _app()
+    w = _window(tmp_path, n=4)
+    try:
+        profile.save_profile(profile.MachineProfile(
+            name=profile.machine_name(), physical_cores=12, logical_cores=24,
+            gpus=[{"index": 0, "name": "GPU (test)", "memory_gb": 16.0, "backend": "cuda"}],
+            throughput={"mmff@cpu": 18000.0, "tblite-gfn2@cpu": 2500.0},
+            benchmarks={"mmff@cpu": {"threads": 23, "set": "pfas-5"}, "tblite-gfn2@cpu": {"threads": 23, "set": "pfas-5"}}))
+        d = _dialog(w)
+        d.w_method.setCurrentIndex(d.w_method.findData("mmff"))
+        text = d.devices_info.text()
+        assert text.startswith("Devices here") and "fastest CPU only" in text and "for 4 molecules" in text
+        assert "mmff runs on the CPU only" in text and not d.devices_info.isHidden()
+        assert d._mean_size(d.ids())[0] > 0          # atoms with hydrogens of the job's molecules
+        d.close()
+    finally:
+        _close(app, w)

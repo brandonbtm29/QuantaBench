@@ -545,6 +545,26 @@ threads. Its profile is "the GPU + 4 to 6 threads", not "the GPU".
 Today the GUI queue runs one build at a time, lanes split the CPU within a build, and MD jobs would run beside it as
 their own processes (section 5). SCHED-3 replaces the one-at-a-time rule with the ledger.
 
+**Built, PR 1 (2026-11-28; `dist.scheduler`, `quantabench-cli jobs plan`, docs/ENGINES.md "Planning devices"):** the
+planning core and two surfaces; nothing is started by it yet. What differs from the plan above:
+- **The profile is a time per assignment**, not a resource vector: for each job the planner predicts the time of the CPU
+  only, the GPU only (with its host threads) and the GPU + threads from the MD benchmark (scaled to the job's atoms and
+  box), the run's own segments, the molecule benchmarks per lane, earlier runs' timings (`--timings`) and the fitted
+  CREST cost model, picks the fastest and gives a **lean** assignment (the fewest threads within 10 % of it). "GPU MD is
+  the GPU + 4-6 threads" comes out of it: Amdahl's law for the CPU part (serial fraction 0.35 from pilots B and C's
+  CPU use) with the GPU's share of the step from the benchmark's timing breakdown gives about 7 of the workstation's 12
+  cores as the lean assignment. OpenMM's GPU platform takes one thread.
+- **Physical cores are the shared resource**, not threads: a thread beyond the cores is worth 0.12 of a core (the
+  workstation's tblite lanes), and side by side each busy thread runs at the machine's share. Without this, two CPU
+  batches on the 12 cores looked 45 % faster together.
+- **Side by side for pairs** of jobs, each keeping its assignment to its end (lanes are planned once per run): advised
+  when neither job finishes later than in its turn one after the other (a running job goes first), or the pair at least
+  10 % sooner. The text says which job finishes how much sooner or later, and that the slowdown of sharing is not
+  measured yet (`--slowdown`).
+- **Surfaces:** the CLI, and the job dialog's Resources page (Devices) for a build on this computer. The Jobs dock's
+  shares and the ledger that starts a job when it fits beside the running ones are PR 2, with RAM and GPU memory (MON-1),
+  the measured slowdown, learned MD thread scaling and a job taking the threads another frees.
+
 ## 8. Engines
 
 | | LAMMPS (first) | OpenMM (v2) |

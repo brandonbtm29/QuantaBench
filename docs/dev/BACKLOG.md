@@ -1047,7 +1047,7 @@ like ChemDraw?"
 - Acceptance: tests that a messy 2D drawing and a distorted 3D geometry come back clean with the connectivity and
   stereo unchanged; screenshot.
 
-## SCHED-3: A scheduler that gives each job its fastest device assignment, and runs jobs side by side when that helps · ready (design: SIMULATE_DESIGN.md §7; MD jobs after SIM-1 PR 1)
+## SCHED-3: A scheduler that gives each job its fastest device assignment, and runs jobs side by side when that helps · in-PR (PR 1: the planner, `jobs plan`, the job dialog's Devices note; PR 2: the ledger in the queue; design: SIMULATE_DESIGN.md §7)
 Brandon (2026-11-22): "Maybe we can include a job queue or scheduler? If one type of job is better suited for the CPU
 and another for a GPU, then we can tell the user that both jobs can run efficiently at the same time."
 Brandon (2026-11-23): "The point of the scheduler is to compare what each job needs, then optimize and make one job go
@@ -1069,6 +1069,26 @@ faster by dedicating just GPU, CPU, or both."
   (an MD job: from `md_throughput` and its earlier segments' ns/day), and says why; a GPU job (AIMNet2 batch or GPU MD)
   and a CPU job (CREST or xTB lanes) start together on one machine within its budget when that helps; the Jobs dock
   shows each one's share and the note; tests of the choice and of the ledger with stand-in profiles.
+- **PR 1 (2026-11-28, branch `feat/sched-3-device-planner`): the planning core.** `dist.scheduler`:
+  - per job and machine, the time of the CPU only, the GPU only (its host threads) and the GPU + threads: MD from
+    `md_throughput` (scaled by `md.bench.estimate_hours`) or the run's own segments on that machine; LAMMPS' GPU package
+    as g + (1 − g) x A(t) (the benchmark's "Pair" share, Amdahl with serial fraction 0.35 from pilots B/C's CPU use);
+    builds as `--lanes auto`'s lanes at the benchmark's (or `--timings`' learned) per-lane rate; CREST from the fitted
+    cost model; the fastest, and the lean assignment (the fewest threads within 10 %), with the reasons in words;
+  - pairs side by side against one after the other, with physical cores as the shared resource (SMT 0.12 of a core),
+    each job keeping its assignment; advised when neither finishes later (a running job first) or the pair 10 % sooner;
+  - `quantabench-cli jobs plan JOB ... [--machine] [--threads] [--timings] [--slowdown] [--json]` (JOB: an MD run folder
+    or `md:` / `build:` / `crest:` specs), and the job dialog's Resources page shows the note for a build here;
+  - tests with stand-in profiles shaped like the two computers (`tests/test_scheduler.py`, one GUI test).
+- **PR 2:** the ledger in the GUI queue (start a job when its lean profile fits beside the running ones and say so;
+  more than two jobs), the Jobs dock's shares, RAM and GPU memory from MON-1's samples, the measured slowdown of two
+  jobs together, an MD run's thread scaling learned from its segments (two thread counts), and a job taking the threads
+  the other one frees (an MD job at its next segment; a batch by a resume).
+- Questions for Brandon (PR 1): the constants (`GPU_WAIT_SHARE` 0.07, `MD_SERIAL_FRACTION` 0.35, `SMT_GAIN` 0.12, `TIE`
+  3 %, `LEAN` 10 %, `SIDE_MARGIN` 10 %) are from the pilots and the lane measurements, not a dedicated benchmark: a
+  thread sweep of `gpu-cutoff16` on the workstation (1, 2, 4, 6, 8, 12 threads, ~10 min) would pin the GPU MD ones.
+  `--lanes auto` puts a GPU lane in when one GPU lane beats one CPU lane at the benchmark's threads; the planner
+  compares the GPU lane with the CPU lanes its threads would otherwise run: use the planner's rule in `plan_auto` (PR 2)?
 
 ## FIX-1: Windows CI green · done 2026-11-05
 - 2026-11-05: first green CI on Windows, Linux and macOS (PLAT-2). The failures since then were separate bugs,
