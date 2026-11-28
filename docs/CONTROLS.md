@@ -164,6 +164,8 @@ Model Kit's actions (UI-7) and Paste, Copy molecules and Copy as (UI-4) are in t
 | Build | Surface builder... | - | - | window | `build.surface_builder` |
 | Build | Model kit (Build mode) | - | - | window | `build.model_kit` |
 | Build | Minimize the Model Kit's structure | - | - | window | `kit.minimize` |
+| Build | Clean up the 2D layout | - | - | window | `build.clean_2d` |
+| Build | Clean up the 3D structure | - | - | window | `build.clean_3d` |
 | Mouse mode | Rotate mode | Ctrl+1 | ⌘1 | window | `view.mode_rotate` |
 | Mouse mode | Select mode | Ctrl+2 | ⌘2 | window | `view.mode_select` |
 | Mouse mode | Move mode | Ctrl+3 | ⌘3 | window | `view.mode_move` |

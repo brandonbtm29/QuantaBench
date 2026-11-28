@@ -251,6 +251,7 @@ class MainWindow(QMainWindow):
     def _install_panels(self) -> None:
         """Optional analysis panels; one that fails to load is logged and skipped."""
         from . import (
+            clean_up,
             clipboard,
             import_action,
             job_monitor,
@@ -271,7 +272,7 @@ class MainWindow(QMainWindow):
 
         for panel in (spectra_panel, surface_panel, table_panel, plot_panel, project_actions, import_action,
                       machines_panel, machine_monitor, job_monitor, update_action, clipboard, sketcher_dock,
-                      model_kit, review_panel, results_fold, popout):
+                      model_kit, clean_up, review_panel, results_fold, popout):
             try:
                 panel.install(self)
             except Exception as exc:  # a broken panel must not stop the app from starting

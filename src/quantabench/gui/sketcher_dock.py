@@ -7,7 +7,10 @@ Buttons: **New** clears the canvas; **Edit selected** loads the selected molecul
 ``chem.sketch.input_from_molblock``, which reports structure problems before anything is added; the molecule then
 goes the way of a SMILES typed into the Molecules box (``win.add_inputs``), and the 3D view previews it. **Insert
 fragment** adds a PFAS piece (CF3, a (CF2)n chain, acid head groups, ...) next to the drawing, ready to be joined
-with a bond.
+with a bond. **Clean up** (BUILD-CLEAN) lays the drawing out again with RDKit, as the 2D view lays out molecules
+(``chem.clean.clean_molblock``), and refuses when that would change its connectivity or stereo. It replaces the
+drawing through the sketcher's clear and import, two steps of the sketcher's own undo: Ctrl+Z twice brings the old
+drawing back (checked under xvfb on Linux).
 
 Nothing of Qt WebEngine is loaded until the dock is first shown. Without WebEngine (``pip install
 "quantabench[editor]"``) the dock says what to install; without the editor's files (``sketcher_assets``) it offers
@@ -40,7 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import sketcher_assets
-from ..chem import sketch
+from ..chem import clean, sketch
 from . import keymap, sketcher_web
 
 TITLE = "Sketch"
@@ -81,11 +84,15 @@ class SketcherPanel(QWidget):
             act = self.fragment_menu.addAction(label)
             act.triggered.connect(lambda _checked=False, s=smiles: self.insert_fragment(s))
         self.b_fragment.setMenu(self.fragment_menu)
+        self.b_clean = QPushButton("Clean up")
+        self.b_clean.setToolTip("Lay the drawing out again with RDKit (CoordGen; long chains as a zig-zag, as in the 2D "
+                                "view); refused when it would change the connectivity or the stereo")
         self.b_new.clicked.connect(self.new)
         self.b_edit.clicked.connect(self.edit_selected)
         self.b_add.clicked.connect(self.add_to_list)
         self.b_replace.clicked.connect(self.replace_selected)
-        for b in (self.b_new, self.b_edit, self.b_add, self.b_replace, self.b_fragment):
+        self.b_clean.clicked.connect(self.clean_up)
+        for b in (self.b_new, self.b_edit, self.b_add, self.b_replace, self.b_fragment, self.b_clean):
             row.addWidget(b)
         row.addStretch(1)
         lay.addLayout(row)
@@ -144,6 +151,7 @@ class SketcherPanel(QWidget):
         self.b_fragment.setEnabled(on)
         self.b_edit.setEnabled(on and row is not None)
         self.b_add.setEnabled(on and not self.empty)
+        self.b_clean.setEnabled(on and not self.empty)
         self.b_replace.setEnabled(on and not self.empty and row is not None and row.id not in self.win.running)
 
     def _show_message(self, html: str, buttons=("download", "zip")) -> None:
@@ -340,6 +348,10 @@ class SketcherPanel(QWidget):
     def add_to_list(self) -> None:
         self._export("Add to list", self.add_block)
 
+    def clean_up(self) -> None:
+        """Lay the drawing out again (``clean_block``) and put it back in the sketcher."""
+        self._export("Clean up", self.clean_block)
+
     def replace_selected(self) -> None:
         self._export("Replace selected", self.replace_block)
 
@@ -359,6 +371,22 @@ class SketcherPanel(QWidget):
         self._log_notes(res.input.id, res.notes)
         self._say(f"Added {res.input.id} ({res.formula}).")
         return True
+
+    def clean_block(self, block: str) -> str | None:
+        """The drawing (a MOL block) laid out again (``chem.clean.clean_molblock``: RDKit's CoordGen, the 2D view's
+        zig-zag rule for long chains, checked: the connectivity and every configuration the drawing defines must
+        stay), loaded into the sketcher in place of the drawing. Returns the new block, or None when it was refused
+        (a message says why; the drawing stays)."""
+        try:
+            new, res = clean.clean_molblock(block)
+        except clean.CleanError as exc:
+            QMessageBox.warning(self, "Clean up", str(exc))
+            return None
+        if self.view is not None and self.ready:
+            self.view.import_text(new, clear=True, callback=lambda ok, v: ok or self._js_failed("Clean up", v))
+        self._say(f"Cleaned up ({res.layout} layout): connectivity and stereo unchanged. Ctrl+Z twice in the "
+                  "sketcher brings the drawing back as it was.")
+        return new
 
     def replace_block(self, block: str) -> bool:
         """Give the selected molecule the drawing's structure, keeping its id, name and place in the list. Its

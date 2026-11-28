@@ -1028,10 +1028,10 @@ after-the-fact checks, into `progress.json`) and by the Simulate panel's review 
   (styles in the build, GPU switches), disk space and run time against the time window.
 - Acceptance: a test per check with a deliberately broken setup; the C6F14 pilots' folders pass.
 
-## BUILD-CLEAN: "Clean up" for a molecule's 2D layout and 3D structure · ready
+## BUILD-CLEAN: "Clean up" for a molecule's 2D layout and 3D structure · in-PR 2026-11-28 (branch `feat/build-clean`)
 Brandon (2026-11-22): "When a molecule is built, do we currently have an option where we can 'clean up' the structure
 like ChemDraw?"
-- Today:
+- Before:
   - 3D: the model kit's edit model has Minimize (MMFF; `chem.edit.Minimize`, UI-7), and its GUI button comes with the
     model kit's build mode (PR #44).
   - 2D: the 2D view lays every molecule out automatically (CoordGen, or a pinned zig-zag for long chains;
@@ -1046,6 +1046,27 @@ like ChemDraw?"
   has no parameters, as one undoable command). Selected atoms can be held fixed.
 - Acceptance: tests that a messy 2D drawing and a distorted 3D geometry come back clean with the connectivity and
   stereo unchanged; screenshot.
+- **Built (2026-11-28):**
+  - *Where:* the Molecules dock's right-click menu (Clean up > 2D layout, 3D structure (in the Model Kit), 3D
+    structure holding the selected atoms fixed); the Model Kit's Clean up button next to Minimize (Freeze selected
+    holds the selection); a Clean up button in the Sketch dock's row; Build > Clean up the 2D layout / the 3D
+    structure (`build.clean_2d`, `build.clean_3d`; no default keys, as `kit.minimize`). `gui/clean_up.py`.
+  - *2D* (`chem.clean.clean_2d`; the Sketch dock: `clean_molblock`): the 2D view's rule (`layout_2d`, moved from
+    `gui.viewer2d`), then CoordGen alone, then RDKit's depictor; the first whose drawing, written as a MOL block with
+    wedges for the new coordinates and read back, has the same atoms and bonds and keeps every configuration the
+    original defines. Stereo the original leaves open is not compared.
+  - *3D* (`chem.edit.CleanUp`, `EditableMolecule.clean_up`): MMFF94 (UFF where it has no parameters), up to 5 rounds
+    of 2000 steps, held atoms fixed, one undoable command; refused, nothing changed, when the stereo read from the
+    coordinates would change or the geometry would read as other bonds (`chem.clean.geometry_bond_problems`). From
+    the list it opens the molecule in the Model Kit first (as Edit selected); Replace or Add to list hands it back.
+  - *Found on the way:* the zig-zag rule drew GenX's C=O and one C-F at half length (RDKit's depictor around the
+    pinned chain). `layout_2d` now takes CoordGen's layout when the zig-zag one has bonds outside 0.7-1.4 times the
+    standard length or atoms on top of each other; this changes the 2D view's drawing of such molecules too.
+  - Tests: `tests/test_clean.py`, `tests/test_gui_clean_up.py`. Screenshots: `docs/dev/screenshots/BUILD-CLEAN/`
+    (`scripts/clean_up_smoke.py`).
+  - Sketch dock: the sketcher's own Ctrl+Z takes a clean-up back in two steps (clear and import; checked under xvfb).
+  - For Brandon (PR body): default keys; Clean up 3D from the list through the Model Kit, or in place; the 2D view's
+    CoordGen fallback; the two-step undo in the sketcher.
 
 ## SCHED-3: A scheduler that gives each job its fastest device assignment, and runs jobs side by side when that helps · ready (design: SIMULATE_DESIGN.md §7; MD jobs after SIM-1 PR 1)
 Brandon (2026-11-22): "Maybe we can include a job queue or scheduler? If one type of job is better suited for the CPU

@@ -2,6 +2,15 @@
 
 ## Unreleased (after 0.3.0)
 
+### Clean up for a molecule's 2D layout and 3D structure (BUILD-CLEAN, 2026-11-28)
+- **Clean up** in the Molecules dock's right-click menu, the Model Kit (next to Minimize), the Sketch dock and the Build
+  menu. *2D layout* lays the drawing out again with RDKit's CoordGen (long chains as a zig-zag, as the 2D view draws
+  them) and undoes rotations and flips; *3D structure* minimizes in the Model Kit until it converges (MMFF94, or UFF
+  where MMFF94 has no parameters) as one step that Undo takes back, with the selected atoms held fixed when asked.
+  Bonds and stereo are checked first: a clean-up that would change them is refused with the atoms named, and nothing
+  changes. The 2D view now draws a molecule with CoordGen when the zig-zag rule would squash bonds (GenX's C=O was
+  drawn at half length).
+
 ### OpenMM LJ-PME against A-fine (GPU-SCREEN-1, 2026-11-25)
 - A-fine's C6F14 slab on the workstation's GPU with OpenMM's LJ-PME (mixed precision, one CPU thread, 74 ns/day):
   the model equals A-fine's frame by frame in double precision, and its σ, 13.02 ± 0.63 mN/m once corrected, matches

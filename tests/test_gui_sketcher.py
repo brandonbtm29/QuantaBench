@@ -1,6 +1,6 @@
 """The Sketch dock (gui.sketcher_dock): menus, what it says without Qt WebEngine or the editor's files, the MOL-block
 hand-off to the molecule list, and (QB_TEST_SKETCHER=1, with Qt WebEngine and the downloaded editor) the real
-Schrödinger Sketcher round trip of PFAS structures through its JavaScript API.
+Schrödinger Sketcher round trip of PFAS structures through its JavaScript API, Clean up included.
 
     QB_TEST_SKETCHER=1 xvfb-run -a python -m pytest tests/test_gui_sketcher.py    # after quantabench-cli sketcher --install
 """
@@ -287,7 +287,51 @@ def test_real_sketcher_in_child(tmp_path, warnings):
     p.add_to_list()
     assert _wait(app, lambda: w.mol_list.count() == n + 1, 20)
     assert w.model.rows()[-1].smiles == _canon("C[C@H](N)C(=O)O")
+    # Clean up (BUILD-CLEAN): a messy drawing of (R)-GenX comes back laid out, the wedge and the structure kept
+    messy = _messy_block(GENX_R)
+    ok, _ = _js(app, lambda cb: v.import_text(messy, clear=True, callback=cb))
+    assert ok
+    assert _wait(app, lambda: p.b_clean.isEnabled(), 10)
+    p.clean_up()
+    assert _wait(app, lambda: "Cleaned up" in p.status.text(), 30), p.status.text()
+    ok, block = _js(app, lambda cb: v.export_text("MDL_MOLV3000", cb))
+    assert ok and sketch.input_from_molblock(block).input.smiles == _canon(GENX_R)
+    assert _bond_spread(block) < 0.05 < _bond_spread(messy)
     p.new()
     assert _wait(app, lambda: p.empty and not p.b_add.isEnabled(), 10)
     _close(app, w)
     assert p.view is None
+
+
+GENX_R = "OC(=O)[C@@](F)(C(F)(F)F)OC(F)(F)C(F)(F)C(F)(F)F"
+
+
+def _messy_block(smiles):
+    """A hand drawing: the molecule laid out, every atom nudged at random; the first seed that keeps its stereo."""
+    import numpy as np
+    from rdkit import Chem
+
+    from quantabench.chem import clean
+
+    for seed in range(1, 50):
+        m = Chem.MolFromSmiles(smiles)
+        clean.layout_2d(m)
+        conf = m.GetConformer()
+        rng = np.random.default_rng(seed)
+        for i in range(m.GetNumAtoms()):
+            q = conf.GetAtomPosition(i)
+            conf.SetAtomPosition(i, (q.x + rng.normal(0, 0.35), q.y + rng.normal(0, 0.35), 0.0))
+        block = Chem.MolToV3KMolBlock(m)
+        if Chem.MolToSmiles(Chem.MolFromMolBlock(block)) == _canon(smiles):
+            return block
+    raise AssertionError(smiles)
+
+
+def _bond_spread(block):
+    import numpy as np
+    from rdkit import Chem
+
+    m = Chem.MolFromMolBlock(block, removeHs=False)
+    pos = m.GetConformer().GetPositions()
+    lengths = [np.linalg.norm(pos[b.GetBeginAtomIdx()] - pos[b.GetEndAtomIdx()]) for b in m.GetBonds()]
+    return float(np.std(lengths) / np.mean(lengths))
