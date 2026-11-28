@@ -7,6 +7,13 @@ Backends (``BACKENDS``, chosen with ``type_molecule(..., ff=)``):
     OPLS-AA (Jorgensen et al. 1996) with Watkins & Jorgensen's 2001 perfluoroalkane types, typed in process by
     ``md.oplsaa`` (alkanes, perfluoroalkanes, (fluoro)benzenes; everything else is refused). Geometric mixing,
     1-4 scaling 0.5/0.5. Needs nothing beyond the core install.
+``oplsaa-pf``
+    OPLS-AA/PF (FF-1, ``md.oplsaa_pf``): the same OPLS-AA family extended, from published tables only, to
+    semifluorinated chains (Pádua 2002 junction torsions), fluorinated aromatics, monoalkyl fluorides, alcohols,
+    2,2,2-trifluoroethanol and 1H,1H-perfluoroalcohols (Silva et al. 2016), and perfluoroalkanesulfonate /
+    trifluoroacetate anions (CL&P). Types every molecule ``oplsaa`` types with the same types and terms. Each
+    molecule is labelled with the published recipe it follows, or "composed". In process. Design note:
+    docs/FORCEFIELDS.md.
 ``openff``
     OpenFF Sage (``openff-2.3.0.offxml`` by default) with AM1-BCC charges from AmberTools' sqm, exported by
     OpenFF Interchange's LAMMPS writer. Lorentz-Berthelot mixing, 1-4 scaling 0.5 (LJ) / 0.8333 (Coulomb).
@@ -43,6 +50,7 @@ import numpy as np
 from rdkit import Chem
 
 from . import oplsaa as O
+from . import oplsaa_pf as PF
 
 AVOGADRO = 6.02214076e23
 DRIVER = Path(__file__).with_name("ff_driver.py")
@@ -100,6 +108,8 @@ class TypedMolecule:
     references: list[str] = field(default_factory=list)
     versions: dict[str, str] = field(default_factory=dict)
     overrides: dict[str, dict] = field(default_factory=dict)
+    recipe: str = ""                      # oplsaa-pf: the published recipe the molecule follows (or "composed ...")
+    tier: str = ""                        # oplsaa-pf: "published" | "composed" | "transferred"
 
     @property
     def n_atoms(self) -> int:
@@ -259,6 +269,90 @@ def _type_oplsaa(mol: Chem.Mol, name: str, smiles: str) -> TypedMolecule:
     return tm
 
 
+# ------------------------------------------------------------------------------------------- OPLS-AA/PF
+def type_oplsaa_pf(mol: Chem.Mol, name: str = "", smiles: str = "") -> TypedMolecule:
+    """OPLS-AA/PF typing of ``mol`` (explicit H, one conformer; an ion is allowed here, a liquid slab refuses it)."""
+    try:
+        asg = PF.assign(mol)
+        tier, recipe = PF.recipe_of(asg)
+    except PF.PFTypingError as exc:
+        raise ForceFieldError(f"OPLS-AA/PF: {exc}") from exc
+    smiles = smiles or Chem.MolToSmiles(Chem.RemoveHs(mol))
+    name = name or smiles
+    types = asg.types
+    bonds, angles, dihedrals = _topology(mol)
+    lj = {t: LJType(t, PF.TYPES[t].element, PF.TYPES[t].mass, PF.TYPES[t].epsilon_kcal, PF.TYPES[t].sigma_A,
+                    PF.TYPES[t].cite()) for t in dict.fromkeys(types)}
+    tm = TypedMolecule(
+        name=name, smiles=smiles, forcefield="oplsaa-pf",
+        label="OPLS-AA/PF: OPLS-AA (Jorgensen et al. 1996) with Watkins-Jorgensen 2001 perfluoroalkyl types and "
+              "published fluorinated-group parameters (FF-1)",
+        elements=[a.GetSymbol() for a in mol.GetAtoms()],
+        positions=(mol.GetConformer().GetPositions() if mol.GetNumConformers() else np.zeros((mol.GetNumAtoms(), 3))),
+        atom_types=list(types), charges=np.array(asg.charges, dtype=float), lj_types=lj,
+        styles={"bond": "harmonic", "angle": "harmonic", "dihedral": "opls", "improper": "cvff"},
+        mixing=PF.MIXING, special_lj=PF.SPECIAL_LJ, special_coul=PF.SPECIAL_COUL,
+        formal_charge=Chem.GetFormalCharge(mol), recipe=recipe, tier=tier,
+        versions={"oplsaa_pf_tables": f"GROMACS {O.GROMACS_COMMIT[:10]}, CL&P {PF.CLP_COMMIT[:10]}"},
+    )
+    transfers: list[str] = []
+    try:
+        for i, j in bonds:
+            t = PF.bond_parameters(types[i], types[j])
+            tm.bond_types.setdefault(t.label, TermType(t.style, list(t.coeffs), t.source))
+            tm.bonds.append((i, j, t.label))
+        for i, j, k in angles:
+            t = PF.angle_parameters(types[i], types[j], types[k])
+            tm.angle_types.setdefault(t.label, TermType(t.style, list(t.coeffs), t.source))
+            tm.angles.append((i, j, k, t.label))
+        for i, j, k, m in dihedrals:
+            t = PF.dihedral_parameters(types[i], types[j], types[k], types[m])
+            if t.label not in tm.dihedral_types:
+                tm.dihedral_types[t.label] = TermType(t.style, list(t.coeffs), t.source + (
+                    f"; TRANSFER: {t.transfer}" if t.transfer else ""))
+                if t.transfer:
+                    transfers.append(t.transfer)
+            tm.dihedrals.append((i, j, k, m, t.label))
+    except PF.PFTypingError as exc:
+        raise ForceFieldError(f"OPLS-AA/PF: {exc}") from exc
+    for a in mol.GetAtoms():
+        tt = types[a.GetIdx()]
+        if tt in PF.AROMATIC_C:
+            n1, n2, n3 = sorted(n.GetIdx() for n in a.GetNeighbors())
+            t = PF.improper_aromatic()
+            tm.improper_types.setdefault(t.label, TermType(t.style, list(t.coeffs), t.source))
+            tm.impropers.append((n1, n2, a.GetIdx(), n3, t.label))
+        elif tt == "clp_CO2":
+            c = next(n.GetIdx() for n in a.GetNeighbors() if n.GetSymbol() == "C")
+            o1, o2 = sorted(n.GetIdx() for n in a.GetNeighbors() if n.GetSymbol() == "O")
+            t = PF.improper_carboxylate()
+            tm.improper_types.setdefault(t.label, TermType(t.style, list(t.coeffs), t.source))
+            tm.impropers.append((c, o1, a.GetIdx(), o2, t.label))
+    if transfers:
+        tm.tier = "transferred"
+    tm.notes.append(f"recipe ({tm.tier}): {recipe}")
+    for i, why in asg.charge_notes.items():
+        tm.notes.append(f"atom {i} ({types[i]}) charge {why}")
+    for why in dict.fromkeys(transfers):
+        tm.notes.append(f"transfer: {why}")
+    tm.notes += asg.notes
+    if any(t in O.PERFLUORO_CARBONS for t in types) and len(set(types) & O.PERFLUORO_CARBONS) and any(
+            lbl.startswith("perfluoro") for lbl in tm.dihedral_types):
+        tm.notes.append("perfluoroalkyl C-C-C-C torsions use Watkins & Jorgensen's own torsion (GROMACS "
+                        "dih_perfluoroalkane_CT_CT_CT_CT), not the hydrocarbon one a bond-type lookup would give")
+    keys = ["jorgensen1996", "watkins2001", "gromacs"]
+    for fams, _j, _label, refs in PF.RECIPES:
+        if fams <= asg.families | {"alkane"}:
+            keys += list(refs)
+    if any(t.source.startswith("CL&P") for t in (*tm.bond_types.values(), *tm.angle_types.values(),
+                                                 *tm.dihedral_types.values())) or any(t.startswith("clp_") for t in types):
+        keys += ["clp"]
+    if any(lbl.startswith("padua") for lbl in tm.dihedral_types):
+        keys += ["padua2002", "clp"]
+    tm.references = [PF.REFERENCES[k] for k in dict.fromkeys(keys) if k in PF.REFERENCES]
+    return tm
+
+
 # --------------------------------------------------------------------------------------- external backends
 def driver_python() -> str | None:
     """The Python of the environment with AmberTools (and OpenFF), found next to its antechamber."""
@@ -328,6 +422,8 @@ class Backend:
 BACKENDS: dict[str, Backend] = {
     "oplsaa": Backend("oplsaa", "OPLS-AA + Watkins-Jorgensen perfluoroalkanes (alkanes, perfluoroalkanes, "
                                 "(fluoro)benzenes), in process", False),
+    "oplsaa-pf": Backend("oplsaa-pf", "OPLS-AA/PF: oplsaa + published fluorinated groups (semifluorinated chains, "
+                                      "fluoroaromatics, alkyl fluorides, (fluoro)alcohols; FF-1), in process", False),
     "openff": Backend("openff", f"OpenFF Sage ({DEFAULT_OPENFF}) + AM1-BCC, through OpenFF Interchange (conda env)", True),
     "gaff2": Backend("gaff2", "GAFF2 + AM1-BCC through AmberTools antechamber/parmchk2/tleap and ParmEd (conda env)", True),
 }
@@ -355,7 +451,12 @@ def type_molecule(smiles: str, name: str = "", ff: str = "oplsaa", *, mol: Chem.
         raise ForceFieldError("a pure liquid of ions is not set up here (net charge must be 0)")
     smiles = smiles or Chem.MolToSmiles(Chem.RemoveHs(mol))
     name = name or smiles
-    tm = _type_oplsaa(mol, name, smiles) if ff == "oplsaa" else _type_external(mol, name, smiles, ff, offxml)
+    if ff == "oplsaa":
+        tm = _type_oplsaa(mol, name, smiles)
+    elif ff == "oplsaa-pf":
+        tm = type_oplsaa_pf(mol, name, smiles)
+    else:
+        tm = _type_external(mol, name, smiles, ff, offxml)
     if overrides:
         tm.apply_overrides(overrides)
     tm.check()

@@ -1293,7 +1293,7 @@ A pure liquid's surface tension σ from a liquid-vapour slab in LAMMPS, starting
 
 ```
 quantabench-cli md liquid-slab --smiles "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --name c6f14 -o c6f14_ewald \
-    [--ff oplsaa|openff|gaff2] [--long-range auto|ewald|cutoff] [--cutoff RC] [--purpose screen|reference] \
+    [--ff oplsaa|oplsaa-pf|openff|gaff2] [--long-range auto|ewald|cutoff] [--cutoff RC] [--purpose screen|reference] \
     [--gpu auto|yes|no] [--size pilot|full] [--molecules N] [--sigma-ref 12.33 --density-ref 1.67 --ref-note "..."]
 cd c6f14_ewald && lmp -in in.bulk && lmp -in in.slab          # README.txt: OpenMP, MPI and GPU commands
 quantabench-cli md surface-tension c6f14_ewald                 # sigma +- error, densities, checks (.json, .md)
@@ -1447,9 +1447,22 @@ For the Simulate panel (SIM-1): `md.long_range.options()` (choices, labels, defa
 | key | what | charges | mixing, 1-4 LJ / Coulomb | covers | runs |
 |---|---|---|---|---|---|
 | `oplsaa` | OPLS-AA with Watkins & Jorgensen's 2001 perfluoroalkane types (opls_961-965) | the force field's | geometric, 0.5 / 0.5 | alkanes, perfluoroalkanes (CF4, branched, cyclic), benzene and fluorobenzenes; everything else is refused with a pointer to the others | in process, core install |
+| `oplsaa-pf` | OPLS-AA/PF (FF-1, `md.oplsaa_pf`): `oplsaa` plus published fluorinated-group parameters (GROMACS' other fluorine types, Pádua 2002's fluorocarbon/hydrocarbon junction torsions, Silva et al. 2016's 1H,1H-perfluoroalcohols, CL&P's sulfonate and trifluoroacetate heads) | the published group charges, never redistributed | geometric, 0.5 / 0.5 | everything `oplsaa` covers (same model), plus semifluorinated chains, ring F/CF3/CH3/Br, monoalkyl fluorides, alcohols, TFE and n:1 FTOHs; anions and Li+/Na+/K+ typed but not run as liquids | in process, core install |
 | `gaff2` | GAFF2 (AmberTools' gaff2.dat + parmchk2) | AM1-BCC (antechamber, sqm) | Lorentz-Berthelot, 0.5 / 0.8333 | any organic molecule | AmberTools' Python (below) |
 | `openff` | OpenFF Sage, `openff-2.3.0.offxml` (`--offxml` for another) | AM1-BCC (AmberTools sqm through the OpenFF toolkit) | Lorentz-Berthelot, 0.5 / 0.8333 | any organic molecule Sage covers | AmberTools' Python, exported by OpenFF Interchange |
 
+- **Which force field to pick.** For alkanes and perfluoroalkanes, `oplsaa` (the default) and `oplsaa-pf` give the
+  same model (the pilots' C6F14). For any other fluorinated liquid, try `--ff oplsaa-pf`: it either types the
+  molecule from published tables, or refuses with the atom and the reason (an ester O next to CF2, a CHF2 group,
+  chlorine, ...). Each typed molecule is labelled in README.txt and liquid_setup.json with the published recipe it
+  follows, or as `composed` (published groups in a combination no paper validated) or `transferred` (one labelled
+  transfer); check its bulk density against a measured one before a slab. `openff` and `gaff2` cover any organic
+  molecule but are cross-checks only: GAFF2 put C6F14's density 10 % and its σ 2.6x too high. Hexafluorobenzene is
+  the one molecule both OPLS-AA backends type differently (opls_718/719 in `oplsaa`, its own opls_720/721 in
+  `oplsaa-pf`). Why, the sources, the coverage of the project's σ and PFAS sets and the validation: docs/FORCEFIELDS.md.
+- **Where the OPLS-AA/PF numbers come from.** `md/oplsaa_pf.py` keeps each value as GROMACS' oplsaa.ff or CL&P's
+  il.ff (github.com/paduagroup/clandp, commit 898c19d5a4, MIT) writes it, with its line;
+  `scripts/check_oplsaa_pf_params.py --gromacs DIR --clp il.ff` re-reads both: 161 entries, no mismatch on 2026-11-28.
 - **Where the OPLS-AA numbers come from.** `md/oplsaa.py` stores each value as written in GROMACS' `oplsaa.ff`
   (`ffnonbonded.itp`, `ffbonded.itp`, commit bc88adaf4e) with its line number, and converts to LAMMPS units in
   one place (bonds and angles K = k/2; Ryckaert-Bellemans to OPLS V1-V4 by the GROMACS manual's relations).

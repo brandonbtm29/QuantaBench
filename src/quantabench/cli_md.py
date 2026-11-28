@@ -2,7 +2,7 @@
 LAMMPS and their surface tension.
 
     quantabench-cli md liquid-slab --smiles "FC(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)C(F)(F)F" --name c6f14 -o DIR
-        [--ff oplsaa|openff|gaff2] [--long-range auto|ewald|cutoff] [--cutoff RC] [--purpose screen|reference]
+        [--ff oplsaa|oplsaa-pf|openff|gaff2] [--long-range auto|ewald|cutoff] [--cutoff RC] [--purpose screen|reference]
         [--gpu auto|yes|no] [--coulomb-accuracy A] [--coulomb-mesh spacing|accuracy] [--disp-grid spacing|accuracy]
         [--disp-gewald G]
         [--disp-spacing H] [--disp-accuracy REAL KSPACE] [--dispersion ewald|cutoff12|cutoff16|...]
@@ -38,7 +38,8 @@ def register(msub) -> None:
     ls.add_argument("--smiles", help="the molecule (neutral; one fragment)")
     ls.add_argument("--name", default="", help="a short name for files and reports")
     ls.add_argument("-o", "--out", help="folder for system.data, ff.params, in.bulk, in.slab, README.txt")
-    ls.add_argument("--ff", default="oplsaa", help="force field: oplsaa (default), openff, gaff2 (--list-ff)")
+    ls.add_argument("--ff", default="oplsaa", help="force field: oplsaa (default), oplsaa-pf (OPLS-AA + published fluorinated "
+                    "groups, FF-1), openff, gaff2 (--list-ff)")
     ls.add_argument("--offxml", default=None, help="with --ff openff: the SMIRNOFF file (default openff-2.3.0.offxml)")
     ls.add_argument("--overrides", help="JSON file of Lennard-Jones overrides by atom type: "
                                         '{"lj": {"f": {"epsilon": .., "sigma": ..}}, "source": "..."}')
