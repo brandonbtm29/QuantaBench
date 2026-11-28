@@ -9,9 +9,10 @@
   trifluoroacetate heads, OPLS-AA Li+/Na+/K+),
   every value with its source line and no charge redistribution; anything else is refused with the reason. It gives
   the pilots' C6F14 model unchanged (`oplsaa` stays the default) and labels each molecule with the published recipe
-  it follows. Covers 28 of the 93 fluorinated σ liquids and 358 of the 3,857 fluorinated PFAS-set molecules
-  (`oplsaa`: 19 and 75). Why and what is left: docs/FORCEFIELDS.md; parameter check:
-  `scripts/check_oplsaa_pf_params.py`.
+  it follows. Covers 29 of the 93 fluorinated σ liquids and 384 of the 3,857 fluorinated PFAS-set molecules
+  (`oplsaa`: 19 and 75). In bulk liquid runs, C6F14, C6F6, a fluorotelomer alcohol, 4-fluorotoluene and
+  1-fluoroheptane come within 2.5 % of their measured densities. Why and what is left: docs/FORCEFIELDS.md;
+  parameter check: `scripts/check_oplsaa_pf_params.py`.
 
 ### OpenMM LJ-PME against A-fine (GPU-SCREEN-1, 2026-11-25)
 - A-fine's C6F14 slab on the workstation's GPU with OpenMM's LJ-PME (mixed precision, one CPU thread, 74 ns/day):

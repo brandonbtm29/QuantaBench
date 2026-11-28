@@ -144,7 +144,8 @@ numbers line by line), so the validated C6F14 model is unchanged: the pilots' ow
 1. **Hexafluorobenzene.** `md.oplsaa` types every aromatic C-F with fluorobenzene's opls_718/719 (q ±0.22);
    GROMACS has hexafluorobenzene's own opls_720/721 (q ±0.13) and foyer assigns them. `oplsaa-pf` uses 720/721
    (and 727/728 for ortho-difluorobenzenes). The written-but-never-run pilot `c6f6_oplsaa_ewald` used 718/719. The
-   validation below runs both.
+   validation below favours 720/721 clearly (density -1.9 % and ΔHvap +0.9 kJ/mol, against +7.6 % and +21 kJ/mol
+   with 718/719); that pilot folder should not be run as written.
 2. **W&J's F-C-C-F torsion.** Watkins & Jorgensen's Table 5 has F-C-C-F V1 = -2.500, V3 = 0.250 kcal/mol (the project's
    extraction, `Runs/md-plan-2026-11-19/wj2001_oplsaa_perfluoroalkane_params.csv`; CL&P and Black et al.'s PFE.xml
    carry the same V3). GROMACS' oplsaa.ff (and foyer) apply their 1,2-difluoride term instead, which has V3 = 0. The
@@ -169,25 +170,64 @@ numbers line by line), so the validated C6F14 model is unchanged: the pilots' ow
 
 | set | molecules | `oplsaa` | `oplsaa-pf` | published / composed / transferred |
 |---|---|---|---|---|
-| fluorinated σ liquids in the SIGMA-4 pool | 93 | 19 | 28 | 28 / 0 / 0 |
+| fluorinated σ liquids in the SIGMA-4 pool | 93 | 19 | 29 | 29 / 0 / 0 |
 | fluorinated σ rows that boil below 25 °C or are solid | 21 | 3 | 5 | 5 / 0 / 0 |
-| PFAS QSAR set, fluorinated (qsar-2026-11-19, anions at pH 7) | 3,857 | 75 | 358 | 272 / 66 / 20 |
+| PFAS QSAR set, fluorinated (qsar-2026-11-19, anions at pH 7) | 3,857 | 75 | 384 | 298 / 66 / 20 |
 
-- σ set: all 24 perfluorinated alkanes and cycloalkanes but perfluorotripropyl/tributyl/trihexylamine, all simple
-  fluoroaromatics but octafluorotoluene and 1-fluoronaphthalene, and the 1-fluoroalkanes. Not covered: 30 esters
-  (Jasper's fluorinated esters: ester O next to CF2, and most carry an H(CF2)n terminus), 7 ethers (HFEs and the
-  perfluoro/omega-H ethers), CHF2 groups (18 molecules' first refusal), chlorine (6), N and P compounds, Novec 649,
+- σ set: all perfluorinated alkanes and cycloalkanes, perfluorodibutyl ether, all simple fluoroaromatics but
+  octafluorotoluene and 1-fluoronaphthalene, and the 1-fluoroalkanes. Not covered: the perfluoroamines, 30 esters
+  (Jasper's fluorinated esters: ester O next to CF2, and most carry an H(CF2)n terminus), 6 ethers (HFEs and
+  omega-H ethers), CHF2 groups (18 molecules' first refusal), chlorine (6), N and P compounds, Novec 649,
   TFA (neutral acid).
-- PFAS set: semifluorinated chains (158 molecules) and perfluoroalkanes are most of the gain; then the n:2 FTOHs
-  (composed), the n:1 FTOHs (transferred), 12 perfluoroalkanesulfonates. First refusal reasons, most common first:
-  nitrogen (1,153), ether/ester/carbonyl/acid O (900), iodine (234), S outside a sulfonate (231), chlorine (212),
-  sp2 carbons (194), CHF2 (138), P (119), Si (87).
+- PFAS set: semifluorinated chains (158 molecules) and perfluoroalkanes (64) are most of the gain; then the n:2 FTOHs
+  and other alcohols on semifluorinated chains (composed), 24 perfluoroethers and PFPE alcohols, the n:1 FTOHs
+  (transferred), 12 perfluoroalkanesulfonates. First refusal reasons, most common first:
+  nitrogen (1,153), ether/ester/carbonyl/acid O (827), iodine (234), S outside a sulfonate (231), chlorine (212),
+  sp2 carbons (200), CHF2 (138), P (119), Si (87).
 
 ## Validation in the cloud container (2026-11-28)
 
-Bulk NPT at 298.15 K and 1 atm, 1,700-2,100 atoms, LJ cutoff 12 Å + analytic tail, PPPM Coulomb, 0.3 ns (the
-first 0.1 ns dropped), 1 CPU thread; ΔHvap from a 5 ns gas-phase run of one molecule. Numbers and caveats:
-`Runs/ff-1-2026-11-27/validation/validation.md`. (Results: in the next commit of the FF-1 PR, when the runs end.)
+Bulk NPT at 298.15 K and 1 atm with `md.liquid`'s bulk stage: 2,000-2,100 atoms (90-170 molecules), LJ 12 Å with the
+analytic tail, PPPM Coulomb 1e-5, 0.2-0.25 ns with the first 0.1 ns dropped, one CPU thread. ΔHvap = E_gas - E_liq/N
++ RT, with E_gas from 64 non-interacting copies of the molecule under Langevin dynamics (0.5 ns). For the two
+near-rigid molecules that E_gas matches the harmonic estimate (C6F6 15.65 vs 15.55, 4-fluorotoluene 14.33 vs
+14.32 kcal/mol). Two earlier gas protocols gave wrong energies and were dropped: one molecule under Langevin with its
+angular momentum removed, and 64 copies under a single Nosé-Hoover thermostat, which is not ergodic for
+non-interacting molecules. The full table, the sources of the measured values and the run files are in
+`Runs/ff-1-2026-11-27/validation/validation.md`.
+
+| liquid | `--ff` (tier) | ρ (g/cm³) | measured | ΔHvap (kJ/mol) | measured | published MD, same model |
+|---|---|---|---|---|---|---|
+| C6F14 | `oplsaa-pf` = `oplsaa` (published) | 1.667 (-0.5 %) | 1.675 | 31.7 | 31.4 | W&J 2001 MC 1.681, 32.9; pilot bulk 1.672 |
+| C6F6, opls_720/721 | `oplsaa-pf` (published) | 1.582 (-1.9 %) | 1.612 | 36.8 | 35.9 | |
+| C6F6, opls_718/719 ¹ | `oplsaa` | 1.735 (+7.6 %) | 1.612 | 57.1 | 35.9 | |
+| 3:1 FTOH | `oplsaa-pf` (transferred) | 1.585 (-0.7 %) | 1.595 | 53.9 | 48.3 | Silva et al. 2016: 1.603, 53.2 |
+| 4-fluorotoluene | `oplsaa-pf` (published) | 0.983 (-1.2 %) | 0.996 ² | 39.8 | 39.4 | |
+| 1-fluoroheptane ¹ | `oplsaa-pf` (published, "tentative" types) | 0.786 (-2.5 %) | 0.806 | 41.3 | 40.8 (302 K) | |
+| toluene (method check) ³ | `oplsaa-pf` (OPLS-AA) | 0.859 (-0.3 %) | 0.862 ² | 39.2 | 37.8 (301 K) | |
+| n-hexane (method check) ³ | `oplsaa` (OPLS-AA) | 0.654 (-1.0 %) | 0.661 ² | 32.9 | 32.0 (301 K) | |
+
+¹ NPT cut at about 160 ps by a container restart and averaged over the last ~100 ps. ² A weak measured value (product
+sheets and compilations disagree on the temperature). ³ Resumed from its restart file after a container restart, and
+run to the end.
+
+What this shows:
+- **C6F14**, the model the pilots validated for σ, comes out at -0.5 % in density and +0.3 kJ/mol in ΔHvap
+  (Watkins & Jorgensen's own Monte Carlo: +0.4 % and +1.5 kJ/mol; the pilots' 1 ns bulk: 1.672): the protocol and
+  the writers reproduce the published model.
+- **The 3:1 FTOH recipe reproduces Silva et al.'s own MD** (density within 1 %, ΔHvap 53.9 vs their 53.2 ± 1.0). Its
+  ~12 % excess over the measured ΔHvap is the recipe's: Silva et al.'s MD has it too. This checks the derived CF2
+  charge and the labelled torsion transfer only as far as these two properties go.
+- **Hexafluorobenzene needs its own types**: opls_720/721 are within 2 % and 1 kJ/mol; fluorobenzene's 718/719 bind
+  far too strongly (+7.6 %, +21 kJ/mol). See caveat 1.
+- **Ring F and alkyl F**: 4-fluorotoluene and 1-fluoroheptane are within 1.2-2.5 % in density and 0.5 kJ/mol in
+  ΔHvap, so the "tentative" monoalkyl fluoride types hold up for these two properties.
+- **Method checks**: plain OPLS-AA toluene and n-hexane come within 1 % in density and 1.4 kJ/mol in ΔHvap, so the
+  protocol adds no large error of its own.
+- The `oplsaa-pf` densities all come out 0.5-2.5 % low. With runs this short and boxes this small, read each to
+  about ± 1 % (the standard errors, 0.2-0.4 %, are lower bounds).
+- **Not tested**: σ (that needs slabs: proposal in the FF-1 report), the perfluoroethers, the sulfonates (ions; the
+  liquid stage refuses them), and anything in water.
 
 ## Next steps (FF-1 follow-ups, BACKLOG)
 

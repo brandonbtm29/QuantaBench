@@ -1200,16 +1200,21 @@ docs/ENGINES.md, "Liquid-slab MD and surface tension"; code: `md/oplsaa_pf.py`, 
     (published / composed / transferred) and its recipe.
   - The same model as `oplsaa` for every molecule `oplsaa` types except C6F6 (tests compare them term by term and
     C6F14's ff.params line by line). `oplsaa` stays the default.
-  - Coverage (NOVA, `Runs\ff-1-2026-11-27\coverage_summary.md`): fluorinated σ liquids 28 of 93 (`oplsaa` 19);
-    PFAS QSAR set 358 of 3,857 (`oplsaa` 75): 272 published, 66 composed, 20 transferred.
-  - Validation (cloud container, bulk NPT 0.3 ns, ~2,000 atoms, 12 Å + tail): running; results in the PR's next commit.
+  - Coverage (NOVA, `Runs\ff-1-2026-11-27\coverage_summary.md`): fluorinated σ liquids 29 of 93 (`oplsaa` 19);
+    PFAS QSAR set 384 of 3,857 (`oplsaa` 75): 298 published, 66 composed, 20 transferred.
+  - Validation (cloud container; bulk NPT 0.2-0.25 ns, ~2,000 atoms, 12 Å + tail; ΔHvap from Langevin gas copies;
+    `Runs\ff-1-2026-11-27\validation\`), density / ΔHvap against measured: C6F14 -0.5 % / +0.3 kJ/mol, C6F6
+    (720/721) -1.9 % / +0.9, 3:1 FTOH -0.7 % / +5.6 (Silva et al.'s own MD: +0.5 % / +4.9), 4-fluorotoluene
+    -1.2 % / +0.4, 1-fluoroheptane -2.5 % / +0.5; C6F6 with 718/719 +7.6 % / +21. Method checks (plain OPLS-AA):
+    toluene -0.3 % / +1.4, n-hexane -1.0 % / +0.9.
   - Tests: `tests/test_md_oplsaa_pf.py` (61, incl. three LAMMPS smoke runs).
 - Open (Brandon):
   - σ slabs for the covered liquids with a measured σ (proposal in the PR): which, and on which machine.
   - W&J's own F-C-C-F torsion has V3 = 0.25 kcal/mol; GROMACS' (used by the pilots and kept here) has V3 = 0.
     Switch (and recheck C6F14), or keep?
-  - Hexafluorobenzene: its own opls_720/721 (`oplsaa-pf`) or fluorobenzene's 718/719 (`oplsaa`, the written C6F6
-    pilot folder)? The validation compares the two densities.
+  - Hexafluorobenzene: the validation favours its own opls_720/721 (`oplsaa-pf`) over fluorobenzene's 718/719
+    (`oplsaa` and the written C6F6 pilot folder). Give `oplsaa` the 720/721 types for C6F6 too, and rewrite that
+    folder?
   - The default `--ff` for fluorinated molecules: keep `oplsaa`, or pick `oplsaa-pf` automatically when `oplsaa`
     refuses?
 - Next (FF-2 and later):
