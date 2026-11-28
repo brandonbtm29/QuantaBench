@@ -224,7 +224,8 @@ def _benzene_ring(atom: Chem.Atom) -> bool:
 def _refuse(atom: Chem.Atom, why: str) -> OplsTypingError:
     return OplsTypingError(
         f"OPLS-AA typing here covers alkanes, perfluoroalkanes and (fluoro)benzenes only: atom {atom.GetIdx()} "
-        f"({atom.GetSymbol()}) {why}. Use --ff openff or --ff gaff2 for this molecule.")
+        f"({atom.GetSymbol()}) {why}. Try --ff oplsaa-pf (more fluorinated groups, from published tables), or "
+        "--ff openff / --ff gaff2 (cross-checks) for this molecule.")
 
 
 def _carbon_type(atom: Chem.Atom) -> str:

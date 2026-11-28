@@ -1242,3 +1242,42 @@ Brandon: "I agree with PR 59 to commit and your suggestions". Each suggestion, a
   on Reference: `ljpme_parameters` always gives the rule's mesh. Test: `test_ljpme_mesh_is_always_given`.
 - Found on the way: `getPMEParametersInContext` raises "not using PME" on OpenCL for an LJPME context (works on the
   CPU platform); `ruff check` (0.17.6) flags two existing lines in `dist/profile.py` (F401, S607), not touched here.
+
+## 2026-11-28: FF-1, a force field for PFAS in MD: OPLS-AA/PF (branch `feat/ff-1-pfas-forcefield`)
+- **Asked** (Brandon, 2026-11-27): "building a force field for PFAS in MD". Worked from the 2026-11-22 literature review,
+  the MD pilots and Brandon's σ and PFAS sets; design note docs/FORCEFIELDS.md.
+- **Route**: OPLS-AA extended only with published OPLS-AA-compatible group parameters (the pilots' C6F14 model is
+  OPLS-AA + W&J: σ +1 % of Freire). GAFF2 is out for fluorinated liquids (pilot σ 2.6x, density +10 %); OpenFF Sage a
+  cross-check; LigParGen (1.14·CM1A-LBCC) or 1.2·CM5 charges are the way to fill the remaining groups, with OPLS-AA
+  LJ and bonded terms, after a density check.
+- **Built**: `md/oplsaa_pf.py` and the `oplsaa-pf` backend (`md.forcefield.type_oplsaa_pf`; `--ff oplsaa-pf`). Types
+  from GROMACS oplsaa.ff (ring F/CF3/Br types 720-730, alkyl fluorides 956-960 "tentative", TFE 160-165, alcohols,
+  alkylbenzenes, Li+/Na+/K+), Pádua 2002's junction torsions, CL&P's sulfonate / trifluoroacetate heads (il.ff
+  898c19d5a4) and Black et al. 2017's perfluoroether groups (the authors' PFE.xml, f8fa0aff6c). Every value with its
+  line; `scripts/check_oplsaa_pf_params.py` re-read GROMACS, CL&P and PFE.xml: 204 entries, 0 mismatches (and found
+  three planted errors). Perfluoroether torsions have phase angles: such molecules are written with
+  `dihedral_style fourier` (`md.liquid` now writes multi-term fourier coefficients), every OPLS torsion converted
+  exactly. No charge redistribution; one derived charge (Silva et al. 2016's rule, +0.326 e) and one labelled
+  transfer (the n:1 FTOH C-C-C-O torsion, from GROMACS' hydrocarbon alcohol term). Molecules carry `recipe` and `tier`
+  (published / composed / transferred), in README.txt and liquid_setup.json.
+- **Same model as `oplsaa`** for every molecule `oplsaa` types except C6F6 (term by term in the tests; the pilots' own
+  C6F14 ff.params files are identical line for line to what `oplsaa-pf` writes, checked on NOVA). C6F6 takes its own
+  opls_720/721 (q ±0.13) instead of fluorobenzene's 718/719 (±0.22).
+- **Found**: W&J 2001's Table 5 F-C-C-F torsion has V3 = 0.25 kcal/mol (CL&P and Black et al.'s PFE.xml carry it);
+  GROMACS' oplsaa.ff and foyer use their 1,2-difluoride term with V3 = 0, and so did the pilots. Kept as is (C6F14
+  unchanged); a question for Brandon.
+- **Coverage** (NOVA, `Runs\ff-1-2026-11-27\`): fluorinated σ liquids 29 of 93 (`oplsaa` 19); PFAS QSAR set 384 of
+  3,857 (`oplsaa` 75). First refusals in the PFAS set: N 1,153, ether/ester/carbonyl/acid O 827, I 234, S outside a
+  sulfonate 231, Cl 212, sp2 C 200, CHF2 138.
+- **Tests**: `tests/test_md_oplsaa_pf.py`, 61 (types, charges, tiers, refusals, provenance of every term, unit
+  conversions, C6F14 unchanged, the exact fourier conversion, three LAMMPS smoke runs). On NOVA (behind `scratch\pytest.lock`, below normal): ruff
+  clean, the MD tests 152 passed, 3 skipped (the PyPI LAMMPS wheel's "Windows fatal exception 0xc0000139" lines at
+  `lammps()` start are printed by faulthandler and do not fail anything).
+- **Validation** (cloud container, `Runs\ff-1-2026-11-27\validation\`): bulk NPT density and ΔHvap of six liquids,
+  ~2,000 atoms, 0.2-0.25 ns. Against measured: C6F14 -0.5 % / +0.3 kJ/mol, C6F6 with 720/721 -1.9 % / +0.9 (with
+  718/719 +7.6 % / +21), 3:1 FTOH -0.7 % / +5.6 (as in Silva et al.'s own MD), 4-fluorotoluene -1.2 % / +0.4,
+  1-fluoroheptane -2.5 % / +0.5. OPLS-AA method checks: toluene -0.3 % / +1.4, n-hexane -1.0 % / +0.9. The
+  gas-phase energy needed a third try: a single molecule under Langevin with its angular momentum removed and 64
+  copies under one Nosé-Hoover thermostat (not ergodic) both gave wrong energies; Langevin on 64 non-interacting
+  copies matches the harmonic estimate for the rigid molecules.
+  Container restarts cut two runs short (marked in the table); two others were resumed from their restart files.
