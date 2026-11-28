@@ -31,6 +31,7 @@ CREST run several times slower even on an idle Mac.
 from __future__ import annotations
 
 import contextlib
+import errno
 import math
 import os
 import shutil
@@ -252,6 +253,15 @@ def _linux_threads() -> list[int]:
         return [threading.get_native_id()]
 
 
+def _linux_tasks(pid: int) -> list[int]:
+    """The thread ids of process ``pid`` on Linux (``/proc/<pid>/task``); just ``pid`` (its main thread) when that
+    cannot be read."""
+    try:
+        return [int(t) for t in os.listdir(f"/proc/{int(pid)}/task")]
+    except (OSError, ValueError):
+        return [int(pid)]
+
+
 def _linux_io_lower(pid: int, level: str) -> bool:
     """Set the I/O priority of task ``pid`` (a thread on Linux) to ``level``'s, unless it is lower already."""
     import psutil
@@ -325,14 +335,47 @@ def _pid_level(p, system: str) -> str:
         cls = int(p.nice())
         return {IDLE_PRIORITY_CLASS: "background", BELOW_NORMAL_PRIORITY_CLASS: "low"}.get(cls, "normal")
     nice = int(p.nice())
+    if system.startswith("linux"):              # per thread on Linux: a process runs as high as its highest thread
+        for tid in _linux_tasks(p.pid):
+            with contextlib.suppress(OSError, AttributeError):
+                nice = min(nice, int(os.getpriority(os.PRIO_PROCESS, tid)))
     return "background" if nice >= NICE["background"] else "low" if nice >= NICE["low"] else "normal"
+
+
+def _linux_lower_tasks(pid: int, level: str) -> int:
+    """Lower every thread of process ``pid`` to ``level``'s nice value and I/O priority, never raising one (PRIO-2:
+    Linux keeps both per thread, and ``setpriority(PRIO_PROCESS, pid)``, which psutil's ``nice()`` calls, changes only
+    the main thread, so the PyTorch, OpenMP, dxtb or AIMNet2 threads a lane already runs would keep the old value).
+    Returns how many threads were lowered. A thread that ended meanwhile is skipped; raises ``OSError`` when the
+    process has ended or when threads needed lowering and none could be (no permission)."""
+    target = NICE[level]
+    lowered, seen, error = 0, 0, None
+    for tid in _linux_tasks(pid):
+        try:
+            if os.getpriority(os.PRIO_PROCESS, tid) < target:
+                os.setpriority(os.PRIO_PROCESS, tid, target)
+                lowered += 1
+            seen += 1
+        except OSError as exc:
+            if exc.errno != errno.ESRCH:
+                seen += 1
+                error = error or exc
+            continue
+        with contextlib.suppress(Exception):
+            _linux_io_lower(tid, level)
+    if not seen:
+        raise ProcessLookupError(errno.ESRCH, f"process {pid} has ended")
+    if error is not None and not lowered:
+        raise error
+    return lowered
 
 
 def apply_to_pids(pids, level, *, children: bool = True, system: str | None = None) -> str:
     """Set running processes (``pids``, and with ``children`` the programs they started: CREST, xtb, Psi4) to
     ``level`` now, for a run priority changed while a batch runs (DIST-7: the Machines dock, ``machines set``).
 
-    Lowering works everywhere. Raising works on Windows (a process may raise its own children's class up to its own),
+    Lowering works everywhere; on Linux it lowers every thread of each process (the nice value and the I/O priority
+    are per thread there, PRIO-2), so the thread pools a lane already runs follow too. Raising works on Windows (a process may raise its own children's class up to its own),
     not on POSIX without privileges (a nice value only goes up): there a raised level is reported and takes effect
     for the next lanes the batch starts. Returns a line for the log; never raises.
 
@@ -359,10 +402,10 @@ def apply_to_pids(pids, level, *, children: bool = True, system: str | None = No
                 for c in p.children(recursive=True):
                     procs[c.pid] = c
     def lower(p) -> None:
-        p.nice(NICE[want])
         if system.startswith("linux") and want != "normal":
-            with contextlib.suppress(Exception):
-                _linux_io_lower(p.pid, want)
+            _linux_lower_tasks(p.pid, want)     # every thread, not only the main one (PRIO-2)
+        else:
+            p.nice(NICE[want])
 
     changed = kept = failed = again = 0
     lowered = []
